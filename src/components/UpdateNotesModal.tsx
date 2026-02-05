@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Sparkles, CheckCircle, Layout, Monitor, Bug, Bell, Palette, Lock, List, AppWindow, Users, LogIn, Zap } from 'lucide-react'
+import { X, Sparkles, CheckCircle, Bug, LogIn, Zap } from 'lucide-react'
 
 const CURRENT_VERSION = '3.0.6'
 

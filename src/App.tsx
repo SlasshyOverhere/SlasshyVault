@@ -51,13 +51,8 @@ import {
 } from '@/services/api'
 import { initAdBlocker } from '@/utils/adBlocker'
 import {
-  initSocial,
-  setCurrentlyWatching,
-  logActivity,
   restoreSocialConnection,
-  isSocialInitialized,
   disconnectSocial,
-  getCachedProfile
 } from '@/services/social'
 import {
   Search, Loader2, Trash2, Play, Film, Tv, Clock,
@@ -1785,7 +1780,7 @@ function App() {
                   exit={{ opacity: 0 }}
                   className="h-full"
                 >
-                  <SocialView onShowSettings={() => setShowSettings(true)} />
+                  <SocialView onShowSettings={() => setSettingsOpen(true)} />
                 </motion.div>
               )}
 
