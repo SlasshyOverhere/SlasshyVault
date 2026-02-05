@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Sparkles, CheckCircle, Layout, Monitor, Bug, Bell, Palette, Lock, List, AppWindow } from 'lucide-react'
+import { X, Sparkles, CheckCircle, Layout, Monitor, Bug, Bell, Palette, Lock, List, AppWindow, Users, LogIn, Zap } from 'lucide-react'
 
-const CURRENT_VERSION = '3.0.4'
+const CURRENT_VERSION = '3.0.6'
 
 interface UpdateNotesModalProps {
   open: boolean
@@ -61,90 +61,42 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
 
               {/* Content */}
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {/* Custom Title Bar */}
+                {/* Required Login */}
                 <Section
-                  icon={<Monitor className="w-4 h-4" />}
-                  title="Custom Title Bar"
+                  icon={<LogIn className="w-4 h-4" />}
+                  title="Google Sign-In Required"
                   color="from-blue-500/20 to-blue-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Sleek custom title bar - no more Windows chrome</li>
-                    <li>• Drag anywhere on title bar to move window</li>
-                    <li>• Custom minimize & close buttons</li>
+                    <li>• Sign in with Google to access the app</li>
+                    <li>• Your data is stored in your own Google Drive</li>
+                    <li>• MPV auto-detected on first login</li>
                   </ul>
                 </Section>
 
-                {/* Fixed Window */}
+                {/* Beta Features */}
                 <Section
-                  icon={<Lock className="w-4 h-4" />}
-                  title="Locked Window Size"
-                  color="from-cyan-500/20 to-cyan-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Fixed resolution at <span className="text-white font-medium">1400x900</span></li>
-                    <li>• No resizing or maximizing - optimized layout</li>
-                  </ul>
-                </Section>
-
-                {/* Redesigned Home */}
-                <Section
-                  icon={<Layout className="w-4 h-4" />}
-                  title="Redesigned Home Tab"
+                  icon={<Zap className="w-4 h-4" />}
+                  title="Beta Features (Experimental)"
                   color="from-purple-500/20 to-purple-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Large centered hero with bigger search bar</li>
-                    <li>• Continue Watching in middle-bottom</li>
-                    <li>• Library stats at bottom - no empty space</li>
-                    <li>• Hero section stays fixed, never moves</li>
+                    <li>• <span className="text-purple-400 font-medium">Watch Together</span> - Watch with friends in sync</li>
+                    <li>• <span className="text-purple-400 font-medium">Social Features</span> - Friends, chat, activity</li>
+                    <li>• Enable in Settings → General → Beta Features</li>
+                    <li>• These features are experimental and may not work perfectly</li>
                   </ul>
                 </Section>
 
-                {/* List View */}
+                {/* Performance */}
                 <Section
-                  icon={<List className="w-4 h-4" />}
-                  title="New List View"
+                  icon={<Zap className="w-4 h-4" />}
+                  title="Faster Startup"
                   color="from-green-500/20 to-green-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Grid/List toggle in Google Drive tab</li>
-                    <li>• Horizontal cards - see more at a glance</li>
-                  </ul>
-                </Section>
-
-                {/* Single Instance */}
-                <Section
-                  icon={<AppWindow className="w-4 h-4" />}
-                  title="Single Instance"
-                  color="from-indigo-500/20 to-indigo-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Running .exe again brings app from tray</li>
-                    <li>• No more duplicate windows</li>
-                  </ul>
-                </Section>
-
-                {/* Notifications */}
-                <Section
-                  icon={<Bell className="w-4 h-4" />}
-                  title="Better Notifications"
-                  color="from-yellow-500/20 to-yellow-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Shows from <span className="text-white font-medium">StreamVault</span> not PowerShell</li>
-                  </ul>
-                </Section>
-
-                {/* Fresh Look */}
-                <Section
-                  icon={<Palette className="w-4 h-4" />}
-                  title="Fresh Look"
-                  color="from-pink-500/20 to-pink-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• New app icon and system tray icon</li>
-                    <li>• Right-click menu disabled in production</li>
-                    <li>• Patch notes modal with "View Notes" in Settings</li>
+                    <li>• App loads instantly after login</li>
+                    <li>• Social features load in background</li>
                   </ul>
                 </Section>
 
@@ -155,11 +107,9 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
                   color="from-orange-500/20 to-orange-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Fixed hero section moving with content</li>
-                    <li>• Fixed window not draggable</li>
-                    <li>• Fixed close button not hiding to tray</li>
-                    <li>• Fixed floating controls overlapping</li>
-                    <li>• Synced all version numbers</li>
+                    <li>• Fixed loading spinner position in Social tab</li>
+                    <li>• Fixed Watch Together showing when beta is off</li>
+                    <li>• Improved login flow reliability</li>
                   </ul>
                 </Section>
               </div>

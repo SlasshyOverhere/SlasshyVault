@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check } from "lucide-react"
+import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion, AnimatePresence } from "framer-motion"
@@ -17,6 +17,7 @@ interface MovieCardProps {
   onFixMatch: (item: MediaItem) => void
   onRemoveFromHistory?: (item: MediaItem) => void
   onDelete?: (item: MediaItem) => void
+  onWatchTogether?: (item: MediaItem) => void
   aspectRatio?: "portrait" | "square"
   className?: string
   index?: number
@@ -28,6 +29,7 @@ export function MovieCard({
   onFixMatch,
   onRemoveFromHistory,
   onDelete,
+  onWatchTogether,
   aspectRatio = "portrait",
   className,
   index = 0,
@@ -292,6 +294,21 @@ export function MovieCard({
           </div>
           <span>Fix Match</span>
         </ContextMenuItem>
+
+        {onWatchTogether && (
+          <>
+            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+            <ContextMenuItem
+              onClick={() => onWatchTogether(item)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-purple-500/20 focus:text-purple-400 transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-purple-500/15 flex items-center justify-center">
+                <Users className="w-4 h-4 text-purple-400" />
+              </div>
+              <span>Watch Together</span>
+            </ContextMenuItem>
+          </>
+        )}
 
         {onRemoveFromHistory && (
           <>

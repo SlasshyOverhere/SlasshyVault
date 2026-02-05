@@ -364,6 +364,17 @@ export const saveConfig = async (config: Config): Promise<void> => {
     }
 };
 
+// Auto-detect MPV executable on the system
+export const autoDetectMpv = async (): Promise<string | null> => {
+    try {
+        const path = await invoke<string | null>('auto_detect_mpv');
+        return path;
+    } catch (error) {
+        console.error('Failed to auto-detect MPV:', error);
+        throw error;
+    }
+};
+
 // Get resume info for a media item
 export const getResumeInfo = async (id: number): Promise<ResumeInfo> => {
     try {
@@ -833,6 +844,37 @@ export const setTabVisibility = (visibility: TabVisibility): void => {
     }
 };
 
+// ==================== BETA FEATURES ====================
+
+const BETA_FEATURES_KEY = 'streamvault_beta_features';
+
+export interface BetaFeatures {
+    enabled: boolean;
+}
+
+// Check if beta features are enabled
+export const isBetaEnabled = (): boolean => {
+    try {
+        const stored = localStorage.getItem(BETA_FEATURES_KEY);
+        if (stored) {
+            const parsed = JSON.parse(stored) as BetaFeatures;
+            return parsed.enabled === true;
+        }
+    } catch (error) {
+        console.error('Failed to get beta features state:', error);
+    }
+    return false;
+};
+
+// Enable or disable beta features
+export const setBetaEnabled = (enabled: boolean): void => {
+    try {
+        localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
+    } catch (error) {
+        console.error('Failed to save beta features state:', error);
+    }
+};
+
 // ==================== CLOUD CACHE ====================
 
 export interface CloudCacheInfo {
@@ -961,6 +1003,157 @@ export const getAppVersion = async (): Promise<string> => {
     } catch (error) {
         console.error('Failed to get app version:', error);
         return '0.0.0';
+    }
+};
+
+// ==================== WATCH TOGETHER ====================
+
+export interface WatchParticipant {
+    id: string;
+    nickname: string;
+    is_host: boolean;
+    is_ready: boolean;
+    duration?: number;
+}
+
+export interface WatchRoom {
+    code: string;
+    host_id: string;
+    media_title: string;
+    media_id: number;
+    participants: WatchParticipant[];
+    is_playing: boolean;
+    current_position: number;
+}
+
+export interface SyncCommand {
+    action: 'play' | 'pause' | 'seek';
+    position: number;
+    from?: string;
+    timestamp?: number;
+}
+
+export interface WatchEvent {
+    type: 'room_updated' | 'sync_command' | 'participant_changed' | 'playback_started' | 'error' | 'disconnected';
+    room?: WatchRoom;
+    command?: SyncCommand;
+    position?: number;
+    message?: string;
+}
+
+// Create a Watch Together room
+export const wtCreateRoom = async (
+    mediaId: number,
+    title: string,
+    nickname: string
+): Promise<WatchRoom> => {
+    try {
+        return await invoke<WatchRoom>('wt_create_room', { mediaId, title, nickname });
+    } catch (error) {
+        console.error('Failed to create watch room:', error);
+        throw error;
+    }
+};
+
+// Join an existing Watch Together room
+export const wtJoinRoom = async (
+    roomCode: string,
+    mediaId: number,
+    nickname: string
+): Promise<WatchRoom> => {
+    try {
+        return await invoke<WatchRoom>('wt_join_room', { roomCode, mediaId, nickname });
+    } catch (error) {
+        console.error('Failed to join watch room:', error);
+        throw error;
+    }
+};
+
+// Leave the current Watch Together room
+export const wtLeaveRoom = async (): Promise<void> => {
+    try {
+        await invoke('wt_leave_room');
+    } catch (error) {
+        console.error('Failed to leave watch room:', error);
+        throw error;
+    }
+};
+
+// Set ready status with video duration
+export const wtSetReady = async (duration: number): Promise<void> => {
+    try {
+        await invoke('wt_set_ready', { duration });
+    } catch (error) {
+        console.error('Failed to set ready status:', error);
+        throw error;
+    }
+};
+
+// Start playback (host only)
+export const wtStartPlayback = async (): Promise<void> => {
+    try {
+        await invoke('wt_start_playback');
+    } catch (error) {
+        console.error('Failed to start playback:', error);
+        throw error;
+    }
+};
+
+// Send a sync command
+export const wtSendSync = async (action: string, position: number): Promise<void> => {
+    try {
+        await invoke('wt_send_sync', { action, position });
+    } catch (error) {
+        console.error('Failed to send sync:', error);
+        throw error;
+    }
+};
+
+// Get current room state
+export const wtGetRoomState = async (): Promise<WatchRoom | null> => {
+    try {
+        return await invoke<WatchRoom | null>('wt_get_room_state');
+    } catch (error) {
+        console.error('Failed to get room state:', error);
+        return null;
+    }
+};
+
+// Check if Watch Together session is active
+export const wtIsActive = async (): Promise<boolean> => {
+    try {
+        return await invoke<boolean>('wt_is_active');
+    } catch (error) {
+        console.error('Failed to check watch session:', error);
+        return false;
+    }
+};
+
+// Launch MPV in Watch Together sync mode
+export const wtLaunchMpv = async (
+    mediaId: number,
+    sessionId: string,
+    startPosition: number = 0
+): Promise<number> => {
+    try {
+        return await invoke<number>('wt_launch_mpv', { mediaId, sessionId, startPosition });
+    } catch (error) {
+        console.error('Failed to launch MPV for watch together:', error);
+        throw error;
+    }
+};
+
+// Send a command to MPV in Watch Together mode
+export const wtSendMpvCommand = async (
+    sessionId: string,
+    action: string,
+    position: number
+): Promise<void> => {
+    try {
+        await invoke('wt_send_mpv_command', { sessionId, action, position });
+    } catch (error) {
+        console.error('Failed to send MPV command:', error);
+        throw error;
     }
 };
 

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Globe, Home, RotateCw, Cloud
+  Globe, Home, RotateCw, Cloud, Users
 } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
@@ -22,6 +22,7 @@ interface SidebarProps {
     total: number
   } | null
   showCloudTab?: boolean
+  betaEnabled?: boolean
 }
 
 // Smooth spring config for natural feel
@@ -46,6 +47,7 @@ export function Sidebar({
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
+  betaEnabled = false,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -92,12 +94,14 @@ export function Sidebar({
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Google Drive", icon: Cloud },
     { id: "stream", label: "Discover", icon: Globe },
+    { id: "social", label: "Social", icon: Users },
     { id: "history", label: "History", icon: History },
   ];
 
   // Filter menu items based on visibility settings
   const menuItems = allMenuItems.filter(item => {
     if (item.id === 'cloud' && !showCloudTab) return false;
+    if (item.id === 'social' && !betaEnabled) return false;
     return true;
   });
 

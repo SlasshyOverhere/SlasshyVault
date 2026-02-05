@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, ChevronUp, RefreshCw } from "lucide-react"
+import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, ChevronUp, RefreshCw, Users } from "lucide-react"
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 interface EpisodeBrowserProps {
     show: MediaItem
     onBack: () => void
+    onWatchTogether?: (episode: MediaItem) => void
 }
 
 // Component to handle episode thumbnail loading from local cache or TMDB
@@ -101,7 +102,7 @@ function EpisodeThumbnailImage({
     );
 }
 
-export function EpisodeBrowser({ show, onBack }: EpisodeBrowserProps) {
+export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowserProps) {
     const [episodes, setEpisodes] = useState<MediaItem[]>([])
     const [loading, setLoading] = useState(true)
     const [posterUrl, setPosterUrl] = useState<string | null>(null)
@@ -493,17 +494,32 @@ export function EpisodeBrowser({ show, onBack }: EpisodeBrowserProps) {
                                                                     </div>
 
                                                                     {/* Play button - hidden on small screens */}
-                                                                    <Button
-                                                                        size="sm"
-                                                                        className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handlePlay(episode);
-                                                                        }}
-                                                                    >
-                                                                        <Play className="w-4 h-4 fill-current mr-1" />
-                                                                        Play
-                                                                    </Button>
+                                                                    <div className="flex items-center gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex">
+                                                                        <Button
+                                                                            size="sm"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                handlePlay(episode);
+                                                                            }}
+                                                                        >
+                                                                            <Play className="w-4 h-4 fill-current mr-1" />
+                                                                            Play
+                                                                        </Button>
+                                                                        {onWatchTogether && (
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="outline"
+                                                                                className="border-purple-500/50 text-purple-400 hover:bg-purple-500/20"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    onWatchTogether(episode);
+                                                                                }}
+                                                                            >
+                                                                                <Users className="w-4 h-4 mr-1" />
+                                                                                Together
+                                                                            </Button>
+                                                                        )}
+                                                                    </div>
                                                                 </div>
 
                                                                 {/* Metadata row - show duration from local file if available */}
