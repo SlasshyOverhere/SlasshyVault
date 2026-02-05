@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  User, Camera, Save, X, Mail, MapPin, Film, Clock,
+  User, Camera, X, MapPin, Film, Clock,
   BarChart3, Edit3, Check, AtSign, AlertCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';

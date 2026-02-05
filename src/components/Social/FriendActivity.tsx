@@ -1,5 +1,5 @@
 import { CurrentlyWatching } from '@/services/social';
-import { Film, Tv, Users, Play } from 'lucide-react';
+import { Film, Tv, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 

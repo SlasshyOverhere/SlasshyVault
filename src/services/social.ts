@@ -235,7 +235,7 @@ export async function initSocial(token: string): Promise<UserProfile | null> {
     }
 
     googleId = data.profile.id;
-    setSocialStorage({ googleId });
+    setSocialStorage({ googleId: googleId || undefined });
 
     // Cache profile locally
     setProfileCache(data.profile);

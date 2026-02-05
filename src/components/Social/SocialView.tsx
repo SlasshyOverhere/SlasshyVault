@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Users, Shield, User, LogIn, Loader2, AlertCircle } from 'lucide-react';
+import { Users, Shield, User, LogIn, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ActivityFeed } from './ActivityFeed';
 import { FriendsPanel } from './FriendsPanel';
@@ -281,7 +281,7 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
         <UserProfileModal
           userId={viewingProfileId}
           onClose={() => setViewingProfileId(null)}
-          onChat={(userId) => {
+          onChat={(_userId) => {
             // Find friend and open chat
             setViewingProfileId(null);
           }}
