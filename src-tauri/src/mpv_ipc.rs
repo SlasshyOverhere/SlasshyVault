@@ -463,3 +463,353 @@ pub fn monitor_mpv_and_save_progress(
 pub fn poll_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
     read_mpv_progress(media_id)
 }
+
+// ==================== WATCH TOGETHER SYNC ====================
+
+/// Get the path for Watch Together sync files
+fn get_sync_dir() -> PathBuf {
+    let app_data = crate::database::get_app_data_dir();
+    app_data.join("wt_sync")
+}
+
+/// Get sync command file path (for sending commands TO MPV)
+fn get_sync_command_file(session_id: &str) -> PathBuf {
+    get_sync_dir().join(format!("cmd_{}.json", session_id))
+}
+
+/// Get sync event file path (for receiving events FROM MPV)
+fn get_sync_event_file(session_id: &str) -> PathBuf {
+    get_sync_dir().join(format!("evt_{}.json", session_id))
+}
+
+/// Sync event from MPV
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MpvSyncEvent {
+    pub event_type: String, // "play", "pause", "seek"
+    pub position: f64,
+    pub timestamp: i64,
+}
+
+/// Sync command to MPV
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MpvSyncCommand {
+    pub action: String, // "play", "pause", "seek"
+    pub position: f64,
+    pub processed: bool,
+}
+
+/// Get the Lua script content for Watch Together sync mode
+fn get_sync_lua_script_content(progress_file: &str, event_file: &str, command_file: &str) -> String {
+    let clean_progress = progress_file.replace("\\", "/");
+    let clean_event = event_file.replace("\\", "/");
+    let clean_command = command_file.replace("\\", "/");
+
+    format!(r#"
+-- StreamVault Watch Together Sync Script for MPV
+-- Handles bidirectional sync: captures user actions and applies remote commands
+
+local progress_file = "{}"
+local event_file = "{}"
+local command_file = "{}"
+local save_interval = 2
+local command_check_interval = 0.5
+
+local last_duration = 0
+local last_position = 0
+local ignore_next_event = false
+local last_command_time = 0
+
+-- JSON encode helper (simple implementation)
+local function json_encode(data)
+    if type(data) == "table" then
+        local result = "{{"
+        local first = true
+        for k, v in pairs(data) do
+            if not first then result = result .. "," end
+            result = result .. '"' .. k .. '":'
+            if type(v) == "string" then
+                result = result .. '"' .. v .. '"'
+            elseif type(v) == "number" then
+                result = result .. tostring(v)
+            elseif type(v) == "boolean" then
+                result = result .. (v and "true" or "false")
+            end
+            first = false
+        end
+        return result .. "}}"
+    end
+    return "{{}}"
+end
+
+-- Write sync event to file
+local function write_event(event_type, position)
+    if ignore_next_event then
+        ignore_next_event = false
+        return
+    end
+
+    local data = json_encode({{
+        event_type = event_type,
+        position = position or mp.get_property_number("time-pos") or 0,
+        timestamp = os.time()
+    }})
+
+    local file = io.open(event_file, "w")
+    if file then
+        file:write(data)
+        file:close()
+    end
+end
+
+-- Read and process sync command from file
+local function check_command()
+    local file = io.open(command_file, "r")
+    if not file then return end
+
+    local content = file:read("*all")
+    file:close()
+
+    if not content or content == "" then return end
+
+    -- Simple JSON parse for our command format
+    local action = content:match('"action"%s*:%s*"([^"]+)"')
+    local position = content:match('"position"%s*:%s*([%d%.]+)')
+    local processed = content:match('"processed"%s*:%s*true')
+
+    if processed then return end
+    if not action then return end
+
+    position = tonumber(position) or 0
+
+    -- Mark as processed
+    local new_content = content:gsub('"processed"%s*:%s*false', '"processed":true')
+    local wfile = io.open(command_file, "w")
+    if wfile then
+        wfile:write(new_content)
+        wfile:close()
+    end
+
+    -- Apply the command
+    ignore_next_event = true
+
+    if action == "play" then
+        mp.set_property_bool("pause", false)
+        if math.abs((mp.get_property_number("time-pos") or 0) - position) > 2 then
+            mp.set_property_number("time-pos", position)
+        end
+    elseif action == "pause" then
+        mp.set_property_bool("pause", true)
+    elseif action == "seek" then
+        mp.set_property_number("time-pos", position)
+    end
+
+    mp.msg.info("Applied sync command: " .. action .. " at " .. position)
+end
+
+-- Progress tracking (same as regular script)
+local function get_progress_data()
+    local pos = mp.get_property_number("time-pos")
+    local duration = mp.get_property_number("duration")
+    local paused = mp.get_property_bool("pause") or false
+    local eof = mp.get_property_bool("eof-reached") or false
+
+    if duration and duration > 0 then last_duration = duration end
+    local d_to_save = duration
+    if not d_to_save or d_to_save <= 0 then d_to_save = last_duration end
+
+    if pos and pos > 0 then last_position = pos end
+    local p_to_save = pos
+    if not p_to_save or p_to_save <= 0 then p_to_save = last_position end
+
+    if d_to_save > 0 and p_to_save > d_to_save then p_to_save = d_to_save end
+
+    return string.format(
+        '{{"position":%.3f,"duration":%.3f,"paused":%s,"eof_reached":%s,"quit_time":%d}}',
+        p_to_save, d_to_save,
+        paused and "true" or "false",
+        eof and "true" or "false",
+        os.time()
+    )
+end
+
+local function save_progress()
+    local duration = mp.get_property_number("duration") or last_duration
+    if not duration or duration <= 0 then return end
+
+    local data = get_progress_data()
+    local file = io.open(progress_file, "w")
+    if file then
+        file:write(data)
+        file:close()
+    end
+end
+
+-- Timers
+mp.add_periodic_timer(save_interval, save_progress)
+mp.add_periodic_timer(command_check_interval, check_command)
+
+-- Event handlers for user actions
+mp.observe_property("pause", "bool", function(name, value)
+    save_progress()
+    if value then
+        write_event("pause", nil)
+    else
+        write_event("play", nil)
+    end
+end)
+
+mp.register_event("seek", function()
+    save_progress()
+    write_event("seek", nil)
+end)
+
+mp.register_event("shutdown", save_progress)
+mp.register_event("end-file", save_progress)
+mp.register_event("file-loaded", function()
+    mp.add_timeout(1, save_progress)
+end)
+
+mp.msg.info("StreamVault Watch Together sync script loaded.")
+"#, clean_progress, clean_event, clean_command)
+}
+
+/// Create the Lua script file for Watch Together sync mode
+fn create_sync_lua_script(media_id: i64, session_id: &str) -> Result<PathBuf, String> {
+    let progress_dir = get_progress_dir();
+    let sync_dir = get_sync_dir();
+    fs::create_dir_all(&progress_dir).map_err(|e| format!("Failed to create progress dir: {}", e))?;
+    fs::create_dir_all(&sync_dir).map_err(|e| format!("Failed to create sync dir: {}", e))?;
+
+    let script_path = sync_dir.join(format!("sync_{}.lua", session_id));
+    let progress_file = get_progress_file_path(media_id);
+    let event_file = get_sync_event_file(session_id);
+    let command_file = get_sync_command_file(session_id);
+
+    let script_content = get_sync_lua_script_content(
+        &progress_file.to_string_lossy(),
+        &event_file.to_string_lossy(),
+        &command_file.to_string_lossy(),
+    );
+
+    let mut file = fs::File::create(&script_path)
+        .map_err(|e| format!("Failed to create sync Lua script: {}", e))?;
+    file.write_all(script_content.as_bytes())
+        .map_err(|e| format!("Failed to write sync Lua script: {}", e))?;
+
+    Ok(script_path)
+}
+
+/// Launch MPV in Watch Together sync mode
+pub fn launch_mpv_with_sync(
+    mpv_path: &str,
+    file_or_url: &str,
+    media_id: i64,
+    session_id: &str,
+    start_position: f64,
+    auth_header: Option<&str>,
+) -> Result<u32, String> {
+    println!("[MPV-SYNC] ========== LAUNCHING MPV (WATCH TOGETHER) ==========");
+    println!("[MPV-SYNC] Media ID: {}", media_id);
+    println!("[MPV-SYNC] Session ID: {}", session_id);
+    println!("[MPV-SYNC] Source: {}", file_or_url);
+    println!("[MPV-SYNC] Start position: {:.2}s", start_position);
+
+    // Verify file exists for local files
+    let is_url = file_or_url.starts_with("http://") || file_or_url.starts_with("https://");
+    if !is_url && !std::path::Path::new(file_or_url).exists() {
+        return Err(format!("File does not exist: {}", file_or_url));
+    }
+
+    // Create the sync Lua script
+    let script_path = create_sync_lua_script(media_id, session_id)?;
+    println!("[MPV-SYNC] Created sync script at: {:?}", script_path);
+
+    // Initialize command file
+    let command_file = get_sync_command_file(session_id);
+    let _ = fs::write(&command_file, r#"{"action":"","position":0,"processed":true}"#);
+
+    // Build MPV command
+    let mut cmd = std::process::Command::new(mpv_path);
+
+    cmd.arg(format!("--script={}", script_path.to_string_lossy()));
+
+    if start_position > 0.0 {
+        cmd.arg(format!("--start={}", start_position as i64));
+    }
+
+    if let Some(header) = auth_header {
+        cmd.arg(format!("--http-header-fields={}", header));
+    }
+
+    cmd.arg(file_or_url);
+    cmd.arg("--save-position-on-quit=no");
+    cmd.arg("--keep-open=no");
+
+    if is_url {
+        cmd.arg("--demuxer-max-bytes=500MiB");
+        cmd.arg("--demuxer-max-back-bytes=100MiB");
+        cmd.arg("--cache=yes");
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to start MPV: {}", e))?;
+
+    let pid = child.id();
+    println!("[MPV-SYNC] Started with PID: {}", pid);
+
+    Ok(pid)
+}
+
+/// Send a sync command to MPV
+pub fn send_mpv_sync_command(session_id: &str, action: &str, position: f64) -> Result<(), String> {
+    let command_file = get_sync_command_file(session_id);
+
+    let command = MpvSyncCommand {
+        action: action.to_string(),
+        position,
+        processed: false,
+    };
+
+    let json = serde_json::to_string(&command)
+        .map_err(|e| format!("Failed to serialize command: {}", e))?;
+
+    fs::write(&command_file, json)
+        .map_err(|e| format!("Failed to write command file: {}", e))?;
+
+    println!("[MPV-SYNC] Sent command: {} at {:.2}s", action, position);
+    Ok(())
+}
+
+/// Read sync event from MPV
+pub fn read_mpv_sync_event(session_id: &str) -> Option<MpvSyncEvent> {
+    let event_file = get_sync_event_file(session_id);
+
+    if !event_file.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&event_file).ok()?;
+    let event: MpvSyncEvent = serde_json::from_str(&content).ok()?;
+
+    // Clear the event file after reading
+    let _ = fs::remove_file(&event_file);
+
+    Some(event)
+}
+
+/// Clean up sync files for a session
+pub fn cleanup_sync_files(session_id: &str) {
+    let sync_dir = get_sync_dir();
+    let _ = fs::remove_file(sync_dir.join(format!("sync_{}.lua", session_id)));
+    let _ = fs::remove_file(get_sync_command_file(session_id));
+    let _ = fs::remove_file(get_sync_event_file(session_id));
+}

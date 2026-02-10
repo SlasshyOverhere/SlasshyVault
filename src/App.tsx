@@ -6,6 +6,7 @@ import { MovieCard, ContinueCard } from '@/components/MovieCard'
 import { EpisodeBrowser } from '@/components/EpisodeBrowser'
 import { StreamView } from '@/components/StreamView'
 import { SettingsModal } from '@/components/SettingsModal'
+import { UpdateNotification, isUpdateDismissed, dismissUpdate } from '@/components/UpdateNotification'
 import { FixMatchModal } from '@/components/FixMatchModal'
 import { PlayerModal } from '@/components/PlayerModal'
 import { ResumeDialog } from '@/components/ResumeDialog'
@@ -48,6 +49,8 @@ import {
   saveConfig,
   isBetaEnabled,
   setBetaEnabled,
+  checkForUpdates,
+  UpdateInfo,
 } from '@/services/api'
 import { initAdBlocker } from '@/utils/adBlocker'
 import {
@@ -133,7 +136,7 @@ function App() {
 
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'cloud' | 'player' | 'api' | 'danger'>('general')
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
 
@@ -209,6 +212,11 @@ function App() {
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
 
+  // Update notification state
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [autoCheckUpdate, setAutoCheckUpdate] = useState(false)
+
   // Check onboarding status and load tab visibility on mount
   useEffect(() => {
     if (!hasCompletedOnboarding()) {
@@ -237,6 +245,25 @@ function App() {
           // GDrive is connected, user is authenticated
           setIsAuthenticated(true)
 
+          // Auto-detect MPV if not configured
+          try {
+            const config = await getConfig()
+            if (!config.mpv_path) {
+              console.log('[Boot] No MPV configured, auto-detecting...')
+              const mpvPath = await autoDetectMpv()
+              if (mpvPath) {
+                await saveConfig({ ...config, mpv_path: mpvPath })
+                console.log('[Boot] MPV auto-detected:', mpvPath)
+                toast({
+                  title: "MPV Detected",
+                  description: "Media player configured automatically"
+                })
+              }
+            }
+          } catch (mpvError) {
+            console.log('[Boot] MPV auto-detect failed (non-critical):', mpvError)
+          }
+
           // Restore social connection in background (don't block UI)
           restoreSocialConnection().catch(err => {
             console.log('[Auth] Social restore failed (non-critical):', err)
@@ -250,6 +277,25 @@ function App() {
     }
     checkAuth()
   }, [])
+
+  // Silent background update check after authentication
+  useEffect(() => {
+    if (!isAuthenticated || isAuthLoading) return
+
+    const timer = setTimeout(async () => {
+      try {
+        const info = await checkForUpdates()
+        if (info.available && !isUpdateDismissed(info.latest_version)) {
+          setUpdateInfo(info)
+          setUpdateAvailable(true)
+        }
+      } catch (error) {
+        console.log('[Update] Silent check failed (non-critical):', error)
+      }
+    }, 3000)
+
+    return () => clearTimeout(timer)
+  }, [isAuthenticated, isAuthLoading])
 
   // Handle Google login
   const handleLogin = async () => {
@@ -337,6 +383,24 @@ function App() {
         ? "Watch Together and Social features are now available"
         : "Watch Together and Social features are now hidden"
     })
+  }
+
+  // Handle update notification actions
+  const handleUpdateNow = () => {
+    setUpdateAvailable(false)
+    if (updateInfo) {
+      dismissUpdate(updateInfo.latest_version)
+    }
+    setSettingsInitialTab('updates')
+    setAutoCheckUpdate(true)
+    setSettingsOpen(true)
+  }
+
+  const handleDismissUpdate = () => {
+    setUpdateAvailable(false)
+    if (updateInfo) {
+      dismissUpdate(updateInfo.latest_version)
+    }
   }
 
   // Handle logout
@@ -999,6 +1063,17 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Update notification banner */}
+      <AnimatePresence>
+        {updateAvailable && updateInfo && (
+          <UpdateNotification
+            updateInfo={updateInfo}
+            onUpdateNow={handleUpdateNow}
+            onDismiss={handleDismissUpdate}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Main app content - only show when authenticated */}
       {isAuthenticated && (
@@ -2112,7 +2187,10 @@ function App() {
         open={settingsOpen}
         onOpenChange={(open) => {
           setSettingsOpen(open)
-          if (!open) setSettingsInitialTab('general')
+          if (!open) {
+            setSettingsInitialTab('general')
+            setAutoCheckUpdate(false)
+          }
         }}
         onRestartOnboarding={handleRestartOnboarding}
         onViewUpdateNotes={() => setShowUpdateNotes(true)}
@@ -2122,6 +2200,19 @@ function App() {
         onLogout={handleLogout}
         betaEnabled={betaEnabled}
         onBetaToggle={handleBetaToggle}
+        autoCheckUpdate={autoCheckUpdate}
+        onSimulateUpdate={() => {
+          const fakeUpdate: UpdateInfo = {
+            available: true,
+            current_version: '3.0.7',
+            latest_version: '99.0.0',
+            release_notes: '- Watch Together improvements\n- Bug fixes and performance\n- New streaming UI redesign',
+            download_url: 'https://fake-url.test/update.exe',
+            published_at: new Date().toISOString(),
+          }
+          setUpdateInfo(fakeUpdate)
+          setUpdateAvailable(true)
+        }}
       />
       <FixMatchModal
         open={fixMatchOpen}

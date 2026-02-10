@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Sparkles, CheckCircle, Bug, LogIn, Zap } from 'lucide-react'
 
-const CURRENT_VERSION = '3.0.6'
+const CURRENT_VERSION = '3.0.7'
 
 interface UpdateNotesModalProps {
   open: boolean
@@ -12,7 +12,7 @@ interface UpdateNotesModalProps {
 export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }: UpdateNotesModalProps) {
   const handleClose = () => {
     if (!isFromSettings) {
-      // Mark as shown in localStorage
+      // Mark as shown in localStorage when closing from main app flow
       markUpdateNotesAsShown()
     }
     onOpenChange(false)
@@ -61,55 +61,57 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
 
               {/* Content */}
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {/* Required Login */}
-                <Section
-                  icon={<LogIn className="w-4 h-4" />}
-                  title="Google Sign-In Required"
-                  color="from-blue-500/20 to-blue-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Sign in with Google to access the app</li>
-                    <li>• Your data is stored in your own Google Drive</li>
-                    <li>• MPV auto-detected on first login</li>
-                  </ul>
-                </Section>
-
-                {/* Beta Features */}
+                {/* Watch Together */}
                 <Section
                   icon={<Zap className="w-4 h-4" />}
-                  title="Beta Features (Experimental)"
+                  title="Watch Together (Beta)"
                   color="from-purple-500/20 to-purple-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• <span className="text-purple-400 font-medium">Watch Together</span> - Watch with friends in sync</li>
-                    <li>• <span className="text-purple-400 font-medium">Social Features</span> - Friends, chat, activity</li>
-                    <li>• Enable in Settings → General → Beta Features</li>
-                    <li>• These features are experimental and may not work perfectly</li>
+                    <li>• <span className="text-purple-400 font-medium">Synchronized playback</span> with friends via WebSocket relay</li>
+                    <li>• Syncplay-style drift correction for frame-accurate sync</li>
+                    <li>• Create/join rooms with 6-character codes</li>
+                    <li>• Works with both local and cloud media</li>
+                    <li>• Enable in Settings → Beta Features</li>
                   </ul>
                 </Section>
 
-                {/* Performance */}
+                {/* MPV Auto-Detection */}
                 <Section
-                  icon={<Zap className="w-4 h-4" />}
-                  title="Faster Startup"
+                  icon={<CheckCircle className="w-4 h-4" />}
+                  title="MPV Auto-Detection"
                   color="from-green-500/20 to-green-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• App loads instantly after login</li>
-                    <li>• Social features load in background</li>
+                    <li>• Automatically finds MPV on your system at startup</li>
+                    <li>• Searches PATH, Program Files, Scoop, Chocolatey installs</li>
+                    <li>• No manual configuration needed</li>
                   </ul>
                 </Section>
 
-                {/* Bug Fixes */}
+                {/* In-App Updates */}
+                <Section
+                  icon={<LogIn className="w-4 h-4" />}
+                  title="In-App Update Notifications"
+                  color="from-blue-500/20 to-blue-500/5"
+                >
+                  <ul className="space-y-1 text-sm text-muted-foreground">
+                    <li>• Silent background update checks after login</li>
+                    <li>• Dismissable notification with release notes preview</li>
+                    <li>• Download and install updates from Settings</li>
+                  </ul>
+                </Section>
+
+                {/* Bug Fixes & Safety */}
                 <Section
                   icon={<Bug className="w-4 h-4" />}
-                  title="Bug Fixes"
+                  title="Improvements & Fixes"
                   color="from-orange-500/20 to-orange-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Fixed loading spinner position in Social tab</li>
-                    <li>• Fixed Watch Together showing when beta is off</li>
-                    <li>• Improved login flow reliability</li>
+                    <li>• Safety check prevents accidental deletion of tracked cloud folders</li>
+                    <li>• Redesigned Settings with Beta, Updates, and Dev tabs</li>
+                    <li>• Chat UI components for social features</li>
                   </ul>
                 </Section>
               </div>

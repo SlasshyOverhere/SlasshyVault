@@ -8,6 +8,8 @@ mod tmdb;
 mod mpv_ipc;
 mod gdrive;
 mod transcoder;
+mod watch_together;
+mod watch_together_mpv;
 
 use tauri_plugin_autostart::MacosLauncher;
 
@@ -44,6 +46,8 @@ pub struct AppState {
     pub is_scanning: Arc<AtomicBool>,
     pub active_mpv_sessions: Mutex<HashMap<i64, MpvSession>>,
     pub gdrive_client: gdrive::GoogleDriveClient,
+    pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
+    pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
 }
 
 // API Response types
@@ -256,6 +260,12 @@ async fn clear_all_streaming_history(
 #[tauri::command]
 async fn gdrive_is_connected(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.gdrive_client.is_authenticated())
+}
+
+/// Get Google Drive access token for social features
+#[tauri::command]
+async fn gdrive_get_access_token(state: State<'_, AppState>) -> Result<String, String> {
+    state.gdrive_client.get_access_token().await
 }
 
 /// Get Google Drive account info
@@ -1840,14 +1850,27 @@ async fn delete_series_cloud_folder(
     // If it's a cloud series and has a folder ID, delete the folder from Google Drive
     if is_cloud {
         if let Some(folder_id) = cloud_folder_id {
-            println!("[DELETE] Deleting cloud folder from Google Drive: {}", folder_id);
-            match state.gdrive_client.delete_file(&folder_id).await {
-                Ok(_) => {
-                    println!("[DELETE] Successfully deleted cloud folder: {}", folder_id);
-                }
-                Err(e) => {
-                    println!("[DELETE] Warning: Failed to delete cloud folder {}: {}", folder_id, e);
-                    // Continue anyway - we still want to remove from DB
+            // SAFETY CHECK: Never delete a tracked root folder - this would delete ALL content!
+            let is_tracked_folder = {
+                let db = state.db.lock().map_err(|e| e.to_string())?;
+                db.get_cloud_folders()
+                    .map(|folders| folders.iter().any(|(id, _, _)| id == &folder_id))
+                    .unwrap_or(false)
+            };
+
+            if is_tracked_folder {
+                println!("[DELETE] SAFETY: Refusing to delete tracked root folder: {} - this would delete all content!", folder_id);
+                // Don't delete the folder, but continue to remove from DB
+            } else {
+                println!("[DELETE] Deleting cloud folder from Google Drive: {}", folder_id);
+                match state.gdrive_client.delete_file(&folder_id).await {
+                    Ok(_) => {
+                        println!("[DELETE] Successfully deleted cloud folder: {}", folder_id);
+                    }
+                    Err(e) => {
+                        println!("[DELETE] Warning: Failed to delete cloud folder {}: {}", folder_id, e);
+                        // Continue anyway - we still want to remove from DB
+                    }
                 }
             }
         }
@@ -1868,6 +1891,14 @@ async fn delete_series_cloud_folder(
     Ok(ApiResponse {
         message: format!("Series '{}' completely removed", series_title),
     })
+}
+
+// Auto-detect MPV executable on the system
+#[tauri::command]
+async fn auto_detect_mpv(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let result = config::auto_detect_mpv(&mut config);
+    Ok(result)
 }
 
 // Get configuration
@@ -4005,6 +4036,364 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+// ==================== WATCH TOGETHER COMMANDS ====================
+
+/// Create a Watch Together room
+#[tauri::command]
+async fn wt_create_room(
+    state: State<'_, AppState>,
+    window: Window,
+    media_id: i64,
+    title: String,
+    nickname: String,
+) -> Result<watch_together::RoomInfo, String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+
+    // Set up event callback to emit to frontend AND apply sync corrections
+    let window_clone = window.clone();
+    let wt_ctrl = state.wt_controller.clone();
+    manager.set_event_callback(move |event| {
+        // If this is a state_update, apply sync to MPV controller
+        if let watch_together::WatchEvent::StateUpdate { position, paused, .. } = &event {
+            let pos = *position;
+            let is_paused = *paused;
+            let ctrl = wt_ctrl.clone();
+            tokio::spawn(async move {
+                let ctrl_guard = ctrl.lock().await;
+                if let Some(ref controller) = *ctrl_guard {
+                    if let Err(e) = controller.apply_sync(pos, is_paused).await {
+                        println!("[WT] Sync apply error: {}", e);
+                    }
+                }
+            });
+        }
+        // Also forward sync_command to MPV controller
+        if let watch_together::WatchEvent::SyncCommand { ref command } = event {
+            let action = command.action.clone();
+            let pos = command.position;
+            let ctrl = wt_ctrl.clone();
+            tokio::spawn(async move {
+                let ctrl_guard = ctrl.lock().await;
+                if let Some(ref controller) = *ctrl_guard {
+                    match action.as_str() {
+                        "play" => {
+                            let _ = controller.set_paused(false).await;
+                            let _ = controller.seek_to(pos).await;
+                        }
+                        "pause" => {
+                            let _ = controller.set_paused(true).await;
+                        }
+                        "seek" => {
+                            let _ = controller.seek_to(pos).await;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        let _ = window_clone.emit("wt-event", &event);
+    }).await;
+
+    manager.create_room(media_id, title, nickname).await
+}
+
+/// Join a Watch Together room
+#[tauri::command]
+async fn wt_join_room(
+    state: State<'_, AppState>,
+    window: Window,
+    room_code: String,
+    media_id: i64,
+    nickname: String,
+) -> Result<watch_together::RoomInfo, String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+
+    // Set up event callback with sync corrections
+    let window_clone = window.clone();
+    let wt_ctrl = state.wt_controller.clone();
+    manager.set_event_callback(move |event| {
+        if let watch_together::WatchEvent::StateUpdate { position, paused, .. } = &event {
+            let pos = *position;
+            let is_paused = *paused;
+            let ctrl = wt_ctrl.clone();
+            tokio::spawn(async move {
+                let ctrl_guard = ctrl.lock().await;
+                if let Some(ref controller) = *ctrl_guard {
+                    if let Err(e) = controller.apply_sync(pos, is_paused).await {
+                        println!("[WT] Sync apply error: {}", e);
+                    }
+                }
+            });
+        }
+        if let watch_together::WatchEvent::SyncCommand { ref command } = event {
+            let action = command.action.clone();
+            let pos = command.position;
+            let ctrl = wt_ctrl.clone();
+            tokio::spawn(async move {
+                let ctrl_guard = ctrl.lock().await;
+                if let Some(ref controller) = *ctrl_guard {
+                    match action.as_str() {
+                        "play" => {
+                            let _ = controller.set_paused(false).await;
+                            let _ = controller.seek_to(pos).await;
+                        }
+                        "pause" => {
+                            let _ = controller.set_paused(true).await;
+                        }
+                        "seek" => {
+                            let _ = controller.seek_to(pos).await;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        let _ = window_clone.emit("wt-event", &event);
+    }).await;
+
+    manager.join_room(room_code, media_id, nickname).await
+}
+
+/// Leave the current Watch Together room
+#[tauri::command]
+async fn wt_leave_room(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    manager.leave_room().await
+}
+
+/// Set ready status with video duration
+#[tauri::command]
+async fn wt_set_ready(
+    state: State<'_, AppState>,
+    duration: f64,
+) -> Result<(), String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    manager.set_ready(duration).await
+}
+
+/// Start playback (host only)
+#[tauri::command]
+async fn wt_start_playback(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    manager.start_playback().await
+}
+
+/// Send a sync command
+#[tauri::command]
+async fn wt_send_sync(
+    state: State<'_, AppState>,
+    action: String,
+    position: f64,
+) -> Result<(), String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    manager.send_sync(&action, position).await
+}
+
+/// Get current room state
+#[tauri::command]
+async fn wt_get_room_state(
+    state: State<'_, AppState>,
+) -> Result<Option<watch_together::RoomInfo>, String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    Ok(manager.get_room_state().await)
+}
+
+/// Check if Watch Together session is active
+#[tauri::command]
+async fn wt_is_active(
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    Ok(manager.is_active().await)
+}
+
+/// Launch MPV in Watch Together sync mode
+#[tauri::command]
+async fn wt_launch_mpv(
+    state: State<'_, AppState>,
+    window: Window,
+    media_id: i64,
+    session_id: String,
+    start_position: f64,
+) -> Result<u32, String> {
+    // Get media info and config
+    let (file_path, mpv_path, is_cloud, cloud_file_id) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        let mpv = config.mpv_path.clone().unwrap_or_else(|| "mpv".to_string());
+        (media.file_path, mpv, media.is_cloud.unwrap_or(false), media.cloud_file_id)
+    };
+
+    let file_or_url = if is_cloud {
+        if let Some(file_id) = cloud_file_id {
+            let (url, _token) = state.gdrive_client.get_stream_url(&file_id)
+                .await
+                .map_err(|e| format!("Failed to get cloud streaming URL: {}", e))?;
+            url
+        } else {
+            return Err("Cloud file has no file ID".to_string());
+        }
+    } else {
+        file_path.ok_or("No file path for local media")?
+    };
+
+    let auth_header: Option<String> = if is_cloud {
+        state.gdrive_client.get_access_token().await.ok().map(|t| format!("Authorization: Bearer {}", t))
+    } else {
+        None
+    };
+
+    // Determine if host
+    let is_host = {
+        let wt = state.watch_together.clone();
+        let manager = wt.lock().await;
+        manager.is_host().await
+    };
+
+    // Launch MPV with pipe-based IPC (replaces old file-based approach)
+    let (pid, mut controller) = watch_together_mpv::launch_mpv_wt(
+        &mpv_path,
+        &file_or_url,
+        media_id,
+        &session_id,
+        start_position,
+        auth_header.as_deref(),
+        is_host,
+    )?;
+
+    // Connect to MPV's named pipe for bidirectional IPC
+    controller.connect().await?;
+
+    // Take the event receiver before storing the controller
+    let mut event_rx = controller.take_event_rx().await
+        .ok_or("Failed to get MPV event receiver")?;
+
+    // Store the controller in AppState
+    {
+        let mut wt_ctrl = state.wt_controller.lock().await;
+        *wt_ctrl = Some(controller);
+    }
+
+    // Store MPV PID in watch session
+    {
+        let wt = state.watch_together.clone();
+        let manager = wt.lock().await;
+        manager.set_mpv_pid(pid).await;
+    }
+
+    // Spawn the sync orchestration loop
+    let wt_clone = state.watch_together.clone();
+    let wt_ctrl = state.wt_controller.clone();
+    let session_id_clone = session_id.clone();
+    let window_clone = window.clone();
+
+    tokio::spawn(async move {
+        let mut state_report_interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        state_report_interval.tick().await;
+
+        loop {
+            tokio::select! {
+                // Handle MPV events from the pipe reader
+                Some(mpv_event) = event_rx.recv() => {
+                    match mpv_event {
+                        watch_together_mpv::MpvSyncEvent::PauseChanged { paused, position } => {
+                            println!("[WT] MPV pause changed: paused={}, pos={:.2}", paused, position);
+                            let action = if paused { "pause" } else { "play" };
+                            let manager = wt_clone.lock().await;
+                            let _ = manager.send_sync(action, position).await;
+                        }
+                        watch_together_mpv::MpvSyncEvent::Seeked { position } => {
+                            println!("[WT] MPV user seek to {:.2}", position);
+                            let manager = wt_clone.lock().await;
+                            let _ = manager.send_sync("seek", position).await;
+                        }
+                        watch_together_mpv::MpvSyncEvent::Ended => {
+                            println!("[WT] MPV process ended");
+                            watch_together_mpv::cleanup_session(&session_id_clone);
+                            let _ = window_clone.emit("wt-mpv-ended", ());
+                            // Clear the controller
+                            let mut ctrl = wt_ctrl.lock().await;
+                            *ctrl = None;
+                            break;
+                        }
+                        watch_together_mpv::MpvSyncEvent::PositionUpdate { .. } => {
+                            // Handled internally by the controller's local_state
+                        }
+                    }
+                }
+
+                // Periodic state report to server (Syncplay-style)
+                _ = state_report_interval.tick() => {
+                    let ctrl = wt_ctrl.lock().await;
+                    if let Some(ref controller) = *ctrl {
+                        let (pos, paused) = controller.get_estimated_position().await;
+                        drop(ctrl);
+                        let manager = wt_clone.lock().await;
+                        let session = manager.session.lock().await;
+                        if let Some(ref session) = *session {
+                            let _ = session.send_message(
+                                watch_together::ClientMessage::StateReport {
+                                    position: pos,
+                                    paused,
+                                }
+                            ).await;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(pid)
+}
+
+/// Send a command to MPV in Watch Together mode
+#[tauri::command]
+async fn wt_send_mpv_command(
+    state: State<'_, AppState>,
+    session_id: String,
+    action: String,
+    position: f64,
+) -> Result<(), String> {
+    let ctrl = state.wt_controller.lock().await;
+    if let Some(ref controller) = *ctrl {
+        match action.as_str() {
+            "play" => {
+                controller.set_paused(false).await?;
+                if position > 0.0 {
+                    controller.seek_to(position).await?;
+                }
+            }
+            "pause" => {
+                controller.set_paused(true).await?;
+            }
+            "seek" => {
+                controller.seek_to(position).await?;
+            }
+            _ => {
+                return Err(format!("Unknown action: {}", action));
+            }
+        }
+        Ok(())
+    } else {
+        // Fallback to file-based IPC
+        mpv_ipc::send_mpv_sync_command(&session_id, &action, position)
+    }
+}
+
 fn main() {
     // Load .env file from project root (for development)
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
@@ -4038,6 +4427,8 @@ fn main() {
         is_scanning: Arc::new(AtomicBool::new(false)),
         active_mpv_sessions: Mutex::new(HashMap::new()),
         gdrive_client: gdrive::GoogleDriveClient::new(),
+        watch_together: Arc::new(tokio::sync::Mutex::new(watch_together::WatchTogetherManager::new())),
+        wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     // Create system tray menu
@@ -4298,6 +4689,7 @@ fn main() {
             get_episodes_for_delete,
             get_config,
             save_config,
+            auto_detect_mpv,
             get_scan_status,
             get_resume_info,
             get_media_info,
@@ -4328,6 +4720,7 @@ fn main() {
             save_videasy_progress,
             // Google Drive commands
             gdrive_is_connected,
+            gdrive_get_access_token,
             gdrive_get_account_info,
             gdrive_start_auth,
             gdrive_complete_auth,
@@ -4355,6 +4748,17 @@ fn main() {
             download_update,
             install_update,
             get_app_version,
+            // Watch Together commands
+            wt_create_room,
+            wt_join_room,
+            wt_leave_room,
+            wt_set_ready,
+            wt_start_playback,
+            wt_send_sync,
+            wt_get_room_state,
+            wt_is_active,
+            wt_launch_mpv,
+            wt_send_mpv_command,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

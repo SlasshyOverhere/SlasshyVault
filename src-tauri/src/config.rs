@@ -1,8 +1,173 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
+use std::path::Path;
+use std::process::Command;
 
 use crate::database::get_config_path;
+
+/// Common locations where MPV might be installed on Windows
+const MPV_SEARCH_PATHS: &[&str] = &[
+    // Common installation directories
+    "C:\\Program Files\\mpv\\mpv.exe",
+    "C:\\Program Files (x86)\\mpv\\mpv.exe",
+    "C:\\Program Files\\mpv.net\\mpv.exe",
+    "C:\\Program Files (x86)\\mpv.net\\mpv.exe",
+    // Scoop installations
+    "C:\\Users\\*\\scoop\\apps\\mpv\\current\\mpv.exe",
+    "C:\\Users\\*\\scoop\\shims\\mpv.exe",
+    // Chocolatey
+    "C:\\ProgramData\\chocolatey\\bin\\mpv.exe",
+    // Portable installations (common locations)
+    "C:\\mpv\\mpv.exe",
+    "C:\\Tools\\mpv\\mpv.exe",
+    "D:\\mpv\\mpv.exe",
+    "D:\\Tools\\mpv\\mpv.exe",
+    // User profile locations
+    "C:\\Users\\*\\AppData\\Local\\Programs\\mpv\\mpv.exe",
+    "C:\\Users\\*\\mpv\\mpv.exe",
+];
+
+/// Search for mpv.exe on the system
+/// Returns the path if found, None otherwise
+pub fn find_mpv_executable() -> Option<String> {
+    println!("[MPV] Searching for mpv.exe on the system...");
+
+    // First, check if mpv is in PATH (fastest check)
+    if let Ok(output) = Command::new("where").arg("mpv.exe").output() {
+        if output.status.success() {
+            if let Ok(path) = String::from_utf8(output.stdout) {
+                let path = path.lines().next().unwrap_or("").trim();
+                if !path.is_empty() && Path::new(path).exists() {
+                    println!("[MPV] Found mpv in PATH: {}", path);
+                    return Some(path.to_string());
+                }
+            }
+        }
+    }
+
+    // Check common installation paths
+    for pattern in MPV_SEARCH_PATHS {
+        if pattern.contains('*') {
+            // Handle wildcard patterns (for user-specific paths)
+            if let Some(found) = expand_and_check_pattern(pattern) {
+                println!("[MPV] Found mpv at: {}", found);
+                return Some(found);
+            }
+        } else if Path::new(pattern).exists() {
+            println!("[MPV] Found mpv at: {}", pattern);
+            return Some(pattern.to_string());
+        }
+    }
+
+    // Deep search in Program Files directories
+    let search_roots = [
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\",
+        "D:\\",
+    ];
+
+    for root in search_roots {
+        if let Some(found) = search_directory_for_mpv(root, 3) {
+            println!("[MPV] Found mpv via deep search: {}", found);
+            return Some(found);
+        }
+    }
+
+    println!("[MPV] mpv.exe not found on the system");
+    None
+}
+
+/// Expand wildcard patterns and check if mpv exists
+fn expand_and_check_pattern(pattern: &str) -> Option<String> {
+    // Handle patterns like "C:\Users\*\scoop\..."
+    if let Some(star_pos) = pattern.find('*') {
+        let prefix = &pattern[..star_pos];
+        let suffix = &pattern[star_pos + 1..];
+
+        if let Ok(entries) = fs::read_dir(prefix) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let full_path = format!("{}{}", entry.path().display(), suffix);
+                if Path::new(&full_path).exists() {
+                    return Some(full_path);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Recursively search a directory for mpv.exe (with depth limit)
+fn search_directory_for_mpv(dir: &str, max_depth: u32) -> Option<String> {
+    if max_depth == 0 {
+        return None;
+    }
+
+    let dir_path = Path::new(dir);
+    if !dir_path.exists() || !dir_path.is_dir() {
+        return None;
+    }
+
+    // Check if mpv.exe is directly in this directory
+    let mpv_path = dir_path.join("mpv.exe");
+    if mpv_path.exists() {
+        return Some(mpv_path.to_string_lossy().to_string());
+    }
+
+    // Also check for mpv/mpv.exe subdirectory
+    let mpv_subdir = dir_path.join("mpv").join("mpv.exe");
+    if mpv_subdir.exists() {
+        return Some(mpv_subdir.to_string_lossy().to_string());
+    }
+
+    // Search subdirectories (only look in likely directories to avoid slow scans)
+    let likely_subdirs = ["mpv", "mpv.net", "video", "media", "players", "tools", "portable", "apps"];
+
+    if let Ok(entries) = fs::read_dir(dir_path) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let entry_name = entry.file_name().to_string_lossy().to_lowercase();
+
+            // Only recurse into likely directories or if at top level
+            if max_depth >= 2 || likely_subdirs.iter().any(|&s| entry_name.contains(s)) {
+                if let Some(found) = search_directory_for_mpv(
+                    &entry.path().to_string_lossy(),
+                    max_depth - 1,
+                ) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Auto-detect and save MPV path if not already configured
+pub fn auto_detect_mpv(config: &mut Config) -> Option<String> {
+    // If already configured and exists, use it
+    if let Some(ref path) = config.mpv_path {
+        if Path::new(path).exists() {
+            println!("[MPV] Using configured path: {}", path);
+            return Some(path.clone());
+        }
+        println!("[MPV] Configured path doesn't exist: {}, searching...", path);
+    }
+
+    // Auto-detect
+    if let Some(found_path) = find_mpv_executable() {
+        config.mpv_path = Some(found_path.clone());
+        // Save to config file
+        if let Err(e) = save_config(config) {
+            println!("[MPV] Warning: Failed to save detected path to config: {}", e);
+        } else {
+            println!("[MPV] Saved detected path to config: {}", found_path);
+        }
+        return Some(found_path);
+    }
+
+    None
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {

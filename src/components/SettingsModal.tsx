@@ -5,11 +5,11 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import {
   Trash2, MonitorPlay, FolderOpen,
-  AlertTriangle, Settings, Key, Zap, Power, X, Save, Sparkles, Eye, Cloud, Wrench, HardDrive, Download, RefreshCw, FileText, Code
+  AlertTriangle, Settings, Key, Zap, Power, X, Save, Sparkles, Eye, Cloud, Download, RefreshCw, FileText, Code, FlaskConical, Users, Radio, Activity, Shield
 } from "lucide-react"
 import {
-  Config, getConfig, saveConfig, clearAllAppData, cleanupMissingMetadata, repairFilePaths,
-  getCloudCacheInfo, clearCloudCache, CloudCacheInfo, TabVisibility,
+  Config, getConfig, saveConfig, clearAllAppData, cleanupMissingMetadata,
+  TabVisibility,
   checkForUpdates, downloadUpdate, installUpdate, getAppVersion, UpdateInfo, autoDetectMpv
 } from "@/services/api"
 import {
@@ -38,11 +38,13 @@ interface SettingsModalProps {
   onLogout?: () => void
   betaEnabled?: boolean
   onBetaToggle?: (enabled: boolean) => void
+  autoCheckUpdate?: boolean
+  onSimulateUpdate?: () => void
 }
 
-type SettingsSection = 'general' | 'cloud' | 'player' | 'api' | 'danger' | 'dev'
+type SettingsSection = 'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'
 
-export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewUpdateNotes, initialTab, tabVisibility, onTabVisibilityChange, onLogout, betaEnabled = false, onBetaToggle }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewUpdateNotes, initialTab, tabVisibility: _tabVisibility, onTabVisibilityChange: _onTabVisibilityChange, onLogout, betaEnabled = false, onBetaToggle, autoCheckUpdate = false, onSimulateUpdate }: SettingsModalProps) {
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
     vlc_path: "",
@@ -59,10 +61,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [cleaningUp, setCleaningUp] = useState(false)
-  const [repairing, setRepairing] = useState(false)
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
-  const [cacheInfo, setCacheInfo] = useState<CloudCacheInfo | null>(null)
-  const [clearingCache, setClearingCache] = useState(false)
   const [appVersion, setAppVersion] = useState<string>("")
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -70,13 +69,13 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [devAuthServerUrl, setDevAuthServerUrl] = useState("")
   const [detectingMpv, setDetectingMpv] = useState(false)
+  const [useOwnApiKey, setUseOwnApiKey] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
     if (open) {
       loadConfig()
       checkAutoStart()
-      loadCacheInfo()
       loadAppVersion()
       setActiveSection(initialTab || 'general')
       setShowResetConfirm(false)
@@ -88,14 +87,12 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
     }
   }, [open, initialTab])
 
-  const loadCacheInfo = async () => {
-    try {
-      const info = await getCloudCacheInfo()
-      setCacheInfo(info)
-    } catch (error) {
-      console.error("Failed to load cache info", error)
+  // Auto-trigger update check when navigated from update notification
+  useEffect(() => {
+    if (open && autoCheckUpdate && activeSection === 'updates') {
+      handleCheckUpdate()
     }
-  }
+  }, [open, autoCheckUpdate])
 
   const loadAppVersion = async () => {
     try {
@@ -192,6 +189,8 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
         cloud_cache_max_mb: data.cloud_cache_max_mb ?? 1024,
         cloud_cache_expiry_hours: data.cloud_cache_expiry_hours ?? 24
       })
+      // If user already has a custom API key saved, show the custom input
+      setUseOwnApiKey(!!data.tmdb_api_key)
     } catch (error) {
       console.error("Failed to load config", error)
       toast({ title: "Error", description: "Failed to load configuration", variant: "destructive" })
@@ -258,26 +257,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
     }
   }
 
-  const handleRepairFilePaths = async () => {
-    setRepairing(true)
-    try {
-      const result = await repairFilePaths()
-      toast({
-        title: "Repair Complete",
-        description: result.message
-      })
-    } catch (error) {
-      console.error("Failed to repair file paths", error)
-      toast({
-        title: "Error",
-        description: String(error) || "Failed to repair file paths",
-        variant: "destructive"
-      })
-    } finally {
-      setRepairing(false)
-    }
-  }
-
   const browseMpvPath = async () => {
     try {
       const selected = await openDialog({
@@ -290,50 +269,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
       }
     } catch (error) {
       console.error("Failed to open file dialog", error)
-    }
-  }
-
-  const browseFfprobePath = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: 'Executable', extensions: ['exe'] }],
-        title: 'Select FFprobe Executable'
-      })
-      if (selected && typeof selected === 'string') {
-        setConfig({ ...config, ffprobe_path: selected })
-      }
-    } catch (error) {
-      console.error("Failed to open file dialog", error)
-    }
-  }
-
-  const browseCacheDir = async () => {
-    try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: 'Select Cache Directory'
-      })
-      if (selected && typeof selected === 'string') {
-        setConfig({ ...config, cloud_cache_dir: selected })
-      }
-    } catch (error) {
-      console.error("Failed to open folder dialog", error)
-    }
-  }
-
-  const handleClearCache = async () => {
-    setClearingCache(true)
-    try {
-      const result = await clearCloudCache()
-      toast({ title: "Cache Cleared", description: result.message })
-      loadCacheInfo()
-    } catch (error) {
-      console.error("Failed to clear cache", error)
-      toast({ title: "Error", description: "Failed to clear cache", variant: "destructive" })
-    } finally {
-      setClearingCache(false)
     }
   }
 
@@ -386,10 +321,11 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
 
   const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
     { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
+    { id: 'updates', label: 'Updates & Security', icon: <Shield className="w-4 h-4" /> },
     { id: 'cloud', label: 'Cloud Storage', icon: <Cloud className="w-4 h-4" /> },
-    { id: 'player', label: 'Player', icon: <MonitorPlay className="w-4 h-4" /> },
     { id: 'api', label: 'API Keys', icon: <Key className="w-4 h-4" /> },
     { id: 'danger', label: 'Advanced', icon: <AlertTriangle className="w-4 h-4" /> },
+    { id: 'beta', label: 'Beta', icon: <FlaskConical className="w-4 h-4" /> },
     // Dev section only visible in development mode
     ...(isDev ? [{ id: 'dev' as SettingsSection, label: 'Developer', icon: <Code className="w-4 h-4" /> }] : []),
   ]
@@ -466,54 +402,41 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       </div>
                     </div>
 
-                    {/* Beta Features */}
-                    <div className="p-4 rounded-xl bg-card border border-purple-500/30">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-purple-500/20">
-                            <Zap className="w-5 h-5 text-purple-400" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <Label className="text-base font-medium">Beta Features</Label>
-                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">BETA</span>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              Enable Watch Together and Social features
-                            </p>
-                          </div>
+                    {/* MPV Path */}
+                    <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-lg bg-white/10">
+                          <MonitorPlay className="w-5 h-5 text-white" />
                         </div>
-                        <Switch
-                          checked={betaEnabled}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              // Show warning before enabling
-                              const confirmed = window.confirm(
-                                "⚠️ Beta Features Warning\n\n" +
-                                "These features are experimental and for public testing only:\n\n" +
-                                "• Watch Together - Watch with friends in sync\n" +
-                                "• Social Features - Friends, chat, activity feed\n\n" +
-                                "⚠️ These features may not work properly, may have bugs, " +
-                                "and could stop working at any time.\n\n" +
-                                "Do you want to enable beta features?"
-                              )
-                              if (confirmed) {
-                                onBetaToggle?.(true)
-                              }
-                            } else {
-                              onBetaToggle?.(false)
-                            }
-                          }}
+                        <div>
+                          <Label className="text-base font-medium">MPV Executable Path</Label>
+                          <p className="text-sm text-muted-foreground">
+                            Required for video playback
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Input
+                          value={config.mpv_path || ""}
+                          onChange={(e) => setConfig({ ...config, mpv_path: e.target.value })}
+                          placeholder="C:\path\to\mpv.exe"
+                          className="flex-1"
                         />
+                        <Button variant="outline" size="icon" onClick={browseMpvPath} title="Browse">
+                          <FolderOpen className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={handleAutoDetectMpv}
+                          disabled={detectingMpv}
+                          className="gap-2"
+                          title="Auto-detect MPV on your PC"
+                        >
+                          <RefreshCw className={cn("w-4 h-4", detectingMpv && "animate-spin")} />
+                          {detectingMpv ? "Detecting..." : "Detect"}
+                        </Button>
                       </div>
-                      <div className="mt-3 pl-12 space-y-2">
-                        <p className="text-xs text-muted-foreground">
-                          These features are experimental and for public testing only.
-                        </p>
-                        <p className="text-xs text-yellow-500/80">
-                          ⚠️ May not work properly • Not stable • Use at your own risk
-                        </p>
-                      </div>
+                      <p className="text-xs text-muted-foreground">Download MPV from mpv.io if not installed</p>
                     </div>
 
                     {/* Onboarding Overview */}
@@ -544,65 +467,184 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                         </Button>
                       </div>
                     </div>
+                  </motion.div>
+                )}
 
-                    {/* Patch Notes */}
-                    <div className="p-4 rounded-xl bg-card border border-border">
+                {/* Beta Features Section */}
+                {activeSection === 'beta' && (
+                  <motion.div
+                    key="beta"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-6"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-semibold text-foreground mb-1">Beta Features</h3>
+                        <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded-full">EXPERIMENTAL</span>
+                      </div>
+                      <p className="text-sm text-muted-foreground">Try new features before they're stable</p>
+                    </div>
+
+                    {/* Master Beta Toggle */}
+                    <div className="p-4 rounded-xl bg-card border border-purple-500/30">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-white/10">
-                            <FileText className="w-5 h-5 text-white" />
+                          <div className="p-2 rounded-lg bg-purple-500/20">
+                            <FlaskConical className="w-5 h-5 text-purple-400" />
                           </div>
                           <div>
-                            <Label className="text-base font-medium">Patch Notes</Label>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-base font-medium">Enable Beta Features</Label>
+                              <span className={cn(
+                                "px-1.5 py-0.5 text-[10px] font-semibold rounded",
+                                betaEnabled
+                                  ? "bg-green-500/20 text-green-400"
+                                  : "bg-muted text-muted-foreground"
+                              )}>
+                                {betaEnabled ? "ON" : "OFF"}
+                              </span>
+                            </div>
                             <p className="text-sm text-muted-foreground">
-                              Version {CURRENT_APP_VERSION}
+                              Toggle all beta features on or off
                             </p>
                           </div>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            onOpenChange(false)
-                            onViewUpdateNotes?.()
-                          }}
-                          className="gap-2"
-                        >
-                          <Eye className="w-4 h-4" />
-                          View Notes
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Tab Visibility */}
-                    <div className="p-4 rounded-xl bg-card border border-border space-y-4">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="p-2 rounded-lg bg-white/10">
-                          <Eye className="w-5 h-5 text-white" />
-                        </div>
-                        <div>
-                          <Label className="text-base font-medium">Navigation Tabs</Label>
-                          <p className="text-sm text-muted-foreground">
-                            Show or hide tabs in the sidebar
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Cloud Tab Toggle */}
-                      <div className="flex items-center justify-between pl-12">
-                        <div className="flex items-center gap-2">
-                          <Cloud className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm font-medium">Google Drive</span>
-                        </div>
                         <Switch
-                          checked={tabVisibility?.showCloud ?? true}
+                          checked={betaEnabled}
                           onCheckedChange={(checked) => {
-                            if (onTabVisibilityChange && tabVisibility) {
-                              onTabVisibilityChange({ ...tabVisibility, showCloud: checked })
+                            if (checked) {
+                              const confirmed = window.confirm(
+                                "Beta Features Warning\n\n" +
+                                "These features are experimental and for public testing only:\n\n" +
+                                "\u2022 Watch Together - Watch with friends in sync\n" +
+                                "\u2022 Social Features - Friends, chat, activity feed\n\n" +
+                                "These features may not work properly, may have bugs, " +
+                                "and could stop working at any time.\n\n" +
+                                "Do you want to enable beta features?"
+                              )
+                              if (confirmed) {
+                                onBetaToggle?.(true)
+                              }
+                            } else {
+                              onBetaToggle?.(false)
                             }
                           }}
                         />
                       </div>
+                    </div>
+
+                    {/* Warning Banner */}
+                    <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-yellow-500">Heads up</p>
+                          <p className="text-xs text-yellow-500/70">
+                            Beta features are experimental and for public testing only. They may not work properly, may have bugs, and could stop working at any time. Use at your own risk.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Feature List */}
+                    <div className="space-y-3">
+                      <Label className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Beta Features</Label>
+
+                      {/* Watch Together */}
+                      <div className={cn(
+                        "p-4 rounded-xl border transition-colors",
+                        betaEnabled
+                          ? "bg-card border-purple-500/20"
+                          : "bg-card/50 border-border opacity-60"
+                      )}>
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            "p-2 rounded-lg flex-shrink-0",
+                            betaEnabled ? "bg-purple-500/20" : "bg-muted"
+                          )}>
+                            <Radio className={cn("w-5 h-5", betaEnabled ? "text-purple-400" : "text-muted-foreground")} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium">Watch Together</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">UNSTABLE</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Watch movies and shows in sync with friends. Create or join rooms for synchronized playback.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Social - Friends & Chat */}
+                      <div className={cn(
+                        "p-4 rounded-xl border transition-colors",
+                        betaEnabled
+                          ? "bg-card border-purple-500/20"
+                          : "bg-card/50 border-border opacity-60"
+                      )}>
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            "p-2 rounded-lg flex-shrink-0",
+                            betaEnabled ? "bg-purple-500/20" : "bg-muted"
+                          )}>
+                            <Users className={cn("w-5 h-5", betaEnabled ? "text-purple-400" : "text-muted-foreground")} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium">Social - Friends & Chat</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">UNSTABLE</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Add friends, send messages, and see what others are watching. Social tab appears in the sidebar.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Activity Feed */}
+                      <div className={cn(
+                        "p-4 rounded-xl border transition-colors",
+                        betaEnabled
+                          ? "bg-card border-purple-500/20"
+                          : "bg-card/50 border-border opacity-60"
+                      )}>
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            "p-2 rounded-lg flex-shrink-0",
+                            betaEnabled ? "bg-purple-500/20" : "bg-muted"
+                          )}>
+                            <Activity className={cn("w-5 h-5", betaEnabled ? "text-purple-400" : "text-muted-foreground")} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium">Activity Feed</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">UNSTABLE</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              See what your friends are watching in real-time. Activity updates show on the Social page.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Updates & Security Section */}
+                {activeSection === 'updates' && (
+                  <motion.div
+                    key="updates"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-6"
+                  >
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground mb-1">Updates & Security</h3>
+                      <p className="text-sm text-muted-foreground">App updates, patch notes, and version info</p>
                     </div>
 
                     {/* About & Updates */}
@@ -677,6 +719,35 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                         </div>
                       )}
                     </div>
+
+                    {/* Patch Notes */}
+                    <div className="p-4 rounded-xl bg-card border border-border">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-white/10">
+                            <FileText className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium">Patch Notes</Label>
+                            <p className="text-sm text-muted-foreground">
+                              Version {CURRENT_APP_VERSION}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            onOpenChange(false)
+                            onViewUpdateNotes?.()
+                          }}
+                          className="gap-2"
+                        >
+                          <Eye className="w-4 h-4" />
+                          View Notes
+                        </Button>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
 
@@ -690,160 +761,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                     className="space-y-6"
                   >
                     <GoogleDriveSettings />
-
-                    {/* Cloud Cache Settings - Always visible */}
-                    <div className="pt-4 border-t border-border">
-                      <div className="mb-3 sm:mb-4">
-                        <h3 className="text-base sm:text-lg font-semibold text-foreground mb-1">Cloud Streaming Cache</h3>
-                        <p className="text-xs sm:text-sm text-muted-foreground">Cache cloud videos for smoother playback</p>
-                      </div>
-
-                      {/* Enable Cache Toggle */}
-                      <div className="p-3 sm:p-4 rounded-xl bg-card border border-border">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                            <div className="p-1.5 sm:p-2 rounded-lg bg-white/10 flex-shrink-0">
-                              <HardDrive className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                            </div>
-                            <div className="min-w-0">
-                              <Label className="text-sm sm:text-base font-medium">Enable Disk Cache</Label>
-                              <p className="text-xs sm:text-sm text-muted-foreground truncate">
-                                Cache streams for smoother playback
-                              </p>
-                            </div>
-                          </div>
-                          <Switch
-                            checked={config.cloud_cache_enabled ?? false}
-                            onCheckedChange={(checked) => setConfig({ ...config, cloud_cache_enabled: checked })}
-                            className="flex-shrink-0"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Cache Directory - Show when enabled */}
-                      {config.cloud_cache_enabled && (
-                        <div className="space-y-3 sm:space-y-4 mt-3 sm:mt-4">
-                          <div className="space-y-2">
-                            <Label className="text-xs sm:text-sm font-medium">Cache Directory</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                value={config.cloud_cache_dir || ""}
-                                onChange={(e) => setConfig({ ...config, cloud_cache_dir: e.target.value })}
-                                placeholder="Select folder..."
-                                className="flex-1 min-w-0 text-sm"
-                              />
-                              <Button variant="outline" size="icon" onClick={browseCacheDir} className="flex-shrink-0">
-                                <FolderOpen className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </div>
-
-                          {/* Cache Size & Expiry - Responsive grid */}
-                          <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                            <div className="space-y-1 sm:space-y-2">
-                              <Label className="text-xs sm:text-sm font-medium">Max Size (MB)</Label>
-                              <Input
-                                type="number"
-                                value={config.cloud_cache_max_mb || 1024}
-                                onChange={(e) => setConfig({ ...config, cloud_cache_max_mb: parseInt(e.target.value) || 1024 })}
-                                min={100}
-                                max={10240}
-                                className="text-sm"
-                              />
-                            </div>
-                            <div className="space-y-1 sm:space-y-2">
-                              <Label className="text-xs sm:text-sm font-medium">Cleanup (Hours)</Label>
-                              <Input
-                                type="number"
-                                value={config.cloud_cache_expiry_hours || 24}
-                                onChange={(e) => setConfig({ ...config, cloud_cache_expiry_hours: parseInt(e.target.value) || 24 })}
-                                min={1}
-                                max={168}
-                                className="text-sm"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Cache Stats */}
-                          {cacheInfo && cacheInfo.cache_dir && (
-                            <div className="p-2 sm:p-3 rounded-xl bg-muted/50 border border-border">
-                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
-                                <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm">
-                                  <span>
-                                    <span className="text-muted-foreground">Used: </span>
-                                    <span className="font-medium">{cacheInfo.total_size_mb.toFixed(1)} MB</span>
-                                  </span>
-                                  <span>
-                                    <span className="text-muted-foreground">Files: </span>
-                                    <span className="font-medium">{cacheInfo.file_count}</span>
-                                  </span>
-                                </div>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={handleClearCache}
-                                  disabled={clearingCache || cacheInfo.file_count === 0}
-                                  className="gap-2 w-full sm:w-auto text-xs sm:text-sm"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  {clearingCache ? "Clearing..." : "Clear"}
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* Player Section */}
-                {activeSection === 'player' && (
-                  <motion.div
-                    key="player"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    className="space-y-6"
-                  >
-                    <div>
-                      <h3 className="text-lg font-semibold text-foreground mb-1">Player Settings</h3>
-                      <p className="text-sm text-muted-foreground">Configure video playback preferences</p>
-                    </div>
-
-                    {/* MPV Path */}
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium">MPV Executable Path</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          value={config.mpv_path || ""}
-                          onChange={(e) => setConfig({ ...config, mpv_path: e.target.value })}
-                          placeholder="C:\path\to\mpv.exe"
-                          className="flex-1"
-                        />
-                        <Button variant="outline" size="icon" onClick={browseMpvPath}>
-                          <FolderOpen className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Required for video playback. Download MPV from mpv.io</p>
-                    </div>
-
-                    {/* FFprobe Path */}
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium">FFprobe Path (Optional)</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          value={config.ffprobe_path || ""}
-                          onChange={(e) => setConfig({ ...config, ffprobe_path: e.target.value })}
-                          placeholder="C:\path\to\ffprobe.exe"
-                          className="flex-1"
-                        />
-                        <Button variant="outline" size="icon" onClick={browseFfprobePath}>
-                          <FolderOpen className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Used for generating accurate progress bars</p>
-                    </div>
                   </motion.div>
                 )}
 
@@ -861,35 +778,113 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       <p className="text-sm text-muted-foreground">Configure external service API keys</p>
                     </div>
 
-                    {/* TMDB API Key/Token */}
+                    {/* TMDB API Key Mode Selection */}
                     <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                       <div className="flex items-center gap-3">
                         <div className="p-2 rounded-lg bg-white/10">
                           <Zap className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <Label className="text-base font-medium">TMDB API Key / Access Token</Label>
-                          <p className="text-sm text-muted-foreground">Required for metadata, posters, and streaming search</p>
+                          <Label className="text-base font-medium">TMDB API Key</Label>
+                          <p className="text-sm text-muted-foreground">Used for metadata, posters, and streaming search</p>
                         </div>
                       </div>
-                      <Input
-                        type="password"
-                        value={config.tmdb_api_key || ""}
-                        onChange={(e) => setConfig({ ...config, tmdb_api_key: e.target.value })}
-                        placeholder="Enter your TMDB API key or Access Token"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        You can use either an <strong>API Key</strong> (v3 auth) or <strong>Access Token</strong> (v4 auth / Bearer token).{" "}
-                        Get yours at{" "}
-                        <a
-                          href="https://www.themoviedb.org/settings/api"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-white hover:underline"
+
+                      {/* Option: Use Built-in */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseOwnApiKey(false)
+                          setConfig({ ...config, tmdb_api_key: "" })
+                        }}
+                        className={cn(
+                          "w-full p-3 rounded-xl border text-left transition-all",
+                          !useOwnApiKey
+                            ? "border-white/30 bg-white/10"
+                            : "border-border bg-card/50 hover:bg-card/80"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn(
+                            "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                            !useOwnApiKey ? "border-white" : "border-muted-foreground"
+                          )}>
+                            {!useOwnApiKey && (
+                              <div className="w-2 h-2 rounded-full bg-white" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">Use Built-in API Key</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded">FREE</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              No setup needed. Shared across all users, so it may hit rate limits during peak usage.
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Option: Use Your Own */}
+                      <button
+                        type="button"
+                        onClick={() => setUseOwnApiKey(true)}
+                        className={cn(
+                          "w-full p-3 rounded-xl border text-left transition-all",
+                          useOwnApiKey
+                            ? "border-white/30 bg-white/10"
+                            : "border-border bg-card/50 hover:bg-card/80"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn(
+                            "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                            useOwnApiKey ? "border-white" : "border-muted-foreground"
+                          )}>
+                            {useOwnApiKey && (
+                              <div className="w-2 h-2 rounded-full bg-white" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">Use Your Own API Key</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/20 text-blue-400 rounded">RECOMMENDED</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              Get your own free key for unlimited requests with no rate limits.
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Custom API Key Input - Only shown when "Use Your Own" is selected */}
+                      {useOwnApiKey && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="space-y-3 pt-1"
                         >
-                          themoviedb.org
-                        </a>
-                      </p>
+                          <Input
+                            type="password"
+                            value={config.tmdb_api_key || ""}
+                            onChange={(e) => setConfig({ ...config, tmdb_api_key: e.target.value })}
+                            placeholder="Enter your TMDB API key or Access Token"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            You can use either an <strong>API Key</strong> (v3 auth) or <strong>Access Token</strong> (v4 auth / Bearer token).{" "}
+                            Get yours at{" "}
+                            <a
+                              href="https://www.themoviedb.org/settings/api"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-white hover:underline"
+                            >
+                              themoviedb.org
+                            </a>
+                          </p>
+                        </motion.div>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -906,34 +901,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                     <div>
                       <h3 className="text-lg font-semibold text-foreground mb-1">Advanced Settings</h3>
                       <p className="text-sm text-muted-foreground">Danger zone - proceed with caution</p>
-                    </div>
-
-                    {/* Repair File Paths */}
-                    <div className="p-4 rounded-xl border border-white/20 bg-white/5 space-y-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-white/10">
-                          <Wrench className="w-5 h-5 text-white" />
-                        </div>
-                        <div>
-                          <Label className="text-base font-medium text-white">Repair File Paths</Label>
-                          <p className="text-sm text-muted-foreground">
-                            Fix broken database entries
-                          </p>
-                        </div>
-                      </div>
-                      <p className="text-sm text-muted-foreground">
-                        If videos show "file not found" errors, this will search your media folders
-                        and repair broken file paths in the database. Run this before rescanning.
-                      </p>
-                      <Button
-                        variant="outline"
-                        onClick={handleRepairFilePaths}
-                        className="w-full border-white/20 hover:bg-white/10"
-                        disabled={repairing}
-                      >
-                        <Wrench className="mr-2 h-4 w-4" />
-                        {repairing ? "Repairing..." : "Repair File Paths"}
-                      </Button>
                     </div>
 
                     {/* Cleanup Missing Metadata */}
@@ -1152,6 +1119,37 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       >
                         <MonitorPlay className={cn("w-4 h-4", detectingMpv && "animate-pulse")} />
                         {detectingMpv ? "Searching PC..." : "Auto-Detect MPV"}
+                      </Button>
+                    </div>
+
+                    {/* Simulate Update Notification */}
+                    <div className="p-4 rounded-xl bg-card border border-violet-500/30 space-y-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-lg bg-violet-500/20">
+                          <Download className="w-5 h-5 text-violet-400" />
+                        </div>
+                        <div>
+                          <Label className="text-base font-medium">Simulate Update</Label>
+                          <p className="text-sm text-muted-foreground">
+                            Trigger a fake update notification to test the flow
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        This will show the in-app update notification banner with fake data so you can test the full update workflow without a real update being available.
+                      </p>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          if (onSimulateUpdate) {
+                            onSimulateUpdate()
+                            onOpenChange(false)
+                          }
+                        }}
+                        className="w-full gap-2 border-violet-500/30 hover:bg-violet-500/10 text-violet-400 hover:text-violet-300"
+                      >
+                        <Download className="w-4 h-4" />
+                        Simulate Update Notification
                       </Button>
                     </div>
 
