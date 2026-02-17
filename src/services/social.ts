@@ -135,7 +135,10 @@ const SOCIAL_SYNCED_ACTIVITY_KEYS_KEY = 'streamvault_social_synced_activity_keys
 const SOCIAL_DEFAULT_SYNC_CURSOR = '1970-01-01 00:00:00';
 const MAX_SYNCED_ACTIVITY_KEYS = 1000;
 const DEV_SETTINGS_KEY = 'streamvault_dev_settings';
-const DEFAULT_AUTH_SERVER_URL = 'https://streamvault-auth.onrender.com';
+const DEFAULT_AUTH_SERVER_URL = (
+  (import.meta.env.VITE_AUTH_SERVER_URL as string | undefined)?.trim()
+  || 'https://streamvault-backend-server.onrender.com'
+);
 const PROFILE_SYNC_INTERVAL = 10 * 60 * 1000; // 10 minutes
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE = 5000; // 5 seconds base delay
