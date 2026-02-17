@@ -228,10 +228,6 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
               </>
             )}
           </Button>
-
-          <p className="mt-4 text-xs text-zinc-500">
-            Make sure the backend server is running on localhost:3000
-          </p>
         </motion.div>
       </div>
     );

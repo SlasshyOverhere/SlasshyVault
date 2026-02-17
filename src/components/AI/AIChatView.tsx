@@ -138,7 +138,7 @@ interface TmdbMoreInfoData {
 
 const LOCAL_HISTORY_FALLBACK_KEY = 'streamvault_ai_beta_history_v1';
 const MAX_HISTORY_LINES = 40;
-const DEFAULT_AI_MODEL = (import.meta.env.VITE_AI_MODEL || '').trim();
+const DEFAULT_AI_MODEL = (import.meta.env.VITE_AI_MODEL || 'llama-3.1-8b-instant').trim();
 const MAX_LINKED_ITEMS = 4;
 const MAX_MENTION_RESULTS = 40;
 const IST_TIMEZONE = 'Asia/Kolkata';
@@ -1334,8 +1334,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
   const canSend = useMemo(() => {
     const hasInput = input.trim().length > 0;
     const hasQuota = quota ? quota.remaining > 0 : true;
-    const hasModel = DEFAULT_AI_MODEL.length > 0;
-    return hasInput && hasQuota && hasModel && !sending && !isBanned;
+    return hasInput && hasQuota && !sending && !isBanned;
   }, [input, quota, sending, isBanned]);
 
   const buildUpgradeLiveNotice = (event: SocialEvent): AiUpgradeLiveNotice => {
@@ -1471,12 +1470,6 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     return () => {
       clearInterval(timer);
     };
-  }, []);
-
-  useEffect(() => {
-    if (!DEFAULT_AI_MODEL) {
-      setError('AI model missing. Set VITE_AI_MODEL.');
-    }
   }, []);
 
   useEffect(() => {
@@ -2164,11 +2157,6 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
   const handleSend = async () => {
     const text = input.trim();
     if (!text || sending) return;
-
-    if (!DEFAULT_AI_MODEL) {
-      setError('AI model missing. Set VITE_AI_MODEL.');
-      return;
-    }
 
     if (isBanned) {
       setError('AI chat access is blocked. Ask admin to unban you.');

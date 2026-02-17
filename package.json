@@ -2,7 +2,7 @@
   "name": "streamvault",
   "author": "Suman Patgiri",
   "private": true,
-  "version": "3.0.16",
+  "version": "0.1.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
