@@ -374,7 +374,7 @@ function App() {
   const handleBetaToggle = (enabled: boolean) => {
     setBetaEnabled(enabled)
     setBetaEnabledState(enabled)
-    if (!enabled && (view === 'social' || view === 'ai')) {
+    if (!enabled && view === 'social') {
       setView('home')
     }
     toast({
@@ -878,14 +878,6 @@ function App() {
   }
 
   const handleAskAiFromContent = (item: MediaItem) => {
-    if (!betaEnabled) {
-      toast({
-        title: "AI Chat Disabled",
-        description: "Enable AI Chat Beta from Settings first.",
-      })
-      return
-    }
-
     setAiLaunchRequest({
       item,
       nonce: Date.now(),
@@ -1418,7 +1410,7 @@ function App() {
 
             {/* Content - Episodes and AI chat have their own fixed layout/scroll behavior */}
             {view === 'episodes' && selectedShow ? (
-              <div className="flex-1 overflow-hidden p-3">
+              <div className="flex-1 overflow-hidden px-3 pb-3 pt-12">
                 <AnimatePresence mode="wait">
                   <motion.div
                     key="episodes"
@@ -1440,7 +1432,7 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-            ) : view === 'ai' && betaEnabled ? (
+            ) : view === 'ai' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
                   <AnimatePresence mode="wait">
@@ -1549,15 +1541,13 @@ function App() {
                                 <Globe className="w-4 h-4 text-gray-400" />
                                 <span>Browse Online</span>
                               </button>
-                              {betaEnabled && (
-                                <button
-                                  onClick={() => setView('ai')}
-                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                                >
-                                  <Bot className="w-4 h-4 text-emerald-300" />
-                                  <span>AI Chat Beta</span>
-                                </button>
-                              )}
+                              <button
+                                onClick={() => setView('ai')}
+                                className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
+                              >
+                                <Bot className="w-4 h-4 text-emerald-300" />
+                                <span>AI Chat</span>
+                              </button>
                             </motion.div>
                           </div>
                         </div>
@@ -1950,8 +1940,8 @@ function App() {
                       </motion.div>
                     )}
 
-                    {/* AI Chat View - Only visible when beta is enabled */}
-                    {view === 'ai' && betaEnabled && (
+                    {/* AI Chat View */}
+                    {view === 'ai' && (
                       <motion.div
                         key="ai"
                         initial={{ opacity: 0 }}
@@ -2140,7 +2130,7 @@ function App() {
                               index={index}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
-                              onAskAI={betaEnabled ? handleAskAiFromContent : undefined}
+                              onAskAI={handleAskAiFromContent}
                               onDelete={handleDelete}
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
