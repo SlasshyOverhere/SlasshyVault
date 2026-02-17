@@ -7,6 +7,7 @@ license = ""
 repository = "https://github.com/SlasshyOverhere/StreamVault"
 edition = "2021"
 default-run = "streamvault"
+autobins = false
 
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
@@ -49,3 +50,13 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Storage
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
+wan-test = []
+
+[[bin]]
+name = "streamvault"
+path = "src/main.rs"
+
+[[bin]]
+name = "wt_tauri_wan_test"
+path = "src/bin/wt_tauri_wan_test.rs"
+required-features = ["wan-test"]
