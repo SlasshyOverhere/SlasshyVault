@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Sparkles, CheckCircle, Bug } from 'lucide-react'
 
-const CURRENT_VERSION = '3.0.15'
+const CURRENT_VERSION = '3.0.16'
 
 interface UpdateNotesModalProps {
   open: boolean
