@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Sparkles, CheckCircle, Bug, LogIn, Zap } from 'lucide-react'
+import { X, Sparkles, CheckCircle, Bug } from 'lucide-react'
 
-const CURRENT_VERSION = '3.0.7'
+const CURRENT_VERSION = '3.0.8'
 
 interface UpdateNotesModalProps {
   open: boolean
@@ -61,57 +61,40 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
 
               {/* Content */}
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {/* Watch Together */}
+                {/* New Features */}
                 <Section
-                  icon={<Zap className="w-4 h-4" />}
-                  title="Watch Together (Beta)"
+                  icon={<Sparkles className="w-4 h-4" />}
+                  title="New Features"
                   color="from-purple-500/20 to-purple-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• <span className="text-purple-400 font-medium">Synchronized playback</span> with friends via WebSocket relay</li>
-                    <li>• Syncplay-style drift correction for frame-accurate sync</li>
-                    <li>• Create/join rooms with 6-character codes</li>
-                    <li>• Works with both local and cloud media</li>
-                    <li>• Enable in Settings → Beta Features</li>
+                    <li>• New AI Chat (Beta) for quicker in-app help and discovery.</li>
+                    <li>• Watch Together beta with shared playback rooms.</li>
+                    <li>• In-app update notifications with quick install flow.</li>
                   </ul>
                 </Section>
 
-                {/* MPV Auto-Detection */}
-                <Section
-                  icon={<CheckCircle className="w-4 h-4" />}
-                  title="MPV Auto-Detection"
-                  color="from-green-500/20 to-green-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Automatically finds MPV on your system at startup</li>
-                    <li>• Searches PATH, Program Files, Scoop, Chocolatey installs</li>
-                    <li>• No manual configuration needed</li>
-                  </ul>
-                </Section>
-
-                {/* In-App Updates */}
-                <Section
-                  icon={<LogIn className="w-4 h-4" />}
-                  title="In-App Update Notifications"
-                  color="from-blue-500/20 to-blue-500/5"
-                >
-                  <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Silent background update checks after login</li>
-                    <li>• Dismissable notification with release notes preview</li>
-                    <li>• Download and install updates from Settings</li>
-                  </ul>
-                </Section>
-
-                {/* Bug Fixes & Safety */}
+                {/* Critical Fixes */}
                 <Section
                   icon={<Bug className="w-4 h-4" />}
-                  title="Improvements & Fixes"
+                  title="Critical Fixes"
                   color="from-orange-500/20 to-orange-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Safety check prevents accidental deletion of tracked cloud folders</li>
-                    <li>• Redesigned Settings with Beta, Updates, and Dev tabs</li>
-                    <li>• Chat UI components for social features</li>
+                    <li>• Fixed key Watch Together sync/reconnect reliability issues.</li>
+                    <li>• Improved safety checks for cloud folder operations.</li>
+                  </ul>
+                </Section>
+
+                {/* Improvements */}
+                <Section
+                  icon={<CheckCircle className="w-4 h-4" />}
+                  title="Improvements"
+                  color="from-blue-500/20 to-blue-500/5"
+                >
+                  <ul className="space-y-1 text-sm text-muted-foreground">
+                    <li>• Faster app startup checks and smoother playback readiness.</li>
+                    <li>• General stability and performance improvements.</li>
                   </ul>
                 </Section>
               </div>

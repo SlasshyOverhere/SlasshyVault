@@ -1,6 +1,6 @@
 [package]
 name = "streamvault"
-version = "3.0.7"
+version = "3.0.8"
 description = "A Tauri Media Library App"
 authors = ["Suman Patgiri"]
 license = ""
@@ -38,7 +38,7 @@ open = "5"
 dotenvy = "0.15"
 tiny_http = "0.12"
 lazy_static = "1.4"
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls", "handshake"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [target.'cfg(windows)'.dependencies]

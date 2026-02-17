@@ -2,31 +2,56 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 // Constants for retry logic
 const MAX_RETRIES: u32 = 5;
 const BASE_DELAY_MS: u64 = 500;
 const MAX_DELAY_MS: u64 = 10000;
 
-// Encoded TMDB access token (base64) - decode at runtime
-// This is a read-only token for fetching public movie/TV metadata
-const ENCODED_TMDB_TOKEN: &str = "ZXlKaGJHY2lPaUpJVXpJMU5pSjkuZXlKaGRXUWlPaUptTVRNNFpqVTFZbVJsWkRnMFpUUmhORFpqTUdaa1kyRXpaV0ZrTkRBNU5DSXNJbTVpWmlJNk1UYzJOelUwT1RjME1pNDNOVGNzSW5OMVlpSTZJalk1TldGaFlqSmxNbVZsT0dKbU9XWXhOalJoWkdJeVlTSXNJbk5qYjNCbGN5STZXeUpoY0dsZmNtVmhaQ0pkTENKMlpYSnphVzl1SWpveGZRLmtwY3dDdkdBb2Q0NDdOR3FGbVRxQ3NSNEtZTVFNd2Rzb0YyRlVZcno1N0E=";
+// Special marker used when we should call the backend TMDB proxy
+const BACKEND_PROXY_CREDENTIAL: &str = "__TMDB_BACKEND_PROXY__";
+const DEFAULT_TMDB_PROXY_BASE_URL: &str = "https://streamvault-backend-server.onrender.com/api/tmdb";
 
-// Decode the TMDB token at runtime
-fn get_default_tmdb_token() -> String {
-    BASE64.decode(ENCODED_TMDB_TOKEN)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .unwrap_or_default()
+pub fn get_tmdb_proxy_base_url() -> String {
+    if let Ok(proxy_url) = std::env::var("STREAMVAULT_TMDB_PROXY_URL") {
+        let trimmed = proxy_url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.trim_end_matches('/').to_string();
+        }
+    }
+
+    if let Ok(proxy_url) = std::env::var("TMDB_PROXY_URL") {
+        let trimmed = proxy_url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.trim_end_matches('/').to_string();
+        }
+    }
+
+    if let Ok(auth_server_url) = std::env::var("STREAMVAULT_AUTH_SERVER_URL") {
+        let trimmed = auth_server_url.trim();
+        if !trimmed.is_empty() {
+            return format!("{}/api/tmdb", trimmed.trim_end_matches('/'));
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        "http://localhost:3001/api/tmdb".to_string()
+    } else {
+        DEFAULT_TMDB_PROXY_BASE_URL.to_string()
+    }
 }
 
-/// Get the TMDB credential to use - user's key if provided, otherwise default
+pub fn is_backend_proxy_credential(credential: &str) -> bool {
+    credential == BACKEND_PROXY_CREDENTIAL
+}
+
+/// Get the TMDB credential to use - user's key if provided, otherwise backend proxy
 pub fn get_tmdb_credential(user_key: &str) -> String {
-    if user_key.is_empty() {
-        get_default_tmdb_token()
+    let trimmed = user_key.trim();
+    if trimmed.is_empty() {
+        BACKEND_PROXY_CREDENTIAL.to_string()
     } else {
-        user_key.to_string()
+        trimmed.to_string()
     }
 }
 
@@ -37,6 +62,20 @@ pub struct TmdbMetadata {
     pub overview: Option<String>,
     pub poster_path: Option<String>,
     pub tmdb_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TmdbSearchListItem {
+    pub id: i64,
+    pub title: Option<String>,
+    pub name: Option<String>,
+    pub media_type: String,
+    pub poster_path: Option<String>,
+    pub backdrop_path: Option<String>,
+    pub overview: Option<String>,
+    pub release_date: Option<String>,
+    pub first_air_date: Option<String>,
+    pub vote_average: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,8 +131,32 @@ struct TmdbFindResult {
 fn build_client() -> Result<reqwest::blocking::Client, Box<dyn std::error::Error + Send + Sync>> {
     Ok(reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("SlashyMediaIndexer/1.0")
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .pool_max_idle_per_host(0)
+        .tcp_keepalive(std::time::Duration::from_secs(20))
+        .tcp_nodelay(true)
+        .user_agent("StreamVault/1.0")
         .build()?)
+}
+
+/// Build a short-lived client for latency-sensitive operations (Fix Match update path).
+fn build_quick_client(
+    timeout_secs: u64,
+    http1_only: bool,
+) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error + Send + Sync>> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(0)
+        .tcp_keepalive(std::time::Duration::from_secs(15))
+        .tcp_nodelay(true)
+        .user_agent("StreamVault/1.0");
+
+    if http1_only {
+        builder = builder.http1_only();
+    }
+
+    Ok(builder.build()?)
 }
 
 /// Check if the given credential is an access token (starts with "eyJ") or API key
@@ -101,10 +164,24 @@ fn is_access_token(credential: &str) -> bool {
     credential.starts_with("eyJ")
 }
 
+fn build_tmdb_proxy_url(base_path: &str, extra_params: &str) -> String {
+    let base = get_tmdb_proxy_base_url();
+    let normalized_path = base_path.trim_start_matches('/');
+    if extra_params.is_empty() {
+        format!("{}/{}", base, normalized_path)
+    } else {
+        format!("{}/{}?{}", base, normalized_path, extra_params)
+    }
+}
+
 /// Build the URL with proper authentication
 /// - For API keys: adds ?api_key=XXX to URL
 /// - For access tokens: returns URL without api_key (auth goes in header)
 fn build_tmdb_url(base_path: &str, credential: &str, extra_params: &str) -> String {
+    if is_backend_proxy_credential(credential) {
+        return build_tmdb_proxy_url(base_path, extra_params);
+    }
+
     if is_access_token(credential) {
         format!(
             "https://api.themoviedb.org/3{}?{}",
@@ -143,7 +220,7 @@ fn tmdb_request_with_retry(
             std::thread::sleep(std::time::Duration::from_millis(total_delay));
         }
 
-        let result = if is_access_token(credential) {
+        let result = if is_access_token(credential) && !is_backend_proxy_credential(credential) {
             client.get(url)
                 .header("Authorization", format!("Bearer {}", credential))
                 .send()
@@ -459,6 +536,111 @@ pub fn search_metadata(
     println!("[TMDB] All strategies exhausted, no results found for '{}'", title);
     println!("[TMDB] ========================================\n");
     Ok(None)
+}
+
+/// Raw multi-search for UI pickers (returns movie/tv result list, no metadata caching).
+pub fn search_multi_raw(
+    api_key: &str,
+    query: &str,
+) -> Result<Vec<TmdbSearchListItem>, Box<dyn std::error::Error + Send + Sync>> {
+    let encoded_query = percent_encoding::utf8_percent_encode(
+        query,
+        percent_encoding::NON_ALPHANUMERIC,
+    ).to_string();
+
+    let params = format!(
+        "query={}&include_adult=false&language=en-US",
+        encoded_query
+    );
+    let url = build_tmdb_url("/search/multi", api_key, &params);
+
+    let client = build_client()?;
+    let response = match tmdb_request(&client, &url, api_key) {
+        Ok(response) => response,
+        Err(primary_error) => {
+            println!(
+                "[TMDB] Primary multi-search request failed, retrying with fallback transport: {}",
+                primary_error
+            );
+
+            // Fallback transport profile for environments where the default
+            // connection strategy gets reset by intermediary network devices.
+            let fallback_client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .pool_max_idle_per_host(0)
+                .tcp_keepalive(std::time::Duration::from_secs(20))
+                .tcp_nodelay(true)
+                .http1_only()
+                .user_agent("StreamVault/1.0")
+                .build()?;
+
+            tmdb_request(&fallback_client, &url, api_key).map_err(|fallback_error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "TMDB multi-search failed after fallback. primary='{}', fallback='{}'",
+                        primary_error, fallback_error
+                    ),
+                )
+            })?
+        }
+    };
+
+    if !response.status().is_success() {
+        return Err(format!("TMDB API error: {}", response.status()).into());
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RawSearchResult {
+        results: Vec<RawSearchItem>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RawSearchItem {
+        id: i64,
+        media_type: Option<String>,
+        title: Option<String>,
+        name: Option<String>,
+        #[serde(alias = "original_title")]
+        original_title: Option<String>,
+        #[serde(alias = "original_name")]
+        original_name: Option<String>,
+        poster_path: Option<String>,
+        backdrop_path: Option<String>,
+        overview: Option<String>,
+        release_date: Option<String>,
+        first_air_date: Option<String>,
+        vote_average: Option<f64>,
+    }
+
+    let raw: RawSearchResult = response.json()?;
+
+    let results = raw
+        .results
+        .into_iter()
+        .filter_map(|item| {
+            let media_type = item.media_type.unwrap_or_default();
+            if media_type != "movie" && media_type != "tv" {
+                return None;
+            }
+
+            Some(TmdbSearchListItem {
+                id: item.id,
+                title: item.title.or(item.original_title),
+                name: item.name.or(item.original_name),
+                media_type,
+                poster_path: item.poster_path,
+                backdrop_path: item.backdrop_path,
+                overview: item.overview,
+                release_date: item.release_date,
+                first_air_date: item.first_air_date,
+                vote_average: item.vote_average,
+            })
+        })
+        .collect();
+
+    Ok(results)
 }
 
 /// Check if a search result title is a reasonable match for the query
@@ -827,7 +1009,9 @@ pub fn fetch_metadata_by_id(
 
     println!("[TMDB] Fetching by ID: {} (source: {})", tmdb_id, source);
 
-    let client = build_client()?;
+    // Keep Fix Match responsive: use shorter request timeout and fewer retries.
+    let client = build_quick_client(10, true)?;
+    let request_retries = 2;
 
     let final_id = if source == "imdb" {
         // Look up TMDB ID from IMDB ID
@@ -837,7 +1021,7 @@ pub fn fetch_metadata_by_id(
             "external_source=imdb_id"
         );
 
-        let response = tmdb_request(&client, &find_url, api_key)?;
+        let response = tmdb_request_with_retry(&client, &find_url, api_key, request_retries)?;
         let result: TmdbFindResult = response.json()?;
 
         // Try movie results first, then TV
@@ -858,7 +1042,7 @@ pub fn fetch_metadata_by_id(
         "language=en-US"
     );
 
-    let response = tmdb_request(&client, &url, api_key)?;
+    let response = tmdb_request_with_retry(&client, &url, api_key, request_retries)?;
 
     if !response.status().is_success() {
         // Try the other media type
@@ -868,7 +1052,7 @@ pub fn fetch_metadata_by_id(
             api_key,
             "language=en-US"
         );
-        let alt_response = tmdb_request(&client, &alt_url, api_key)?;
+        let alt_response = tmdb_request_with_retry(&client, &alt_url, api_key, request_retries)?;
         if !alt_response.status().is_success() {
             return Err(format!("Failed to fetch metadata for ID {}", final_id).into());
         }
@@ -956,7 +1140,8 @@ fn cache_image(
 
     let image_url = format!("https://image.tmdb.org/t/p/{}{}", size, image_path);
 
-    let client = build_client()?;
+    // Image download should fail fast instead of blocking Fix Match for minutes.
+    let client = build_quick_client(8, true)?;
     let response = client.get(&image_url).send()?;
 
     if !response.status().is_success() {
@@ -1043,19 +1228,19 @@ pub fn cache_image_organized(
     }
 
     // Try different sizes with retry logic
-    let sizes = ["w500", "w342", "w185", "original"];
+    let sizes = ["w500", "w342"];
 
     for size in &sizes {
         let image_url = format!("https://image.tmdb.org/t/p/{}{}", size, image_path);
 
         // Retry logic for image download
-        for attempt in 0..3 {
+        for attempt in 0..2 {
             if attempt > 0 {
                 let delay = BASE_DELAY_MS * (1 << attempt);
                 std::thread::sleep(std::time::Duration::from_millis(delay));
             }
 
-            if let Ok(client) = build_client() {
+            if let Ok(client) = build_quick_client(8, true) {
                 match client.get(&image_url).send() {
                     Ok(response) => {
                         if response.status().is_success() {
@@ -1077,7 +1262,10 @@ pub fn cache_image_organized(
                         let error_str = e.to_string();
                         let is_retryable = error_str.contains("10054")
                             || error_str.contains("connection")
-                            || error_str.contains("timeout");
+                            || error_str.contains("timeout")
+                            || error_str.contains("timed out")
+                            || error_str.contains("closed")
+                            || error_str.contains("reset");
                         if !is_retryable {
                             break;
                         }

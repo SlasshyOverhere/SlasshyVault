@@ -1,83 +1,262 @@
-import { useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { fixMatch, MediaItem } from "@/services/api"
+import { Check, Film, Loader2, Search, Star, Tv } from "lucide-react"
+import { fixMatch, MediaItem, searchTmdb, TmdbSearchResult } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
+import { cn } from "@/lib/utils"
 
 interface FixMatchModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   item: MediaItem | null
-  onSuccess: () => void
+  onSuccess: () => void | Promise<void>
+}
+
+const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w92"
+
+const getResultTitle = (result: TmdbSearchResult) => result.title || result.name || "Untitled"
+
+const getResultYear = (result: TmdbSearchResult): string | null => {
+  const date = result.release_date || result.first_air_date
+  if (!date) return null
+
+  const year = new Date(date).getFullYear()
+  if (Number.isNaN(year)) return null
+
+  return year.toString()
 }
 
 export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchModalProps) {
-  const [inputVal, setInputVal] = useState("")
-  const [loading, setLoading] = useState(false)
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState<TmdbSearchResult[]>([])
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [isSearching, setIsSearching] = useState(false)
+  const [isUpdating, setIsUpdating] = useState(false)
+  const searchTokenRef = useRef(0)
   const { toast } = useToast()
 
-  const handleSave = async () => {
-    if (!item) return
-    if (!inputVal) {
-        toast({ title: "Error", description: "Please enter a value", variant: "destructive" })
-        return
+  const runSearch = useCallback(async (searchQuery: string, mediaType: "movie" | "tv") => {
+    const trimmedQuery = searchQuery.trim()
+    if (!trimmedQuery) {
+      setResults([])
+      setSelectedId(null)
+      return
     }
 
-    setLoading(true)
+    const currentToken = ++searchTokenRef.current
+    setIsSearching(true)
+
     try {
-      const type = item.media_type === 'movie' ? 'movie' : 'tv'
-      await fixMatch(item.id, inputVal, type)
+      const response = await searchTmdb(trimmedQuery)
+      if (currentToken !== searchTokenRef.current) return
+
+      const filtered = response.results.filter((result) => result.media_type === mediaType)
+      setResults(filtered)
+      setSelectedId((currentId) => {
+        if (currentId && filtered.some((result) => result.id === currentId)) {
+          return currentId
+        }
+        return filtered[0]?.id ?? null
+      })
+    } catch (error) {
+      if (currentToken !== searchTokenRef.current) return
+
+      console.error("TMDB search failed", error)
+      const errorMessage = typeof error === "string" ? error : (error as { message?: string })?.message || "Unknown error"
+      toast({
+        title: "Search Failed",
+        description: errorMessage.includes("API key")
+          ? "TMDB API key not configured. Please add it in Settings."
+          : `Search error: ${errorMessage}`,
+        variant: "destructive"
+      })
+    } finally {
+      if (currentToken === searchTokenRef.current) {
+        setIsSearching(false)
+      }
+    }
+  }, [toast])
+
+  useEffect(() => {
+    if (!open || !item) {
+      searchTokenRef.current += 1
+      setQuery("")
+      setResults([])
+      setSelectedId(null)
+      setIsSearching(false)
+      setIsUpdating(false)
+      return
+    }
+
+    const initialQuery = item.title.trim()
+    const mediaType = item.media_type === "movie" ? "movie" : "tv"
+
+    setQuery(initialQuery)
+    setResults([])
+    setSelectedId(null)
+
+    void runSearch(initialQuery, mediaType)
+  }, [open, item, runSearch])
+
+  const handleSearch = async () => {
+    if (!item) return
+    const mediaType = item.media_type === "movie" ? "movie" : "tv"
+    await runSearch(query, mediaType)
+  }
+
+  const handleSave = async () => {
+    if (!item || selectedId === null) {
+      toast({ title: "Error", description: "Please select a match first", variant: "destructive" })
+      return
+    }
+
+    setIsUpdating(true)
+    try {
+      const type = item.media_type === "movie" ? "movie" : "tv"
+      await fixMatch(item.id, selectedId.toString(), type)
+
       toast({ title: "Success", description: "Metadata updated successfully" })
-      
-      // Close modal first, then trigger refresh
       onOpenChange(false)
-      setInputVal("")
-      
-      // Small delay to ensure DB write is committed before read
-      setTimeout(() => {
-          onSuccess()
-      }, 1500)
-      
+
+      try {
+        await Promise.resolve(onSuccess())
+      } catch (refreshError) {
+        console.error("Failed to refresh UI after match update", refreshError)
+      }
     } catch (error) {
       console.error("Failed to fix match", error)
-      toast({ title: "Error", description: "Failed to update metadata. Check the ID or URL.", variant: "destructive" })
+      const errorMessage = typeof error === "string"
+        ? error
+        : (error as { message?: string })?.message || "Failed to update metadata."
+
+      toast({ title: "Error", description: errorMessage, variant: "destructive" })
     } finally {
-      setLoading(false)
+      setIsUpdating(false)
     }
+  }
+
+  const selectedResult = useMemo(
+    () => results.find((result) => result.id === selectedId) || null,
+    [results, selectedId]
+  )
+
+  const expectedTypeLabel = item?.media_type === "movie" ? "movie" : "show"
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return
+    event.preventDefault()
+    void handleSearch()
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[720px] max-h-[80vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Fix Match</DialogTitle>
           <DialogDescription>
-            Enter the <b>TMDB ID</b>, <b>TMDB URL</b>, or <b>IMDB URL</b> to fix the metadata for this {item?.media_type === 'movie' ? 'movie' : 'show'}.
+            Search TMDB for this {expectedTypeLabel}, select the correct result, and update its metadata automatically.
           </DialogDescription>
         </DialogHeader>
-        
-        <div className="grid gap-4 py-4">
-          <div className="grid gap-2">
-            <Label htmlFor="tmdbId">ID or URL</Label>
-            <Input 
-              id="tmdbId" 
-              value={inputVal} 
-              onChange={(e) => setInputVal(e.target.value)}
-              placeholder="e.g. 550, or https://www.imdb.com/title/tt0137523/"
+
+        <div className="space-y-4 py-4 min-h-0 flex-1">
+          <div className="flex gap-2">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Search by title..."
+              disabled={isSearching || isUpdating}
             />
-            <p className="text-xs text-muted-foreground">
-                Supports direct IDs, TMDB URLs, and IMDB URLs.
-            </p>
+            <Button onClick={handleSearch} disabled={!query.trim() || isSearching || isUpdating}>
+              {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Search
+            </Button>
+          </div>
+
+          <div className="text-xs text-muted-foreground">
+            {isSearching
+              ? "Searching TMDB..."
+              : `Found ${results.length} ${results.length === 1 ? "result" : "results"} for ${expectedTypeLabel}s`}
+          </div>
+
+          <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+            {!isSearching && results.length === 0 && (
+              <div className="rounded-md border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+                No results found. Try adjusting the search title.
+              </div>
+            )}
+
+            {results.map((result) => {
+              const isSelected = selectedId === result.id
+              const title = getResultTitle(result)
+              const year = getResultYear(result)
+              const posterUrl = result.poster_path ? `${TMDB_IMAGE_BASE}${result.poster_path}` : null
+
+              return (
+                <button
+                  key={`${result.media_type}-${result.id}`}
+                  type="button"
+                  onClick={() => setSelectedId(result.id)}
+                  className={cn(
+                    "w-full rounded-lg border p-3 text-left transition-colors",
+                    "hover:bg-muted/50",
+                    isSelected ? "border-primary/70 bg-primary/10" : "border-border/60"
+                  )}
+                  disabled={isUpdating}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-[50px] h-[75px] rounded-md border border-border/60 overflow-hidden bg-muted/30 flex items-center justify-center shrink-0">
+                      {posterUrl ? (
+                        <img src={posterUrl} alt={title} className="w-full h-full object-cover" />
+                      ) : result.media_type === "movie" ? (
+                        <Film className="w-5 h-5 text-muted-foreground" />
+                      ) : (
+                        <Tv className="w-5 h-5 text-muted-foreground" />
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium line-clamp-1">{title}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {result.media_type === "movie" ? "Movie" : "TV Show"}
+                            {year ? ` • ${year}` : ""}
+                          </div>
+                        </div>
+
+                        {typeof result.vote_average === "number" && result.vote_average > 0 && (
+                          <div className="flex items-center gap-1 text-xs text-yellow-400 shrink-0">
+                            <Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />
+                            {result.vote_average.toFixed(1)}
+                          </div>
+                        )}
+                      </div>
+
+                      {result.overview && (
+                        <p className="text-xs text-muted-foreground line-clamp-2">{result.overview}</p>
+                      )}
+                    </div>
+
+                    {isSelected && (
+                      <Check className="w-4 h-4 text-primary shrink-0 mt-1" />
+                    )}
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
 
         <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={loading}>
-                {loading ? "Updating..." : "Update Match"}
-            </Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isUpdating}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={isUpdating || !selectedResult}>
+            {isUpdating ? "Updating..." : "Update Match"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -18,6 +18,8 @@ const AUTH_SERVER_URL: &str = "https://streamvault-backend-server.onrender.com";
 
 // Google Drive API
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD_API_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
+const AI_CHAT_HISTORY_FILE_NAME: &str = "streamvault_ai_chat_history_v1.json";
 
 /// Stored OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +346,121 @@ impl GoogleDriveClient {
         let access_token = self.get_access_token().await?;
         let url = format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id);
         Ok((url, access_token))
+    }
+
+    async fn find_app_data_file_id(&self, file_name: &str) -> Result<Option<String>, String> {
+        let access_token = self.get_access_token().await?;
+        let query = format!("name='{}' and trashed = false", file_name);
+        let url = format!(
+            "{}/files?q={}&spaces=appDataFolder&fields=files(id,name,mimeType)&pageSize=1",
+            DRIVE_API_BASE,
+            urlencoding::encode(&query)
+        );
+
+        let response = self.http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to search app data file: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API search error: {}", error_text));
+        }
+
+        let result: DriveListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse app data file search response: {}", e))?;
+
+        Ok(result.files.first().map(|f| f.id.clone()))
+    }
+
+    async fn create_app_data_file(&self, file_name: &str, mime_type: &str) -> Result<String, String> {
+        let access_token = self.get_access_token().await?;
+
+        let response = self.http_client
+            .post(format!("{}/files?fields=id", DRIVE_API_BASE))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "name": file_name,
+                "parents": ["appDataFolder"],
+                "mimeType": mime_type
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to create app data file: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API create file error: {}", error_text));
+        }
+
+        let data: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse create file response: {}", e))?;
+
+        data["id"]
+            .as_str()
+            .map(|id| id.to_string())
+            .ok_or_else(|| "Missing file id in create file response".to_string())
+    }
+
+    pub async fn load_ai_chat_history(&self) -> Result<Option<String>, String> {
+        let file_id = match self.find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME).await? {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self.http_client
+            .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download AI chat history: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API download AI chat history error: {}", error_text));
+        }
+
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read AI chat history response: {}", e))?;
+
+        Ok(Some(text))
+    }
+
+    pub async fn save_ai_chat_history(&self, history_json: &str) -> Result<(), String> {
+        serde_json::from_str::<serde_json::Value>(history_json)
+            .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
+
+        let file_id = match self.find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME).await? {
+            Some(id) => id,
+            None => self.create_app_data_file(AI_CHAT_HISTORY_FILE_NAME, "application/json").await?,
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self.http_client
+            .patch(format!("{}/files/{}?uploadType=media", DRIVE_UPLOAD_API_BASE, file_id))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .body(history_json.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload AI chat history: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API upload AI chat history error: {}", error_text));
+        }
+
+        Ok(())
     }
 
     /// Get file metadata

@@ -9,13 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 // Syncplay-inspired sync thresholds (in seconds)
-const SEEK_THRESHOLD: f64 = 1.0;           // Hard seek if drift > 1.0s (Syncplay: 1.0)
-const SLOWDOWN_KICKIN: f64 = 1.5;          // Start slowdown if drift > 1.5s
+const SEEK_THRESHOLD: f64 = 2.0;           // Seek if drift exceeds this threshold
+const SLOWDOWN_KICKIN: f64 = 0.35;         // Start gentle speed correction for smaller drift
 const SLOWDOWN_RESET: f64 = 0.1;           // Reset speed when drift < 0.1s
 const SLOWDOWN_RATE: f64 = 0.95;           // Slow to 95% speed (Syncplay: 0.95)
 const SPEEDUP_RATE: f64 = 1.05;            // Speed up to 105% to catch up
 const REWIND_THRESHOLD: f64 = 4.0;         // Rewind if too far ahead (Syncplay: 4.0)
 const FASTFORWARD_THRESHOLD: f64 = 5.0;    // Fast-forward if too far behind (Syncplay: 5.0)
+const SEEK_COOLDOWN_MS: u64 = 1200;        // Prevent repeated seek spam on noisy updates
 
 /// MPV IPC command
 #[derive(Debug, Clone, Serialize)]
@@ -112,6 +113,8 @@ pub struct WatchTogetherController {
     connected: Arc<AtomicBool>,
     /// Counter for ignoring echo events (Syncplay's ignoringOnTheFly)
     pub ignoring_on_the_fly: Arc<AtomicU64>,
+    /// Last time we performed a seek-based correction
+    last_seek_correction: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl WatchTogetherController {
@@ -128,6 +131,7 @@ impl WatchTogetherController {
             next_request_id: Arc::new(AtomicU64::new(1)),
             connected: Arc::new(AtomicBool::new(false)),
             ignoring_on_the_fly: Arc::new(AtomicU64::new(0)),
+            last_seek_correction: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -426,6 +430,18 @@ impl WatchTogetherController {
         (pos, state.paused)
     }
 
+    async fn should_seek_now(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut last_seek = self.last_seek_correction.lock().await;
+        if let Some(last) = *last_seek {
+            if now.duration_since(last).as_millis() < SEEK_COOLDOWN_MS as u128 {
+                return false;
+            }
+        }
+        *last_seek = Some(now);
+        true
+    }
+
     /// Apply sync correction based on server-provided authoritative position
     /// This implements Syncplay's drift correction algorithm
     pub async fn apply_sync(&self, server_position: f64, server_paused: bool) -> Result<(), String> {
@@ -460,10 +476,13 @@ impl WatchTogetherController {
         }
 
         // Position sync - Syncplay-style tiered correction
-        if diff.abs() > FASTFORWARD_THRESHOLD || diff.abs() > REWIND_THRESHOLD {
+        if diff > REWIND_THRESHOLD || diff < -FASTFORWARD_THRESHOLD {
             // Very large drift - hard seek immediately
-            println!("[WT-MPV] Hard seek: drift={:.3}s, target={:.2}s", diff, server_position);
             drop(state);
+            if !self.should_seek_now().await {
+                return Ok(());
+            }
+            println!("[WT-MPV] Hard seek: drift={:.3}s, target={:.2}s", diff, server_position);
             self.seek_to(server_position).await?;
             self.set_speed(1.0).await?;
             let mut state = self.local_state.write().await;
@@ -472,8 +491,11 @@ impl WatchTogetherController {
             state.last_update = std::time::Instant::now();
         } else if diff.abs() > SEEK_THRESHOLD {
             // Medium drift - seek to correct position
-            println!("[WT-MPV] Seek correction: drift={:.3}s", diff);
             drop(state);
+            if !self.should_seek_now().await {
+                return Ok(());
+            }
+            println!("[WT-MPV] Seek correction: drift={:.3}s", diff);
             self.seek_to(server_position).await?;
             self.set_speed(1.0).await?;
             let mut state = self.local_state.write().await;

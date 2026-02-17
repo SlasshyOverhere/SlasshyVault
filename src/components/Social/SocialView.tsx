@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Users, Shield, User, LogIn, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,12 +12,13 @@ import { invoke } from '@tauri-apps/api/tauri';
 import {
   isSocialInitialized,
   restoreSocialConnection,
-  getProfile,
+  getCachedProfile,
   initSocial,
   onSocialEvent,
   Friend,
   UserProfile,
-  disconnectSocial
+  disconnectSocial,
+  syncLocalWatchDataToSocial
 } from '@/services/social';
 
 interface SocialViewProps {
@@ -36,6 +37,8 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
   const [activeChat, setActiveChat] = useState<Friend | null>(null);
   const [viewingProfileId, setViewingProfileId] = useState<string | null>(null);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  const [activityFeedKey, setActivityFeedKey] = useState(0);
+  const autoSyncInProgressRef = useRef(false);
 
   useEffect(() => {
     checkInitialization();
@@ -58,16 +61,46 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isInitialized || autoSyncInProgressRef.current) return;
+
+    autoSyncInProgressRef.current = true;
+    syncLocalWatchDataToSocial()
+      .then((syncResult) => {
+        console.log('[SocialView] Auto-sync complete:', syncResult);
+      })
+      .catch((syncError) => {
+        console.warn('[SocialView] Auto-sync failed:', syncError);
+      })
+      .finally(() => {
+        autoSyncInProgressRef.current = false;
+      });
+  }, [isInitialized]);
+
   const checkInitialization = async () => {
     setLoading(true);
     setError(null);
     try {
       if (isSocialInitialized()) {
+        // Show cached profile immediately for instant UI
+        const cached = getCachedProfile();
+        if (cached) {
+          setProfile(cached);
+          setIsInitialized(true);
+        }
+
         const restored = await restoreSocialConnection();
         if (restored) {
           setIsInitialized(true);
-          const profileData = await getProfile();
-          setProfile(profileData);
+          // restoreSocialConnection already calls syncProfile() which updates the cache.
+          // Use getCachedProfile() instead of a redundant getProfile() API call.
+          const freshProfile = getCachedProfile();
+          if (freshProfile) {
+            setProfile(freshProfile);
+          }
+        } else if (!cached) {
+          // Only mark as not initialized if we also don't have a cached profile
+          setIsInitialized(false);
         }
       }
     } catch (err) {
@@ -127,6 +160,16 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
     setIsInitialized(false);
     setProfile(null);
     setError(null);
+  };
+
+  const handleReconnect = async () => {
+    // Disconnect first, then reconnect with a fresh token
+    disconnectSocial();
+    setProfile(null);
+    setError(null);
+    await handleConnect();
+    // Bump key to force ActivityFeed to fully remount and re-fetch data
+    setActivityFeedKey(prev => prev + 1);
   };
 
   const handleOpenChat = (friend: Friend) => {
@@ -255,7 +298,7 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
       </div>
 
       {/* Activity Feed */}
-      <ActivityFeed onViewProfile={setViewingProfileId} />
+      <ActivityFeed key={activityFeedKey} onViewProfile={setViewingProfileId} onReconnect={handleReconnect} />
 
       {/* Friends Panel */}
       <FriendsPanel

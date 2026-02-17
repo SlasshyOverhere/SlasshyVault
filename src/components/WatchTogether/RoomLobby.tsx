@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { WatchRoom, wtSetReady, wtStartPlayback, wtLeaveRoom } from '@/services/api';
+import { WatchRoom, wtSetReady, wtStartPlayback } from '@/services/api';
 import { ParticipantList } from './ParticipantList';
 import { Button } from '@/components/ui/button';
 import { Copy, Check, Play, LogOut, Loader2 } from 'lucide-react';
@@ -8,15 +8,17 @@ interface RoomLobbyProps {
     room: WatchRoom;
     isHost: boolean;
     currentUserId: string;
+    mediaDuration?: number;
     onPlaybackStart: () => void;
     onLaunchMpv: (startPosition?: number) => Promise<void>;
-    onLeave: () => void;
+    onLeave: () => Promise<void>;
 }
 
 export function RoomLobby({
     room,
     isHost,
     currentUserId,
+    mediaDuration,
     onPlaybackStart,
     onLaunchMpv,
     onLeave,
@@ -37,8 +39,9 @@ export function RoomLobby({
 
     const handleSetReady = async () => {
         try {
-            // Use a default duration - in real usage this would come from the video
-            await wtSetReady(0);
+            const durationFromParticipant = room.participants.find((p) => p.id === currentUserId)?.duration;
+            const duration = mediaDuration ?? durationFromParticipant ?? 0;
+            await wtSetReady(duration);
             setIsReady(true);
         } catch (error) {
             console.error('Failed to set ready:', error);
@@ -66,8 +69,7 @@ export function RoomLobby({
     const handleLeave = async () => {
         setIsLeaving(true);
         try {
-            await wtLeaveRoom();
-            onLeave();
+            await onLeave();
         } catch (error) {
             console.error('Failed to leave room:', error);
         } finally {

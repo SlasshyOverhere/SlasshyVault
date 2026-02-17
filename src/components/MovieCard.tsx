@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users } from "lucide-react"
+import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion, AnimatePresence } from "framer-motion"
@@ -18,6 +18,7 @@ interface MovieCardProps {
   onRemoveFromHistory?: (item: MediaItem) => void
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
+  onAskAI?: (item: MediaItem) => void
   aspectRatio?: "portrait" | "square"
   className?: string
   index?: number
@@ -30,6 +31,7 @@ export function MovieCard({
   onRemoveFromHistory,
   onDelete,
   onWatchTogether,
+  onAskAI,
   aspectRatio = "portrait",
   className,
   index = 0,
@@ -176,18 +178,47 @@ export function MovieCard({
                 </AnimatePresence>
 
                 {/* Options button on hover */}
-                <motion.button
+                <motion.div
                   initial={{ opacity: 0, scale: 0.5 }}
                   animate={{
                     opacity: isHovered ? 1 : 0,
                     scale: isHovered ? 1 : 0.5
                   }}
                   transition={{ duration: 0.2 }}
-                  onClick={(e) => { e.stopPropagation(); onFixMatch(item) }}
-                  className="ml-auto p-2 rounded-xl bg-black/50 backdrop-blur-xl border border-white/10 text-white/80 hover:text-white hover:bg-black/70 hover:border-white/20 transition-all shadow-xl"
+                  className="ml-auto flex items-center gap-1.5"
                 >
-                  <MoreHorizontal className="w-4 h-4" />
-                </motion.button>
+                  {onAskAI && item.is_cloud && (
+                    <button
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onAskAI(item);
+                      }}
+                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-amber-300/45 text-amber-200 hover:text-amber-100 hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
+                      title="Ask AI about this title"
+                      aria-label={`Ask AI about ${item.title}`}
+                    >
+                      <Bot className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onFixMatch(item) }}
+                    className="p-2 rounded-xl bg-black/50 backdrop-blur-xl border border-white/10 text-white/80 hover:text-white hover:bg-black/70 hover:border-white/20 transition-all shadow-xl"
+                    title="More actions"
+                    aria-label={`More actions for ${item.title}`}
+                  >
+                    <MoreHorizontal className="w-4 h-4" />
+                  </button>
+                </motion.div>
               </div>
 
               {/* Play Button - Center */}
@@ -295,15 +326,27 @@ export function MovieCard({
           <span>Fix Match</span>
         </ContextMenuItem>
 
+        {onAskAI && item.is_cloud && (
+          <ContextMenuItem
+            onClick={() => onAskAI(item)}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-300 text-amber-300 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/35 flex items-center justify-center">
+              <Bot className="w-4 h-4 text-amber-300" />
+            </div>
+            <span>Ask AI (New)</span>
+          </ContextMenuItem>
+        )}
+
         {onWatchTogether && (
           <>
             <ContextMenuSeparator className="bg-white/[0.08] my-2" />
             <ContextMenuItem
               onClick={() => onWatchTogether(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-purple-500/20 focus:text-purple-400 transition-colors"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
             >
-              <div className="w-8 h-8 rounded-lg bg-purple-500/15 flex items-center justify-center">
-                <Users className="w-4 h-4 text-purple-400" />
+              <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                <Users className="w-4 h-4 text-white" />
               </div>
               <span>Watch Together</span>
             </ContextMenuItem>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Film, Tv, Filter, User, X, AlertCircle } from 'lucide-react';
+import { Film, Tv, Filter, User, X, AlertCircle, RefreshCw, LogIn } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,9 +14,10 @@ import {
 
 interface ActivityFeedProps {
   onViewProfile?: (userId: string) => void;
+  onReconnect?: () => void;
 }
 
-export function ActivityFeed({ onViewProfile }: ActivityFeedProps) {
+export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [watching, setWatching] = useState<(CurrentlyWatching & { userId: string; userName: string; userAvatar?: string })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,9 +90,16 @@ export function ActivityFeed({ onViewProfile }: ActivityFeedProps) {
     try {
       setLoading(true);
       setError(null);
+      // loadActivities and loadWatching each have their own error handling,
+      // so failures in one won't block the other
       await Promise.all([loadActivities(true), loadWatching()]);
     } catch (err) {
-      setError('Failed to load activity data. Please try again later.');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('Auth error') || errMsg.includes('401')) {
+        setError('Your session has expired. Please disconnect and reconnect to refresh.');
+      } else {
+        setError('Failed to load activity data. Please try again later.');
+      }
       console.error('Failed to load activity data:', err);
     } finally {
       setLoading(false);
@@ -100,9 +108,7 @@ export function ActivityFeed({ onViewProfile }: ActivityFeedProps) {
 
   const loadActivities = async (reset = false) => {
     try {
-      if (reset) {
-        setLoading(true);
-      } else {
+      if (!reset) {
         setIsLoadingMore(true);
       }
 
@@ -125,12 +131,15 @@ export function ActivityFeed({ onViewProfile }: ActivityFeedProps) {
     } catch (error) {
       console.error('Failed to load activities:', error);
       if (reset) {
-        setError('Failed to load activities. Please try again later.');
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (errMsg.includes('Auth error') || errMsg.includes('401')) {
+          setError('Your session has expired. Please disconnect and reconnect to refresh.');
+        } else {
+          setError('Failed to load activities. Please try again later.');
+        }
       }
     } finally {
-      if (reset) {
-        setLoading(false);
-      } else {
+      if (!reset) {
         setIsLoadingMore(false);
       }
     }
@@ -297,18 +306,33 @@ export function ActivityFeed({ onViewProfile }: ActivityFeedProps) {
         {error ? (
           <div className="flex flex-col items-center justify-center py-12 text-center p-4">
             <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-            <p className="text-red-400 font-medium mb-2">Failed to load activity</p>
+            <p className="text-red-400 font-medium mb-2">
+              {error.includes('session has expired') ? 'Session Expired' : 'Failed to load activity'}
+            </p>
             <p className="text-zinc-500 text-sm mb-4">{error}</p>
-            <Button 
-              variant="outline" 
-              onClick={retryLoad}
-              className="border-zinc-700"
-            >
-              Retry
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button 
+                variant="outline" 
+                onClick={retryLoad}
+                className="border-zinc-700"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Retry
+              </Button>
+              {onReconnect && (
+                <Button 
+                  onClick={onReconnect}
+                  className="bg-purple-600 hover:bg-purple-700"
+                >
+                  <LogIn className="w-4 h-4 mr-2" />
+                  Reconnect
+                </Button>
+              )}
+            </div>
           </div>
         ) : loading ? (
-          <div className="flex items-center justify-center py-12 text-zinc-500">
+          <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
+            <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mb-3"></div>
             Loading activity...
           </div>
         ) : activities.length === 0 ? (

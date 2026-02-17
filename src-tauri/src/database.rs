@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -27,15 +27,24 @@ pub fn get_app_data_dir() -> PathBuf {
 }
 
 pub fn get_database_path() -> String {
-    get_app_data_dir().join("media_library.db").to_string_lossy().to_string()
+    get_app_data_dir()
+        .join("media_library.db")
+        .to_string_lossy()
+        .to_string()
 }
 
 pub fn get_image_cache_dir() -> String {
-    get_app_data_dir().join("image_cache").to_string_lossy().to_string()
+    get_app_data_dir()
+        .join("image_cache")
+        .to_string_lossy()
+        .to_string()
 }
 
 pub fn get_config_path() -> String {
-    get_app_data_dir().join("media_config.json").to_string_lossy().to_string()
+    get_app_data_dir()
+        .join("media_config.json")
+        .to_string_lossy()
+        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +105,7 @@ pub struct CachedEpisodeMetadataFull {
 pub struct StreamingHistoryItem {
     pub id: i64,
     pub tmdb_id: String,
-    pub media_type: String,  // "movie" or "tv"
+    pub media_type: String, // "movie" or "tv"
     pub title: String,
     pub poster_path: Option<String>,
     pub season: Option<i32>,
@@ -104,6 +113,28 @@ pub struct StreamingHistoryItem {
     pub resume_position_seconds: f64,
     pub duration_seconds: f64,
     pub progress_percent: f64,
+    pub last_watched: String,
+}
+
+/// Aggregated watch statistics for social sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchStatsAggregated {
+    pub movies_watched: i64,
+    pub episodes_watched: i64,
+    pub total_watch_time_seconds: f64,
+}
+
+/// A recently completed watch activity for social sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchActivityItem {
+    pub content_id: String,
+    pub title: String,
+    pub content_type: String,  // "movie" or "tv"
+    pub activity_type: String, // "watched_movie" or "watched_episode"
+    pub poster_path: Option<String>,
+    pub season: Option<i32>,
+    pub episode: Option<i32>,
+    pub duration_seconds: Option<f64>,
     pub last_watched: String,
 }
 
@@ -118,7 +149,7 @@ impl Database {
         db.init()?;
         Ok(db)
     }
-    
+
     fn init(&self) -> Result<()> {
         // Create media table if not exists
         self.conn.execute(
@@ -141,51 +172,79 @@ impl Database {
             )",
             [],
         )?;
-        
+
         // Check for missing columns and add them
-        let columns: Vec<String> = self.conn
+        let columns: Vec<String> = self
+            .conn
             .prepare("PRAGMA table_info(media)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .filter_map(|r| r.ok())
             .collect();
-        
+
         if !columns.contains(&"parent_id".to_string()) {
             self.conn.execute("ALTER TABLE media ADD COLUMN parent_id INTEGER REFERENCES media(id) ON DELETE CASCADE", [])?;
         }
         if !columns.contains(&"season_number".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN season_number INTEGER", [])?;
+            self.conn
+                .execute("ALTER TABLE media ADD COLUMN season_number INTEGER", [])?;
         }
         if !columns.contains(&"episode_number".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN episode_number INTEGER", [])?;
+            self.conn
+                .execute("ALTER TABLE media ADD COLUMN episode_number INTEGER", [])?;
         }
         if !columns.contains(&"duration_seconds".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN duration_seconds REAL DEFAULT 0", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN duration_seconds REAL DEFAULT 0",
+                [],
+            )?;
         }
         if !columns.contains(&"resume_position_seconds".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN resume_position_seconds REAL DEFAULT 0", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN resume_position_seconds REAL DEFAULT 0",
+                [],
+            )?;
         }
         if !columns.contains(&"last_watched".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN last_watched TIMESTAMP DEFAULT NULL", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN last_watched TIMESTAMP DEFAULT NULL",
+                [],
+            )?;
         }
         if !columns.contains(&"tmdb_id".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN tmdb_id TEXT DEFAULT NULL", [])?;
+            self.conn
+                .execute("ALTER TABLE media ADD COLUMN tmdb_id TEXT DEFAULT NULL", [])?;
         }
         if !columns.contains(&"episode_title".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN episode_title TEXT DEFAULT NULL", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN episode_title TEXT DEFAULT NULL",
+                [],
+            )?;
         }
         if !columns.contains(&"still_path".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN still_path TEXT DEFAULT NULL", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN still_path TEXT DEFAULT NULL",
+                [],
+            )?;
         }
 
         // Cloud storage columns
         if !columns.contains(&"is_cloud".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN is_cloud INTEGER DEFAULT 0", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN is_cloud INTEGER DEFAULT 0",
+                [],
+            )?;
         }
         if !columns.contains(&"cloud_file_id".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN cloud_file_id TEXT DEFAULT NULL", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN cloud_file_id TEXT DEFAULT NULL",
+                [],
+            )?;
         }
         if !columns.contains(&"cloud_folder_id".to_string()) {
-            self.conn.execute("ALTER TABLE media ADD COLUMN cloud_folder_id TEXT DEFAULT NULL", [])?;
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN cloud_folder_id TEXT DEFAULT NULL",
+                [],
+            )?;
         }
 
         // Create cached_episode_metadata table for pre-fetched episode info from TMDB
@@ -254,10 +313,12 @@ impl Database {
         )?;
 
         // Add changes_page_token column if it doesn't exist (migration)
-        self.conn.execute(
-            "ALTER TABLE cloud_folders ADD COLUMN changes_page_token TEXT",
-            [],
-        ).ok(); // Ignore error if column already exists
+        self.conn
+            .execute(
+                "ALTER TABLE cloud_folders ADD COLUMN changes_page_token TEXT",
+                [],
+            )
+            .ok(); // Ignore error if column already exists
 
         // Create app_settings table for storing global settings like the changes token
         self.conn.execute(
@@ -279,7 +340,7 @@ impl Database {
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
                     is_cloud, cloud_file_id
-             FROM media WHERE media_type = ?"
+             FROM media WHERE media_type = ?",
         );
 
         if search.is_some() {
@@ -290,23 +351,36 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let items = if let Some(query) = search {
-            stmt.query_map(params![media_type, format!("%{}%", query)], Self::map_media_item)?
+            stmt.query_map(
+                params![media_type, format!("%{}%", query)],
+                Self::map_media_item,
+            )?
         } else {
             stmt.query_map(params![media_type], Self::map_media_item)?
         };
 
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     /// Get library filtered by cloud status
-    pub fn get_library_filtered(&self, media_type: &str, search: Option<&str>, is_cloud: Option<bool>) -> Result<Vec<MediaItem>> {
+    pub fn get_library_filtered(
+        &self,
+        media_type: &str,
+        search: Option<&str>,
+        is_cloud: Option<bool>,
+    ) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
             "SELECT id, title, year, overview, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
                     is_cloud, cloud_file_id
-             FROM media WHERE media_type = ?"
+             FROM media WHERE media_type = ?",
         );
 
         // Add cloud filter if specified
@@ -326,12 +400,20 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let items = if let Some(query) = search {
-            stmt.query_map(params![media_type, format!("%{}%", query)], Self::map_media_item)?
+            stmt.query_map(
+                params![media_type, format!("%{}%", query)],
+                Self::map_media_item,
+            )?
         } else {
             stmt.query_map(params![media_type], Self::map_media_item)?
         };
 
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     pub fn get_episodes(&self, series_id: i64) -> Result<Vec<MediaItem>> {
@@ -341,13 +423,18 @@ impl Database {
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
                     is_cloud, cloud_file_id
-             FROM media WHERE parent_id = ? ORDER BY season_number, episode_number"
+             FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
         )?;
 
         let items = stmt.query_map(params![series_id], Self::map_media_item)?;
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
-    
+
     pub fn get_watch_history(&self, limit: i32) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -376,7 +463,12 @@ impl Database {
         )?;
 
         let items = stmt.query_map(params![limit], Self::map_media_item)?;
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     pub fn get_media_by_id(&self, id: i64) -> Result<MediaItem> {
@@ -385,26 +477,30 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
-             FROM media WHERE id = ?"
+             FROM media WHERE id = ?",
         )?;
 
         stmt.query_row(params![id], Self::map_media_item)
     }
-    
+
     pub fn get_resume_info(&self, media_id: i64) -> Result<ResumeInfo> {
-        let mut stmt = self.conn.prepare(
-            "SELECT resume_position_seconds, duration_seconds FROM media WHERE id = ?"
-        )?;
-        
+        let mut stmt = self
+            .conn
+            .prepare("SELECT resume_position_seconds, duration_seconds FROM media WHERE id = ?")?;
+
         let (position, duration): (f64, f64) = stmt.query_row(params![media_id], |row| {
             Ok((
                 row.get::<_, Option<f64>>(0)?.unwrap_or(0.0),
                 row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
             ))
         })?;
-        
-        let progress_percent = if duration > 0.0 { (position / duration) * 100.0 } else { 0.0 };
-        
+
+        let progress_percent = if duration > 0.0 {
+            (position / duration) * 100.0
+        } else {
+            0.0
+        };
+
         // Don't return progress if >= 95%
         if progress_percent >= 95.0 {
             return Ok(ResumeInfo {
@@ -415,14 +511,14 @@ impl Database {
                 progress_percent: 0.0,
             });
         }
-        
+
         let has_progress = position > 0.0 && duration > 0.0;
-        
+
         let hours = (position / 3600.0) as i32;
         let minutes = ((position % 3600.0) / 60.0) as i32;
         let seconds = (position % 60.0) as i32;
         let time_str = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-        
+
         Ok(ResumeInfo {
             has_progress,
             position,
@@ -431,11 +527,15 @@ impl Database {
             progress_percent,
         })
     }
-    
+
     pub fn update_progress(&self, media_id: i64, current_time: f64, duration: f64) -> Result<()> {
         // Clear progress if >= 95%
-        let progress_percent = if duration > 0.0 { current_time / duration } else { 0.0 };
-        
+        let progress_percent = if duration > 0.0 {
+            current_time / duration
+        } else {
+            0.0
+        };
+
         if progress_percent >= 0.95 {
             self.conn.execute(
                 "UPDATE media SET resume_position_seconds = 0, duration_seconds = ?, 
@@ -450,10 +550,10 @@ impl Database {
                 params![current_time, duration, duration, media_id],
             )?;
         }
-        
+
         Ok(())
     }
-    
+
     pub fn clear_progress(&self, media_id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE media SET resume_position_seconds = 0 WHERE id = ?",
@@ -461,7 +561,7 @@ impl Database {
         )?;
         Ok(())
     }
-    
+
     pub fn update_last_watched(&self, media_id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE media SET last_watched = datetime('now') WHERE id = ?",
@@ -469,7 +569,7 @@ impl Database {
         )?;
         Ok(())
     }
-    
+
     /// Remove a single item from watch history by clearing its last_watched timestamp
     pub fn remove_from_watch_history(&self, media_id: i64) -> Result<()> {
         self.conn.execute(
@@ -478,7 +578,7 @@ impl Database {
         )?;
         Ok(())
     }
-    
+
     /// Clear all watch history by resetting last_watched for all items
     pub fn clear_all_watch_history(&self) -> Result<i32> {
         let count = self.conn.execute(
@@ -487,9 +587,9 @@ impl Database {
         )?;
         Ok(count as i32)
     }
-    
+
     // ==================== STREAMING HISTORY FUNCTIONS ====================
-    
+
     /// Save or update streaming history entry
     pub fn save_streaming_progress(
         &self,
@@ -503,14 +603,17 @@ impl Database {
         duration: f64,
     ) -> Result<()> {
         // First try to find existing entry using COALESCE for NULL-safe comparison
-        let existing_id: Option<i64> = self.conn.query_row(
-            "SELECT id FROM streaming_history
+        let existing_id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM streaming_history
              WHERE tmdb_id = ? AND media_type = ?
              AND COALESCE(season, -1) = COALESCE(?, -1)
              AND COALESCE(episode, -1) = COALESCE(?, -1)",
-            params![tmdb_id, media_type, season, episode],
-            |row| row.get(0)
-        ).ok();
+                params![tmdb_id, media_type, season, episode],
+                |row| row.get(0),
+            )
+            .ok();
 
         if let Some(id) = existing_id {
             // Update existing entry
@@ -534,7 +637,7 @@ impl Database {
         }
         Ok(())
     }
-    
+
     /// Get streaming history (most recent first)
     pub fn get_streaming_history(&self, limit: i32) -> Result<Vec<StreamingHistoryItem>> {
         let mut stmt = self.conn.prepare(
@@ -542,14 +645,18 @@ impl Database {
                     resume_position_seconds, duration_seconds, last_watched
              FROM streaming_history 
              ORDER BY last_watched DESC 
-             LIMIT ?"
+             LIMIT ?",
         )?;
-        
+
         let items = stmt.query_map(params![limit], |row| {
             let duration: f64 = row.get::<_, f64>(8).unwrap_or(0.0);
             let position: f64 = row.get::<_, f64>(7).unwrap_or(0.0);
-            let progress_percent = if duration > 0.0 { (position / duration) * 100.0 } else { 0.0 };
-            
+            let progress_percent = if duration > 0.0 {
+                (position / duration) * 100.0
+            } else {
+                0.0
+            };
+
             Ok(StreamingHistoryItem {
                 id: row.get(0)?,
                 tmdb_id: row.get(1)?,
@@ -564,10 +671,15 @@ impl Database {
                 last_watched: row.get(9)?,
             })
         })?;
-        
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
-    
+
     /// Get streaming resume info for a specific content
     pub fn get_streaming_resume_info(
         &self,
@@ -582,62 +694,70 @@ impl Database {
              FROM streaming_history 
              WHERE tmdb_id = ? AND media_type = ? AND 
                    (season IS ? OR (season IS NULL AND ? IS NULL)) AND 
-                   (episode IS ? OR (episode IS NULL AND ? IS NULL))"
+                   (episode IS ? OR (episode IS NULL AND ? IS NULL))",
         )?;
-        
-        match stmt.query_row(params![tmdb_id, media_type, season, season, episode, episode], |row| {
-            let duration: f64 = row.get::<_, f64>(8).unwrap_or(0.0);
-            let position: f64 = row.get::<_, f64>(7).unwrap_or(0.0);
-            let progress_percent = if duration > 0.0 { (position / duration) * 100.0 } else { 0.0 };
-            
-            Ok(StreamingHistoryItem {
-                id: row.get(0)?,
-                tmdb_id: row.get(1)?,
-                media_type: row.get(2)?,
-                title: row.get(3)?,
-                poster_path: row.get(4)?,
-                season: row.get(5)?,
-                episode: row.get(6)?,
-                resume_position_seconds: position,
-                duration_seconds: duration,
-                progress_percent,
-                last_watched: row.get(9)?,
-            })
-        }) {
+
+        match stmt.query_row(
+            params![tmdb_id, media_type, season, season, episode, episode],
+            |row| {
+                let duration: f64 = row.get::<_, f64>(8).unwrap_or(0.0);
+                let position: f64 = row.get::<_, f64>(7).unwrap_or(0.0);
+                let progress_percent = if duration > 0.0 {
+                    (position / duration) * 100.0
+                } else {
+                    0.0
+                };
+
+                Ok(StreamingHistoryItem {
+                    id: row.get(0)?,
+                    tmdb_id: row.get(1)?,
+                    media_type: row.get(2)?,
+                    title: row.get(3)?,
+                    poster_path: row.get(4)?,
+                    season: row.get(5)?,
+                    episode: row.get(6)?,
+                    resume_position_seconds: position,
+                    duration_seconds: duration,
+                    progress_percent,
+                    last_watched: row.get(9)?,
+                })
+            },
+        ) {
             Ok(item) => Ok(Some(item)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
     }
-    
+
     /// Remove a single item from streaming history
     pub fn remove_from_streaming_history(&self, id: i64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM streaming_history WHERE id = ?",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM streaming_history WHERE id = ?", params![id])?;
         Ok(())
     }
-    
+
     /// Clear all streaming history
     pub fn clear_all_streaming_history(&self) -> Result<i32> {
-        let count = self.conn.execute(
-            "DELETE FROM streaming_history",
-            [],
-        )?;
+        let count = self.conn.execute("DELETE FROM streaming_history", [])?;
         Ok(count as i32)
     }
-    
-    pub fn update_metadata(&self, media_id: i64, metadata: &super::tmdb::TmdbMetadata) -> Result<()> {
+
+    pub fn update_metadata(
+        &self,
+        media_id: i64,
+        metadata: &super::tmdb::TmdbMetadata,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE media SET title = ?, year = ?, overview = ?, poster_path = ?, tmdb_id = ? WHERE id = ?",
             params![metadata.title, metadata.year, metadata.overview, metadata.poster_path, metadata.tmdb_id, media_id],
         )?;
         Ok(())
     }
-    
+
     pub fn media_exists(&self, file_path: &str) -> Result<bool> {
-        let mut stmt = self.conn.prepare("SELECT id FROM media WHERE file_path = ?")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM media WHERE file_path = ?")?;
         let exists = stmt.exists(params![file_path])?;
         Ok(exists)
     }
@@ -659,14 +779,13 @@ impl Database {
                   OR file_path LIKE '%.wmv'
                   OR file_path LIKE '%.flv'
                   OR file_path LIKE '%.ts'
-                  OR file_path LIKE '%.m2ts')"
+                  OR file_path LIKE '%.m2ts')",
         )?;
 
-        let paths = stmt.query_map([], |row| {
-            row.get::<_, String>(0)
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+        let paths = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(paths)
     }
@@ -678,7 +797,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
-             FROM media WHERE file_path = ?"
+             FROM media WHERE file_path = ?",
         )?;
 
         match stmt.query_row(params![file_path], Self::map_media_item) {
@@ -689,17 +808,24 @@ impl Database {
     }
 
     /// Remove media by file path and return image paths for cleanup
-    pub fn remove_media_by_file_path(&self, file_path: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
+    pub fn remove_media_by_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
         // First get the media info so we can return it for cleanup
-        let media_info: Option<(i64, String, Option<String>, Option<String>)> = self.conn.query_row(
-            "SELECT id, title, poster_path, still_path FROM media WHERE file_path = ?",
-            params![file_path],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        ).ok();
+        let media_info: Option<(i64, String, Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT id, title, poster_path, still_path FROM media WHERE file_path = ?",
+                params![file_path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
 
         if let Some((id, _, _, _)) = &media_info {
             // Delete the entry
-            self.conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
+            self.conn
+                .execute("DELETE FROM media WHERE id = ?", params![id])?;
         }
 
         Ok(media_info)
@@ -712,42 +838,49 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.poster_path FROM media m
              WHERE m.media_type = 'tvshow'
-             AND NOT EXISTS (SELECT 1 FROM media e WHERE e.parent_id = m.id)"
+             AND NOT EXISTS (SELECT 1 FROM media e WHERE e.parent_id = m.id)",
         )?;
 
-        let empty_series: Vec<(i64, Option<String>)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let empty_series: Vec<(i64, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         // Delete empty series
         for (id, _) in &empty_series {
-            self.conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
+            self.conn
+                .execute("DELETE FROM media WHERE id = ?", params![id])?;
         }
 
         Ok(empty_series)
     }
-    
+
     pub fn find_series_by_folder(&self, folder_path: &str) -> Result<Option<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE file_path = ? AND media_type = 'tvshow'"
-        )?;
-        
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM media WHERE file_path = ? AND media_type = 'tvshow'")?;
+
         match stmt.query_row(params![folder_path], |row| row.get::<_, i64>(0)) {
             Ok(id) => Ok(Some(id)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
     }
-    
+
     /// Find a TV show series by TMDB ID first, then by normalized title as fallback.
     /// This allows consolidating episodes from different directories under the same series.
-    pub fn find_series_by_tmdb_or_title(&self, tmdb_id: Option<&str>, title: &str, year: Option<i32>) -> Result<Option<i64>> {
+    pub fn find_series_by_tmdb_or_title(
+        &self,
+        tmdb_id: Option<&str>,
+        title: &str,
+        year: Option<i32>,
+    ) -> Result<Option<i64>> {
         // First, try to find by TMDB ID if available (most reliable match)
         if let Some(tid) = tmdb_id {
             if !tid.is_empty() {
-                let mut stmt = self.conn.prepare(
-                    "SELECT id FROM media WHERE tmdb_id = ? AND media_type = 'tvshow'"
-                )?;
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT id FROM media WHERE tmdb_id = ? AND media_type = 'tvshow'")?;
 
                 if let Ok(id) = stmt.query_row(params![tid], |row| row.get::<_, i64>(0)) {
                     return Ok(Some(id));
@@ -772,7 +905,9 @@ impl Database {
             let mut stmt2 = self.conn.prepare(
                 "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND year = ? AND media_type = 'tvshow'"
             )?;
-            if let Ok(id) = stmt2.query_row(params![&normalized_title, y], |row| row.get::<_, i64>(0)) {
+            if let Ok(id) =
+                stmt2.query_row(params![&normalized_title, y], |row| row.get::<_, i64>(0))
+            {
                 return Ok(Some(id));
             }
 
@@ -780,14 +915,16 @@ impl Database {
             let mut stmt3 = self.conn.prepare(
                 "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND (year = ? OR year = ? OR year = ?) AND media_type = 'tvshow'"
             )?;
-            if let Ok(id) = stmt3.query_row(params![title, y, y - 1, y + 1], |row| row.get::<_, i64>(0)) {
+            if let Ok(id) =
+                stmt3.query_row(params![title, y, y - 1, y + 1], |row| row.get::<_, i64>(0))
+            {
                 return Ok(Some(id));
             }
         }
 
         // Try matching by just title (without year) - useful when year isn't in filename
         let mut stmt4 = self.conn.prepare(
-            "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'"
+            "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'",
         )?;
         if let Ok(id) = stmt4.query_row(params![title], |row| row.get::<_, i64>(0)) {
             return Ok(Some(id));
@@ -795,23 +932,25 @@ impl Database {
 
         // Try with normalized title without year
         let mut stmt5 = self.conn.prepare(
-            "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'"
+            "SELECT id FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'",
         )?;
         if let Ok(id) = stmt5.query_row(params![&normalized_title], |row| row.get::<_, i64>(0)) {
             return Ok(Some(id));
         }
 
         // Final attempt: fuzzy match using LIKE with the first significant word
-        let first_word = normalized_title.split_whitespace().next().unwrap_or(&normalized_title);
+        let first_word = normalized_title
+            .split_whitespace()
+            .next()
+            .unwrap_or(&normalized_title);
         if first_word.len() >= 3 {
             let mut stmt6 = self.conn.prepare(
-                "SELECT id, title FROM media WHERE LOWER(title) LIKE ? AND media_type = 'tvshow'"
+                "SELECT id, title FROM media WHERE LOWER(title) LIKE ? AND media_type = 'tvshow'",
             )?;
             let pattern = format!("{}%", first_word.to_lowercase());
 
-            let result: Result<(i64, String), _> = stmt6.query_row(params![pattern], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            });
+            let result: Result<(i64, String), _> =
+                stmt6.query_row(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)));
 
             if let Ok((id, db_title)) = result {
                 // Check if the titles are similar enough
@@ -870,9 +1009,17 @@ impl Database {
         // If most words match, consider them similar
         smaller > 0 && intersection >= smaller.saturating_sub(1)
     }
-    
-    pub fn insert_movie(&self, title: &str, year: Option<i32>, overview: Option<&str>, 
-                       poster_path: Option<&str>, file_path: &str, duration: f64, tmdb_id: Option<&str>) -> Result<i64> {
+
+    pub fn insert_movie(
+        &self,
+        title: &str,
+        year: Option<i32>,
+        overview: Option<&str>,
+        poster_path: Option<&str>,
+        file_path: &str,
+        duration: f64,
+        tmdb_id: Option<&str>,
+    ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, duration_seconds, tmdb_id) 
              VALUES (?, ?, ?, ?, ?, 'movie', ?, ?)",
@@ -880,9 +1027,16 @@ impl Database {
         )?;
         Ok(self.conn.last_insert_rowid())
     }
-    
-    pub fn insert_tvshow(&self, title: &str, year: Option<i32>, overview: Option<&str>,
-                        poster_path: Option<&str>, folder_path: &str, tmdb_id: Option<&str>) -> Result<i64> {
+
+    pub fn insert_tvshow(
+        &self,
+        title: &str,
+        year: Option<i32>,
+        overview: Option<&str>,
+        poster_path: Option<&str>,
+        folder_path: &str,
+        tmdb_id: Option<&str>,
+    ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, tmdb_id) 
              VALUES (?, ?, ?, ?, ?, 'tvshow', ?)",
@@ -890,9 +1044,16 @@ impl Database {
         )?;
         Ok(self.conn.last_insert_rowid())
     }
-    
-    pub fn insert_episode(&self, title: &str, file_path: &str, parent_id: i64,
-                         season: i32, episode: i32, duration: f64) -> Result<i64> {
+
+    pub fn insert_episode(
+        &self,
+        title: &str,
+        file_path: &str,
+        parent_id: i64,
+        season: i32,
+        episode: i32,
+        duration: f64,
+    ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO media (title, file_path, media_type, parent_id, season_number, episode_number, duration_seconds)
              VALUES (?, ?, 'tvepisode', ?, ?, ?, ?)",
@@ -1020,11 +1181,16 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
-             FROM media WHERE cloud_folder_id = ?"
+             FROM media WHERE cloud_folder_id = ?",
         )?;
 
         let items = stmt.query_map(params![cloud_folder_id], Self::map_media_item)?;
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     /// Delete all cloud media for a folder
@@ -1059,7 +1225,7 @@ impl Database {
     /// Get all cloud folders
     pub fn get_cloud_folders(&self) -> Result<Vec<(String, String, bool)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT folder_id, folder_name, auto_scan FROM cloud_folders ORDER BY created_at"
+            "SELECT folder_id, folder_name, auto_scan FROM cloud_folders ORDER BY created_at",
         )?;
 
         let items = stmt.query_map([], |row| {
@@ -1088,9 +1254,7 @@ impl Database {
             "SELECT cloud_file_id FROM media WHERE cloud_folder_id = ? AND cloud_file_id IS NOT NULL"
         )?;
 
-        let items = stmt.query_map(params![folder_id], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let items = stmt.query_map(params![folder_id], |row| row.get::<_, String>(0))?;
 
         items.collect()
     }
@@ -1136,7 +1300,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, season_number, episode_number FROM media
              WHERE parent_id = ? AND media_type = 'tvepisode'
-             ORDER BY season_number, episode_number"
+             ORDER BY season_number, episode_number",
         )?;
 
         let items = stmt.query_map(params![series_id], |row| {
@@ -1152,9 +1316,9 @@ impl Database {
 
     /// Find series ID by TMDB ID
     pub fn find_series_id_by_tmdb(&self, tmdb_id: &str) -> Result<Option<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE tmdb_id = ? AND media_type = 'tvshow'"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM media WHERE tmdb_id = ? AND media_type = 'tvshow'")?;
 
         match stmt.query_row(params![tmdb_id], |row| row.get::<_, i64>(0)) {
             Ok(id) => Ok(Some(id)),
@@ -1170,7 +1334,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
-             FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'"
+             FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'",
         )?;
 
         match stmt.query_row(params![title], Self::map_media_item) {
@@ -1212,17 +1376,20 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT episode_title, overview, still_path, air_date
              FROM cached_episode_metadata
-             WHERE series_tmdb_id = ? AND season_number = ? AND episode_number = ?"
+             WHERE series_tmdb_id = ? AND season_number = ? AND episode_number = ?",
         )?;
 
-        match stmt.query_row(params![series_tmdb_id, season_number, episode_number], |row| {
-            Ok(CachedEpisodeMetadata {
-                episode_title: row.get(0)?,
-                overview: row.get(1)?,
-                still_path: row.get(2)?,
-                air_date: row.get(3)?,
-            })
-        }) {
+        match stmt.query_row(
+            params![series_tmdb_id, season_number, episode_number],
+            |row| {
+                Ok(CachedEpisodeMetadata {
+                    episode_title: row.get(0)?,
+                    overview: row.get(1)?,
+                    still_path: row.get(2)?,
+                    air_date: row.get(3)?,
+                })
+            },
+        ) {
             Ok(metadata) => Ok(Some(metadata)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
@@ -1234,7 +1401,7 @@ impl Database {
         let count: i32 = self.conn.query_row(
             "SELECT COUNT(*) FROM cached_episode_metadata WHERE series_tmdb_id = ?",
             params![series_tmdb_id],
-            |row| row.get(0)
+            |row| row.get(0),
         )?;
         Ok(count > 0)
     }
@@ -1249,12 +1416,15 @@ impl Database {
     }
 
     /// Get all cached episodes for a series
-    pub fn get_all_cached_episodes_for_series(&self, series_tmdb_id: &str) -> Result<Vec<CachedEpisodeMetadata>> {
+    pub fn get_all_cached_episodes_for_series(
+        &self,
+        series_tmdb_id: &str,
+    ) -> Result<Vec<CachedEpisodeMetadata>> {
         let mut stmt = self.conn.prepare(
             "SELECT episode_title, overview, still_path, air_date, season_number, episode_number
              FROM cached_episode_metadata
              WHERE series_tmdb_id = ?
-             ORDER BY season_number, episode_number"
+             ORDER BY season_number, episode_number",
         )?;
 
         let items = stmt.query_map(params![series_tmdb_id], |row| {
@@ -1268,21 +1438,32 @@ impl Database {
             })
         })?;
 
-        items.filter_map(|r| r.ok().map(|f| CachedEpisodeMetadata {
-            episode_title: f.episode_title,
-            overview: f.overview,
-            still_path: f.still_path,
-            air_date: f.air_date,
-        })).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| {
+                r.ok().map(|f| CachedEpisodeMetadata {
+                    episode_title: f.episode_title,
+                    overview: f.overview,
+                    still_path: f.still_path,
+                    air_date: f.air_date,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     /// Get cached episodes for a specific season of a series
-    pub fn get_cached_episodes_for_season(&self, series_tmdb_id: &str, season_number: i32) -> Result<Vec<CachedEpisodeMetadataFull>> {
+    pub fn get_cached_episodes_for_season(
+        &self,
+        series_tmdb_id: &str,
+        season_number: i32,
+    ) -> Result<Vec<CachedEpisodeMetadataFull>> {
         let mut stmt = self.conn.prepare(
             "SELECT episode_title, overview, still_path, air_date, season_number, episode_number
              FROM cached_episode_metadata
              WHERE series_tmdb_id = ? AND season_number = ?
-             ORDER BY episode_number"
+             ORDER BY episode_number",
         )?;
 
         let items = stmt.query_map(params![series_tmdb_id, season_number], |row| {
@@ -1306,30 +1487,35 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
-             FROM media"
+             FROM media",
         )?;
 
         let items = stmt.query_map([], Self::map_media_item)?;
-        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
-    
+
     /// Get all poster paths currently in use (including still_paths and cached episode images)
     pub fn get_all_poster_paths(&self) -> Result<Vec<String>> {
         let mut all_paths = Vec::new();
 
         // Get poster paths from media table
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT poster_path FROM media WHERE poster_path IS NOT NULL"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT poster_path FROM media WHERE poster_path IS NOT NULL")?;
         let paths = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for path in paths.filter_map(|r| r.ok()) {
             all_paths.push(path);
         }
 
         // Get still paths from media table
-        let mut stmt2 = self.conn.prepare(
-            "SELECT DISTINCT still_path FROM media WHERE still_path IS NOT NULL"
-        )?;
+        let mut stmt2 = self
+            .conn
+            .prepare("SELECT DISTINCT still_path FROM media WHERE still_path IS NOT NULL")?;
         let still_paths = stmt2.query_map([], |row| row.get::<_, String>(0))?;
         for path in still_paths.filter_map(|r| r.ok()) {
             all_paths.push(path);
@@ -1337,7 +1523,7 @@ impl Database {
 
         // Get still paths from cached episode metadata
         let mut stmt3 = self.conn.prepare(
-            "SELECT DISTINCT still_path FROM cached_episode_metadata WHERE still_path IS NOT NULL"
+            "SELECT DISTINCT still_path FROM cached_episode_metadata WHERE still_path IS NOT NULL",
         )?;
         let cached_paths = stmt3.query_map([], |row| row.get::<_, String>(0))?;
         for path in cached_paths.filter_map(|r| r.ok()) {
@@ -1350,62 +1536,73 @@ impl Database {
     /// Remove a media entry by ID
     pub fn remove_media(&self, id: i64) -> Result<Option<String>> {
         // First get the poster path so we can clean it up
-        let poster_path: Option<String> = self.conn.query_row(
-            "SELECT poster_path FROM media WHERE id = ?",
-            params![id],
-            |row| row.get(0)
-        ).ok();
-        
+        let poster_path: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT poster_path FROM media WHERE id = ?",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
+
         // Delete the entry
-        self.conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
-        
+        self.conn
+            .execute("DELETE FROM media WHERE id = ?", params![id])?;
+
         Ok(poster_path)
     }
-    
+
     /// Remove all episodes for a series
     pub fn remove_series_episodes(&self, series_id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM media WHERE parent_id = ?", params![series_id])?;
+        self.conn
+            .execute("DELETE FROM media WHERE parent_id = ?", params![series_id])?;
         Ok(())
     }
-    
+
     /// Get file paths for multiple media IDs (for deletion)
     pub fn get_media_file_paths(&self, ids: &[i64]) -> Result<Vec<(i64, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        
+
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
             "SELECT id, file_path FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
-        
+
         let mut stmt = self.conn.prepare(&query)?;
-        let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-        
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
         let results = stmt.query_map(params.as_slice(), |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
         })?;
-        
-        results.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+
+        results
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     /// Get cloud info for a series (is_cloud, cloud_folder_id)
     pub fn get_series_cloud_info(&self, series_id: i64) -> Result<(bool, Option<String>)> {
-        let mut stmt = self.conn.prepare(
-            "SELECT COALESCE(is_cloud, 0), cloud_folder_id FROM media WHERE id = ?"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COALESCE(is_cloud, 0), cloud_folder_id FROM media WHERE id = ?")?;
 
         stmt.query_row(params![series_id], |row| {
-            Ok((
-                row.get::<_, i32>(0)? == 1,
-                row.get::<_, Option<String>>(1)?,
-            ))
+            Ok((row.get::<_, i32>(0)? == 1, row.get::<_, Option<String>>(1)?))
         })
     }
 
     /// Get media info for deletion (file_path, is_cloud, cloud_file_id)
-    pub fn get_media_delete_info(&self, ids: &[i64]) -> Result<Vec<(i64, Option<String>, bool, Option<String>)>> {
+    pub fn get_media_delete_info(
+        &self,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -1417,7 +1614,8 @@ impl Database {
         );
 
         let mut stmt = self.conn.prepare(&query)?;
-        let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
 
         let results = stmt.query_map(params.as_slice(), |row| {
             Ok((
@@ -1428,7 +1626,12 @@ impl Database {
             ))
         })?;
 
-        results.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+        results
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
     }
 
     /// Delete multiple media entries and return their file paths for cleanup
@@ -1436,43 +1639,45 @@ impl Database {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        
+
         // First get the file paths
-        let file_paths: Vec<String> = self.get_media_file_paths(ids)?
+        let file_paths: Vec<String> = self
+            .get_media_file_paths(ids)?
             .into_iter()
             .filter_map(|(_, path)| path)
             .collect();
-        
+
         // Delete all entries
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
             "DELETE FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
-        
-        let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
         self.conn.execute(&query, params.as_slice())?;
-        
+
         Ok(file_paths)
     }
-    
+
     /// Check if a series has any remaining episodes
     pub fn series_has_episodes(&self, series_id: i64) -> Result<bool> {
         let count: i32 = self.conn.query_row(
             "SELECT COUNT(*) FROM media WHERE parent_id = ?",
             params![series_id],
-            |row| row.get(0)
+            |row| row.get(0),
         )?;
         Ok(count > 0)
     }
-    
+
     /// Merge duplicate TV shows into a single entry.
     /// Groups by TMDB ID first, then by title (case-insensitive).
     /// Keeps the entry with the most complete metadata as the primary.
     pub fn merge_duplicate_tvshows(&self) -> Result<i32> {
         println!("[MERGE] Looking for duplicate TV shows to merge...");
         let mut merged_count = 0;
-        
+
         // Step 1: Find and merge duplicates with same TMDB ID
         let tmdb_duplicates: Vec<(String, Vec<i64>)> = {
             let mut stmt = self.conn.prepare(
@@ -1480,27 +1685,35 @@ impl Database {
                  FROM media 
                  WHERE media_type = 'tvshow' AND tmdb_id IS NOT NULL AND tmdb_id != ''
                  GROUP BY tmdb_id 
-                 HAVING cnt > 1"
+                 HAVING cnt > 1",
             )?;
-            
-            let results: Vec<(String, Vec<i64>)> = stmt.query_map([], |row| {
-                let tmdb_id: String = row.get(0)?;
-                let ids_str: String = row.get(1)?;
-                let ids: Vec<i64> = ids_str.split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect();
-                Ok((tmdb_id, ids))
-            })?.filter_map(|r| r.ok()).collect();
+
+            let results: Vec<(String, Vec<i64>)> = stmt
+                .query_map([], |row| {
+                    let tmdb_id: String = row.get(0)?;
+                    let ids_str: String = row.get(1)?;
+                    let ids: Vec<i64> = ids_str
+                        .split(',')
+                        .filter_map(|s| s.trim().parse().ok())
+                        .collect();
+                    Ok((tmdb_id, ids))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             results
         };
-        
+
         for (tmdb_id, ids) in tmdb_duplicates {
             if ids.len() > 1 {
-                println!("[MERGE] Found {} duplicates with TMDB ID: {}", ids.len(), tmdb_id);
+                println!(
+                    "[MERGE] Found {} duplicates with TMDB ID: {}",
+                    ids.len(),
+                    tmdb_id
+                );
                 merged_count += self.merge_series_entries(&ids)?;
             }
         }
-        
+
         // Step 2: Find and merge duplicates by same title (case-insensitive) without TMDB ID
         let title_duplicates: Vec<(String, Vec<i64>)> = {
             let mut stmt = self.conn.prepare(
@@ -1508,104 +1721,125 @@ impl Database {
                  FROM media 
                  WHERE media_type = 'tvshow'
                  GROUP BY LOWER(title) 
-                 HAVING cnt > 1"
+                 HAVING cnt > 1",
             )?;
-            
-            let results: Vec<(String, Vec<i64>)> = stmt.query_map([], |row| {
-                let title: String = row.get(0)?;
-                let ids_str: String = row.get(1)?;
-                let ids: Vec<i64> = ids_str.split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect();
-                Ok((title, ids))
-            })?.filter_map(|r| r.ok()).collect();
+
+            let results: Vec<(String, Vec<i64>)> = stmt
+                .query_map([], |row| {
+                    let title: String = row.get(0)?;
+                    let ids_str: String = row.get(1)?;
+                    let ids: Vec<i64> = ids_str
+                        .split(',')
+                        .filter_map(|s| s.trim().parse().ok())
+                        .collect();
+                    Ok((title, ids))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             results
         };
-        
+
         for (title, ids) in title_duplicates {
             if ids.len() > 1 {
-                println!("[MERGE] Found {} duplicates with title: {}", ids.len(), title);
+                println!(
+                    "[MERGE] Found {} duplicates with title: {}",
+                    ids.len(),
+                    title
+                );
                 merged_count += self.merge_series_entries(&ids)?;
             }
         }
-        
+
         if merged_count > 0 {
             println!("[MERGE] Merged {} duplicate TV show entries", merged_count);
         } else {
             println!("[MERGE] No duplicates found");
         }
-        
+
         Ok(merged_count)
     }
-    
+
     /// Merge a list of series IDs into one primary entry.
     /// Picks the best entry (has TMDB ID + poster) as primary, moves all episodes to it.
     fn merge_series_entries(&self, ids: &[i64]) -> Result<i32> {
         if ids.len() < 2 {
             return Ok(0);
         }
-        
+
         // Find the best entry to keep (prefer one with TMDB ID and poster)
         let mut best_id: i64 = ids[0];
         let mut best_score = 0;
-        
+
         for &id in ids {
-            let score: i32 = self.conn.query_row(
-                "SELECT 
+            let score: i32 = self
+                .conn
+                .query_row(
+                    "SELECT 
                     (CASE WHEN tmdb_id IS NOT NULL AND tmdb_id != '' THEN 10 ELSE 0 END) +
                     (CASE WHEN poster_path IS NOT NULL AND poster_path != '' THEN 5 ELSE 0 END) +
                     (CASE WHEN overview IS NOT NULL AND overview != '' THEN 2 ELSE 0 END) +
                     (CASE WHEN year IS NOT NULL THEN 1 ELSE 0 END)
                  FROM media WHERE id = ?",
-                params![id],
-                |row| row.get(0)
-            ).unwrap_or(0);
-            
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
             if score > best_score {
                 best_score = score;
                 best_id = id;
             }
         }
-        
+
         // Get the best entry's metadata for reference
-        let best_title: String = self.conn.query_row(
-            "SELECT title FROM media WHERE id = ?",
-            params![best_id],
-            |row| row.get(0)
-        ).unwrap_or_else(|_| "Unknown".to_string());
-        
-        println!("[MERGE] Keeping series ID {} ({}) as primary", best_id, best_title);
-        
+        let best_title: String = self
+            .conn
+            .query_row(
+                "SELECT title FROM media WHERE id = ?",
+                params![best_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "Unknown".to_string());
+
+        println!(
+            "[MERGE] Keeping series ID {} ({}) as primary",
+            best_id, best_title
+        );
+
         let mut merged = 0;
-        
+
         // Move all episodes from other entries to the best entry
         for &id in ids {
             if id != best_id {
                 // Count episodes that will be moved
-                let episode_count: i32 = self.conn.query_row(
-                    "SELECT COUNT(*) FROM media WHERE parent_id = ?",
-                    params![id],
-                    |row| row.get(0)
-                ).unwrap_or(0);
-                
-                println!("[MERGE] Moving {} episodes from series {} to {}", episode_count, id, best_id);
-                
+                let episode_count: i32 = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM media WHERE parent_id = ?",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+
+                println!(
+                    "[MERGE] Moving {} episodes from series {} to {}",
+                    episode_count, id, best_id
+                );
+
                 // Move episodes to primary series
                 self.conn.execute(
                     "UPDATE media SET parent_id = ? WHERE parent_id = ?",
-                    params![best_id, id]
+                    params![best_id, id],
                 )?;
-                
+
                 // Delete the duplicate series entry
-                self.conn.execute(
-                    "DELETE FROM media WHERE id = ?",
-                    params![id]
-                )?;
-                
+                self.conn
+                    .execute("DELETE FROM media WHERE id = ?", params![id])?;
+
                 merged += 1;
             }
         }
-        
+
         Ok(merged)
     }
 
@@ -1619,7 +1853,8 @@ impl Database {
         self.conn.execute("DELETE FROM media", [])?;
 
         // Delete all cached episode metadata (important - stale cache causes missing images)
-        self.conn.execute("DELETE FROM cached_episode_metadata", [])?;
+        self.conn
+            .execute("DELETE FROM cached_episode_metadata", [])?;
 
         // Return the image cache path for the caller to delete
         Ok(get_image_cache_dir())
@@ -1633,7 +1868,7 @@ impl Database {
                AND file_path != ''
                AND file_path NOT LIKE 'tvshow://%'
                AND file_path NOT LIKE '%/%'
-               AND file_path NOT LIKE '%\\%'"
+               AND file_path NOT LIKE '%\\%'",
         )?;
 
         let items = stmt.query_map([], |row| {
@@ -1650,6 +1885,150 @@ impl Database {
             params![new_path, media_id],
         )?;
         Ok(())
+    }
+
+    // ==================== SOCIAL SYNC FUNCTIONS ====================
+
+    /// Get aggregated watch stats from both media and streaming_history tables.
+    /// "Completed" means: for media table, resume_position = 0 AND last_watched IS NOT NULL AND duration > 0
+    /// (because update_progress resets position to 0 at >= 95%).
+    /// For streaming_history, completed means duration > 0 AND progress >= 95%.
+    pub fn get_watch_stats(&self) -> Result<WatchStatsAggregated> {
+        // Query completed items from the media table
+        let (media_movies, media_episodes, media_time): (i64, i64, f64) = self.conn.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'tvepisode' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(duration_seconds), 0)
+             FROM media
+             WHERE last_watched IS NOT NULL
+               AND resume_position_seconds = 0
+               AND duration_seconds > 0
+               AND media_type IN ('movie', 'tvepisode')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        // Query completed items from streaming_history table
+        let (stream_movies, stream_episodes, stream_time): (i64, i64, f64) = self.conn.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'tv' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(duration_seconds), 0)
+             FROM streaming_history
+             WHERE duration_seconds > 0
+               AND (resume_position_seconds = 0
+                    OR (resume_position_seconds * 1.0 / duration_seconds) >= 0.95)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        Ok(WatchStatsAggregated {
+            movies_watched: media_movies + stream_movies,
+            episodes_watched: media_episodes + stream_episodes,
+            total_watch_time_seconds: media_time + stream_time,
+        })
+    }
+
+    /// Get recently completed watch activities since a given timestamp.
+    /// Returns items from both media and streaming_history tables,
+    /// unified into WatchActivityItem structs ready for social API.
+    pub fn get_recent_watch_activities(
+        &self,
+        since_timestamp: &str,
+    ) -> Result<Vec<WatchActivityItem>> {
+        let mut activities = Vec::new();
+
+        // From media table: completed items since timestamp
+        // For episodes, join to parent to get the show's tmdb_id and title
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                COALESCE(
+                    CASE WHEN m.media_type = 'tvepisode' THEN p.tmdb_id ELSE m.tmdb_id END,
+                    CAST(m.id AS TEXT)
+                ) as content_id,
+                CASE WHEN m.media_type = 'tvepisode' THEN COALESCE(p.title, m.title) ELSE m.title END as title,
+                CASE WHEN m.media_type = 'tvepisode' THEN 'tv' ELSE 'movie' END as content_type,
+                CASE WHEN m.media_type = 'tvepisode' THEN 'watched_episode' ELSE 'watched_movie' END as activity_type,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END as poster_path,
+                m.season_number,
+                m.episode_number,
+                m.duration_seconds,
+                m.last_watched
+             FROM media m
+             LEFT JOIN media p ON m.parent_id = p.id
+             WHERE m.last_watched IS NOT NULL
+               AND m.last_watched > ?
+               AND m.resume_position_seconds = 0
+               AND m.duration_seconds > 0
+               AND m.media_type IN ('movie', 'tvepisode')
+             ORDER BY m.last_watched DESC"
+        )?;
+
+        let media_items = stmt.query_map(params![since_timestamp], |row| {
+            Ok(WatchActivityItem {
+                content_id: row.get(0)?,
+                title: row.get(1)?,
+                content_type: row.get(2)?,
+                activity_type: row.get(3)?,
+                poster_path: row.get(4)?,
+                season: row.get(5)?,
+                episode: row.get(6)?,
+                duration_seconds: row.get(7)?,
+                last_watched: row.get(8)?,
+            })
+        })?;
+
+        for item in media_items {
+            if let Ok(activity) = item {
+                activities.push(activity);
+            }
+        }
+
+        // From streaming_history: completed items since timestamp
+        let mut stmt2 = self.conn.prepare(
+            "SELECT
+                tmdb_id,
+                title,
+                CASE WHEN media_type = 'movie' THEN 'movie' ELSE 'tv' END as content_type,
+                CASE WHEN media_type = 'movie' THEN 'watched_movie' ELSE 'watched_episode' END as activity_type,
+                poster_path,
+                season,
+                episode,
+                duration_seconds,
+                last_watched
+             FROM streaming_history
+             WHERE last_watched > ?
+               AND duration_seconds > 0
+               AND (resume_position_seconds = 0
+                    OR (resume_position_seconds * 1.0 / duration_seconds) >= 0.95)
+             ORDER BY last_watched DESC"
+        )?;
+
+        let stream_items = stmt2.query_map(params![since_timestamp], |row| {
+            Ok(WatchActivityItem {
+                content_id: row.get(0)?,
+                title: row.get(1)?,
+                content_type: row.get(2)?,
+                activity_type: row.get(3)?,
+                poster_path: row.get(4)?,
+                season: row.get(5)?,
+                episode: row.get(6)?,
+                duration_seconds: row.get(7)?,
+                last_watched: row.get(8)?,
+            })
+        })?;
+
+        for item in stream_items {
+            if let Ok(activity) = item {
+                activities.push(activity);
+            }
+        }
+
+        // Sort all activities by last_watched descending
+        activities.sort_by(|a, b| b.last_watched.cmp(&a.last_watched));
+
+        Ok(activities)
     }
 
     fn map_media_item(row: &rusqlite::Row) -> rusqlite::Result<MediaItem> {

@@ -130,10 +130,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
 
     useEffect(() => {
         loadEpisodes()
-        loadPoster()
 
         let unlistenMpvEnded: UnlistenFn | undefined;
         let unlistenMarkedComplete: UnlistenFn | undefined;
+        let unlistenLibraryUpdated: UnlistenFn | undefined;
 
         const setupListener = async () => {
             unlistenMpvEnded = await listen('mpv-playback-ended', () => {
@@ -143,6 +143,11 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             unlistenMarkedComplete = await listen('media-marked-complete', () => {
                 loadEpisodes();
             });
+            // Listen for metadata updates (Fix Match / file watcher) and refresh in-place.
+            unlistenLibraryUpdated = await listen('library-updated', () => {
+                loadEpisodes();
+                loadPoster();
+            });
         };
 
         setupListener();
@@ -150,8 +155,13 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         return () => {
             unlistenMpvEnded?.();
             unlistenMarkedComplete?.();
+            unlistenLibraryUpdated?.();
         };
     }, [show.id])
+
+    useEffect(() => {
+        loadPoster()
+    }, [show.id, show.poster_path])
 
     // Load TMDB episode metadata when season changes - only if local data is incomplete
     useEffect(() => {
@@ -205,6 +215,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     }
 
     const loadPoster = async () => {
+        setPosterUrl(null);
         if (show.poster_path) {
             const filename = show.poster_path.replace('image_cache/', '');
             const url = await getCachedImageUrl(filename);

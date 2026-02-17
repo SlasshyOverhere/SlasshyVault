@@ -59,6 +59,25 @@ export interface StreamInfo {
     access_token?: string;
 }
 
+// TMDB search result
+export interface TmdbSearchResult {
+    id: number;
+    title?: string;
+    name?: string;
+    media_type: 'movie' | 'tv';
+    poster_path?: string;
+    backdrop_path?: string;
+    overview?: string;
+    release_date?: string;
+    first_air_date?: string;
+    vote_average?: number;
+}
+
+export interface TmdbSearchResponse {
+    results: TmdbSearchResult[];
+    total_results: number;
+}
+
 // Get library items (movies or TV shows)
 export const getLibrary = async (type: 'movie' | 'tv', search: string = ''): Promise<MediaItem[]> => {
     try {
@@ -509,13 +528,29 @@ export const playWithVlc = async (id: number, resume: boolean): Promise<void> =>
 // Fix match - update metadata from TMDB
 export const fixMatch = async (id: number, tmdbId: string, type: 'movie' | 'tv'): Promise<void> => {
     try {
-        await invoke('fix_match', {
-            mediaId: id,
-            tmdbId,
-            mediaType: type
-        });
+        const timeoutMs = 45000;
+        await Promise.race([
+            invoke('fix_match', {
+                mediaId: id,
+                tmdbId,
+                mediaType: type
+            }),
+            new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Fix Match timed out. Please try again.')), timeoutMs);
+            })
+        ]);
     } catch (error) {
         console.error('Failed to fix match:', error);
+        throw error;
+    }
+};
+
+// Search TMDB by title
+export const searchTmdb = async (query: string): Promise<TmdbSearchResponse> => {
+    try {
+        return await invoke<TmdbSearchResponse>('search_tmdb', { query });
+    } catch (error) {
+        console.error('Failed to search TMDB:', error);
         throw error;
     }
 };
@@ -1023,6 +1058,7 @@ export interface WatchRoom {
     media_id: number;
     participants: WatchParticipant[];
     is_playing: boolean;
+    state?: string;
     current_position: number;
 }
 
@@ -1034,7 +1070,7 @@ export interface SyncCommand {
 }
 
 export interface WatchEvent {
-    type: 'room_updated' | 'sync_command' | 'participant_changed' | 'playback_started' | 'error' | 'disconnected';
+    type: 'room_updated' | 'sync_command' | 'participant_changed' | 'playback_started' | 'state_update' | 'error' | 'disconnected';
     room?: WatchRoom;
     command?: SyncCommand;
     position?: number;
@@ -1129,6 +1165,17 @@ export const wtIsActive = async (): Promise<boolean> => {
     }
 };
 
+// Get local client ID for the current Watch Together session
+export const wtGetClientId = async (): Promise<string> => {
+    try {
+        const clientId = await invoke<string | null>('wt_get_client_id');
+        return clientId || '';
+    } catch (error) {
+        console.error('Failed to get WT client ID:', error);
+        return '';
+    }
+};
+
 // Launch MPV in Watch Together sync mode
 export const wtLaunchMpv = async (
     mediaId: number,
@@ -1156,4 +1203,3 @@ export const wtSendMpvCommand = async (
         throw error;
     }
 };
-

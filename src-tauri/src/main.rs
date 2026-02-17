@@ -227,6 +227,28 @@ async fn get_streaming_resume_info(
         .map_err(|e| e.to_string())
 }
 
+// ==================== SOCIAL SYNC COMMANDS ====================
+
+// Get aggregated watch stats for social sync
+#[tauri::command]
+async fn get_watch_stats(
+    state: State<'_, AppState>,
+) -> Result<database::WatchStatsAggregated, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_watch_stats().map_err(|e| e.to_string())
+}
+
+// Get recently completed watch activities since a timestamp
+#[tauri::command]
+async fn get_recent_watch_activities(
+    state: State<'_, AppState>,
+    since_timestamp: String,
+) -> Result<Vec<database::WatchActivityItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_recent_watch_activities(&since_timestamp)
+        .map_err(|e| e.to_string())
+}
+
 // Remove a single item from streaming history
 #[tauri::command]
 async fn remove_from_streaming_history(
@@ -274,6 +296,25 @@ async fn gdrive_get_account_info(
     state: State<'_, AppState>,
 ) -> Result<gdrive::DriveAccountInfo, String> {
     state.gdrive_client.get_account_info().await
+}
+
+/// Load AI chat history JSON from Google Drive appDataFolder (hidden app storage)
+#[tauri::command]
+async fn gdrive_get_ai_chat_history(state: State<'_, AppState>) -> Result<String, String> {
+    let history = state.gdrive_client.load_ai_chat_history().await?;
+    Ok(history.unwrap_or_else(|| "[]".to_string()))
+}
+
+/// Save AI chat history JSON to Google Drive appDataFolder (hidden app storage)
+#[tauri::command]
+async fn gdrive_save_ai_chat_history(
+    state: State<'_, AppState>,
+    history_json: String,
+) -> Result<ApiResponse, String> {
+    state.gdrive_client.save_ai_chat_history(&history_json).await?;
+    Ok(ApiResponse {
+        message: "AI chat history saved".to_string(),
+    })
 }
 
 /// Start Google Drive OAuth flow - returns auth URL
@@ -2072,6 +2113,7 @@ async fn clear_progress(
 // Fix match - update metadata from TMDB
 #[tauri::command]
 async fn fix_match(
+    window: Window,
     state: State<'_, AppState>,
     media_id: i64,
     tmdb_id: String,
@@ -2083,13 +2125,42 @@ async fn fix_match(
     };
 
     let api_key = tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default());
-
     let image_cache_dir = database::get_image_cache_dir();
-    let metadata = tmdb::fetch_metadata_by_id(&api_key, &tmdb_id, &media_type, &image_cache_dir)
-        .map_err(|e| e.to_string())?;
+    let api_key_clone = api_key.clone();
+    let tmdb_id_clone = tmdb_id.clone();
+    let media_type_clone = media_type.clone();
+    let image_cache_dir_clone = image_cache_dir.clone();
+
+    // Prevent Update Match from hanging indefinitely on unstable network/image requests.
+    let metadata = tokio::time::timeout(Duration::from_secs(40), tokio::task::spawn_blocking(move || {
+        tmdb::fetch_metadata_by_id(&api_key_clone, &tmdb_id_clone, &media_type_clone, &image_cache_dir_clone)
+            .map_err(|e| e.to_string())
+    }))
+    .await
+    .map_err(|_| "Fix Match timed out while fetching metadata. Please try again.".to_string())?
+    .map_err(|e| e.to_string())??;
     
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.update_metadata(media_id, &metadata).map_err(|e| e.to_string())?;
+    let updated_title = metadata.title.clone();
+    let updated_tmdb_id = metadata.tmdb_id.clone();
+
+    let parent_id = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_metadata(media_id, &metadata).map_err(|e| e.to_string())?;
+        db.get_media_by_id(media_id)
+            .ok()
+            .and_then(|item| item.parent_id)
+    };
+
+    let payload = serde_json::json!({
+        "type": "metadata-updated",
+        "title": updated_title,
+        "media_id": media_id,
+        "parent_id": parent_id,
+        "media_type": media_type,
+        "tmdb_id": updated_tmdb_id,
+    });
+    window.emit("media-metadata-updated", payload.clone()).ok();
+    window.emit("library-updated", payload).ok();
     
     Ok(ApiResponse {
         message: format!("Metadata updated for: {}", metadata.title),
@@ -2450,6 +2521,16 @@ fn is_access_token(credential: &str) -> bool {
 /// - For API keys: adds ?api_key=XXX to URL
 /// - For access tokens: returns URL without api_key (auth goes in header)
 fn build_tmdb_api_url(path: &str, credential: &str, extra_params: &str) -> String {
+    if tmdb::is_backend_proxy_credential(credential) {
+        let base = tmdb::get_tmdb_proxy_base_url();
+        let normalized_path = path.trim_start_matches('/');
+        return if extra_params.is_empty() {
+            format!("{}/{}", base, normalized_path)
+        } else {
+            format!("{}/{}?{}", base, normalized_path, extra_params)
+        };
+    }
+
     let base = "https://api.themoviedb.org/3";
     if is_access_token(credential) {
         if extra_params.is_empty() {
@@ -2470,7 +2551,7 @@ fn build_tmdb_api_url(path: &str, credential: &str, extra_params: &str) -> Strin
 // Configured to handle Windows connection issues (error 10054 - connection reset)
 fn http_get_with_retry_auth(url: &str, credential: &str, max_retries: u32) -> Result<reqwest::blocking::Response, String> {
     let mut last_error = String::new();
-    let use_bearer = is_access_token(credential);
+    let use_bearer = is_access_token(credential) && !tmdb::is_backend_proxy_credential(credential);
 
     for attempt in 0..max_retries {
         if attempt > 0 {
@@ -2949,66 +3030,33 @@ async fn search_tmdb(
         key
     };
 
-    let encoded_query = percent_encoding::utf8_percent_encode(&query, percent_encoding::NON_ALPHANUMERIC).to_string();
-    let url = build_tmdb_api_url("/search/multi", &credential, &format!("query={}&include_adult=false", encoded_query));
+    println!("[SEARCH_TMDB] Using TMDB module search with robust retry logic");
 
-    println!("[SEARCH_TMDB] URL built, making request...");
-
-    // Run blocking HTTP request with retry in a separate thread
-    let result = tokio::task::spawn_blocking(move || -> Result<TmdbSearchResponse, String> {
-        let response = http_get_with_retry_auth(&url, &credential, 3)?;
-        
-        #[derive(serde::Deserialize)]
-        struct RawSearchResult {
-            results: Vec<RawSearchItem>,
-        }
-        
-        #[derive(serde::Deserialize)]
-        struct RawSearchItem {
-            id: i64,
-            media_type: Option<String>,
-            title: Option<String>,
-            name: Option<String>,
-            #[serde(alias = "original_title")]
-            original_title: Option<String>,
-            #[serde(alias = "original_name")]
-            original_name: Option<String>,
-            poster_path: Option<String>,
-            backdrop_path: Option<String>,
-            overview: Option<String>,
-            release_date: Option<String>,
-            first_air_date: Option<String>,
-            vote_average: Option<f64>,
-        }
-        
-        let raw: RawSearchResult = response.json().map_err(|e| e.to_string())?;
-        
-        let results: Vec<TmdbSearchResultItem> = raw.results.into_iter()
-            .filter(|item| {
-                let mt = item.media_type.as_deref().unwrap_or("");
-                mt == "movie" || mt == "tv"
-            })
-            .map(|item| TmdbSearchResultItem {
-                id: item.id,
-                title: item.title.or(item.original_title),
-                name: item.name.or(item.original_name),
-                media_type: item.media_type.unwrap_or_default(),
-                poster_path: item.poster_path,
-                backdrop_path: item.backdrop_path,
-                overview: item.overview,
-                release_date: item.release_date,
-                first_air_date: item.first_air_date,
-                vote_average: item.vote_average,
-            })
-            .collect();
-        
-        Ok(TmdbSearchResponse {
-            total_results: results.len(),
-            results,
-        })
+    // Run blocking HTTP request in a separate thread using tmdb.rs retry handling
+    let raw_results = tokio::task::spawn_blocking(move || -> Result<Vec<tmdb::TmdbSearchListItem>, String> {
+        tmdb::search_multi_raw(&credential, &query).map_err(|e| e.to_string())
     }).await.map_err(|e| e.to_string())??;
-    
-    Ok(result)
+
+    let results = raw_results
+        .into_iter()
+        .map(|item| TmdbSearchResultItem {
+            id: item.id,
+            title: item.title,
+            name: item.name,
+            media_type: item.media_type,
+            poster_path: item.poster_path,
+            backdrop_path: item.backdrop_path,
+            overview: item.overview,
+            release_date: item.release_date,
+            first_air_date: item.first_air_date,
+            vote_average: item.vote_average,
+        })
+        .collect::<Vec<_>>();
+
+    Ok(TmdbSearchResponse {
+        total_results: results.len(),
+        results,
+    })
 }
 
 // Videasy localStorage progress format
@@ -4219,6 +4267,16 @@ async fn wt_is_active(
     Ok(manager.is_active().await)
 }
 
+/// Get local Watch Together client ID for current session
+#[tauri::command]
+async fn wt_get_client_id(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let wt = state.watch_together.clone();
+    let manager = wt.lock().await;
+    Ok(manager.get_client_id().await)
+}
+
 /// Launch MPV in Watch Together sync mode
 #[tauri::command]
 async fn wt_launch_mpv(
@@ -4301,7 +4359,7 @@ async fn wt_launch_mpv(
     let window_clone = window.clone();
 
     tokio::spawn(async move {
-        let mut state_report_interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut state_report_interval = tokio::time::interval(std::time::Duration::from_millis(500));
         state_report_interval.tick().await;
 
         loop {
@@ -4678,6 +4736,9 @@ fn main() {
             get_streaming_resume_info,
             remove_from_streaming_history,
             clear_all_streaming_history,
+            // Social sync commands
+            get_watch_stats,
+            get_recent_watch_activities,
             // App reset command
             clear_all_app_data,
             cleanup_missing_metadata,
@@ -4722,6 +4783,8 @@ fn main() {
             gdrive_is_connected,
             gdrive_get_access_token,
             gdrive_get_account_info,
+            gdrive_get_ai_chat_history,
+            gdrive_save_ai_chat_history,
             gdrive_start_auth,
             gdrive_complete_auth,
             gdrive_auth_with_code,
@@ -4757,6 +4820,7 @@ fn main() {
             wt_send_sync,
             wt_get_room_state,
             wt_is_active,
+            wt_get_client_id,
             wt_launch_mpv,
             wt_send_mpv_command,
         ])

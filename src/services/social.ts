@@ -9,6 +9,8 @@
  * - "Currently watching" status
  */
 
+import { invoke } from '@tauri-apps/api/tauri';
+
 // Types
 export interface PrivacySettings {
   showStatsToFriends: boolean;
@@ -95,13 +97,43 @@ export interface ChatMessage {
 export interface SocialEvent {
   type: 'friend_request' | 'friend_accepted' | 'friend_online' | 'friend_offline' |
         'friend_activity' | 'currently_watching' | 'chat_message' | 'typing' |
-        'chat_message_sent' | 'heartbeat_ack' | 'profile_updated';
+        'chat_message_sent' | 'heartbeat_ack' | 'profile_updated' | 'ai_upgrade_update';
   [key: string]: unknown;
+}
+
+interface WatchStatsAggregated {
+  movies_watched: number;
+  episodes_watched: number;
+  total_watch_time_seconds: number;
+}
+
+interface WatchActivityItem {
+  content_id: string;
+  title: string;
+  content_type: 'movie' | 'tv' | string;
+  activity_type: 'watched_movie' | 'watched_episode' | string;
+  poster_path: string | null;
+  season: number | null;
+  episode: number | null;
+  duration_seconds: number | null;
+  last_watched: string;
+}
+
+export interface SocialAutoSyncResult {
+  statsSynced: boolean;
+  activityFound: number;
+  activitySynced: number;
+  activitySkipped: number;
+  lastCursor: string;
 }
 
 // Configuration
 const SOCIAL_STORAGE_KEY = 'streamvault_social';
 const PROFILE_CACHE_KEY = 'streamvault_profile_cache';
+const SOCIAL_LAST_SYNC_KEY = 'streamvault_social_last_sync';
+const SOCIAL_SYNCED_ACTIVITY_KEYS_KEY = 'streamvault_social_synced_activity_keys';
+const SOCIAL_DEFAULT_SYNC_CURSOR = '1970-01-01 00:00:00';
+const MAX_SYNCED_ACTIVITY_KEYS = 1000;
 const DEV_SETTINGS_KEY = 'streamvault_dev_settings';
 const DEFAULT_AUTH_SERVER_URL = 'https://streamvault-auth.onrender.com';
 const PROFILE_SYNC_INTERVAL = 10 * 60 * 1000; // 10 minutes
@@ -126,7 +158,7 @@ function getAuthServerUrl(): string {
       // Ignore parse errors
     }
   }
-  return import.meta.env.VITE_AUTH_SERVER_URL || DEFAULT_AUTH_SERVER_URL;
+  return DEFAULT_AUTH_SERVER_URL;
 }
 
 // Dev settings management
@@ -192,6 +224,98 @@ function setSocialStorage(data: { accessToken?: string; googleId?: string }) {
   } catch (error) {
     console.error('[Social] Storage error:', error);
   }
+}
+
+function getSocialScopedStorageKey(baseKey: string): string {
+  const storage = getSocialStorage();
+  const id = storage.googleId || 'default';
+  return `${baseKey}_${id}`;
+}
+
+function getLastSocialSyncCursor(): string {
+  try {
+    const key = getSocialScopedStorageKey(SOCIAL_LAST_SYNC_KEY);
+    const stored = localStorage.getItem(key);
+    return stored || SOCIAL_DEFAULT_SYNC_CURSOR;
+  } catch {
+    return SOCIAL_DEFAULT_SYNC_CURSOR;
+  }
+}
+
+function setLastSocialSyncCursor(cursor: string): void {
+  try {
+    const key = getSocialScopedStorageKey(SOCIAL_LAST_SYNC_KEY);
+    localStorage.setItem(key, cursor);
+  } catch (error) {
+    console.warn('[Social Sync] Failed to store sync cursor:', error);
+  }
+}
+
+function getSyncedActivityKeys(): string[] {
+  try {
+    const key = getSocialScopedStorageKey(SOCIAL_SYNCED_ACTIVITY_KEYS_KEY);
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function setSyncedActivityKeys(keys: string[]): void {
+  try {
+    const key = getSocialScopedStorageKey(SOCIAL_SYNCED_ACTIVITY_KEYS_KEY);
+    localStorage.setItem(key, JSON.stringify(keys.slice(-MAX_SYNCED_ACTIVITY_KEYS)));
+  } catch (error) {
+    console.warn('[Social Sync] Failed to store dedupe keys:', error);
+  }
+}
+
+function buildActivitySyncKey(activity: WatchActivityItem): string {
+  return [
+    activity.content_id,
+    activity.activity_type,
+    activity.season ?? '',
+    activity.episode ?? '',
+    activity.last_watched,
+  ].join('|');
+}
+
+function normalizePosterPath(posterPath: string | null): string | undefined {
+  if (!posterPath) return undefined;
+  if (posterPath.startsWith('/')) return posterPath;
+
+  // Handle full TMDB URLs
+  const tmdbMatch = posterPath.match(/\/t\/p\/(?:w\d+|original)?(\/[^?]+)/);
+  if (tmdbMatch?.[1]) {
+    return tmdbMatch[1];
+  }
+
+  return undefined;
+}
+
+function mapWatchActivityToSocialActivity(activity: WatchActivityItem): Omit<Activity, 'id' | 'timestamp'> | null {
+  const contentType = activity.content_type === 'tv' ? 'tv'
+    : activity.content_type === 'movie' ? 'movie'
+      : null;
+  const type = activity.activity_type === 'watched_episode' ? 'watched_episode'
+    : activity.activity_type === 'watched_movie' ? 'watched_movie'
+      : null;
+
+  if (!contentType || !type) return null;
+
+  return {
+    type,
+    contentId: activity.content_id,
+    title: activity.title,
+    contentType,
+    posterPath: normalizePosterPath(activity.poster_path),
+    season: activity.season ?? undefined,
+    episode: activity.episode ?? undefined,
+    duration: activity.duration_seconds ? Math.round(activity.duration_seconds) : undefined,
+  };
 }
 
 /**
@@ -269,6 +393,13 @@ export function getSocialCredentials(): { accessToken: string | null; googleId: 
   accessToken = storage.accessToken || null;
   googleId = storage.googleId || null;
   return { accessToken, googleId };
+}
+
+export function setSocialAccessToken(token: string): void {
+  const normalized = typeof token === 'string' ? token.trim() : '';
+  if (!normalized) return;
+  accessToken = normalized;
+  setSocialStorage({ accessToken: normalized });
 }
 
 /**
@@ -484,28 +615,46 @@ function emitEvent(eventType: string, data: SocialEvent) {
 /**
  * API Helpers
  */
-async function apiGet<T>(endpoint: string, retries = 3): Promise<T> {
+async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+        signal: controller.signal
       });
+      
+      clearTimeout(timeout);
       
       if (!response.ok) {
         const errorText = await response.text();
+        // Don't retry on auth errors - token won't become valid by waiting
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`Auth error: ${response.status} - ${errorText}`);
+        }
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
       
       return await response.json();
     } catch (error) {
       lastError = error as Error;
+      
+      // Don't retry auth errors or aborted requests
+      const isAuthError = lastError.message.startsWith('Auth error:');
+      const isAborted = lastError.name === 'AbortError';
+      if (isAuthError || isAborted) {
+        break;
+      }
+      
       console.warn(`[Social API] GET ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
       
       if (attempt < retries - 1) {
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+        // Shorter backoff: 500ms, 1s
+        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
       }
     }
   }
@@ -513,33 +662,48 @@ async function apiGet<T>(endpoint: string, retries = 3): Promise<T> {
   throw lastError!;
 }
 
-async function apiPost<T>(endpoint: string, body?: object, retries = 3): Promise<T> {
+async function apiPost<T>(endpoint: string, body?: object, retries = 2): Promise<T> {
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         },
-        body: body ? JSON.stringify(body) : undefined
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
       });
+      
+      clearTimeout(timeout);
       
       if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`Auth error: ${response.status} - ${errorText}`);
+        }
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
       
       return await response.json();
     } catch (error) {
       lastError = error as Error;
+      
+      const isAuthError = lastError.message.startsWith('Auth error:');
+      const isAborted = lastError.name === 'AbortError';
+      if (isAuthError || isAborted) {
+        break;
+      }
+      
       console.warn(`[Social API] POST ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
       
       if (attempt < retries - 1) {
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
       }
     }
   }
@@ -547,33 +711,48 @@ async function apiPost<T>(endpoint: string, body?: object, retries = 3): Promise
   throw lastError!;
 }
 
-async function apiPatch<T>(endpoint: string, body: object, retries = 3): Promise<T> {
+async function apiPatch<T>(endpoint: string, body: object, retries = 2): Promise<T> {
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeout);
       
       if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`Auth error: ${response.status} - ${errorText}`);
+        }
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
       
       return await response.json();
     } catch (error) {
       lastError = error as Error;
+      
+      const isAuthError = lastError.message.startsWith('Auth error:');
+      const isAborted = lastError.name === 'AbortError';
+      if (isAuthError || isAborted) {
+        break;
+      }
+      
       console.warn(`[Social API] PATCH ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
       
       if (attempt < retries - 1) {
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
       }
     }
   }
@@ -581,27 +760,43 @@ async function apiPatch<T>(endpoint: string, body: object, retries = 3): Promise
   throw lastError!;
 }
 
-async function apiDelete(endpoint: string, retries = 3): Promise<void> {
+async function apiDelete(endpoint: string, retries = 2): Promise<void> {
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${accessToken}` }
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+        signal: controller.signal
       });
+      
+      clearTimeout(timeout);
       
       if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`Auth error: ${response.status} - ${errorText}`);
+        }
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
+      return; // Success - exit early
     } catch (error) {
       lastError = error as Error;
+      
+      const isAuthError = lastError.message.startsWith('Auth error:');
+      const isAborted = lastError.name === 'AbortError';
+      if (isAuthError || isAborted) {
+        break;
+      }
+      
       console.warn(`[Social API] DELETE ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
       
       if (attempt < retries - 1) {
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
       }
     }
   }
@@ -639,7 +834,13 @@ export async function updateProfile(updates: {
 }
 
 export async function updatePrivacySettings(settings: Partial<PrivacySettings>): Promise<PrivacySettings> {
-  return apiPatch<PrivacySettings>('/api/social/privacy', settings);
+  const privacySettings = await apiPatch<PrivacySettings>('/api/social/privacy', settings);
+  if (cachedProfile) {
+    const updatedProfile = { ...cachedProfile, privacySettings };
+    setProfileCache(updatedProfile);
+    emitEvent('profile_updated', { type: 'profile_updated', profile: updatedProfile });
+  }
+  return privacySettings;
 }
 
 export async function getFriendProfile(friendId: string): Promise<UserProfile | null> {
@@ -710,7 +911,110 @@ export async function getFriendsActivity(filters?: {
  * Stats API
  */
 export async function syncStats(stats: Partial<UserStats>): Promise<UserStats> {
-  return apiPost<UserStats>('/api/social/stats/sync', stats);
+  const updatedStats = await apiPost<UserStats>('/api/social/stats/sync', stats);
+  if (cachedProfile) {
+    const updatedProfile = { ...cachedProfile, stats: updatedStats };
+    setProfileCache(updatedProfile);
+    emitEvent('profile_updated', { type: 'profile_updated', profile: updatedProfile });
+  }
+  return updatedStats;
+}
+
+export async function syncLocalWatchDataToSocial(): Promise<SocialAutoSyncResult> {
+  if (!accessToken) {
+    getSocialCredentials();
+  }
+
+  const result: SocialAutoSyncResult = {
+    statsSynced: false,
+    activityFound: 0,
+    activitySynced: 0,
+    activitySkipped: 0,
+    lastCursor: getLastSocialSyncCursor(),
+  };
+
+  if (!accessToken) {
+    return result;
+  }
+
+  try {
+    const profile = await syncProfile();
+    if (!profile) {
+      return result;
+    }
+  } catch (error) {
+    console.warn('[Social Sync] Profile sync failed:', error);
+    return result;
+  }
+
+  try {
+    const stats = await invoke<WatchStatsAggregated>('get_watch_stats');
+    await syncStats({
+      moviesWatched: Math.max(0, Math.trunc(stats.movies_watched)),
+      tvEpisodesWatched: Math.max(0, Math.trunc(stats.episodes_watched)),
+      totalWatchTime: Math.max(0, Math.round(stats.total_watch_time_seconds)),
+    });
+    result.statsSynced = true;
+  } catch (error) {
+    console.warn('[Social Sync] Failed to sync watch stats:', error);
+  }
+
+  const cursor = getLastSocialSyncCursor();
+  result.lastCursor = cursor;
+
+  let activities: WatchActivityItem[] = [];
+  try {
+    activities = await invoke<WatchActivityItem[]>('get_recent_watch_activities', { sinceTimestamp: cursor });
+  } catch (error) {
+    console.warn('[Social Sync] Failed to load local watch activities:', error);
+    return result;
+  }
+
+  if (!activities.length) {
+    return result;
+  }
+
+  result.activityFound = activities.length;
+  const dedupeKeys = new Set(getSyncedActivityKeys());
+  const sortedActivities = [...activities].sort((a, b) => a.last_watched.localeCompare(b.last_watched));
+  let latestCursor = cursor;
+
+  for (const activity of sortedActivities) {
+    const dedupeKey = buildActivitySyncKey(activity);
+    if (dedupeKeys.has(dedupeKey)) {
+      result.activitySkipped += 1;
+      continue;
+    }
+
+    const mapped = mapWatchActivityToSocialActivity(activity);
+    if (!mapped) {
+      dedupeKeys.add(dedupeKey);
+      result.activitySkipped += 1;
+      if (activity.last_watched > latestCursor) {
+        latestCursor = activity.last_watched;
+      }
+      continue;
+    }
+
+    try {
+      await logActivity(mapped);
+      result.activitySynced += 1;
+      dedupeKeys.add(dedupeKey);
+      if (activity.last_watched > latestCursor) {
+        latestCursor = activity.last_watched;
+      }
+    } catch (error) {
+      console.warn('[Social Sync] Failed to sync activity:', activity.title, error);
+    }
+  }
+
+  setSyncedActivityKeys(Array.from(dedupeKeys));
+  if (latestCursor > cursor) {
+    setLastSocialSyncCursor(latestCursor);
+    result.lastCursor = latestCursor;
+  }
+
+  return result;
 }
 
 /**

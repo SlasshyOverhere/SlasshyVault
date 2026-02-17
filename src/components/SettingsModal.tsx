@@ -644,7 +644,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                   >
                     <div>
                       <h3 className="text-lg font-semibold text-foreground mb-1">Updates & Security</h3>
-                      <p className="text-sm text-muted-foreground">App updates, patch notes, and version info</p>
+                      <p className="text-sm text-muted-foreground">App updates, what's new, and version info</p>
                     </div>
 
                     {/* About & Updates */}
@@ -720,7 +720,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       )}
                     </div>
 
-                    {/* Patch Notes */}
+                    {/* What's New */}
                     <div className="p-4 rounded-xl bg-card border border-border">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -728,7 +728,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                             <FileText className="w-5 h-5 text-white" />
                           </div>
                           <div>
-                            <Label className="text-base font-medium">Patch Notes</Label>
+                            <Label className="text-base font-medium">What's New</Label>
                             <p className="text-sm text-muted-foreground">
                               Version {CURRENT_APP_VERSION}
                             </p>
@@ -744,7 +744,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                           className="gap-2"
                         >
                           <Eye className="w-4 h-4" />
-                          View Notes
+                          View What's New
                         </Button>
                       </div>
                     </div>

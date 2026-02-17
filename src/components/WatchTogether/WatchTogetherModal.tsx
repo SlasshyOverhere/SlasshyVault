@@ -6,8 +6,8 @@ import {
     MediaItem,
     wtCreateRoom,
     wtJoinRoom,
+    wtGetClientId,
     wtLaunchMpv,
-    wtSendMpvCommand,
     wtLeaveRoom,
 } from '@/services/api';
 import { RoomLobby } from './RoomLobby';
@@ -52,6 +52,7 @@ export function WatchTogetherModal({
     const [error, setError] = useState<string | null>(null);
     const [isConnected, setIsConnected] = useState(true);
     const [lastSyncTime, setLastSyncTime] = useState<number | undefined>();
+    const [currentUserId, setCurrentUserId] = useState('');
 
     // Use refs to avoid stale closures in event listeners
     const selectedMediaRef = useRef(selectedMedia);
@@ -71,6 +72,13 @@ export function WatchTogetherModal({
 
     useEffect(() => {
         activeRoomRef.current = activeRoom;
+    }, [activeRoom]);
+
+    useEffect(() => {
+        if (!activeRoom) {
+            mpvLaunchedRef.current = false;
+            setCurrentUserId('');
+        }
     }, [activeRoom]);
 
     // Sync view with session state when modal opens
@@ -153,19 +161,25 @@ export function WatchTogetherModal({
                 case 'room_updated':
                 case 'participant_changed':
                     if (data.room) {
-                        onSessionChange(data.room, sessionIdRef.current, isPlaying, selectedMediaRef.current || undefined);
+                        const roomIsPlaying = data.room.is_playing || data.room.state === 'playing';
+                        onSessionChange(data.room, sessionIdRef.current, roomIsPlaying, selectedMediaRef.current || undefined);
                     }
                     break;
                 case 'sync_command':
-                    if (data.command && sessionIdRef.current) {
-                        console.log('[WT] Applying sync command:', data.command);
-                        wtSendMpvCommand(sessionIdRef.current, data.command.action, data.command.position);
-                        setLastSyncTime(Date.now());
-                    }
+                    // Sync commands are applied in the Tauri backend.
+                    setLastSyncTime(Date.now());
+                    setIsConnected(true);
+                    break;
+                case 'state_update':
+                    // Authoritative periodic sync update from backend relay.
+                    setLastSyncTime(Date.now());
+                    setIsConnected(true);
                     break;
                 case 'playback_started':
                     console.log('[WT] Playback started event received');
                     setView('playing');
+                    setLastSyncTime(Date.now());
+                    setIsConnected(true);
                     onSessionChange(activeRoomRef.current, sessionIdRef.current, true, selectedMediaRef.current || undefined);
                     // Launch MPV for participants (host already launched it)
                     launchMpv(data.position || 0);
@@ -177,6 +191,9 @@ export function WatchTogetherModal({
                 case 'disconnected':
                     console.log('[WT] Disconnected');
                     setIsConnected(false);
+                    setCurrentUserId('');
+                    setLastSyncTime(undefined);
+                    mpvLaunchedRef.current = false;
                     onSessionChange(null, '', false);
                     setView('menu');
                     break;
@@ -193,6 +210,7 @@ export function WatchTogetherModal({
     useEffect(() => {
         const unlisten = listen('wt-mpv-ended', () => {
             console.log('[WT] MPV ended');
+            mpvLaunchedRef.current = false;
             setView('lobby');
             onSessionChange(activeRoomRef.current, sessionIdRef.current, false, selectedMediaRef.current || undefined);
         });
@@ -220,12 +238,18 @@ export function WatchTogetherModal({
                 nickname.trim()
             );
             console.log('[WT] Room created:', newRoom.code);
+            const localClientId = await wtGetClientId();
+            if (localClientId) {
+                setCurrentUserId(localClientId);
+            }
+            mpvLaunchedRef.current = false;
+            setIsConnected(true);
             // Pass the media along with the session change
             onSessionChange(newRoom, newRoom.code, false, selectedMedia);
             setView('lobby');
         } catch (err) {
             console.error('[WT] Failed to create room:', err);
-            setError(err instanceof Error ? err.message : 'Failed to create room');
+            setError(typeof err === 'string' ? err : err instanceof Error ? err.message : 'Failed to create room');
         } finally {
             setIsLoading(false);
         }
@@ -249,12 +273,25 @@ export function WatchTogetherModal({
                 nickname.trim()
             );
             console.log('[WT] Joined room:', joinedRoom.code);
+            const localClientId = await wtGetClientId();
+            if (localClientId) {
+                setCurrentUserId(localClientId);
+            }
+            const roomIsPlaying = joinedRoom.is_playing || joinedRoom.state === 'playing';
+            mpvLaunchedRef.current = false;
+            setIsConnected(true);
             // Pass the media along with the session change
-            onSessionChange(joinedRoom, joinedRoom.code, false, selectedMedia);
-            setView('lobby');
+            onSessionChange(joinedRoom, joinedRoom.code, roomIsPlaying, selectedMedia);
+
+            if (roomIsPlaying) {
+                setView('playing');
+                await launchMpv(joinedRoom.current_position || 0);
+            } else {
+                setView('lobby');
+            }
         } catch (err) {
             console.error('[WT] Failed to join room:', err);
-            setError(err instanceof Error ? err.message : 'Failed to join room');
+            setError(typeof err === 'string' ? err : err instanceof Error ? err.message : 'Failed to join room');
         } finally {
             setIsLoading(false);
         }
@@ -273,6 +310,10 @@ export function WatchTogetherModal({
         } catch (error) {
             console.error('Failed to leave room:', error);
         }
+        mpvLaunchedRef.current = false;
+        setCurrentUserId('');
+        setLastSyncTime(undefined);
+        setIsConnected(false);
         onSessionChange(null, '', false);
         setView('menu');
     };
@@ -282,8 +323,10 @@ export function WatchTogetherModal({
         onSessionChange(activeRoom, sessionId, true, selectedMedia);
     };
 
-    const isHost = activeRoom?.host_id === activeRoom?.participants.find(p => p.nickname === nickname)?.id;
-    const currentUserId = activeRoom?.participants.find(p => p.nickname === nickname)?.id || '';
+    const resolvedCurrentUserId = currentUserId
+        || activeRoom?.participants.find(p => p.nickname === nickname)?.id
+        || '';
+    const isHost = !!activeRoom && activeRoom.host_id === resolvedCurrentUserId;
 
     return (
         <>
@@ -379,7 +422,8 @@ export function WatchTogetherModal({
                         <RoomLobby
                             room={activeRoom}
                             isHost={isHost}
-                            currentUserId={currentUserId}
+                            currentUserId={resolvedCurrentUserId}
+                            mediaDuration={selectedMedia?.duration_seconds}
                             onPlaybackStart={handlePlaybackStart}
                             onLaunchMpv={launchMpv}
                             onLeave={handleLeave}

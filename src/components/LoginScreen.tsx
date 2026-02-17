@@ -22,8 +22,8 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
       <div className="flex-1 flex flex-col justify-center px-16 bg-gradient-to-br from-[#0a0a0a] via-[#111] to-[#0a0a0a]">
         {/* Logo and App Name */}
         <div className="flex items-center gap-4 mb-8">
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shadow-lg shadow-violet-500/20">
-            <Film className="w-7 h-7 text-white" />
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-white to-zinc-400 flex items-center justify-center shadow-lg shadow-white/20">
+            <Film className="w-7 h-7 text-black" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">StreamVault</h1>

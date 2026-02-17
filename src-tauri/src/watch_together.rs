@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, protocol::Message}};
 use uuid::Uuid;
 
 // Backend server URL - reads from env var, falls back to production
@@ -53,7 +53,10 @@ pub struct RoomInfo {
     pub media_title: String,
     pub media_id: i64,
     pub participants: Vec<Participant>,
+    #[serde(default)]
     pub is_playing: bool,
+    #[serde(default)]
+    pub state: Option<String>,
     pub current_position: f64,
 }
 
@@ -151,7 +154,11 @@ pub enum ServerMessage {
     #[serde(rename = "participant_joined")]
     ParticipantJoined { participant: Participant },
     #[serde(rename = "participant_left")]
-    ParticipantLeft { participant_id: String },
+    ParticipantLeft {
+        participant_id: String,
+        #[serde(default)]
+        room: Option<RoomInfo>,
+    },
     #[serde(rename = "participant_ready")]
     ParticipantReady {
         participant_id: String,
@@ -269,6 +276,17 @@ impl WatchTogetherManager {
         }
     }
 
+    fn normalize_room(mut room: RoomInfo) -> RoomInfo {
+        if !room.is_playing {
+            if let Some(state) = room.state.as_deref() {
+                if state == "playing" {
+                    room.is_playing = true;
+                }
+            }
+        }
+        room
+    }
+
     /// Set the event callback for frontend notifications
     pub async fn set_event_callback<F>(&self, callback: F)
     where
@@ -309,9 +327,18 @@ impl WatchTogetherManager {
         let relay_url = get_relay_server_url();
         println!("[WT] Connecting to relay server: {}", relay_url);
 
-        let (ws_stream, _) = connect_async(&relay_url)
+        let mut request = relay_url
+            .into_client_request()
+            .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
+        
+        request.headers_mut().remove("Sec-WebSocket-Extensions");
+
+        let (ws_stream, _) = connect_async(request)
             .await
-            .map_err(|e| format!("Failed to connect to relay server at {}: {}", relay_url, e))?;
+            .map_err(|e| {
+                eprintln!("[WT] Connection error details: {} (url: ...)", e);
+                format!("Could not connect to Watch Together server. Please check your internet connection and try again. ({})", e)
+            })?;
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -348,7 +375,7 @@ impl WatchTogetherManager {
                             if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                                 match server_msg {
                                     ServerMessage::RoomCreated { room } => {
-                                        return Ok(room);
+                                        return Ok(Self::normalize_room(room));
                                     }
                                     ServerMessage::Error { message } => {
                                         return Err(message);
@@ -465,9 +492,15 @@ impl WatchTogetherManager {
         let relay_url = get_relay_server_url();
         println!("[WT] Connecting to relay server: {}", relay_url);
 
-        let (ws_stream, _) = connect_async(&relay_url)
+        let mut request = relay_url
+            .into_client_request()
+            .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
+
+        request.headers_mut().remove("Sec-WebSocket-Extensions");
+
+        let (ws_stream, _) = connect_async(request)
             .await
-            .map_err(|e| format!("Failed to connect to relay server at {}: {}", relay_url, e))?;
+            .map_err(|e| format!("Failed to connect to relay server: {}", e))?;
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -504,7 +537,7 @@ impl WatchTogetherManager {
                             if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                                 match server_msg {
                                     ServerMessage::RoomJoined { room } => {
-                                        return Ok(room);
+                                        return Ok(Self::normalize_room(room));
                                     }
                                     ServerMessage::Error { message } => {
                                         return Err(message);
@@ -612,6 +645,7 @@ impl WatchTogetherManager {
 
         match msg {
             ServerMessage::RoomState { room } => {
+                let room = Self::normalize_room(room);
                 {
                     let mut info = room_info.write().await;
                     *info = Some(room.clone());
@@ -640,14 +674,8 @@ impl WatchTogetherManager {
                     participants,
                 }).await;
             }
-            ServerMessage::Ping { ping_id, .. } => {
-                // Server ping for RTT measurement - record time and send back
-                let now = std::time::Instant::now();
-                ping_times.lock().await.insert(ping_id.clone(), now);
-                // Send pong back immediately (the server already handles pong)
-                // The server sends us a ping, we respond - but actually the server
-                // already handles this. We need to measure OUR RTT to the server.
-                // So we send our own ping and measure the pong response.
+            ServerMessage::Ping { .. } => {
+                // Ignore server-side pings here. RTT is measured via our own client ping -> server pong cycle.
             }
             ServerMessage::Pong { ping_id, .. } => {
                 // We sent a ping and got a pong back - calculate RTT
@@ -664,13 +692,21 @@ impl WatchTogetherManager {
             ServerMessage::ParticipantJoined { participant } => {
                 let mut info = room_info.write().await;
                 if let Some(ref mut room) = *info {
-                    room.participants.push(participant);
+                    if let Some(existing) = room.participants.iter_mut().find(|p| p.id == participant.id) {
+                        *existing = participant;
+                    } else {
+                        room.participants.push(participant);
+                    }
                     emit(WatchEvent::ParticipantChanged { room: room.clone() }).await;
                 }
             }
-            ServerMessage::ParticipantLeft { participant_id } => {
+            ServerMessage::ParticipantLeft { participant_id, room } => {
                 let mut info = room_info.write().await;
-                if let Some(ref mut room) = *info {
+                if let Some(snapshot) = room {
+                    let normalized = Self::normalize_room(snapshot);
+                    *info = Some(normalized.clone());
+                    emit(WatchEvent::ParticipantChanged { room: normalized }).await;
+                } else if let Some(ref mut room) = *info {
                     room.participants.retain(|p| p.id != participant_id);
                     emit(WatchEvent::ParticipantChanged { room: room.clone() }).await;
                 }
@@ -689,6 +725,7 @@ impl WatchTogetherManager {
                 let mut info = room_info.write().await;
                 if let Some(ref mut room) = *info {
                     room.is_playing = true;
+                    room.state = Some("playing".to_string());
                     room.current_position = position;
                 }
                 emit(WatchEvent::PlaybackStarted { position }).await;
@@ -708,6 +745,8 @@ impl WatchTogetherManager {
             // Send leave message
             if let Some(tx) = &session.command_tx {
                 let _ = tx.send(ClientMessage::Leave).await;
+                // Keep socket alive long enough for Leave to reach relay on higher-latency links.
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             }
 
             // Trigger shutdown
@@ -736,7 +775,13 @@ impl WatchTogetherManager {
         let session_guard = self.session.lock().await;
 
         if let Some(session) = session_guard.as_ref() {
-            if !session.is_host {
+            let am_host = if let Some(room) = session.room_info.read().await.as_ref() {
+                room.host_id == session.client_id
+            } else {
+                session.is_host
+            };
+
+            if !am_host {
                 return Err("Only the host can start playback".to_string());
             }
             session.send_message(ClientMessage::Start).await?;
@@ -769,7 +814,7 @@ impl WatchTogetherManager {
         let session_guard = self.session.lock().await;
 
         if let Some(session) = session_guard.as_ref() {
-            session.get_room_info().await
+            session.get_room_info().await.map(Self::normalize_room)
         } else {
             None
         }
@@ -783,10 +828,23 @@ impl WatchTogetherManager {
     /// Check if we're the host
     pub async fn is_host(&self) -> bool {
         if let Some(session) = self.session.lock().await.as_ref() {
-            session.is_host
+            if let Some(room) = session.room_info.read().await.as_ref() {
+                room.host_id == session.client_id
+            } else {
+                session.is_host
+            }
         } else {
             false
         }
+    }
+
+    /// Get the current session client ID
+    pub async fn get_client_id(&self) -> Option<String> {
+        self.session
+            .lock()
+            .await
+            .as_ref()
+            .map(|session| session.client_id.clone())
     }
 
     /// Set the MPV process ID for the session
