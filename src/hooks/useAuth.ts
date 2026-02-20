@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getConfig,
@@ -14,12 +14,26 @@ export function useAuth() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const isMountedRef = useRef(true)
+  const initialScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+      if (initialScanTimeoutRef.current) {
+        clearTimeout(initialScanTimeoutRef.current)
+        initialScanTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   // Check authentication on mount
   useEffect(() => {
     const checkAuth = async () => {
-      setIsAuthLoading(true)
+      if (isMountedRef.current) {
+        setIsAuthLoading(true)
+      }
       try {
         // First check if GDrive is connected (fast local check)
         const { isGDriveConnected } = await import('@/services/gdrive')
@@ -27,7 +41,9 @@ export function useAuth() {
 
         if (connected) {
           // GDrive is connected, user is authenticated
-          setIsAuthenticated(true)
+          if (isMountedRef.current) {
+            setIsAuthenticated(true)
+          }
 
           // Auto-detect MPV if not configured
           try {
@@ -56,7 +72,9 @@ export function useAuth() {
       } catch (error) {
         console.error('[Auth] Failed to check connection:', error)
       } finally {
-        setIsAuthLoading(false)
+        if (isMountedRef.current) {
+          setIsAuthLoading(false)
+        }
       }
     }
     checkAuth()
@@ -64,7 +82,9 @@ export function useAuth() {
 
   // Handle Google login
   const login = async () => {
-    setIsLoggingIn(true)
+    if (isMountedRef.current) {
+      setIsLoggingIn(true)
+    }
     try {
       const { startGDriveAuth, completeGDriveAuth, isGDriveConnected } = await import('@/services/gdrive')
 
@@ -105,14 +125,19 @@ export function useAuth() {
             console.log('[Auth] Social init failed (non-critical):', socialError)
           }
 
-          setIsAuthenticated(true)
-          toast({
-            title: "Welcome!",
-            description: `Signed in as ${accountInfo.email}`
-          })
+          if (isMountedRef.current) {
+            setIsAuthenticated(true)
+            toast({
+              title: "Welcome!",
+              description: `Signed in as ${accountInfo.email}`
+            })
+          }
 
           // Trigger initial cloud scan to set up folders
-          setTimeout(async () => {
+          if (initialScanTimeoutRef.current) {
+            clearTimeout(initialScanTimeoutRef.current)
+          }
+          initialScanTimeoutRef.current = setTimeout(async () => {
             try {
               const { scanCloudFolder } = await import('@/services/gdrive')
               console.log('[Auth] Starting initial cloud scan...')
@@ -128,13 +153,17 @@ export function useAuth() {
       }
     } catch (error) {
       console.error('[Auth] Login failed:', error)
-      toast({
-        title: "Login Failed",
-        description: String(error) || "Failed to sign in with Google",
-        variant: "destructive"
-      })
+      if (isMountedRef.current) {
+        toast({
+          title: "Login Failed",
+          description: String(error) || "Failed to sign in with Google",
+          variant: "destructive"
+        })
+      }
     } finally {
-      setIsLoggingIn(false)
+      if (isMountedRef.current) {
+        setIsLoggingIn(false)
+      }
     }
   }
 
@@ -144,11 +173,13 @@ export function useAuth() {
       const { disconnectGDrive } = await import('@/services/gdrive')
       await disconnectGDrive()
       disconnectSocial()
-      setIsAuthenticated(false)
-      toast({
-        title: "Signed Out",
-        description: "You have been signed out successfully"
-      })
+      if (isMountedRef.current) {
+        setIsAuthenticated(false)
+        toast({
+          title: "Signed Out",
+          description: "You have been signed out successfully"
+        })
+      }
     } catch (error) {
       console.error('[Auth] Logout failed:', error)
     }
