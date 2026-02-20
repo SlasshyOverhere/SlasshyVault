@@ -60,13 +60,21 @@ import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 
 // Lazy load heavy components
-const SettingsModal = lazy(() => import('@/components/SettingsModal').then(module => ({ default: module.SettingsModal })))
-const EpisodeBrowser = lazy(() => import('@/components/EpisodeBrowser').then(module => ({ default: module.EpisodeBrowser })))
-const StreamView = lazy(() => import('@/components/StreamView').then(module => ({ default: module.StreamView })))
-const SocialView = lazy(() => import('@/components/Social').then(module => ({ default: module.SocialView })))
-const AIChatView = lazy(() => import('@/components/AI/AIChatView').then(module => ({ default: module.AIChatView })))
-const WatchTogetherModal = lazy(() => import('@/components/WatchTogether/WatchTogetherModal').then(module => ({ default: module.WatchTogetherModal })))
-const FixMatchModal = lazy(() => import('@/components/FixMatchModal').then(module => ({ default: module.FixMatchModal })))
+const loadSettingsModal = () => import('@/components/SettingsModal')
+const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
+const loadStreamView = () => import('@/components/StreamView')
+const loadSocialView = () => import('@/components/Social')
+const loadAIChatView = () => import('@/components/AI/AIChatView')
+const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
+const loadFixMatchModal = () => import('@/components/FixMatchModal')
+
+const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
+const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
+const StreamView = lazy(() => loadStreamView().then(module => ({ default: module.StreamView })))
+const SocialView = lazy(() => loadSocialView().then(module => ({ default: module.SocialView })))
+const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module.AIChatView })))
+const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
+const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 
 initAdBlocker()
 
@@ -152,6 +160,20 @@ function App() {
 
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
+
+  useEffect(() => {
+    const preloadTimer = window.setTimeout(() => {
+      void loadSettingsModal()
+      void loadEpisodeBrowser()
+      void loadStreamView()
+      void loadSocialView()
+      void loadAIChatView()
+      void loadWatchTogetherModal()
+      void loadFixMatchModal()
+    }, 1500)
+
+    return () => window.clearTimeout(preloadTimer)
+  }, [])
 
   // Resume dialog state
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
