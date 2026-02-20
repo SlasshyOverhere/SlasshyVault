@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, AtSign, Bot, ExternalLink, Loader2, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { open } from '@tauri-apps/api/shell';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -600,6 +601,56 @@ function parseTmdbDeepProfileForCard(content: string): TmdbDeepProfileData | nul
   };
 }
 
+function normalizeExternalHttpUrl(url?: string): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function handleExternalLink(url: string | undefined, event?: React.MouseEvent) {
+  if (event) {
+    event.preventDefault();
+  }
+
+  const safeUrl = normalizeExternalHttpUrl(url);
+  if (!safeUrl) return;
+
+  try {
+    await open(safeUrl);
+  } catch (error) {
+    console.warn('Failed to open external link in shell, falling back to window.open:', error);
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+  }
+}
+
+type MarkdownAnchorProps = ComponentPropsWithoutRef<'a'> & { node?: unknown };
+
+const MARKDOWN_COMPONENTS = {
+  a: ({ node: _node, href, onClick, ...props }: MarkdownAnchorProps) => (
+    <a
+      {...props}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => {
+        onClick?.(e);
+        if (!e.defaultPrevented) {
+          void handleExternalLink(href, e);
+        }
+      }}
+    />
+  ),
+};
 
 function parseAiError(error: unknown): string {
   if (error instanceof AiApiError) {
@@ -2235,6 +2286,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                                   >
                                     <ReactMarkdown
                                       remarkPlugins={[remarkGfm]}
+                                      components={MARKDOWN_COMPONENTS}
                                     >
                                       {line.content}
                                     </ReactMarkdown>
@@ -2819,6 +2871,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.tmdbUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.tmdbUrl, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-sky-200/35 bg-sky-300/14 px-2.5 py-1.5 text-xs font-medium text-sky-100 hover:bg-sky-300/24"
                 >
                   TMDB
@@ -2830,6 +2883,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.imdbUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.imdbUrl as string, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-neutral-100 hover:bg-white/18"
                 >
                   IMDb
@@ -2841,6 +2895,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.homepage}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.homepage as string, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-neutral-100 hover:bg-white/18"
                 >
                   Homepage

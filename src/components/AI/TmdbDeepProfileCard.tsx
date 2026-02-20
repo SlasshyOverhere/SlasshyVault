@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { open } from '@tauri-apps/api/shell';
 
 export type TmdbProfileSectionKey =
   | 'cast'
@@ -58,6 +59,32 @@ export function dedupePreserveOrder(items: string[], maxItems: number): string[]
   }
 
   return deduped;
+}
+
+function normalizeExternalHttpUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function handleExternalLink(url: string, event?: React.MouseEvent) {
+  if (event) {
+    event.preventDefault();
+  }
+  const safeUrl = normalizeExternalHttpUrl(url);
+  if (!safeUrl) return;
+
+  try {
+    await open(safeUrl);
+  } catch {
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+  }
 }
 
 export function TmdbDeepProfileCard({
@@ -186,6 +213,7 @@ export function TmdbDeepProfileCard({
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => handleExternalLink(link.url, e)}
                 className="inline-flex items-center gap-1 rounded-full border border-sky-200/30 bg-sky-300/12 px-2.5 py-1 text-[11px] font-medium text-sky-100 transition-colors hover:border-sky-100/45 hover:bg-sky-300/20"
               >
                 <span>{link.label}</span>
