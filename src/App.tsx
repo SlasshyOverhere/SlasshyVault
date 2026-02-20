@@ -1,17 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
   Sidebar,
   MovieCard,
   ContinueCard,
-  EpisodeBrowser,
-  StreamView,
-  SettingsModal,
   UpdateNotification,
   isUpdateDismissed,
   dismissUpdate,
-  FixMatchModal,
   ResumeDialog,
   DeleteEpisodesModal,
   OnboardingModal,
@@ -20,10 +16,7 @@ import {
   shouldShowUpdateNotes,
   CURRENT_APP_VERSION,
   MarkCompleteDialog,
-  WatchTogetherModal,
   WatchTogetherBanner,
-  SocialView,
-  AIChatView,
   LoginScreen
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -67,6 +60,23 @@ import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 
+// Lazy load heavy components
+const loadSettingsModal = () => import('@/components/SettingsModal')
+const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
+const loadStreamView = () => import('@/components/StreamView')
+const loadSocialView = () => import('@/components/Social')
+const loadAIChatView = () => import('@/components/AI/AIChatView')
+const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
+const loadFixMatchModal = () => import('@/components/FixMatchModal')
+
+const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
+const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
+const StreamView = lazy(() => loadStreamView().then(module => ({ default: module.StreamView })))
+const SocialView = lazy(() => loadSocialView().then(module => ({ default: module.SocialView })))
+const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module.AIChatView })))
+const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
+const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
+
 initAdBlocker()
 
 interface ScanProgressPayload {
@@ -95,6 +105,12 @@ interface MpvPlaybackEndedPayload {
 type ViewMode = 'grid' | 'list'
 type SortOption = 'title' | 'year' | 'recent' | 'progress'
 type MediaSubTab = 'movies' | 'tv'
+
+const LoadingFallback = () => (
+  <div className="flex h-full w-full items-center justify-center min-h-[50vh]">
+    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+  </div>
+)
 
 function App() {
   const [view, setView] = useState<string>('home')
@@ -145,6 +161,20 @@ function App() {
 
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
+
+  useEffect(() => {
+    const preloadTimer = window.setTimeout(() => {
+      void loadSettingsModal()
+      void loadEpisodeBrowser()
+      void loadStreamView()
+      void loadSocialView()
+      void loadAIChatView()
+      void loadWatchTogetherModal()
+      void loadFixMatchModal()
+    }, 1500)
+
+    return () => window.clearTimeout(preloadTimer)
+  }, [])
 
   // Resume dialog state
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
@@ -1282,16 +1312,18 @@ function App() {
                     exit={{ opacity: 0, x: -20 }}
                     className="h-full"
                   >
-                    <EpisodeBrowser
-                      show={selectedShow}
-                      onBack={() => {
-                        // Navigate back to cloud view (all shows are cloud-based now)
-                        setView('cloud')
-                        setCloudSubTab('tv')
-                        setSelectedShow(null)
-                      }}
-                      onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
-                    />
+                    <Suspense fallback={<LoadingFallback />}>
+                      <EpisodeBrowser
+                        show={selectedShow}
+                        onBack={() => {
+                          // Navigate back to cloud view (all shows are cloud-based now)
+                          setView('cloud')
+                          setCloudSubTab('tv')
+                          setSelectedShow(null)
+                        }}
+                        onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                      />
+                    </Suspense>
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -1306,11 +1338,13 @@ function App() {
                       exit={{ opacity: 0 }}
                       className="h-full"
                     >
-                      <AIChatView
-                        launchItem={aiLaunchRequest?.item || null}
-                        launchNonce={aiLaunchRequest?.nonce || 0}
-                        onLaunchHandled={() => setAiLaunchRequest(null)}
-                      />
+                      <Suspense fallback={<LoadingFallback />}>
+                        <AIChatView
+                          launchItem={aiLaunchRequest?.item || null}
+                          launchNonce={aiLaunchRequest?.nonce || 0}
+                          onLaunchHandled={() => setAiLaunchRequest(null)}
+                        />
+                      </Suspense>
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -1799,7 +1833,9 @@ function App() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                       >
-                        <StreamView />
+                        <Suspense fallback={<LoadingFallback />}>
+                          <StreamView />
+                        </Suspense>
                       </motion.div>
                     )}
 
@@ -1812,11 +1848,13 @@ function App() {
                         exit={{ opacity: 0 }}
                         className="h-full"
                       >
-                        <AIChatView
-                          launchItem={aiLaunchRequest?.item || null}
-                          launchNonce={aiLaunchRequest?.nonce || 0}
-                          onLaunchHandled={() => setAiLaunchRequest(null)}
-                        />
+                        <Suspense fallback={<LoadingFallback />}>
+                          <AIChatView
+                            launchItem={aiLaunchRequest?.item || null}
+                            launchNonce={aiLaunchRequest?.nonce || 0}
+                            onLaunchHandled={() => setAiLaunchRequest(null)}
+                          />
+                        </Suspense>
                       </motion.div>
                     )}
 
@@ -1829,7 +1867,9 @@ function App() {
                         exit={{ opacity: 0 }}
                         className="h-full"
                       >
-                        <SocialView onShowSettings={() => setSettingsOpen(true)} />
+                        <Suspense fallback={<LoadingFallback />}>
+                          <SocialView onShowSettings={() => setSettingsOpen(true)} />
+                        </Suspense>
                       </motion.div>
                     )}
 
@@ -2158,43 +2198,49 @@ function App() {
             }}
           />
 
-          <SettingsModal
-            open={settingsOpen}
-            onOpenChange={(open) => {
-              setSettingsOpen(open)
-              if (!open) {
-                setSettingsInitialTab('general')
-                setAutoCheckUpdate(false)
-              }
-            }}
-            onRestartOnboarding={handleRestartOnboarding}
-            onViewUpdateNotes={() => setShowUpdateNotes(true)}
-            initialTab={settingsInitialTab}
-            tabVisibility={tabVisibility}
-            onTabVisibilityChange={handleTabVisibilityChange}
-            onLogout={handleLogout}
-            betaEnabled={betaEnabled}
-            onBetaToggle={handleBetaToggle}
-            autoCheckUpdate={autoCheckUpdate}
-            onSimulateUpdate={() => {
-              const fakeUpdate: UpdateInfo = {
-                available: true,
-                current_version: CURRENT_APP_VERSION,
-                latest_version: '99.0.0',
-                release_notes: '- Critical bug fixes\n- Stability improvements\n- New features',
-                download_url: 'https://fake-url.test/update.exe',
-                published_at: new Date().toISOString(),
-              }
-              setUpdateInfo(fakeUpdate)
-              setUpdateAvailable(true)
-            }}
-          />
-          <FixMatchModal
-            open={fixMatchOpen}
-            onOpenChange={setFixMatchOpen}
-            item={itemToFix}
-            onSuccess={handleFixMatchSuccess}
-          />
+          <Suspense fallback={null}>
+            <SettingsModal
+              open={settingsOpen}
+              onOpenChange={(open) => {
+                setSettingsOpen(open)
+                if (!open) {
+                  setSettingsInitialTab('general')
+                  setAutoCheckUpdate(false)
+                }
+              }}
+              onRestartOnboarding={handleRestartOnboarding}
+              onViewUpdateNotes={() => setShowUpdateNotes(true)}
+              initialTab={settingsInitialTab}
+              tabVisibility={tabVisibility}
+              onTabVisibilityChange={handleTabVisibilityChange}
+              onLogout={handleLogout}
+              betaEnabled={betaEnabled}
+              onBetaToggle={handleBetaToggle}
+              autoCheckUpdate={autoCheckUpdate}
+              onSimulateUpdate={() => {
+                const fakeUpdate: UpdateInfo = {
+                  available: true,
+                  current_version: CURRENT_APP_VERSION,
+                  latest_version: '99.0.0',
+                  release_notes: '- Critical bug fixes\n- Stability improvements\n- New features',
+                  download_url: 'https://fake-url.test/update.exe',
+                  published_at: new Date().toISOString(),
+                }
+                setUpdateInfo(fakeUpdate)
+                setUpdateAvailable(true)
+              }}
+            />
+          </Suspense>
+
+          <Suspense fallback={null}>
+            <FixMatchModal
+              open={fixMatchOpen}
+              onOpenChange={setFixMatchOpen}
+              item={itemToFix}
+              onSuccess={handleFixMatchSuccess}
+            />
+          </Suspense>
+
           {resumeDialogData && (
             <ResumeDialog
               open={resumeDialogOpen}
@@ -2269,21 +2315,23 @@ function App() {
           )}
 
           {/* Watch Together Modal */}
-          <WatchTogetherModal
-            isOpen={watchTogetherOpen}
-            onClose={() => {
-              setWatchTogetherOpen(false)
-              // Don't clear watchTogetherMedia if still in a room
-              if (!wtActiveRoom) {
-                setWatchTogetherMedia(null)
-              }
-            }}
-            selectedMedia={wtSessionMedia || watchTogetherMedia || undefined}
-            activeRoom={wtActiveRoom}
-            sessionId={wtSessionId}
-            isPlaying={wtIsPlaying}
-            onSessionChange={handleWtSessionChange}
-          />
+          <Suspense fallback={null}>
+            <WatchTogetherModal
+              isOpen={watchTogetherOpen}
+              onClose={() => {
+                setWatchTogetherOpen(false)
+                // Don't clear watchTogetherMedia if still in a room
+                if (!wtActiveRoom) {
+                  setWatchTogetherMedia(null)
+                }
+              }}
+              selectedMedia={wtSessionMedia || watchTogetherMedia || undefined}
+              activeRoom={wtActiveRoom}
+              sessionId={wtSessionId}
+              isPlaying={wtIsPlaying}
+              onSessionChange={handleWtSessionChange}
+            />
+          </Suspense>
 
           {/* Watch Together Banner - shows when in a room but modal is closed */}
           {wtActiveRoom && !watchTogetherOpen && (
