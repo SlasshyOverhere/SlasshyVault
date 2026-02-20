@@ -40,7 +40,6 @@ import {
   TmdbDeepProfileCard,
   type TmdbDeepProfileData,
   type TmdbProfileLink,
-  type TmdbProfilePanelKey,
   type TmdbProfileSectionKey,
   cleanTmdbProfileLine,
   dedupePreserveOrder,
