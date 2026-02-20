@@ -1570,54 +1570,6 @@ struct DeleteResponse {
     message: String,
 }
 
-// Helper function to clean up empty parent directories after file deletion
-fn cleanup_empty_parent_dirs(file_paths: &[String]) {
-    use std::collections::HashSet;
-
-    // Collect unique parent directories from deleted files
-    let mut parent_dirs: HashSet<std::path::PathBuf> = HashSet::new();
-    for file_path in file_paths {
-        let path = std::path::Path::new(file_path);
-        if let Some(parent) = path.parent() {
-            parent_dirs.insert(parent.to_path_buf());
-        }
-    }
-
-    // Try to remove empty directories (and their parents if also empty)
-    for dir in parent_dirs {
-        let mut current_dir = Some(dir);
-        while let Some(dir_path) = current_dir {
-            // Only try to remove if the directory exists
-            if dir_path.exists() && dir_path.is_dir() {
-                // Check if directory is empty
-                match std::fs::read_dir(&dir_path) {
-                    Ok(mut entries) => {
-                        if entries.next().is_none() {
-                            // Directory is empty, try to remove it
-                            match std::fs::remove_dir(&dir_path) {
-                                Ok(_) => {
-                                    println!("[DELETE] Removed empty directory: {:?}", dir_path);
-                                    // Continue to check parent directory
-                                    current_dir = dir_path.parent().map(|p| p.to_path_buf());
-                                    continue;
-                                }
-                                Err(e) => {
-                                    println!("[DELETE] Failed to remove directory {:?}: {}", dir_path, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("[DELETE] Failed to read directory {:?}: {}", dir_path, e);
-                    }
-                }
-            }
-            // Stop if directory not empty or doesn't exist
-            current_dir = None;
-        }
-    }
-}
-
 // Delete media files permanently from disk (bypasses recycle bin)
 // Also handles cloud files by deleting from Google Drive
 #[tauri::command]
@@ -1700,7 +1652,7 @@ async fn delete_media_files(
     }
 
     // Clean up empty parent directories (only for local files)
-    cleanup_empty_parent_dirs(&deleted_file_paths);
+    media_manager::cleanup_empty_parent_dirs(&deleted_file_paths);
 
     let message = if failed_count == 0 {
         format!("Successfully deleted {} file(s)", deleted_count)
@@ -1851,7 +1803,7 @@ async fn delete_series(
 
     // Clean up empty parent directories (only for local files)
     if delete_files && !deleted_file_paths.is_empty() {
-        cleanup_empty_parent_dirs(&deleted_file_paths);
+        media_manager::cleanup_empty_parent_dirs(&deleted_file_paths);
     }
 
     // Delete the series entry itself

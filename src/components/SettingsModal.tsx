@@ -13,11 +13,11 @@ import {
   checkForUpdates, downloadUpdate, installUpdate, getAppVersion, UpdateInfo, autoDetectMpv
 } from "@/services/api"
 import {
-  isDev,
   getDevSettings,
   setDevSettings,
   getDefaultAuthServerUrl
 } from "@/services/social"
+import { isDev } from "@/config/social"
 import { useToast } from "@/components/ui/use-toast"
 import { open as openDialog } from '@tauri-apps/api/dialog'
 import { invoke } from '@tauri-apps/api/tauri'

@@ -1,17 +1,24 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
-import { Sidebar } from '@/components/Sidebar'
-import { MovieCard, ContinueCard } from '@/components/MovieCard'
-import { UpdateNotification, isUpdateDismissed, dismissUpdate } from '@/components/UpdateNotification'
-import { ResumeDialog } from '@/components/ResumeDialog'
-import { DeleteEpisodesModal } from '@/components/DeleteEpisodesModal'
-import { OnboardingModal } from '@/components/OnboardingModal'
-import { MainAppTour } from '@/components/MainAppTour'
-import { UpdateNotesModal, shouldShowUpdateNotes, CURRENT_APP_VERSION } from '@/components/UpdateNotesModal'
-import { MarkCompleteDialog } from '@/components/MarkCompleteDialog'
-import { WatchTogetherBanner } from '@/components/WatchTogether/WatchTogetherBanner'
-import { LoginScreen } from '@/components/LoginScreen'
+import {
+  Sidebar,
+  MovieCard,
+  ContinueCard,
+  UpdateNotification,
+  isUpdateDismissed,
+  dismissUpdate,
+  ResumeDialog,
+  DeleteEpisodesModal,
+  OnboardingModal,
+  MainAppTour,
+  UpdateNotesModal,
+  shouldShowUpdateNotes,
+  CURRENT_APP_VERSION,
+  MarkCompleteDialog,
+  WatchTogetherBanner,
+  LoginScreen
+} from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
 import {
@@ -38,9 +45,6 @@ import {
   setTabVisibility,
   TabVisibility,
   markAsComplete,
-  autoDetectMpv,
-  getConfig,
-  saveConfig,
   isBetaEnabled,
   setBetaEnabled,
   checkForUpdates,
@@ -48,16 +52,13 @@ import {
 } from '@/services/api'
 import { initAdBlocker } from '@/utils/adBlocker'
 import {
-  restoreSocialConnection,
-  disconnectSocial,
-} from '@/services/social'
-import {
   Search, Loader2, Trash2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
   TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, Globe, X, Cloud, RefreshCw, Minus, Bot
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useAuth } from '@/hooks/useAuth'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -232,9 +233,7 @@ function App() {
   } | null>(null)
 
   // Authentication state
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [isAuthLoading, setIsAuthLoading] = useState(true)
-  const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout } = useAuth()
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
@@ -256,53 +255,9 @@ function App() {
     setTabVisibilityState(getTabVisibility())
   }, [])
 
-  // Check authentication on app start
+  // Initialize beta features
   useEffect(() => {
-    const checkAuth = async () => {
-      setIsAuthLoading(true)
-      try {
-        // Load beta features state (instant - localStorage)
-        setBetaEnabledState(isBetaEnabled())
-
-        // First check if GDrive is connected (fast local check)
-        const { isGDriveConnected } = await import('@/services/gdrive')
-        const connected = await isGDriveConnected()
-
-        if (connected) {
-          // GDrive is connected, user is authenticated
-          setIsAuthenticated(true)
-
-          // Auto-detect MPV if not configured
-          try {
-            const config = await getConfig()
-            if (!config.mpv_path) {
-              console.log('[Boot] No MPV configured, auto-detecting...')
-              const mpvPath = await autoDetectMpv()
-              if (mpvPath) {
-                await saveConfig({ ...config, mpv_path: mpvPath })
-                console.log('[Boot] MPV auto-detected:', mpvPath)
-                toast({
-                  title: "MPV Detected",
-                  description: "Media player configured automatically"
-                })
-              }
-            }
-          } catch (mpvError) {
-            console.log('[Boot] MPV auto-detect failed (non-critical):', mpvError)
-          }
-
-          // Restore social connection in background (don't block UI)
-          restoreSocialConnection().catch(err => {
-            console.log('[Auth] Social restore failed (non-critical):', err)
-          })
-        }
-      } catch (error) {
-        console.error('[Auth] Failed to check connection:', error)
-      } finally {
-        setIsAuthLoading(false)
-      }
-    }
-    checkAuth()
+    setBetaEnabledState(isBetaEnabled())
   }, [])
 
   // Silent background update check after authentication
@@ -323,82 +278,6 @@ function App() {
 
     return () => clearTimeout(timer)
   }, [isAuthenticated, isAuthLoading])
-
-  // Handle Google login
-  const handleLogin = async () => {
-    setIsLoggingIn(true)
-    try {
-      const { startGDriveAuth, completeGDriveAuth, isGDriveConnected } = await import('@/services/gdrive')
-
-      // Start OAuth flow - opens browser
-      await startGDriveAuth()
-
-      // Wait for OAuth completion (this waits for localhost:8085 callback)
-      const accountInfo = await completeGDriveAuth()
-
-      if (accountInfo) {
-        // Check if GDrive is now connected
-        const connected = await isGDriveConnected()
-
-        if (connected) {
-          // Auto-detect MPV on first login
-          try {
-            const config = await getConfig()
-            if (!config.mpv_path) {
-              console.log('[Auth] No MPV configured, auto-detecting...')
-              const mpvPath = await autoDetectMpv()
-              if (mpvPath) {
-                await saveConfig({ ...config, mpv_path: mpvPath })
-                console.log('[Auth] MPV auto-detected:', mpvPath)
-                toast({
-                  title: "MPV Detected",
-                  description: "Media player configured automatically"
-                })
-              }
-            }
-          } catch (mpvError) {
-            console.log('[Auth] MPV auto-detect failed (non-critical):', mpvError)
-          }
-
-          // Initialize social connection with new tokens
-          try {
-            await restoreSocialConnection()
-          } catch (socialError) {
-            console.log('[Auth] Social init failed (non-critical):', socialError)
-          }
-
-          setIsAuthenticated(true)
-          toast({
-            title: "Welcome!",
-            description: `Signed in as ${accountInfo.email}`
-          })
-
-          // Trigger initial cloud scan to set up folders
-          setTimeout(async () => {
-            try {
-              const { scanCloudFolder } = await import('@/services/gdrive')
-              console.log('[Auth] Starting initial cloud scan...')
-              await scanCloudFolder('root', 'My Drive')
-              console.log('[Auth] Initial cloud scan complete')
-            } catch (scanError) {
-              console.log('[Auth] Initial scan failed (non-critical):', scanError)
-            }
-          }, 1000)
-        } else {
-          throw new Error('OAuth completed but GDrive not connected')
-        }
-      }
-    } catch (error) {
-      console.error('[Auth] Login failed:', error)
-      toast({
-        title: "Login Failed",
-        description: String(error) || "Failed to sign in with Google",
-        variant: "destructive"
-      })
-    } finally {
-      setIsLoggingIn(false)
-    }
-  }
 
   // Handle beta toggle
   const handleBetaToggle = (enabled: boolean) => {
@@ -430,22 +309,6 @@ function App() {
     setUpdateAvailable(false)
     if (updateInfo) {
       dismissUpdate(updateInfo.latest_version)
-    }
-  }
-
-  // Handle logout
-  const handleLogout = async () => {
-    try {
-      const { disconnectGDrive } = await import('@/services/gdrive')
-      await disconnectGDrive()
-      disconnectSocial()
-      setIsAuthenticated(false)
-      toast({
-        title: "Signed Out",
-        description: "You have been signed out successfully"
-      })
-    } catch (error) {
-      console.error('[Auth] Logout failed:', error)
     }
   }
 
