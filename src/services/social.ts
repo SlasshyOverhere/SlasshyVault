@@ -624,23 +624,21 @@ async function requestWithRetry<T>(
     retries: number = 2
 ): Promise<T> {
   let lastError: Error | null = null;
-  const method = options.method || 'GET';
+  const method = (options.method || 'GET').toUpperCase();
   
   for (let attempt = 0; attempt < retries; attempt++) {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const headers = new Headers(options.headers);
+      headers.set('Authorization', `Bearer ${accessToken}`);
       
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
         ...options,
-        headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            ...(options.headers || {})
-        },
+        headers,
         signal: controller.signal
       });
-      
-      clearTimeout(timeout);
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -650,11 +648,16 @@ async function requestWithRetry<T>(
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
       
-      if (method === 'DELETE') {
-          return undefined as unknown as T;
+      if (method === 'DELETE' || response.status === 204 || response.status === 205) {
+        return undefined as unknown as T;
       }
 
-      return await response.json();
+      const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+      if (!contentType.includes('application/json')) {
+        return undefined as unknown as T;
+      }
+
+      return await response.json() as T;
     } catch (error) {
       lastError = error as Error;
       
@@ -669,6 +672,10 @@ async function requestWithRetry<T>(
       if (attempt < retries - 1) {
         // Shorter backoff: 500ms, 1s
         await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
+      }
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
       }
     }
   }
