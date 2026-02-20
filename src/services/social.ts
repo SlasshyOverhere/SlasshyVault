@@ -618,8 +618,13 @@ function emitEvent(eventType: string, data: SocialEvent) {
 /**
  * API Helpers
  */
-async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
+async function requestWithRetry<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    retries: number = 2
+): Promise<T> {
   let lastError: Error | null = null;
+  const method = options.method || 'GET';
   
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -627,7 +632,11 @@ async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
       const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
       
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
+        ...options,
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            ...(options.headers || {})
+        },
         signal: controller.signal
       });
       
@@ -635,25 +644,27 @@ async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
       
       if (!response.ok) {
         const errorText = await response.text();
-        // Don't retry on auth errors - token won't become valid by waiting
         if (response.status === 401 || response.status === 403) {
           throw new Error(`Auth error: ${response.status} - ${errorText}`);
         }
         throw new Error(`API error: ${response.status} - ${errorText}`);
       }
       
+      if (method === 'DELETE') {
+          return undefined as unknown as T;
+      }
+
       return await response.json();
     } catch (error) {
       lastError = error as Error;
       
-      // Don't retry auth errors or aborted requests
       const isAuthError = lastError.message.startsWith('Auth error:');
       const isAborted = lastError.name === 'AbortError';
       if (isAuthError || isAborted) {
         break;
       }
       
-      console.warn(`[Social API] GET ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
+      console.warn(`[Social API] ${method} ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
       
       if (attempt < retries - 1) {
         // Shorter backoff: 500ms, 1s
@@ -665,148 +676,28 @@ async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
   throw lastError!;
 }
 
+async function apiGet<T>(endpoint: string, retries = 2): Promise<T> {
+  return requestWithRetry<T>(endpoint, { method: 'GET' }, retries);
+}
+
 async function apiPost<T>(endpoint: string, body?: object, retries = 2): Promise<T> {
-  let lastError: Error | null = null;
-  
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      
-      const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeout);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(`Auth error: ${response.status} - ${errorText}`);
-        }
-        throw new Error(`API error: ${response.status} - ${errorText}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      lastError = error as Error;
-      
-      const isAuthError = lastError.message.startsWith('Auth error:');
-      const isAborted = lastError.name === 'AbortError';
-      if (isAuthError || isAborted) {
-        break;
-      }
-      
-      console.warn(`[Social API] POST ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
-      
-      if (attempt < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
-      }
-    }
-  }
-  
-  throw lastError!;
+  return requestWithRetry<T>(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  }, retries);
 }
 
 async function apiPatch<T>(endpoint: string, body: object, retries = 2): Promise<T> {
-  let lastError: Error | null = null;
-  
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      
-      const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeout);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(`Auth error: ${response.status} - ${errorText}`);
-        }
-        throw new Error(`API error: ${response.status} - ${errorText}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      lastError = error as Error;
-      
-      const isAuthError = lastError.message.startsWith('Auth error:');
-      const isAborted = lastError.name === 'AbortError';
-      if (isAuthError || isAborted) {
-        break;
-      }
-      
-      console.warn(`[Social API] PATCH ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
-      
-      if (attempt < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
-      }
-    }
-  }
-  
-  throw lastError!;
+  return requestWithRetry<T>(endpoint, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }, retries);
 }
 
 async function apiDelete(endpoint: string, retries = 2): Promise<void> {
-  let lastError: Error | null = null;
-  
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      
-      const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeout);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(`Auth error: ${response.status} - ${errorText}`);
-        }
-        throw new Error(`API error: ${response.status} - ${errorText}`);
-      }
-      return; // Success - exit early
-    } catch (error) {
-      lastError = error as Error;
-      
-      const isAuthError = lastError.message.startsWith('Auth error:');
-      const isAborted = lastError.name === 'AbortError';
-      if (isAuthError || isAborted) {
-        break;
-      }
-      
-      console.warn(`[Social API] DELETE ${endpoint} failed (attempt ${attempt + 1}/${retries}):`, error);
-      
-      if (attempt < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
-      }
-    }
-  }
-  
-  if (lastError) {
-    throw lastError;
-  }
+  return requestWithRetry<void>(endpoint, { method: 'DELETE' }, retries);
 }
 
 /**
