@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, AtSign, Bot, ChevronDown, ChevronUp, ExternalLink, Loader2, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { open } from '@tauri-apps/api/shell';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -646,6 +647,30 @@ function parseTmdbDeepProfileForCard(content: string): TmdbDeepProfileData | nul
   };
 }
 
+async function handleExternalLink(url: string, event?: React.MouseEvent) {
+  if (event) {
+    event.preventDefault();
+  }
+  try {
+    await open(url);
+  } catch (error) {
+    console.warn('Failed to open external link in shell, falling back to window.open:', error);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+const MARKDOWN_COMPONENTS = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  a: ({ node: _node, ...props }: any) => (
+    <a
+      {...props}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => handleExternalLink(props.href as string, e)}
+    />
+  ),
+};
+
 function TmdbDeepProfileCard({
   profile,
   onMoreInfo,
@@ -772,6 +797,7 @@ function TmdbDeepProfileCard({
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => handleExternalLink(link.url, e)}
                 className="inline-flex items-center gap-1 rounded-full border border-sky-200/30 bg-sky-300/12 px-2.5 py-1 text-[11px] font-medium text-sky-100 transition-colors hover:border-sky-100/45 hover:bg-sky-300/20"
               >
                 <span>{link.label}</span>
@@ -2522,6 +2548,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                                   >
                                     <ReactMarkdown
                                       remarkPlugins={[remarkGfm]}
+                                      components={MARKDOWN_COMPONENTS}
                                     >
                                       {line.content}
                                     </ReactMarkdown>
@@ -3106,6 +3133,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.tmdbUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.tmdbUrl, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-sky-200/35 bg-sky-300/14 px-2.5 py-1.5 text-xs font-medium text-sky-100 hover:bg-sky-300/24"
                 >
                   TMDB
@@ -3117,6 +3145,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.imdbUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.imdbUrl as string, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-neutral-100 hover:bg-white/18"
                 >
                   IMDb
@@ -3128,6 +3157,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
                   href={tmdbMoreInfoData.homepage}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(e) => handleExternalLink(tmdbMoreInfoData.homepage as string, e)}
                   className="inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-neutral-100 hover:bg-white/18"
                 >
                   Homepage
