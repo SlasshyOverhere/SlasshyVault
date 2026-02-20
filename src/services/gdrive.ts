@@ -279,12 +279,14 @@ export const parseVideoFilename = (filename: string): {
     const nameWithoutExt = filename.replace(/\.[^/.]+$/, '');
 
     // Try to match TV show pattern: ShowName S01E01 or ShowName 1x01
-    const tvMatch = nameWithoutExt.match(/^(.+?)[.\s_-]+[Ss](\d{1,2})[Ee](\d{1,2})/);
+    const tvMatch = nameWithoutExt.match(/^(.+?)[.\s_-]+(?:[Ss](\d{1,2})[Ee](\d{1,2})|(\d{1,2})[xX](\d{1,2}))/);
     if (tvMatch) {
+        const season = tvMatch[2] ? parseInt(tvMatch[2]) : parseInt(tvMatch[4]);
+        const episode = tvMatch[3] ? parseInt(tvMatch[3]) : parseInt(tvMatch[5]);
         return {
             title: tvMatch[1].replace(/[._]/g, ' ').trim(),
-            season: parseInt(tvMatch[2]),
-            episode: parseInt(tvMatch[3]),
+            season,
+            episode,
         };
     }
 

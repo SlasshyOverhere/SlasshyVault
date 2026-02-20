@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -40,6 +42,35 @@ jobs:
       - name: Prebuild WAN test binary
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin wt_tauri_wan_test --features wan-test
 
+      - name: Generate release notes
+        id: release_notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          git fetch --tags --force
+          $previousTag = $null
+          try {
+            $previousTag = (git describe --tags --abbrev=0 "$tag^" 2>$null).Trim()
+          } catch {}
+
+          if ($previousTag) {
+            $changes = git log "$previousTag..$tag" --pretty=format:"- %s (%h)"
+            if (-not $changes) {
+              $changes = "- No commit messages found between $previousTag and $tag."
+            }
+            $notes = "## What's Changed`n`n$changes`n`n**Full Changelog**: https://github.com/${{ github.repository }}/compare/$previousTag...$tag"
+          } else {
+            $changes = git log "$tag" --pretty=format:"- %s (%h)"
+            if (-not $changes) {
+              $changes = "- Initial tagged release."
+            }
+            $notes = "## What's Changed`n`n$changes"
+          }
+
+          "notes<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -51,6 +82,6 @@ jobs:
           args: --bundles nsis,updater
           tagName: ${{ github.ref_name }}
           releaseName: 'StreamVault ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download and install this version.'
+          releaseBody: ${{ steps.release_notes.outputs.notes }}
           releaseDraft: false
           prerelease: false

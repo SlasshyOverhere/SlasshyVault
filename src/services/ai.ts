@@ -1,5 +1,6 @@
 import { arch, locale, platform, type as osType, version as osVersion } from '@tauri-apps/api/os';
-import { getDefaultAuthServerUrl, getDevSettings, getSocialCredentials, isDev, setSocialAccessToken } from './social';
+import { getDefaultAuthServerUrl, getDevSettings, getSocialCredentials, setSocialAccessToken } from './social';
+import { isDev } from '../config/social';
 import { getGDriveAccessToken } from './gdrive';
 
 export type AiRole = 'user' | 'assistant' | 'system';
