@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, AtSign, Bot, ChevronDown, ChevronUp, ExternalLink, Loader2, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -647,26 +647,53 @@ function parseTmdbDeepProfileForCard(content: string): TmdbDeepProfileData | nul
   };
 }
 
-async function handleExternalLink(url: string, event?: React.MouseEvent) {
-  if (event) {
-    event.preventDefault();
-  }
+function normalizeExternalHttpUrl(url?: string): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
   try {
-    await open(url);
-  } catch (error) {
-    console.warn('Failed to open external link in shell, falling back to window.open:', error);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
   }
 }
 
+async function handleExternalLink(url: string | undefined, event?: React.MouseEvent) {
+  if (event) {
+    event.preventDefault();
+  }
+
+  const safeUrl = normalizeExternalHttpUrl(url);
+  if (!safeUrl) return;
+
+  try {
+    await open(safeUrl);
+  } catch (error) {
+    console.warn('Failed to open external link in shell, falling back to window.open:', error);
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+  }
+}
+
+type MarkdownAnchorProps = ComponentPropsWithoutRef<'a'> & { node?: unknown };
+
 const MARKDOWN_COMPONENTS = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  a: ({ node: _node, ...props }: any) => (
+  a: ({ node: _node, href, onClick, ...props }: MarkdownAnchorProps) => (
     <a
       {...props}
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={(e) => handleExternalLink(props.href as string, e)}
+      onClick={(e) => {
+        onClick?.(e);
+        if (!e.defaultPrevented) {
+          void handleExternalLink(href, e);
+        }
+      }}
     />
   ),
 };
