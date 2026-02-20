@@ -1,24 +1,31 @@
 import { useState, useEffect } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
-import { Sidebar } from '@/components/Sidebar'
-import { MovieCard, ContinueCard } from '@/components/MovieCard'
-import { EpisodeBrowser } from '@/components/EpisodeBrowser'
-import { StreamView } from '@/components/StreamView'
-import { SettingsModal } from '@/components/SettingsModal'
-import { UpdateNotification, isUpdateDismissed, dismissUpdate } from '@/components/UpdateNotification'
-import { FixMatchModal } from '@/components/FixMatchModal'
-import { ResumeDialog } from '@/components/ResumeDialog'
-import { DeleteEpisodesModal } from '@/components/DeleteEpisodesModal'
-import { OnboardingModal } from '@/components/OnboardingModal'
-import { MainAppTour } from '@/components/MainAppTour'
-import { UpdateNotesModal, shouldShowUpdateNotes, CURRENT_APP_VERSION } from '@/components/UpdateNotesModal'
-import { MarkCompleteDialog } from '@/components/MarkCompleteDialog'
-import { WatchTogetherModal } from '@/components/WatchTogether/WatchTogetherModal'
-import { WatchTogetherBanner } from '@/components/WatchTogether/WatchTogetherBanner'
-import { SocialView } from '@/components/Social'
-import { AIChatView } from '@/components/AI/AIChatView'
-import { LoginScreen } from '@/components/LoginScreen'
+import {
+  Sidebar,
+  MovieCard,
+  ContinueCard,
+  EpisodeBrowser,
+  StreamView,
+  SettingsModal,
+  UpdateNotification,
+  isUpdateDismissed,
+  dismissUpdate,
+  FixMatchModal,
+  ResumeDialog,
+  DeleteEpisodesModal,
+  OnboardingModal,
+  MainAppTour,
+  UpdateNotesModal,
+  shouldShowUpdateNotes,
+  CURRENT_APP_VERSION,
+  MarkCompleteDialog,
+  WatchTogetherModal,
+  WatchTogetherBanner,
+  SocialView,
+  AIChatView,
+  LoginScreen
+} from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
 import {
