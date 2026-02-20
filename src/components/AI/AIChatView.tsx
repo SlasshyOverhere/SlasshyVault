@@ -34,7 +34,8 @@ import {
   submitAiUpgradeRequest,
 } from '@/services/ai';
 import { getGDriveAiChatHistory, saveGDriveAiChatHistory } from '@/services/gdrive';
-import { getDefaultAuthServerUrl, getDevSettings, isDev, onSocialEvent, type SocialEvent } from '@/services/social';
+import { getDefaultAuthServerUrl, getDevSettings, onSocialEvent, type SocialEvent } from '@/services/social';
+import { isDev } from '@/config/social';
 
 interface ChatLine {
   id: string;
