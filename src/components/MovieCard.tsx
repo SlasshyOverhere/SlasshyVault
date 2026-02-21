@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, memo } from "react"
 import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
@@ -24,7 +24,7 @@ interface MovieCardProps {
   index?: number
 }
 
-export function MovieCard({
+export const MovieCard = memo(function MovieCard({
   item,
   onClick,
   onFixMatch,
@@ -385,7 +385,7 @@ export function MovieCard({
       </ContextMenuContent>
     </ContextMenu>
   )
-}
+})
 
 // Horizontal Continue Watching Card
 interface ContinueCardProps {
@@ -394,7 +394,7 @@ interface ContinueCardProps {
   index?: number
 }
 
-export function ContinueCard({ item, onClick, index = 0 }: ContinueCardProps) {
+export const ContinueCard = memo(function ContinueCard({ item, onClick, index = 0 }: ContinueCardProps) {
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
   const [isHovered, setIsHovered] = useState(false)
 
@@ -557,4 +557,4 @@ export function ContinueCard({ item, onClick, index = 0 }: ContinueCardProps) {
       </motion.div>
     </motion.div>
   )
-}
+})

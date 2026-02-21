@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, lazy, Suspense, useCallback } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -512,7 +512,7 @@ function App() {
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
     }
-  }, [view, searchQuery, cloudSubTab, selectedShow?.id])
+  }, [view, searchQuery, cloudSubTab, selectedShow, fetchData, loadContinueWatching, loadLibraryStats, toast])
 
   useEffect(() => {
     document.documentElement.classList.add('dark')
@@ -531,14 +531,14 @@ function App() {
   useEffect(() => {
     loadContinueWatching()
     loadLibraryStats()
-  }, [tabVisibility])
+  }, [tabVisibility, loadContinueWatching, loadLibraryStats])
 
   // Cloud change detection is now handled by the Rust backend
   // The backend polls every 60 seconds and emits 'library-updated' events
   // which are already handled elsewhere in the app
 
   // Load library stats - cloud only
-  const loadLibraryStats = async () => {
+  const loadLibraryStats = useCallback(async () => {
     try {
       const [cloudMovies, cloudShows] = await Promise.all([
         getLibraryFiltered('movie', '', true),
@@ -553,10 +553,10 @@ function App() {
     } catch (error) {
       console.error('Failed to load stats', error)
     }
-  }
+  }, [])
 
   // Load continue watching
-  const loadContinueWatching = async () => {
+  const loadContinueWatching = useCallback(async () => {
     try {
       const history = await getWatchHistory()
       // Filter to items with progress < 95%
@@ -572,7 +572,7 @@ function App() {
     } catch (error) {
       console.error('Failed to load continue watching', error)
     }
-  }
+  }, [])
 
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
@@ -581,7 +581,7 @@ function App() {
       }, 300)
       return () => clearTimeout(delayDebounceFn)
     }
-  }, [view, searchQuery, sortBy, cloudSubTab])
+  }, [view, searchQuery, sortBy, cloudSubTab, fetchData])
 
   useEffect(() => {
     if (view !== 'home') return
@@ -594,9 +594,9 @@ function App() {
       handleHomeSearch()
     }, 300)
     return () => clearTimeout(delayDebounceFn)
-  }, [homeSearchQuery, view])
+  }, [homeSearchQuery, view, handleHomeSearch])
 
-  const handleHomeSearch = async () => {
+  const handleHomeSearch = useCallback(async () => {
     if (!homeSearchQuery.trim()) {
       setHomeSearchResults([])
       return
@@ -630,9 +630,9 @@ function App() {
     } finally {
       setIsHomeSearching(false)
     }
-  }
+  }, [homeSearchQuery])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       let data: MediaItem[] = []
       if (view === 'cloud') {
@@ -658,7 +658,7 @@ function App() {
     } catch (error) {
       console.error("Failed to fetch data", error)
     }
-  }
+  }, [view, cloudSubTab, searchQuery, sortBy])
 
   // Handle cloud-only indexing - scans the entire Google Drive for NEW files only
   const handleCloudScan = async () => {
@@ -723,7 +723,7 @@ function App() {
     }
   }
 
-  const handleItemClick = async (item: MediaItem) => {
+  const handleItemClick = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setSelectedShow(item)
       setView('episodes')
@@ -749,9 +749,9 @@ function App() {
         toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
       }
     }
-  }
+  }, [toast])
 
-  const handleResumeChoice = async (resume: boolean) => {
+  const handleResumeChoice = useCallback(async (resume: boolean) => {
     if (!resumeDialogData) return
     const { item, resumeInfo } = resumeDialogData
     const resumeTime = resume ? resumeInfo.position : 0
@@ -763,14 +763,14 @@ function App() {
     } catch (e) {
       toast({ title: "Error", description: String(e) || "Failed to start playback", variant: "destructive" })
     }
-  }
+  }, [resumeDialogData, toast])
 
-  const handleFixMatch = (item: MediaItem) => {
+  const handleFixMatch = useCallback((item: MediaItem) => {
     setItemToFix(item)
     setFixMatchOpen(true)
-  }
+  }, [])
 
-  const handleAskAiFromContent = (item: MediaItem) => {
+  const handleAskAiFromContent = useCallback((item: MediaItem) => {
     setAiLaunchRequest({
       item,
       nonce: Date.now(),
@@ -780,9 +780,9 @@ function App() {
       title: "Opening AI Chat",
       description: `Fetching insights for "${item.title}"...`,
     })
-  }
+  }, [toast])
 
-  const handleFixMatchSuccess = async () => {
+  const handleFixMatchSuccess = useCallback(async () => {
     const fixedItem = itemToFix
 
     await Promise.all([
@@ -819,9 +819,9 @@ function App() {
     } catch (error) {
       console.warn('[FixMatch] Failed to refresh selected show metadata:', error)
     }
-  }
+  }, [itemToFix, selectedShow, view, fetchData, loadLibraryStats, loadContinueWatching])
 
-  const handleRemoveFromHistory = async (item: MediaItem) => {
+  const handleRemoveFromHistory = useCallback(async (item: MediaItem) => {
     try {
       await removeFromWatchHistory(item.id)
       toast({ title: "Removed", description: `"${item.title}" removed from watch history.` })
@@ -830,9 +830,9 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
-  }
+  }, [toast, fetchData, loadContinueWatching])
 
-  const handleClearAllHistory = async () => {
+  const handleClearAllHistory = useCallback(async () => {
     if (!confirm("Are you sure you want to clear all watch history?")) return
     try {
       await clearAllWatchHistory()
@@ -842,9 +842,9 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
     }
-  }
+  }, [toast, fetchData, loadContinueWatching])
 
-  const handleRemoveFromStreamingHistory = async (item: StreamingHistoryItem) => {
+  const handleRemoveFromStreamingHistory = useCallback(async (item: StreamingHistoryItem) => {
     try {
       await removeFromStreamingHistory(item.id)
       toast({ title: "Removed", description: `"${item.title}" removed from streaming history.` })
@@ -852,9 +852,9 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to remove from streaming history", variant: "destructive" })
     }
-  }
+  }, [toast, fetchData])
 
-  const handleClearAllStreamingHistory = async () => {
+  const handleClearAllStreamingHistory = useCallback(async () => {
     if (!confirm("Are you sure you want to clear all streaming history?")) return
     try {
       await clearAllStreamingHistory()
@@ -863,14 +863,14 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to clear streaming history", variant: "destructive" })
     }
-  }
+  }, [toast, fetchData])
 
-  const handleStreamingItemClick = async (item: StreamingHistoryItem) => {
+  const handleStreamingItemClick = useCallback(async (item: StreamingHistoryItem) => {
     setStreamingResumeData(item)
     setStreamingResumeDialogOpen(true)
-  }
+  }, [])
 
-  const openStreamingContent = async (item: StreamingHistoryItem) => {
+  const openStreamingContent = useCallback(async (item: StreamingHistoryItem) => {
     const VIDEASY_PLAYER_BASE = 'https://player.videasy.net'
     const STREAMVAULT_COLOR = 'FFFFFF'
 
@@ -905,17 +905,17 @@ function App() {
     } catch (error) {
       toast({ title: "Failed to Open Player", description: "Could not open the streaming player", variant: "destructive" })
     }
-  }
+  }, [toast])
 
-  const handleStreamingResumeChoice = async (_resume: boolean) => {
+  const handleStreamingResumeChoice = useCallback(async (_resume: boolean) => {
     if (streamingResumeData) {
       await openStreamingContent(streamingResumeData)
       setStreamingResumeDialogOpen(false)
       setStreamingResumeData(null)
     }
-  }
+  }, [streamingResumeData, openStreamingContent])
 
-  const handleDelete = async (item: MediaItem) => {
+  const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
@@ -936,14 +936,14 @@ function App() {
         }
       }
     }
-  }
+  }, [toast, fetchData])
 
-  const handleDeleteComplete = async () => {
+  const handleDeleteComplete = useCallback(async () => {
     await fetchData()
     toast({ title: "Deleted", description: "Selected episodes have been permanently deleted." })
-  }
+  }, [toast, fetchData])
 
-  const handleMarkComplete = async () => {
+  const handleMarkComplete = useCallback(async () => {
     if (!markCompleteData) return
     try {
       await markAsComplete(markCompleteData.mediaId)
@@ -959,15 +959,15 @@ function App() {
     } catch (error) {
       toast({ title: "Error", description: "Failed to mark as complete", variant: "destructive" })
     }
-  }
+  }, [markCompleteData, toast, loadContinueWatching, fetchData, view])
 
   // Watch Together handler
-  const handleWatchTogether = (item: MediaItem) => {
+  const handleWatchTogether = useCallback((item: MediaItem) => {
     // Only allow if beta is enabled
     if (!betaEnabled) return
     setWatchTogetherMedia(item)
     setWatchTogetherOpen(true)
-  }
+  }, [betaEnabled])
 
   // Watch Together session change handler
   const handleWtSessionChange = (room: WatchRoom | null, sessionId: string, isPlaying: boolean, media?: MediaItem) => {
