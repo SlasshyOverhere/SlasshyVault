@@ -750,14 +750,17 @@ export function getVideasyUrl(
     let baseUrl: string;
     let queryString: string;
 
+    const safeTmdbId = encodeURIComponent(tmdbId);
+    const safeColor = encodeURIComponent(color);
+
     if (mediaType === 'movie') {
-        baseUrl = `${VIDEASY_BASE_URL}/movie/${tmdbId}`;
+        baseUrl = `${VIDEASY_BASE_URL}/movie/${safeTmdbId}`;
         // Movie params in order: overlay, color
-        queryString = `overlay=true&color=${color}`;
+        queryString = `overlay=true&color=${safeColor}`;
     } else if (mediaType === 'tv' && season !== undefined && episode !== undefined) {
-        baseUrl = `${VIDEASY_BASE_URL}/tv/${tmdbId}/${season}/${episode}`;
+        baseUrl = `${VIDEASY_BASE_URL}/tv/${safeTmdbId}/${season}/${episode}`;
         // TV params in required order: nextEpisode, autoplayNextEpisode, episodeSelector, overlay, color
-        queryString = `nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=${color}`;
+        queryString = `nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=${safeColor}`;
     } else {
         return null;
     }
