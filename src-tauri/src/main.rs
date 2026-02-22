@@ -2405,6 +2405,15 @@ async fn get_cached_image(image_name: String) -> Result<String, String> {
     println!("[IMAGE] Full path: {:?}", image_path);
     
     if image_path.exists() {
+        // Security check: Path traversal prevention
+        let canonical_path = image_path.canonicalize().map_err(|e| format!("Path error: {}", e))?;
+        let canonical_cache_dir = std::path::Path::new(&cache_dir).canonicalize().map_err(|e| format!("Cache dir error: {}", e))?;
+
+        if !canonical_path.starts_with(&canonical_cache_dir) {
+             println!("[IMAGE] Security warning: Path traversal attempt detected: {:?}", image_name);
+             return Err("Access denied".to_string());
+        }
+
         let asset_url = format!("asset://localhost/{}", image_path.to_string_lossy().replace("\\", "/").replace(":", ""));
         println!("[IMAGE] Found! Asset URL: {}", asset_url);
         Ok(asset_url)
@@ -2424,6 +2433,15 @@ async fn get_cached_image_path(image_name: String) -> Result<String, String> {
     println!("[IMAGE_PATH] Full path: {:?}", image_path);
     
     if image_path.exists() {
+        // Security check: Path traversal prevention
+        let canonical_path = image_path.canonicalize().map_err(|e| format!("Path error: {}", e))?;
+        let canonical_cache_dir = std::path::Path::new(&cache_dir).canonicalize().map_err(|e| format!("Cache dir error: {}", e))?;
+
+        if !canonical_path.starts_with(&canonical_cache_dir) {
+             println!("[IMAGE_PATH] Security warning: Path traversal attempt detected: {:?}", image_name);
+             return Err("Access denied".to_string());
+        }
+
         let path_str = image_path.to_string_lossy().to_string();
         println!("[IMAGE_PATH] Found! Path: {}", path_str);
         Ok(path_str)
