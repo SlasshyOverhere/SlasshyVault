@@ -4045,6 +4045,7 @@ async fn wt_create_room(
     window: Window,
     media_id: i64,
     title: String,
+    media_match_key: Option<String>,
     nickname: String,
 ) -> Result<watch_together::RoomInfo, String> {
     let wt = state.watch_together.clone();
@@ -4095,7 +4096,9 @@ async fn wt_create_room(
         let _ = window_clone.emit("wt-event", &event);
     }).await;
 
-    manager.create_room(media_id, title, nickname).await
+    manager
+        .create_room(media_id, title, media_match_key, nickname)
+        .await
 }
 
 /// Join a Watch Together room
@@ -4105,6 +4108,8 @@ async fn wt_join_room(
     window: Window,
     room_code: String,
     media_id: i64,
+    media_title: Option<String>,
+    media_match_key: Option<String>,
     nickname: String,
 ) -> Result<watch_together::RoomInfo, String> {
     let wt = state.watch_together.clone();
@@ -4153,7 +4158,9 @@ async fn wt_join_room(
         let _ = window_clone.emit("wt-event", &event);
     }).await;
 
-    manager.join_room(room_code, media_id, nickname).await
+    manager
+        .join_room(room_code, media_id, media_title, media_match_key, nickname)
+        .await
 }
 
 /// Leave the current Watch Together room

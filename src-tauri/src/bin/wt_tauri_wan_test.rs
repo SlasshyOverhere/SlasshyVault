@@ -330,13 +330,24 @@ async fn run() -> Result<(), String> {
     let mut guest_inbox = EventInbox::new("guest", guest_rx);
 
     let host_room = host
-        .create_room(media_id, "WAN E2E Movie".to_string(), "Host".to_string())
+        .create_room(
+            media_id,
+            "WAN E2E Movie".to_string(),
+            Some("file:wan-e2e-movie.mp4".to_string()),
+            "Host".to_string(),
+        )
         .await?;
     let room_code = host_room.code.clone();
     let host_id = host_room.host_id.clone();
 
     let guest_room = guest
-        .join_room(room_code.clone(), media_id, "Guest".to_string())
+        .join_room(
+            room_code.clone(),
+            media_id,
+            Some("WAN E2E Movie".to_string()),
+            Some("file:wan-e2e-movie.mp4".to_string()),
+            "Guest".to_string(),
+        )
         .await?;
     let guest_id = guest_room
         .participants

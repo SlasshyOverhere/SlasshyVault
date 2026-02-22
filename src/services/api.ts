@@ -1081,10 +1081,16 @@ export interface WatchEvent {
 export const wtCreateRoom = async (
     mediaId: number,
     title: string,
+    mediaMatchKey: string | undefined,
     nickname: string
 ): Promise<WatchRoom> => {
     try {
-        return await invoke<WatchRoom>('wt_create_room', { mediaId, title, nickname });
+        return await invoke<WatchRoom>('wt_create_room', {
+            mediaId,
+            title,
+            mediaMatchKey: mediaMatchKey ?? null,
+            nickname
+        });
     } catch (error) {
         console.error('Failed to create watch room:', error);
         throw error;
@@ -1095,10 +1101,18 @@ export const wtCreateRoom = async (
 export const wtJoinRoom = async (
     roomCode: string,
     mediaId: number,
+    mediaTitle: string,
+    mediaMatchKey: string | undefined,
     nickname: string
 ): Promise<WatchRoom> => {
     try {
-        return await invoke<WatchRoom>('wt_join_room', { roomCode, mediaId, nickname });
+        return await invoke<WatchRoom>('wt_join_room', {
+            roomCode,
+            mediaId,
+            mediaTitle,
+            mediaMatchKey: mediaMatchKey ?? null,
+            nickname
+        });
     } catch (error) {
         console.error('Failed to join watch room:', error);
         throw error;

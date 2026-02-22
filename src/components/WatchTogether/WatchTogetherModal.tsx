@@ -36,6 +36,40 @@ interface WatchTogetherModalProps {
 
 type ModalView = 'menu' | 'lobby' | 'playing';
 
+function buildMediaMatchKey(media?: MediaItem): string | undefined {
+    if (!media) return undefined;
+
+    const tokens: string[] = [];
+
+    if (media.cloud_file_id?.trim()) {
+        tokens.push(`cloud:${media.cloud_file_id.trim().toLowerCase()}`);
+    }
+
+    if (media.file_path?.trim()) {
+        const normalizedPath = media.file_path.replace(/\\/g, '/');
+        const fileName = normalizedPath.split('/').pop()?.trim();
+        if (fileName) {
+            tokens.push(`file:${fileName.toLowerCase()}`);
+        }
+    }
+
+    if (media.tmdb_id?.trim()) {
+        tokens.push(`tmdb:${media.tmdb_id.trim().toLowerCase()}`);
+    }
+
+    const title = media.title?.trim();
+    if (title) {
+        tokens.push(`title:${title.toLowerCase()}`);
+    }
+
+    if (tokens.length === 0) {
+        return undefined;
+    }
+
+    // Send all available keys; server accepts join if any token overlaps.
+    return Array.from(new Set(tokens)).join('|');
+}
+
 export function WatchTogetherModal({
     isOpen,
     onClose,
@@ -235,6 +269,7 @@ export function WatchTogetherModal({
             const newRoom = await wtCreateRoom(
                 selectedMedia.id,
                 selectedMedia.title,
+                buildMediaMatchKey(selectedMedia),
                 nickname.trim()
             );
             console.log('[WT] Room created:', newRoom.code);
@@ -270,6 +305,8 @@ export function WatchTogetherModal({
             const joinedRoom = await wtJoinRoom(
                 roomCode.trim().toUpperCase(),
                 selectedMedia.id,
+                selectedMedia.title,
+                buildMediaMatchKey(selectedMedia),
                 nickname.trim()
             );
             console.log('[WT] Joined room:', joinedRoom.code);

@@ -89,6 +89,7 @@ pub enum ClientMessage {
     Create {
         media_title: String,
         media_id: i64,
+        media_match_key: Option<String>,
         nickname: String,
         client_id: String,
     },
@@ -98,6 +99,8 @@ pub enum ClientMessage {
         nickname: String,
         client_id: String,
         media_id: i64,
+        media_title: Option<String>,
+        media_match_key: Option<String>,
     },
     #[serde(rename = "ready")]
     Ready { duration: f64 },
@@ -308,6 +311,7 @@ impl WatchTogetherManager {
         &self,
         media_id: i64,
         media_title: String,
+        media_match_key: Option<String>,
         nickname: String,
     ) -> Result<RoomInfo, String> {
         let mut session_guard = self.session.lock().await;
@@ -353,6 +357,7 @@ impl WatchTogetherManager {
         let create_msg = ClientMessage::Create {
             media_title: media_title.clone(),
             media_id,
+            media_match_key,
             nickname,
             client_id: client_id.clone(),
         };
@@ -473,6 +478,8 @@ impl WatchTogetherManager {
         &self,
         room_code: String,
         media_id: i64,
+        media_title: Option<String>,
+        media_match_key: Option<String>,
         nickname: String,
     ) -> Result<RoomInfo, String> {
         let mut session_guard = self.session.lock().await;
@@ -517,6 +524,8 @@ impl WatchTogetherManager {
             nickname,
             client_id: client_id.clone(),
             media_id,
+            media_title,
+            media_match_key,
         };
 
         let msg_json = serde_json::to_string(&join_msg)
