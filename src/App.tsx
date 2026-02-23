@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, lazy, Suspense, useMemo } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -124,6 +124,19 @@ function App() {
   // View mode and sort
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [sortBy] = useState<SortOption>('title')
+
+  // Memoized sorted items to prevent re-sorting on every render
+  const sortedItems = useMemo(() => {
+    const sorted = [...items]
+    if (sortBy === 'title') {
+      sorted.sort((a, b) => a.title.localeCompare(b.title))
+    } else if (sortBy === 'year') {
+      sorted.sort((a, b) => (b.year || 0) - (a.year || 0))
+    } else if (sortBy === 'recent') {
+      sorted.sort((a, b) => new Date(b.last_watched || 0).getTime() - new Date(a.last_watched || 0).getTime())
+    }
+    return sorted
+  }, [items, sortBy])
 
   // Home search state
   const [homeSearchQuery, setHomeSearchQuery] = useState('')
@@ -394,11 +407,8 @@ function App() {
         setIsScanning(false)
         setScanProgress(null)
         // Refresh based on current view
-        if (view === 'cloud') {
+        if (view === 'cloud' || view === 'history') {
           await fetchData()
-        } else if (view === 'history') {
-          setItems(await getWatchHistory())
-          setStreamingHistoryItems(await getStreamingHistory(50))
         }
         await loadLibraryStats()
         await loadContinueWatching()
@@ -444,11 +454,8 @@ function App() {
         }
 
         // Refresh based on current view - don't clear items for views that don't need refresh
-        if (view === 'cloud') {
+        if (view === 'cloud' || view === 'history') {
           await fetchData()
-        } else if (view === 'history') {
-          setItems(await getWatchHistory())
-          setStreamingHistoryItems(await getStreamingHistory(50))
         }
         // Always refresh continue watching since progress changed
         await loadContinueWatching()
@@ -465,11 +472,8 @@ function App() {
         setIsCloudIndexing(false)
 
         // Refresh based on current view
-        if (view === 'cloud') {
+        if (view === 'cloud' || view === 'history') {
           await fetchData()
-        } else if (view === 'history') {
-          setItems(await getWatchHistory())
-          setStreamingHistoryItems(await getStreamingHistory(50))
         } else if (view === 'episodes' && selectedShow) {
           try {
             const selectedId = selectedShow.id
@@ -581,7 +585,7 @@ function App() {
       }, 300)
       return () => clearTimeout(delayDebounceFn)
     }
-  }, [view, searchQuery, sortBy, cloudSubTab])
+  }, [view, searchQuery, cloudSubTab])
 
   useEffect(() => {
     if (view !== 'home') return
@@ -645,15 +649,7 @@ function App() {
         setStreamingHistoryItems(streamingData)
       }
 
-      // Sort data
-      if (sortBy === 'title') {
-        data.sort((a, b) => a.title.localeCompare(b.title))
-      } else if (sortBy === 'year') {
-        data.sort((a, b) => (b.year || 0) - (a.year || 0))
-      } else if (sortBy === 'recent') {
-        data.sort((a, b) => new Date(b.last_watched || 0).getTime() - new Date(a.last_watched || 0).getTime())
-      }
-
+      // Sorting is now handled by useMemo (sortedItems)
       setItems(data)
     } catch (error) {
       console.error("Failed to fetch data", error)
@@ -953,9 +949,6 @@ function App() {
       await loadContinueWatching()
       // Refresh library items to update progress display on cards
       await fetchData()
-      if (view === 'history') {
-        setItems(await getWatchHistory())
-      }
     } catch (error) {
       toast({ title: "Error", description: "Failed to mark as complete", variant: "destructive" })
     }
@@ -1884,7 +1877,7 @@ function App() {
                       >
                         {historyTab === 'local' ? (
                           <div className="grid-media">
-                            {items.map((item, index) => (
+                            {sortedItems.map((item, index) => (
                               <MovieCard
                                 key={item.id}
                                 item={item}
@@ -1896,7 +1889,7 @@ function App() {
                                 onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                               />
                             ))}
-                            {items.length === 0 && (
+                            {sortedItems.length === 0 && (
                               <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                                 <motion.div
                                   className="empty-state-enhanced flex flex-col items-center text-center"
@@ -2026,7 +2019,7 @@ function App() {
                         className="pt-24"
                       >
                         <div className={viewMode === 'grid' ? 'grid-media' : 'list-media'}>
-                          {items.map((item, index) => (
+                          {sortedItems.map((item, index) => (
                             <MovieCard
                               key={item.id}
                               item={item}
@@ -2038,7 +2031,7 @@ function App() {
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
                           ))}
-                          {items.length === 0 && (
+                          {sortedItems.length === 0 && (
                             <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                               <motion.div
                                 className="empty-state-enhanced flex flex-col items-center text-center"
