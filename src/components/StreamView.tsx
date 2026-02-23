@@ -4,36 +4,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/tauri';
 import { EpisodeSelector } from './EpisodeSelector';
 import { useToast } from './ui/use-toast';
-import { saveStreamingProgress, getStreamingHistory, StreamingHistoryItem, openVideasyPlayer } from '@/services/api';
+import { saveStreamingProgress, getStreamingHistory, StreamingHistoryItem, openVideasyPlayer, getVideasyUrl } from '@/services/api';
 import { cn } from '@/lib/utils';
 
-// Videasy player base URL - opens directly in browser
-const VIDEASY_PLAYER_BASE = 'https://player.videasy.net';
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 const STREAMVAULT_COLOR = 'FFFFFF'; // StreamVault brand white (monochrome)
-
-// Build Videasy player URL with all features
-function buildVideasyUrl(
-    mediaType: 'movie' | 'tv',
-    tmdbId: number,
-    season?: number,
-    episode?: number
-): string {
-    let baseUrl: string;
-    let queryString: string;
-
-    if (mediaType === 'movie') {
-        baseUrl = `${VIDEASY_PLAYER_BASE}/movie/${tmdbId}`;
-        queryString = `overlay=true&color=${STREAMVAULT_COLOR}`;
-    } else {
-        const s = season || 1;
-        const ep = episode || 1;
-        baseUrl = `${VIDEASY_PLAYER_BASE}/tv/${tmdbId}/${s}/${ep}`;
-        queryString = `nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=${STREAMVAULT_COLOR}`;
-    }
-
-    return `${baseUrl}?${queryString}`;
-}
 
 interface TmdbSearchResult {
     id: number;
@@ -170,8 +145,10 @@ export function StreamView() {
             setIsEpisodeSelectorOpen(true);
         } else {
             const title = item.title || item.name || 'Unknown';
-            const url = buildVideasyUrl('movie', item.id);
-            openInPlayer(url, title, item.id.toString(), 'movie', item.poster_path);
+            const url = getVideasyUrl(item.id.toString(), 'movie', undefined, undefined, { color: STREAMVAULT_COLOR });
+            if (url) {
+                openInPlayer(url, title, item.id.toString(), 'movie', item.poster_path);
+            }
         }
     }, [openInPlayer]);
 
@@ -179,8 +156,10 @@ export function StreamView() {
         if (selectedItem) {
             const title = selectedItem.name || selectedItem.title || 'Unknown';
             const displayTitle = `${title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
-            const url = buildVideasyUrl('tv', selectedItem.id, season, episode);
-            openInPlayer(url, displayTitle, selectedItem.id.toString(), 'tv', selectedItem.poster_path, season, episode);
+            const url = getVideasyUrl(selectedItem.id.toString(), 'tv', season, episode, { color: STREAMVAULT_COLOR });
+            if (url) {
+                openInPlayer(url, displayTitle, selectedItem.id.toString(), 'tv', selectedItem.poster_path, season, episode);
+            }
         }
         setIsEpisodeSelectorOpen(false);
         setSelectedItem(null);
@@ -192,9 +171,15 @@ export function StreamView() {
     }, []);
 
     const handleRecentClick = (item: StreamingHistoryItem) => {
-        const url = item.media_type === 'movie'
-            ? buildVideasyUrl('movie', parseInt(item.tmdb_id))
-            : buildVideasyUrl('tv', parseInt(item.tmdb_id), item.season || 1, item.episode || 1);
+        const url = getVideasyUrl(
+            item.tmdb_id,
+            item.media_type,
+            item.season || 1,
+            item.episode || 1,
+            { color: STREAMVAULT_COLOR }
+        );
+
+        if (!url) return;
 
         const displayTitle = item.media_type === 'tv' && item.season && item.episode
             ? `${item.title} S${String(item.season).padStart(2, '0')}E${String(item.episode).padStart(2, '0')}`

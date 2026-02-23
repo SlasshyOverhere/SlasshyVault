@@ -38,6 +38,7 @@ import {
   getStreamingHistory,
   removeFromStreamingHistory,
   clearAllStreamingHistory,
+  getVideasyUrl,
   openVideasyPlayer,
   hasCompletedOnboarding,
   completeOnboarding,
@@ -867,19 +868,26 @@ function App() {
   }
 
   const openStreamingContent = async (item: StreamingHistoryItem) => {
-    const VIDEASY_PLAYER_BASE = 'https://player.videasy.net'
     const STREAMVAULT_COLOR = 'FFFFFF'
 
-    let url: string
     let displayTitle = item.title
-
-    if (item.media_type === 'movie') {
-      url = `${VIDEASY_PLAYER_BASE}/movie/${item.tmdb_id}?overlay=true&color=${STREAMVAULT_COLOR}`
-    } else {
+    if (item.media_type !== 'movie') {
       const season = item.season || 1
       const episode = item.episode || 1
       displayTitle = `${item.title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
-      url = `${VIDEASY_PLAYER_BASE}/tv/${item.tmdb_id}/${season}/${episode}?nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=${STREAMVAULT_COLOR}`
+    }
+
+    const url = getVideasyUrl(
+      item.tmdb_id,
+      item.media_type,
+      item.season || 1,
+      item.episode || 1,
+      { color: STREAMVAULT_COLOR }
+    )
+
+    if (!url) {
+      toast({ title: "Error", description: "Could not generate streaming URL", variant: "destructive" })
+      return
     }
 
     // Extract poster path from full URL
