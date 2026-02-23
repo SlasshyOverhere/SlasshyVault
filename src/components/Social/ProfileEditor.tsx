@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   getProfile,
   updateProfile,
+  syncLocalWatchDataToSocial,
   UserProfile,
   formatWatchTime
 } from '@/services/social';
@@ -50,6 +51,7 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
     try {
       setLoading(true);
       setError(null);
+      await syncLocalWatchDataToSocial();
       const profileData = await getProfile();
       if (profileData) {
         setProfile(profileData);

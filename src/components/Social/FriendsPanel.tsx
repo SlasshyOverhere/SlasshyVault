@@ -39,6 +39,8 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
     if (isOpen) {
       loadFriendsAndRequests();
     }
+    // loadFriendsAndRequests is intentionally excluded to avoid re-fetch loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   useEffect(() => {
@@ -56,6 +58,17 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
       setOnlineFriends(prev => prev.filter(f => f.id !== data.userId));
     });
 
+    const unsubWatching = onSocialEvent('currently_watching', (data) => {
+      const userId = typeof data.userId === 'string' ? data.userId : '';
+      if (!userId) return;
+      const currentlyWatching = (data.content ?? null) as Friend['currentlyWatching'];
+      setOnlineFriends(prev => prev.map(friend => (
+        friend.id === userId
+          ? { ...friend, currentlyWatching }
+          : friend
+      )));
+    });
+
     const unsubRequest = onSocialEvent('friend_request', () => {
       loadRequests();
     });
@@ -67,6 +80,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
     return () => {
       unsubOnline();
       unsubOffline();
+      unsubWatching();
       unsubRequest();
       unsubAccepted();
     };

@@ -14,7 +14,7 @@ export function ChatInput({ friendId }: ChatInputProps) {
 
   const handleSend = () => {
     if (message.trim()) {
-      sendChatMessage(friendId, message.trim());
+      void sendChatMessage(friendId, message.trim());
       setMessage('');
     }
   };

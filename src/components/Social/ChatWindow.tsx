@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, AlertCircle } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -29,19 +29,49 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
+  const appendMessage = useCallback((message: ChatMessage) => {
+    setMessages((prev) => {
+      if (prev.some((existing) => existing.id === message.id)) {
+        return prev;
+      }
+      return [...prev, message];
+    });
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, []);
+
+  const loadChatHistory = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const history = await getChatHistory(friend.id);
+      setMessages(history);
+      setTimeout(scrollToBottom, 100);
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+      setError('Failed to load chat history. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  }, [friend.id, scrollToBottom]);
+
   useEffect(() => {
-    loadChatHistory();
+    void loadChatHistory();
 
     const unsubMessage = onSocialEvent('chat_message', (data) => {
       if (data.fromUserId === friend.id) {
-        setMessages(prev => [...prev, data.message as ChatMessage]);
+        appendMessage(data.message as ChatMessage);
         scrollToBottom();
       }
     });
 
     const unsubSent = onSocialEvent('chat_message_sent', (data) => {
       if (data.friendId === friend.id) {
-        setMessages(prev => [...prev, data.message as ChatMessage]);
+        appendMessage(data.message as ChatMessage);
         scrollToBottom();
       }
     });
@@ -64,38 +94,23 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [friend.id]);
-
-  const loadChatHistory = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const history = await getChatHistory(friend.id);
-      setMessages(history);
-      setTimeout(scrollToBottom, 100);
-    } catch (error) {
-      console.error('Failed to load chat history:', error);
-      setError('Failed to load chat history. Please try again later.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  };
+  }, [friend.id, appendMessage, loadChatHistory, scrollToBottom]);
 
   const handleSend = async () => {
     if (!newMessage.trim() || sending) return;
-    
+
     try {
       setSending(true);
-      sendChatMessage(friend.id, newMessage.trim());
+      setError(null);
+      const sentMessage = await sendChatMessage(friend.id, newMessage.trim());
+      if (sentMessage) {
+        appendMessage(sentMessage);
+        setTimeout(scrollToBottom, 0);
+      }
       setNewMessage('');
     } catch (error) {
       console.error('Failed to send message:', error);
+      setError('Failed to send message. Please try again.');
     } finally {
       setSending(false);
     }

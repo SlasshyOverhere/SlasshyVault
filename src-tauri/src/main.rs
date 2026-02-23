@@ -4077,16 +4077,28 @@ async fn wt_create_room(
             tokio::spawn(async move {
                 let ctrl_guard = ctrl.lock().await;
                 if let Some(ref controller) = *ctrl_guard {
+                    let (current_pos, current_paused) = controller.get_estimated_position().await;
                     match action.as_str() {
-                        "play" => {
-                            let _ = controller.set_paused(false).await;
-                            let _ = controller.seek_to(pos).await;
+                        "play" | "resume" => {
+                            if current_paused {
+                                let _ = controller.set_paused(false).await;
+                            }
+                            if (pos - current_pos).abs() > 0.12 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         "pause" => {
-                            let _ = controller.set_paused(true).await;
+                            if !current_paused {
+                                let _ = controller.set_paused(true).await;
+                            }
+                            if (pos - current_pos).abs() > 0.12 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         "seek" => {
-                            let _ = controller.seek_to(pos).await;
+                            if (pos - current_pos).abs() > 0.05 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         _ => {}
                     }
@@ -4139,16 +4151,28 @@ async fn wt_join_room(
             tokio::spawn(async move {
                 let ctrl_guard = ctrl.lock().await;
                 if let Some(ref controller) = *ctrl_guard {
+                    let (current_pos, current_paused) = controller.get_estimated_position().await;
                     match action.as_str() {
-                        "play" => {
-                            let _ = controller.set_paused(false).await;
-                            let _ = controller.seek_to(pos).await;
+                        "play" | "resume" => {
+                            if current_paused {
+                                let _ = controller.set_paused(false).await;
+                            }
+                            if (pos - current_pos).abs() > 0.12 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         "pause" => {
-                            let _ = controller.set_paused(true).await;
+                            if !current_paused {
+                                let _ = controller.set_paused(true).await;
+                            }
+                            if (pos - current_pos).abs() > 0.12 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         "seek" => {
-                            let _ = controller.seek_to(pos).await;
+                            if (pos - current_pos).abs() > 0.05 {
+                                let _ = controller.seek_to(pos).await;
+                            }
                         }
                         _ => {}
                     }
@@ -4388,7 +4412,7 @@ async fn wt_send_mpv_command(
     let ctrl = state.wt_controller.lock().await;
     if let Some(ref controller) = *ctrl {
         match action.as_str() {
-            "play" => {
+            "play" | "resume" => {
                 controller.set_paused(false).await?;
                 if position > 0.0 {
                     controller.seek_to(position).await?;

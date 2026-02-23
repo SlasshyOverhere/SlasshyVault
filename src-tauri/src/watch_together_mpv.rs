@@ -17,6 +17,7 @@ const SPEEDUP_RATE: f64 = 1.05;            // Speed up to 105% to catch up
 const REWIND_THRESHOLD: f64 = 4.0;         // Rewind if too far ahead (Syncplay: 4.0)
 const FASTFORWARD_THRESHOLD: f64 = 5.0;    // Fast-forward if too far behind (Syncplay: 5.0)
 const SEEK_COOLDOWN_MS: u64 = 1200;        // Prevent repeated seek spam on noisy updates
+const COMMAND_POSITION_EPSILON: f64 = 0.05; // Skip redundant seeks that can suppress real user events
 
 /// MPV IPC command
 #[derive(Debug, Clone, Serialize)]
@@ -220,6 +221,7 @@ impl WatchTogetherController {
             let reader = BufReader::new(read_file);
             let mut last_position = 0.0f64;
             let mut last_paused = true;
+            let mut pending_user_seek = false;
 
             for line in reader.lines() {
                 match line {
@@ -245,6 +247,12 @@ impl WatchTogetherController {
                                                     });
                                                 }
                                                 last_position = pos;
+                                                if pending_user_seek {
+                                                    pending_user_seek = false;
+                                                    let _ = event_tx.blocking_send(
+                                                        MpvSyncEvent::Seeked { position: pos }
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -290,14 +298,13 @@ impl WatchTogetherController {
                                     _ => {}
                                 }
                             } else if event.event.as_deref() == Some("seek") {
-                                // User-initiated seek
+                                // Seek event can fire before time-pos updates. We defer emission
+                                // until the next time-pos property change for an accurate position.
                                 let ign = ignoring.load(Ordering::SeqCst);
                                 if ign > 0 {
                                     ignoring.fetch_sub(1, Ordering::SeqCst);
                                 } else {
-                                    let _ = event_tx.blocking_send(
-                                        MpvSyncEvent::Seeked { position: last_position }
-                                    );
+                                    pending_user_seek = true;
                                 }
                             } else if event.event.as_deref() == Some("shutdown")
                                 || event.event.as_deref() == Some("end-file")
@@ -382,22 +389,49 @@ impl WatchTogetherController {
 
     /// Set pause state (with echo prevention)
     pub async fn set_paused(&self, paused: bool) -> Result<(), String> {
+        let state = self.local_state.read().await;
+        if state.paused == paused {
+            return Ok(());
+        }
+        drop(state);
+
         self.ignoring_on_the_fly.fetch_add(1, Ordering::SeqCst);
         self.send_command(vec![
             "set_property".into(),
             "pause".into(),
             paused.into(),
-        ]).await
+        ]).await?;
+
+        let mut state = self.local_state.write().await;
+        state.paused = paused;
+        state.last_update = std::time::Instant::now();
+        Ok(())
     }
 
     /// Seek to position (with echo prevention)
     pub async fn seek_to(&self, position: f64) -> Result<(), String> {
+        let state = self.local_state.read().await;
+        let estimated_position = if state.paused {
+            state.position
+        } else {
+            state.position + (state.last_update.elapsed().as_secs_f64() * state.speed)
+        };
+        if (estimated_position - position).abs() < COMMAND_POSITION_EPSILON {
+            return Ok(());
+        }
+        drop(state);
+
         self.ignoring_on_the_fly.fetch_add(1, Ordering::SeqCst);
         self.send_command(vec![
             "set_property".into(),
             "time-pos".into(),
             position.into(),
-        ]).await
+        ]).await?;
+
+        let mut state = self.local_state.write().await;
+        state.position = position;
+        state.last_update = std::time::Instant::now();
+        Ok(())
     }
 
     /// Set playback speed

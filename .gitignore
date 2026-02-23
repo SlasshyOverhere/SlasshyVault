@@ -74,6 +74,9 @@ coverage/
 *.key
 *.cert
 
+# PR review workspace
+pr-review-workspace/
+
 # Markdown files (block all except specific ones)
 *.md
 !README.md
