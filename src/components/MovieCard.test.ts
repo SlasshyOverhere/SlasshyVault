@@ -17,18 +17,21 @@ const mockItem: MediaItem = {
 
 describe('areMovieCardPropsEqual', () => {
   it('should return true when all relevant props are the same', () => {
+    const onClick = () => {}
+    const onFixMatch = () => {}
+
     const prevProps: MovieCardProps = {
       item: mockItem,
-      onClick: () => {},
-      onFixMatch: () => {},
+      onClick,
+      onFixMatch,
       index: 0,
       className: 'test',
       aspectRatio: 'portrait'
     }
     const nextProps: MovieCardProps = {
       item: mockItem,
-      onClick: () => {}, // Different function reference
-      onFixMatch: () => {}, // Different function reference
+      onClick,
+      onFixMatch,
       index: 0,
       className: 'test',
       aspectRatio: 'portrait'
@@ -99,32 +102,36 @@ describe('areMovieCardPropsEqual', () => {
     expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
   })
 
-  it('should return true ignoring different function references', () => {
+  it('should return false when callback references change', () => {
+    const onFixMatch = () => {}
+
     const prevProps: MovieCardProps = {
       item: mockItem,
-      onClick: () => console.log('A'),
-      onFixMatch: () => {},
+      onClick: () => {},
+      onFixMatch,
     }
     const nextProps: MovieCardProps = {
       item: mockItem,
-      onClick: () => console.log('B'),
-      onFixMatch: () => {},
+      onClick: () => {},
+      onFixMatch,
     }
 
-    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(true)
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
   })
 })
 
 describe('areContinueCardPropsEqual', () => {
   it('should return true when all relevant props are the same', () => {
+    const onClick = () => {}
+
     const prevProps: ContinueCardProps = {
       item: mockItem,
-      onClick: () => {},
+      onClick,
       index: 0
     }
     const nextProps: ContinueCardProps = {
       item: mockItem,
-      onClick: () => {}, // Different reference
+      onClick,
       index: 0
     }
 
@@ -132,13 +139,30 @@ describe('areContinueCardPropsEqual', () => {
   })
 
   it('should return false when item changes', () => {
+    const onClick = () => {}
+
     const prevProps: ContinueCardProps = {
       item: mockItem,
-      onClick: () => {},
+      onClick,
     }
     const nextProps: ContinueCardProps = {
       item: { ...mockItem, title: 'Changed' },
+      onClick,
+    }
+
+    expect(areContinueCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
+  it('should return false when callback references change', () => {
+    const prevProps: ContinueCardProps = {
+      item: mockItem,
       onClick: () => {},
+      index: 0
+    }
+    const nextProps: ContinueCardProps = {
+      item: mockItem,
+      onClick: () => {},
+      index: 0
     }
 
     expect(areContinueCardPropsEqual(prevProps, nextProps)).toBe(false)

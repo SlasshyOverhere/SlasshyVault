@@ -35,7 +35,19 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     return false
   }
 
-  // 2. Compare item fields that affect rendering
+  // 2. Callback props must remain in sync to avoid stale closures.
+  if (
+    prev.onClick !== next.onClick ||
+    prev.onFixMatch !== next.onFixMatch ||
+    prev.onRemoveFromHistory !== next.onRemoveFromHistory ||
+    prev.onDelete !== next.onDelete ||
+    prev.onWatchTogether !== next.onWatchTogether ||
+    prev.onAskAI !== next.onAskAI
+  ) {
+    return false
+  }
+
+  // 3. Compare item fields that affect rendering
   const pItem = prev.item
   const nItem = next.item
 
@@ -58,9 +70,6 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     pItem.episode_number === nItem.episode_number &&
     pItem.year === nItem.year
   )
-  // Note: We deliberately ignore function props (onClick, etc.)
-  // because in the parent component they are often inline functions
-  // created on every render, but their behavior remains consistent for the same item.
 }
 
 function MovieCardBase({
@@ -438,6 +447,7 @@ export interface ContinueCardProps {
 // Custom comparison for ContinueCard
 export function areContinueCardPropsEqual(prev: ContinueCardProps, next: ContinueCardProps) {
   if (prev.index !== next.index) return false
+  if (prev.onClick !== next.onClick) return false
 
   const pItem = prev.item
   const nItem = next.item
