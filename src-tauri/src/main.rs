@@ -2398,39 +2398,92 @@ async fn get_active_mpv_sessions(
 // Get image from cache (returns the file path for asset protocol)
 #[tauri::command]
 async fn get_cached_image(image_name: String) -> Result<String, String> {
-    let cache_dir = database::get_image_cache_dir();
-    let image_path = std::path::Path::new(&cache_dir).join(&image_name);
+    let cache_dir_str = database::get_image_cache_dir();
+    let cache_dir = std::path::Path::new(&cache_dir_str);
+    let image_path = cache_dir.join(&image_name);
     
-    println!("[IMAGE] Looking for: {} in {}", image_name, cache_dir);
+    println!("[IMAGE] Looking for: {} in {}", image_name, cache_dir_str);
     println!("[IMAGE] Full path: {:?}", image_path);
-    
-    if image_path.exists() {
-        let asset_url = format!("asset://localhost/{}", image_path.to_string_lossy().replace("\\", "/").replace(":", ""));
-        println!("[IMAGE] Found! Asset URL: {}", asset_url);
-        Ok(asset_url)
-    } else {
-        println!("[IMAGE] Not found: {:?}", image_path);
-        Err("Image not found".to_string())
+
+    // Validate path to prevent traversal
+    let canonical_cache = match cache_dir.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("Cache directory error: {}", e)),
+    };
+
+    // Canonicalize the target path - this will fail if the file doesn't exist
+    // effectively checking for existence as well
+    let canonical_path = match image_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            println!("[IMAGE] Not found: {:?}", image_path);
+            return Err("Image not found".to_string());
+        }
+    };
+
+    // Check if the canonical path starts with the canonical cache path
+    if !canonical_path.starts_with(&canonical_cache) {
+        println!("[SECURITY] Path traversal attempt blocked: {:?}", canonical_path);
+        return Err("Access denied".to_string());
     }
+
+    let path_cow = canonical_path.to_string_lossy();
+    let path_str = path_cow.as_ref();
+    
+    #[cfg(windows)]
+    let path_str = if path_str.starts_with(r"\\?\") {
+        &path_str[4..]
+    } else {
+        path_str
+    };
+
+    let asset_url = format!("asset://localhost/{}", path_str.replace("\\", "/").replace(":", ""));
+    println!("[IMAGE] Found! Asset URL: {}", asset_url);
+    Ok(asset_url)
 }
 
 // Get image path for Tauri's convertFileSrc (returns raw file path)
 #[tauri::command]
 async fn get_cached_image_path(image_name: String) -> Result<String, String> {
-    let cache_dir = database::get_image_cache_dir();
-    let image_path = std::path::Path::new(&cache_dir).join(&image_name);
+    let cache_dir_str = database::get_image_cache_dir();
+    let cache_dir = std::path::Path::new(&cache_dir_str);
+    let image_path = cache_dir.join(&image_name);
     
-    println!("[IMAGE_PATH] Looking for: {} in {}", image_name, cache_dir);
+    println!("[IMAGE_PATH] Looking for: {} in {}", image_name, cache_dir_str);
     println!("[IMAGE_PATH] Full path: {:?}", image_path);
-    
-    if image_path.exists() {
-        let path_str = image_path.to_string_lossy().to_string();
-        println!("[IMAGE_PATH] Found! Path: {}", path_str);
-        Ok(path_str)
-    } else {
-        println!("[IMAGE_PATH] Not found: {:?}", image_path);
-        Err("Image not found".to_string())
+
+    // Validate path to prevent traversal
+    let canonical_cache = match cache_dir.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("Cache directory error: {}", e)),
+    };
+
+    let canonical_path = match image_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            println!("[IMAGE_PATH] Not found: {:?}", image_path);
+            return Err("Image not found".to_string());
+        }
+    };
+
+    if !canonical_path.starts_with(&canonical_cache) {
+        println!("[SECURITY] Path traversal attempt blocked: {:?}", canonical_path);
+        return Err("Access denied".to_string());
     }
+
+    let path_cow = canonical_path.to_string_lossy();
+    let path_str = path_cow.as_ref();
+    
+    #[cfg(windows)]
+    let path_str = if path_str.starts_with(r"\\?\") {
+        &path_str[4..]
+    } else {
+        path_str
+    };
+
+    let final_path = path_str.to_string();
+    println!("[IMAGE_PATH] Found! Path: {}", final_path);
+    Ok(final_path)
 }
 
 // Read video file chunk (workaround for asset protocol issues with Windows drive letters)
