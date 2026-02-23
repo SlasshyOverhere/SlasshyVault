@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, memo } from "react"
 import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
@@ -11,7 +11,7 @@ import {
   ContextMenuSeparator
 } from "@/components/ui/context-menu"
 
-interface MovieCardProps {
+export interface MovieCardProps {
   item: MediaItem
   onClick: (item: MediaItem) => void
   onFixMatch: (item: MediaItem) => void
@@ -24,7 +24,55 @@ interface MovieCardProps {
   index?: number
 }
 
-export function MovieCard({
+// Custom comparison function for React.memo to prevent unnecessary re-renders
+export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProps) {
+  // 1. Compare simple scalar props
+  if (
+    prev.index !== next.index ||
+    prev.className !== next.className ||
+    prev.aspectRatio !== next.aspectRatio
+  ) {
+    return false
+  }
+
+  // 2. Callback props must remain in sync to avoid stale closures.
+  if (
+    prev.onClick !== next.onClick ||
+    prev.onFixMatch !== next.onFixMatch ||
+    prev.onRemoveFromHistory !== next.onRemoveFromHistory ||
+    prev.onDelete !== next.onDelete ||
+    prev.onWatchTogether !== next.onWatchTogether ||
+    prev.onAskAI !== next.onAskAI
+  ) {
+    return false
+  }
+
+  // 3. Compare item fields that affect rendering
+  const pItem = prev.item
+  const nItem = next.item
+
+  // Fast path: same object reference
+  if (pItem === nItem) return true
+
+  // Check unique ID first
+  if (pItem.id !== nItem.id) return false
+
+  // Check visual properties
+  return (
+    pItem.title === nItem.title &&
+    pItem.poster_path === nItem.poster_path &&
+    pItem.progress_percent === nItem.progress_percent &&
+    pItem.resume_position_seconds === nItem.resume_position_seconds &&
+    pItem.duration_seconds === nItem.duration_seconds &&
+    pItem.media_type === nItem.media_type &&
+    pItem.is_cloud === nItem.is_cloud &&
+    pItem.season_number === nItem.season_number &&
+    pItem.episode_number === nItem.episode_number &&
+    pItem.year === nItem.year
+  )
+}
+
+function MovieCardBase({
   item,
   onClick,
   onFixMatch,
@@ -387,14 +435,36 @@ export function MovieCard({
   )
 }
 
+export const MovieCard = memo(MovieCardBase, areMovieCardPropsEqual)
+
 // Horizontal Continue Watching Card
-interface ContinueCardProps {
+export interface ContinueCardProps {
   item: MediaItem
   onClick: (item: MediaItem) => void
   index?: number
 }
 
-export function ContinueCard({ item, onClick, index = 0 }: ContinueCardProps) {
+// Custom comparison for ContinueCard
+export function areContinueCardPropsEqual(prev: ContinueCardProps, next: ContinueCardProps) {
+  if (prev.index !== next.index) return false
+  if (prev.onClick !== next.onClick) return false
+
+  const pItem = prev.item
+  const nItem = next.item
+
+  if (pItem === nItem) return true
+  if (pItem.id !== nItem.id) return false
+
+  return (
+    pItem.title === nItem.title &&
+    pItem.poster_path === nItem.poster_path &&
+    pItem.progress_percent === nItem.progress_percent &&
+    pItem.resume_position_seconds === nItem.resume_position_seconds &&
+    pItem.duration_seconds === nItem.duration_seconds
+  )
+}
+
+function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
   const [isHovered, setIsHovered] = useState(false)
 
@@ -558,3 +628,5 @@ export function ContinueCard({ item, onClick, index = 0 }: ContinueCardProps) {
     </motion.div>
   )
 }
+
+export const ContinueCard = memo(ContinueCardBase, areContinueCardPropsEqual)
