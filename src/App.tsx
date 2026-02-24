@@ -655,7 +655,7 @@ function App() {
       handleHomeSearch()
     }, 300)
     return () => clearTimeout(delayDebounceFn)
-  }, [homeSearchQuery, view])
+  }, [homeSearchQuery, view, handleHomeSearch])
 
 
   // Handle cloud-only indexing - scans the entire Google Drive for NEW files only
@@ -734,7 +734,9 @@ function App() {
           if (item.poster_path) {
             try {
               posterUrl = await getCachedImageUrl(item.poster_path.replace('image_cache/', '')) || undefined
-            } catch { }
+            } catch {
+              // Ignore cache lookup failures and continue playback.
+            }
           }
 
           setResumeDialogData({ item, resumeInfo, posterUrl })
@@ -743,7 +745,7 @@ function App() {
           await playMedia(item.id, false)
           toast({ title: "Playing", description: `Now playing: ${item.title}` })
         }
-      } catch (e) {
+      } catch {
         toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
       }
     }
@@ -907,7 +909,7 @@ function App() {
         item.episode || undefined
       )
       toast({ title: "Opening in Browser", description: `Streaming "${displayTitle}" in your default browser` })
-    } catch (error) {
+    } catch {
       toast({ title: "Failed to Open Player", description: "Could not open the streaming player", variant: "destructive" })
     }
   }
@@ -936,7 +938,7 @@ function App() {
             toast({ title: "Partial Delete", description: result.message, variant: "destructive" })
             await fetchData()
           }
-        } catch (error) {
+        } catch {
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
       }
@@ -958,7 +960,7 @@ function App() {
       await loadContinueWatching()
       // Refresh library items to update progress display on cards
       await fetchData()
-    } catch (error) {
+    } catch {
       toast({ title: "Error", description: "Failed to mark as complete", variant: "destructive" })
     }
   }
