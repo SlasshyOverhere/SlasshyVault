@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense, useMemo } from 'react'
+import { useState, useEffect, lazy, Suspense, useMemo, useCallback } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -543,7 +543,7 @@ function App() {
   // which are already handled elsewhere in the app
 
   // Load library stats - cloud only
-  const loadLibraryStats = async () => {
+  const loadLibraryStats = useCallback(async () => {
     try {
       const [cloudMovies, cloudShows] = await Promise.all([
         getLibraryFiltered('movie', '', true),
@@ -558,10 +558,10 @@ function App() {
     } catch (error) {
       console.error('Failed to load stats', error)
     }
-  }
+  }, [])
 
   // Load continue watching
-  const loadContinueWatching = async () => {
+  const loadContinueWatching = useCallback(async () => {
     try {
       const history = await getWatchHistory()
       // Filter to items with progress < 95%
@@ -577,31 +577,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load continue watching', error)
     }
-  }
+  }, [])
 
-  useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
-      const delayDebounceFn = setTimeout(() => {
-        fetchData()
-      }, 300)
-      return () => clearTimeout(delayDebounceFn)
-    }
-  }, [view, searchQuery, cloudSubTab])
-
-  useEffect(() => {
-    if (view !== 'home') return
-    if (!homeSearchQuery.trim()) {
-      setHomeSearchResults([])
-      return
-    }
-
-    const delayDebounceFn = setTimeout(() => {
-      handleHomeSearch()
-    }, 300)
-    return () => clearTimeout(delayDebounceFn)
-  }, [homeSearchQuery, view])
-
-  const handleHomeSearch = async () => {
+  const handleHomeSearch = useCallback(async () => {
     if (!homeSearchQuery.trim()) {
       setHomeSearchResults([])
       return
@@ -635,9 +613,9 @@ function App() {
     } finally {
       setIsHomeSearching(false)
     }
-  }
+  }, [homeSearchQuery])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       let data: MediaItem[] = []
       if (view === 'cloud') {
@@ -655,7 +633,30 @@ function App() {
     } catch (error) {
       console.error("Failed to fetch data", error)
     }
-  }
+  }, [view, cloudSubTab, searchQuery])
+
+  useEffect(() => {
+    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
+      const delayDebounceFn = setTimeout(() => {
+        fetchData()
+      }, 300)
+      return () => clearTimeout(delayDebounceFn)
+    }
+  }, [view, searchQuery, cloudSubTab, fetchData])
+
+  useEffect(() => {
+    if (view !== 'home') return
+    if (!homeSearchQuery.trim()) {
+      setHomeSearchResults([])
+      return
+    }
+
+    const delayDebounceFn = setTimeout(() => {
+      handleHomeSearch()
+    }, 300)
+    return () => clearTimeout(delayDebounceFn)
+  }, [homeSearchQuery, view])
+
 
   // Handle cloud-only indexing - scans the entire Google Drive for NEW files only
   const handleCloudScan = async () => {
@@ -720,7 +721,7 @@ function App() {
     }
   }
 
-  const handleItemClick = async (item: MediaItem) => {
+  const handleItemClick = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setSelectedShow(item)
       setView('episodes')
@@ -746,7 +747,7 @@ function App() {
         toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
       }
     }
-  }
+  }, [toast])
 
   const handleResumeChoice = async (resume: boolean) => {
     if (!resumeDialogData) return
@@ -762,12 +763,12 @@ function App() {
     }
   }
 
-  const handleFixMatch = (item: MediaItem) => {
+  const handleFixMatch = useCallback((item: MediaItem) => {
     setItemToFix(item)
     setFixMatchOpen(true)
-  }
+  }, [])
 
-  const handleAskAiFromContent = (item: MediaItem) => {
+  const handleAskAiFromContent = useCallback((item: MediaItem) => {
     setAiLaunchRequest({
       item,
       nonce: Date.now(),
@@ -777,9 +778,9 @@ function App() {
       title: "Opening AI Chat",
       description: `Fetching insights for "${item.title}"...`,
     })
-  }
+  }, [toast])
 
-  const handleFixMatchSuccess = async () => {
+  const handleFixMatchSuccess = useCallback(async () => {
     const fixedItem = itemToFix
 
     await Promise.all([
@@ -816,9 +817,9 @@ function App() {
     } catch (error) {
       console.warn('[FixMatch] Failed to refresh selected show metadata:', error)
     }
-  }
+  }, [itemToFix, fetchData, loadLibraryStats, loadContinueWatching, selectedShow, view])
 
-  const handleRemoveFromHistory = async (item: MediaItem) => {
+  const handleRemoveFromHistory = useCallback(async (item: MediaItem) => {
     try {
       await removeFromWatchHistory(item.id)
       toast({ title: "Removed", description: `"${item.title}" removed from watch history.` })
@@ -827,7 +828,7 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
-  }
+  }, [toast, fetchData, loadContinueWatching])
 
   const handleClearAllHistory = async () => {
     if (!confirm("Are you sure you want to clear all watch history?")) return
@@ -919,7 +920,7 @@ function App() {
     }
   }
 
-  const handleDelete = async (item: MediaItem) => {
+  const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
@@ -940,7 +941,7 @@ function App() {
         }
       }
     }
-  }
+  }, [toast, fetchData])
 
   const handleDeleteComplete = async () => {
     await fetchData()
@@ -963,12 +964,12 @@ function App() {
   }
 
   // Watch Together handler
-  const handleWatchTogether = (item: MediaItem) => {
+  const handleWatchTogether = useCallback((item: MediaItem) => {
     // Only allow if beta is enabled
     if (!betaEnabled) return
     setWatchTogetherMedia(item)
     setWatchTogetherOpen(true)
-  }
+  }, [betaEnabled])
 
   // Watch Together session change handler
   const handleWtSessionChange = (room: WatchRoom | null, sessionId: string, isPlaying: boolean, media?: MediaItem) => {
