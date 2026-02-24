@@ -45,6 +45,24 @@ A modern, cloud-first media library manager built with **Tauri**, **Rust**, and 
 | Metadata | TMDB API |
 | Cloud | Google Drive API |
 
+## Backend (Fork / Self-Host)
+
+Official backend repository:
+
+- `https://github.com/SlasshyOverhere/StreamVault-Backend`
+
+If you want to fork/build your own backend:
+
+1. Fork and deploy the backend repo above.
+2. In frontend `.env`, set:
+   - `VITE_AUTH_SERVER_URL=https://your-backend-domain`
+3. For Tauri-side backend routing, set environment variables before building:
+   - `STREAMVAULT_AUTH_SERVER_URL=https://your-backend-domain`
+   - `STREAMVAULT_TMDB_PROXY_URL=https://your-backend-domain/api/tmdb` (optional explicit TMDB proxy override)
+   - `STREAMVAULT_WS_URL=wss://your-backend-domain/ws/watchtogether`
+4. Update `AUTH_SERVER_URL` in `src-tauri/src/gdrive.rs` to your deployed backend URL (used for `/auth/google` and `/auth/refresh`).
+5. Build the app after these values are configured.
+
 ## Supported Formats
 
 `.mkv` `.mp4` `.avi` `.mov` `.webm` `.m4v` `.wmv` `.flv` `.ts` `.m2ts`
