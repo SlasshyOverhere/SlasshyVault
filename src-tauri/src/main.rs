@@ -2489,12 +2489,24 @@ async fn get_cached_image_path(image_name: String) -> Result<String, String> {
 // Read video file chunk (workaround for asset protocol issues with Windows drive letters)
 #[tauri::command]
 async fn read_video_chunk(
+    state: State<'_, AppState>,
     file_path: String,
     offset: u64,
     chunk_size: u64,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
     use std::fs::File;
+
+    // Security check: Verify file is in library
+    let is_authorized = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.media_exists(&file_path).map_err(|e| e.to_string())?
+    };
+
+    if !is_authorized {
+        println!("[SECURITY] Blocked access to non-library file: {}", file_path);
+        return Err("Access denied: File not found in library".to_string());
+    }
     
     let mut file = File::open(&file_path)
         .map_err(|e| format!("Failed to open file: {}", e))?;
@@ -2511,7 +2523,18 @@ async fn read_video_chunk(
 }
 
 #[tauri::command]
-async fn get_video_file_size(file_path: String) -> Result<u64, String> {
+async fn get_video_file_size(state: State<'_, AppState>, file_path: String) -> Result<u64, String> {
+    // Security check: Verify file is in library
+    let is_authorized = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.media_exists(&file_path).map_err(|e| e.to_string())?
+    };
+
+    if !is_authorized {
+        println!("[SECURITY] Blocked access to non-library file: {}", file_path);
+        return Err("Access denied: File not found in library".to_string());
+    }
+
     let metadata = std::fs::metadata(&file_path)
         .map_err(|e| format!("Failed to get file metadata: {}", e))?;
     Ok(metadata.len())
