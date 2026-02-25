@@ -1,5 +1,7 @@
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke, convertFileSrc } from '@tauri-apps/api/tauri';
 
+// Cache for image URLs to prevent repeated IPC calls
+const imageUrlCache = new Map<string, Promise<string | null>>();
 
 export interface MediaItem {
     id: number;
@@ -556,16 +558,23 @@ export const searchTmdb = async (query: string): Promise<TmdbSearchResponse> => 
 };
 
 // Get cached image URL (converts local path to asset protocol URL)
-export const getCachedImageUrl = async (imageName: string): Promise<string | null> => {
-    try {
-        const filePath = await invoke<string>('get_cached_image_path', { imageName });
-        // Use Tauri's convertFileSrc for proper path conversion
-        const { convertFileSrc } = await import('@tauri-apps/api/tauri');
-        return convertFileSrc(filePath);
-    } catch (error) {
-        console.warn('[Image] Failed to get cached image:', imageName, error);
-        return null;
+export const getCachedImageUrl = (imageName: string): Promise<string | null> => {
+    if (imageUrlCache.has(imageName)) {
+        return imageUrlCache.get(imageName)!;
     }
+
+    const promise = (async () => {
+        try {
+            const filePath = await invoke<string>('get_cached_image_path', { imageName });
+            return convertFileSrc(filePath);
+        } catch (error) {
+            console.warn('[Image] Failed to get cached image:', imageName, error);
+            return null;
+        }
+    })();
+
+    imageUrlCache.set(imageName, promise);
+    return promise;
 };
 
 // Helper to get poster URL from media item
