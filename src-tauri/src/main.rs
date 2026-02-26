@@ -3198,6 +3198,17 @@ async fn start_transcode_stream(
     file_path: String,
     start_time: Option<f64>,
 ) -> Result<TranscodeResponse, String> {
+    // Security check: Verify file is in library
+    let is_authorized = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.media_exists(&file_path).map_err(|e| e.to_string())?
+    };
+
+    if !is_authorized {
+        println!("[SECURITY] Blocked access to non-library file for transcoding: {}", file_path);
+        return Err("Access denied: File not found in library".to_string());
+    }
+
     let ffmpeg_path = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
         config.ffmpeg_path.clone()
