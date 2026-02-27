@@ -128,15 +128,19 @@ function App() {
 
   // Memoized sorted items to prevent re-sorting on every render
   const sortedItems = useMemo(() => {
-    const sorted = [...items]
     if (sortBy === 'title') {
-      sorted.sort((a, b) => a.title.localeCompare(b.title))
+      return [...items].sort((a, b) => a.title.localeCompare(b.title))
     } else if (sortBy === 'year') {
-      sorted.sort((a, b) => (b.year || 0) - (a.year || 0))
+      return [...items].sort((a, b) => (b.year || 0) - (a.year || 0))
     } else if (sortBy === 'recent') {
-      sorted.sort((a, b) => new Date(b.last_watched || 0).getTime() - new Date(a.last_watched || 0).getTime())
+      // Optimized sort: Map-Sort-Map to avoid creating Date objects in the loop
+      // This is O(n) for Date creation instead of O(n log n)
+      return items
+        .map((item) => ({ item, time: new Date(item.last_watched || 0).getTime() }))
+        .sort((a, b) => b.time - a.time)
+        .map(({ item }) => item)
     }
-    return sorted
+    return items
   }, [items, sortBy])
 
   // Home search state
