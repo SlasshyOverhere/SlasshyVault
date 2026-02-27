@@ -3118,6 +3118,21 @@ async fn open_videasy_player(
     season: Option<i32>,
     episode: Option<i32>,
 ) -> Result<ApiResponse, String> {
+    // Validate URL - prevent opening arbitrary sites
+    let parsed_url = url::Url::parse(&url).map_err(|_| "Invalid URL format".to_string())?;
+
+    // 1. Ensure HTTPS
+    if parsed_url.scheme() != "https" {
+        return Err("Player URL must use HTTPS".to_string());
+    }
+
+    // 2. Allow only Videasy domain
+    let host = parsed_url.host_str().unwrap_or("");
+    if host != "videasy.net" && !host.ends_with(".videasy.net") {
+        println!("[SECURITY] Blocked navigation to untrusted host: {}", host);
+        return Err(format!("Untrusted player host: {}", host));
+    }
+
     println!("[VIDEASY] Opening in browser for: {} (tmdb_id: {})", title, tmdb_id);
 
     // Open the URL directly in the user's default browser using Tauri's shell API
@@ -4026,6 +4041,27 @@ async fn download_update(
     window: tauri::Window,
     url: String,
 ) -> Result<String, String> {
+    // Validate URL - prevent SSRF/arbitrary file download
+    let parsed_url = url::Url::parse(&url).map_err(|_| "Invalid URL format".to_string())?;
+
+    // 1. Ensure HTTPS
+    if parsed_url.scheme() != "https" {
+        return Err("Update URL must use HTTPS".to_string());
+    }
+
+    // 2. Allow only GitHub domains
+    let host = parsed_url.host_str().unwrap_or("");
+    let allowed_hosts = [
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com"
+    ];
+
+    if !allowed_hosts.contains(&host) {
+        println!("[SECURITY] Blocked update from untrusted host: {}", host);
+        return Err(format!("Untrusted update source: {}", host));
+    }
+
     use std::io::Write;
 
     println!("[UPDATE] Downloading update from: {}", url);
