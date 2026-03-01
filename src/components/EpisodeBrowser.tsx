@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -242,13 +242,17 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         }
     }
 
-    // Get unique seasons
-    const seasons = [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+    // Get unique seasons (memoized to prevent recalculation on every render)
+    const seasons = useMemo(() => {
+        return [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+    }, [episodes])
 
-    // Filter episodes by selected season
-    const filteredEpisodes = episodes
-        .filter(ep => (ep.season_number || 1) === selectedSeason)
-        .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+    // Filter episodes by selected season (memoized to prevent sorting on every render)
+    const filteredEpisodes = useMemo(() => {
+        return episodes
+            .filter(ep => (ep.season_number || 1) === selectedSeason)
+            .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+    }, [episodes, selectedSeason])
 
     const handlePlay = async (episode: MediaItem) => {
         try {
