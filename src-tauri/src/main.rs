@@ -3120,6 +3120,20 @@ async fn open_videasy_player(
 ) -> Result<ApiResponse, String> {
     println!("[VIDEASY] Opening in browser for: {} (tmdb_id: {})", title, tmdb_id);
 
+    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
+    let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if parsed_url.scheme() != "https" {
+        return Err("Only HTTPS URLs are allowed".to_string());
+    }
+
+    if let Some(host_str) = parsed_url.host_str() {
+        if host_str != "videasy.net" && !host_str.ends_with(".videasy.net") {
+             return Err("URL domain not allowed".to_string());
+        }
+    } else {
+        return Err("Invalid URL domain".to_string());
+    }
+
     // Open the URL directly in the user's default browser using Tauri's shell API
     tauri::api::shell::open(&app_handle.shell_scope(), &url, None)
         .map_err(|e| format!("Failed to open browser: {}", e))?;
@@ -4040,6 +4054,20 @@ async fn download_update(
     use std::io::Write;
 
     println!("[UPDATE] Downloading update from: {}", url);
+
+    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
+    let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if parsed_url.scheme() != "https" {
+        return Err("Only HTTPS URLs are allowed".to_string());
+    }
+
+    if let Some(host_str) = parsed_url.host_str() {
+        if host_str != "github.com" && host_str != "api.github.com" && host_str != "objects.githubusercontent.com" && !host_str.ends_with(".github.com") && !host_str.ends_with(".githubusercontent.com") {
+             return Err("URL domain not allowed".to_string());
+        }
+    } else {
+        return Err("Invalid URL domain".to_string());
+    }
 
     let client = reqwest::Client::new();
     let mut request = client.get(&url);
