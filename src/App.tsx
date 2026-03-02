@@ -60,6 +60,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
+import { sortMediaItems } from '@/utils/sorting'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -128,15 +129,7 @@ function App() {
 
   // Memoized sorted items to prevent re-sorting on every render
   const sortedItems = useMemo(() => {
-    const sorted = [...items]
-    if (sortBy === 'title') {
-      sorted.sort((a, b) => a.title.localeCompare(b.title))
-    } else if (sortBy === 'year') {
-      sorted.sort((a, b) => (b.year || 0) - (a.year || 0))
-    } else if (sortBy === 'recent') {
-      sorted.sort((a, b) => new Date(b.last_watched || 0).getTime() - new Date(a.last_watched || 0).getTime())
-    }
-    return sorted
+    return sortMediaItems(items, sortBy)
   }, [items, sortBy])
 
   // Home search state
