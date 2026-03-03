@@ -146,8 +146,8 @@ function App() {
     if (!isChunkedCloudRender) return sortedItems
     return sortedItems.slice(0, visibleCloudItemsCount)
   }, [sortedItems, isChunkedCloudRender, visibleCloudItemsCount])
-  const disableCloudEntryAnimation = true
-  const disableHistoryEntryAnimation = true
+  const disableCloudEntryAnimation = false
+  const disableHistoryEntryAnimation = false
 
   // Home search state
   const [homeSearchQuery, setHomeSearchQuery] = useState('')
@@ -1395,7 +1395,7 @@ function App() {
             {/* Content - Episodes and AI chat have their own fixed layout/scroll behavior */}
             {view === 'episodes' && selectedShow ? (
               <div className="flex-1 overflow-hidden px-3 pb-3 pt-12">
-                <AnimatePresence mode="sync">
+                <AnimatePresence mode="wait">
                   <motion.div
                     key="episodes"
                     initial={{ opacity: 0, x: 20 }}
@@ -1421,7 +1421,7 @@ function App() {
             ) : view === 'ai' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
-                  <AnimatePresence mode="sync">
+                  <AnimatePresence mode="wait">
                     <motion.div
                       key="ai"
                       initial={{ opacity: 0 }}
@@ -1443,7 +1443,7 @@ function App() {
             ) : (
               <ScrollArea className="flex-1">
                 <div className={`content-container ${view === 'social' ? 'h-full min-h-0' : ''}`}>
-                  <AnimatePresence mode="sync">
+                  <AnimatePresence mode="wait">
                     {/* Home View */}
                     {view === 'home' && (
                       <motion.div
