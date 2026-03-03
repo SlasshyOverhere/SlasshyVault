@@ -61,6 +61,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 import { sortMediaItems } from '@/utils/sorting'
+import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -1033,7 +1034,13 @@ function App() {
                 }}
                 className="flex items-center gap-2 pl-3 select-none"
               >
-                <span data-tauri-drag-region className="pointer-events-none w-1.5 h-1.5 rounded-full bg-emerald-300/80 shadow-[0_0_8px_rgba(110,231,183,0.55)]" />
+                <img
+                  data-tauri-drag-region
+                  src={streamvaultIcon}
+                  alt=""
+                  draggable={false}
+                  className="pointer-events-none h-4 w-4 object-contain"
+                />
                 <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
                   StreamVault
                 </span>
