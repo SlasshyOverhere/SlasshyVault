@@ -1672,7 +1672,7 @@ impl Database {
     }
 
     /// Merge duplicate TV shows into a single entry.
-    /// Groups by TMDB ID first, then by title (case-insensitive).
+    /// Groups by TMDB ID first, then by normalized title.
     /// Keeps the entry with the most complete metadata as the primary.
     pub fn merge_duplicate_tvshows(&self) -> Result<i32> {
         println!("[MERGE] Looking for duplicate TV shows to merge...");
@@ -1714,35 +1714,98 @@ impl Database {
             }
         }
 
-        // Step 2: Find and merge duplicates by same title (case-insensitive) without TMDB ID
-        let title_duplicates: Vec<(String, Vec<i64>)> = {
+        // Step 2: Find and merge duplicates by normalized title.
+        // This catches punctuation/spacing variants like:
+        // "Monarch: Legacy of Monsters" vs "Monarch Legacy of Monsters".
+        // Safety guard: never merge groups that contain multiple different TMDB IDs,
+        // and avoid merging same-name-but-different-era shows with wide year gaps.
+        let normalized_duplicates: Vec<(String, Vec<i64>)> = {
             let mut stmt = self.conn.prepare(
-                "SELECT LOWER(title), GROUP_CONCAT(id) as ids, COUNT(*) as cnt 
-                 FROM media 
-                 WHERE media_type = 'tvshow'
-                 GROUP BY LOWER(title) 
-                 HAVING cnt > 1",
+                "SELECT id, title, tmdb_id, year
+                 FROM media
+                 WHERE media_type = 'tvshow'",
             )?;
 
-            let results: Vec<(String, Vec<i64>)> = stmt
+            let rows: Vec<(i64, String, Option<String>, Option<i32>)> = stmt
                 .query_map([], |row| {
-                    let title: String = row.get(0)?;
-                    let ids_str: String = row.get(1)?;
-                    let ids: Vec<i64> = ids_str
-                        .split(',')
-                        .filter_map(|s| s.trim().parse().ok())
-                        .collect();
-                    Ok((title, ids))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i32>>(3)?,
+                    ))
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
-            results
+
+            let mut groups: std::collections::HashMap<
+                String,
+                Vec<(i64, Option<String>, Option<i32>)>,
+            > = std::collections::HashMap::new();
+
+            for (id, title, tmdb_id, year) in rows {
+                let normalized = Self::normalize_title_for_db(&title);
+                groups
+                    .entry(normalized)
+                    .or_default()
+                    .push((id, tmdb_id, year));
+            }
+
+            let mut candidates: Vec<(String, Vec<i64>)> = Vec::new();
+
+            for (normalized_title, entries) in groups {
+                if entries.len() < 2 {
+                    continue;
+                }
+
+                let mut tmdb_ids: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut years: Vec<i32> = Vec::new();
+
+                for (_, tmdb_id, year) in &entries {
+                    if let Some(tid) = tmdb_id
+                        .as_ref()
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                    {
+                        tmdb_ids.insert(tid.to_string());
+                    }
+                    if let Some(y) = year {
+                        years.push(*y);
+                    }
+                }
+
+                if tmdb_ids.len() > 1 {
+                    println!(
+                        "[MERGE] Skipping normalized title '{}' (multiple TMDB IDs detected)",
+                        normalized_title
+                    );
+                    continue;
+                }
+
+                if !years.is_empty() {
+                    let min_year = *years.iter().min().unwrap_or(&0);
+                    let max_year = *years.iter().max().unwrap_or(&0);
+                    if max_year - min_year > 1 {
+                        println!(
+                            "[MERGE] Skipping normalized title '{}' (year spread {}-{})",
+                            normalized_title, min_year, max_year
+                        );
+                        continue;
+                    }
+                }
+
+                let ids = entries.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+                candidates.push((normalized_title, ids));
+            }
+
+            candidates
         };
 
-        for (title, ids) in title_duplicates {
+        for (title, ids) in normalized_duplicates {
             if ids.len() > 1 {
                 println!(
-                    "[MERGE] Found {} duplicates with title: {}",
+                    "[MERGE] Found {} duplicates with normalized title: {}",
                     ids.len(),
                     title
                 );
