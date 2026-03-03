@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense, useMemo, useCallback } from 'react'
+import { useState, useEffect, lazy, Suspense, useMemo, useCallback, useRef } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -628,6 +628,11 @@ function App() {
     }
   }, [view, cloudSubTab, searchQuery])
 
+  // Stable ref for fetchData to prevent triggering massive re-renders
+  // when passed to memoized components like MovieCard
+  const fetchDataRef = useRef(fetchData)
+  fetchDataRef.current = fetchData
+
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
       const delayDebounceFn = setTimeout(() => {
@@ -818,19 +823,19 @@ function App() {
     try {
       await removeFromWatchHistory(item.id)
       toast({ title: "Removed", description: `"${item.title}" removed from watch history.` })
-      await fetchData()
+      await fetchDataRef.current()
       await loadContinueWatching()
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
-  }, [toast, fetchData, loadContinueWatching])
+  }, [toast, loadContinueWatching])
 
   const handleClearAllHistory = async () => {
     if (!confirm("Are you sure you want to clear all watch history?")) return
     try {
       await clearAllWatchHistory()
       toast({ title: "Cleared", description: "All watch history has been cleared." })
-      await fetchData()
+      await fetchDataRef.current()
       await loadContinueWatching()
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
@@ -841,7 +846,7 @@ function App() {
     try {
       await removeFromStreamingHistory(item.id)
       toast({ title: "Removed", description: `"${item.title}" removed from streaming history.` })
-      await fetchData()
+      await fetchDataRef.current()
     } catch {
       toast({ title: "Error", description: "Failed to remove from streaming history", variant: "destructive" })
     }
@@ -852,7 +857,7 @@ function App() {
     try {
       await clearAllStreamingHistory()
       toast({ title: "Cleared", description: "All streaming history has been cleared." })
-      await fetchData()
+      await fetchDataRef.current()
     } catch {
       toast({ title: "Error", description: "Failed to clear streaming history", variant: "destructive" })
     }
@@ -926,22 +931,22 @@ function App() {
           const result = await deleteMediaFiles([item.id])
           if (result.success) {
             toast({ title: "Deleted", description: result.message })
-            await fetchData()
+            await fetchDataRef.current()
           } else {
             toast({ title: "Partial Delete", description: result.message, variant: "destructive" })
-            await fetchData()
+            await fetchDataRef.current()
           }
         } catch {
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
       }
     }
-  }, [toast, fetchData])
+  }, [toast])
 
-  const handleDeleteComplete = async () => {
-    await fetchData()
+  const handleDeleteComplete = useCallback(async () => {
+    await fetchDataRef.current()
     toast({ title: "Deleted", description: "Selected episodes have been permanently deleted." })
-  }
+  }, [toast])
 
   const handleMarkComplete = async () => {
     if (!markCompleteData) return
