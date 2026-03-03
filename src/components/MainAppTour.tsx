@@ -5,10 +5,11 @@ interface MainAppTourProps {
   onComplete: () => void
   onSkip: () => void
   setView: (view: string) => void
+  showStreamTab?: boolean
 }
 
-export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTourProps) {
-  const tourSteps: TourStep[] = [
+export function MainAppTour({ isActive, onComplete, onSkip, setView, showStreamTab = false }: MainAppTourProps) {
+  const allSteps: TourStep[] = [
     // Sidebar Overview
     {
       id: 'sidebar-intro',
@@ -135,6 +136,8 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       action: () => setView('home'),
     },
   ]
+
+  const tourSteps = allSteps.filter((step) => showStreamTab || step.id !== 'nav-stream')
 
   return (
     <GuidedTour

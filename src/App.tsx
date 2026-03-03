@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -40,6 +40,8 @@ import {
   clearAllStreamingHistory,
   getVideasyUrl,
   openVideasyPlayer,
+  isBrowserOpenEnabled,
+  isStreamTabEnabled,
   hasCompletedOnboarding,
   completeOnboarding,
   getTabVisibility,
@@ -108,6 +110,9 @@ interface MpvPlaybackEndedPayload {
 type ViewMode = 'grid' | 'list'
 type SortOption = 'title' | 'year' | 'recent' | 'progress'
 type MediaSubTab = 'movies' | 'tv'
+const LARGE_LIBRARY_THRESHOLD = 120
+const CLOUD_INITIAL_RENDER_COUNT = 48
+const CLOUD_CHUNK_RENDER_COUNT = 96
 
 const LoadingFallback = () => (
   <div className="flex h-full w-full items-center justify-center min-h-[50vh]">
@@ -132,6 +137,17 @@ function App() {
   const sortedItems = useMemo(() => {
     return sortMediaItems(items, sortBy)
   }, [items, sortBy])
+
+  // Incremental rendering for very large cloud libraries to avoid view-switch stutter
+  const [visibleCloudItemsCount, setVisibleCloudItemsCount] = useState(CLOUD_INITIAL_RENDER_COUNT)
+  const cloudLoadMoreRef = useRef<HTMLDivElement | null>(null)
+  const isChunkedCloudRender = view === 'cloud' && !searchQuery.trim() && sortedItems.length > LARGE_LIBRARY_THRESHOLD
+  const cloudItemsToRender = useMemo(() => {
+    if (!isChunkedCloudRender) return sortedItems
+    return sortedItems.slice(0, visibleCloudItemsCount)
+  }, [sortedItems, isChunkedCloudRender, visibleCloudItemsCount])
+  const disableCloudEntryAnimation = true
+  const disableHistoryEntryAnimation = true
 
   // Home search state
   const [homeSearchQuery, setHomeSearchQuery] = useState('')
@@ -245,6 +261,7 @@ function App() {
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
+  const [streamTabEnabled, setStreamTabEnabledState] = useState(false)
 
   // Update notification state
   const [updateAvailable, setUpdateAvailable] = useState(false)
@@ -266,6 +283,7 @@ function App() {
   // Initialize beta features
   useEffect(() => {
     setBetaEnabledState(isBetaEnabled())
+    setStreamTabEnabledState(isStreamTabEnabled())
   }, [])
 
   // Silent background update check after authentication
@@ -300,6 +318,13 @@ function App() {
         ? "Watch Together and Social features are now available"
         : "Watch Together and Social features are now hidden"
     })
+  }
+
+  const handleStreamTabToggle = (enabled: boolean) => {
+    setStreamTabEnabledState(enabled)
+    if (!enabled && view === 'stream') {
+      setView('home')
+    }
   }
 
   // Handle update notification actions
@@ -372,6 +397,12 @@ function App() {
       setView('home')
     }
   }
+
+  useEffect(() => {
+    if (!streamTabEnabled && view === 'stream') {
+      setView('home')
+    }
+  }, [streamTabEnabled, view])
 
   // Listen for Tauri events - depends on view to properly refresh data
   useEffect(() => {
@@ -631,12 +662,52 @@ function App() {
 
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
-      const delayDebounceFn = setTimeout(() => {
+      // Fetch immediately on tab switch; only debounce active typing.
+      const delayMs = searchQuery.trim() ? 180 : 0
+      const timer = window.setTimeout(() => {
         fetchData()
-      }, 300)
-      return () => clearTimeout(delayDebounceFn)
+      }, delayMs)
+      return () => window.clearTimeout(timer)
     }
   }, [view, searchQuery, cloudSubTab, fetchData])
+
+  useEffect(() => {
+    if (view !== 'cloud') return
+
+    if (!isChunkedCloudRender) {
+      setVisibleCloudItemsCount(sortedItems.length)
+      return
+    }
+
+    setVisibleCloudItemsCount(Math.min(CLOUD_INITIAL_RENDER_COUNT, sortedItems.length))
+  }, [view, cloudSubTab, searchQuery, sortedItems.length, isChunkedCloudRender])
+
+  useEffect(() => {
+    if (view !== 'cloud' || !isChunkedCloudRender) return
+
+    const sentinel = cloudLoadMoreRef.current
+    if (!sentinel) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          setVisibleCloudItemsCount((prev) => {
+            if (prev >= sortedItems.length) return prev
+            return Math.min(prev + CLOUD_CHUNK_RENDER_COUNT, sortedItems.length)
+          })
+        }
+      },
+      {
+        root: null,
+        rootMargin: '260px 0px',
+        threshold: 0.01,
+      }
+    )
+
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [view, isChunkedCloudRender, sortedItems.length])
 
   useEffect(() => {
     if (view !== 'home') return
@@ -867,6 +938,15 @@ function App() {
   const openStreamingContent = async (item: StreamingHistoryItem) => {
     const STREAMVAULT_COLOR = 'FFFFFF'
 
+    if (!isBrowserOpenEnabled()) {
+      toast({
+        title: "Browser Streaming Disabled",
+        description: "Enable it in Settings > General > Allow Browser Streaming.",
+        variant: "destructive"
+      })
+      return
+    }
+
     let displayTitle = item.title
     if (item.media_type !== 'movie') {
       const season = item.season || 1
@@ -1077,6 +1157,7 @@ function App() {
           <Sidebar
             currentView={view === 'episodes' ? 'cloud' : view}
             setView={(v) => {
+              if (v === 'stream' && !streamTabEnabled) return
               setView(v)
               setSelectedShow(null)
               setSearchQuery('')
@@ -1091,6 +1172,7 @@ function App() {
             isCloudIndexing={isCloudIndexing}
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
+            showStreamTab={streamTabEnabled}
             betaEnabled={betaEnabled}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
@@ -1313,7 +1395,7 @@ function App() {
             {/* Content - Episodes and AI chat have their own fixed layout/scroll behavior */}
             {view === 'episodes' && selectedShow ? (
               <div className="flex-1 overflow-hidden px-3 pb-3 pt-12">
-                <AnimatePresence mode="wait">
+                <AnimatePresence mode="sync">
                   <motion.div
                     key="episodes"
                     initial={{ opacity: 0, x: 20 }}
@@ -1339,7 +1421,7 @@ function App() {
             ) : view === 'ai' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
-                  <AnimatePresence mode="wait">
+                  <AnimatePresence mode="sync">
                     <motion.div
                       key="ai"
                       initial={{ opacity: 0 }}
@@ -1361,7 +1443,7 @@ function App() {
             ) : (
               <ScrollArea className="flex-1">
                 <div className={`content-container ${view === 'social' ? 'h-full min-h-0' : ''}`}>
-                  <AnimatePresence mode="wait">
+                  <AnimatePresence mode="sync">
                     {/* Home View */}
                     {view === 'home' && (
                       <motion.div
@@ -1440,13 +1522,15 @@ function App() {
                                   <span>Google Drive</span>
                                 </button>
                               )}
-                              <button
-                                onClick={() => setView('stream')}
-                                className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                              >
-                                <Globe className="w-4 h-4 text-gray-400" />
-                                <span>Browse Online</span>
-                              </button>
+                              {streamTabEnabled && (
+                                <button
+                                  onClick={() => setView('stream')}
+                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
+                                >
+                                  <Globe className="w-4 h-4 text-gray-400" />
+                                  <span>Browse Online</span>
+                                </button>
+                              )}
                               <button
                                 onClick={() => setView('ai')}
                                 className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
@@ -1835,7 +1919,7 @@ function App() {
                     )}
 
                     {/* Stream View */}
-                    {view === 'stream' && (
+                    {view === 'stream' && streamTabEnabled && (
                       <motion.div
                         key="stream"
                         initial={{ opacity: 0 }}
@@ -1898,6 +1982,7 @@ function App() {
                                 key={item.id}
                                 item={item}
                                 index={index}
+                                disableEntryAnimation={disableHistoryEntryAnimation}
                                 onClick={handleItemClick}
                                 onFixMatch={handleFixMatch}
                                 onRemoveFromHistory={handleRemoveFromHistory}
@@ -2035,11 +2120,12 @@ function App() {
                         className="pt-24"
                       >
                         <div className={viewMode === 'grid' ? 'grid-media' : 'list-media'}>
-                          {sortedItems.map((item, index) => (
+                          {cloudItemsToRender.map((item, index) => (
                             <MovieCard
                               key={item.id}
                               item={item}
                               index={index}
+                              disableEntryAnimation={disableCloudEntryAnimation}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
                               onAskAI={handleAskAiFromContent}
@@ -2047,6 +2133,16 @@ function App() {
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
                           ))}
+                          {isChunkedCloudRender && cloudItemsToRender.length < sortedItems.length && (
+                            <div
+                              ref={cloudLoadMoreRef}
+                              className={viewMode === 'grid'
+                                ? 'col-span-full h-16 flex items-center justify-center text-xs text-muted-foreground/70'
+                                : 'h-16 flex items-center justify-center text-xs text-muted-foreground/70'}
+                            >
+                              Loading more...
+                            </div>
+                          )}
                           {sortedItems.length === 0 && (
                             <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                               <motion.div
@@ -2198,7 +2294,9 @@ function App() {
             isActive={showMainAppTour}
             onComplete={handleMainAppTourComplete}
             onSkip={handleMainAppTourSkip}
+            showStreamTab={streamTabEnabled}
             setView={(v) => {
+              if (v === 'stream' && !streamTabEnabled) return
               setView(v)
               setSelectedShow(null)
               setSearchQuery('')
@@ -2225,6 +2323,8 @@ function App() {
               onLogout={handleLogout}
               betaEnabled={betaEnabled}
               onBetaToggle={handleBetaToggle}
+              streamTabEnabled={streamTabEnabled}
+              onStreamTabToggle={handleStreamTabToggle}
               autoCheckUpdate={autoCheckUpdate}
               onSimulateUpdate={() => {
                 const fakeUpdate: UpdateInfo = {
