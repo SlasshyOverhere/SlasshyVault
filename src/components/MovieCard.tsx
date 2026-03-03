@@ -19,6 +19,7 @@ export interface MovieCardProps {
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
   onAskAI?: (item: MediaItem) => void
+  disableEntryAnimation?: boolean
   aspectRatio?: "portrait" | "square"
   className?: string
   index?: number
@@ -42,7 +43,8 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     prev.onRemoveFromHistory !== next.onRemoveFromHistory ||
     prev.onDelete !== next.onDelete ||
     prev.onWatchTogether !== next.onWatchTogether ||
-    prev.onAskAI !== next.onAskAI
+    prev.onAskAI !== next.onAskAI ||
+    prev.disableEntryAnimation !== next.disableEntryAnimation
   ) {
     return false
   }
@@ -80,6 +82,7 @@ function MovieCardBase({
   onDelete,
   onWatchTogether,
   onAskAI,
+  disableEntryAnimation = false,
   aspectRatio = "portrait",
   className,
   index = 0,
@@ -116,13 +119,15 @@ function MovieCardBase({
           onClick={() => onClick(item)}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          initial={{ opacity: 0, y: 30, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{
-            duration: 0.5,
-            delay: index * 0.04,
-            ease: [0.22, 1, 0.36, 1]
-          }}
+          initial={disableEntryAnimation ? false : { opacity: 0, y: 30, scale: 0.95 }}
+          animate={disableEntryAnimation ? undefined : { opacity: 1, y: 0, scale: 1 }}
+          transition={disableEntryAnimation
+            ? undefined
+            : {
+              duration: 0.5,
+              delay: index * 0.04,
+              ease: [0.22, 1, 0.36, 1]
+            }}
         >
           {/* Glow Effect Behind Card */}
           <motion.div

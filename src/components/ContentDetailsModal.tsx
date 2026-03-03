@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Calendar, Clock, Play, Tv } from "lucide-react"
-import { MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, searchTmdb } from "@/services/api"
+import { MediaItem, getCachedImageUrl, getTmdbImageUrl, searchTmdb } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 
@@ -12,7 +12,6 @@ interface ContentDetailsModalProps {
 }
 
 const heroArtworkCache = new Map<number, string | null>()
-const runtimeMinutesCache = new Map<number, number | null>()
 
 const resolveLocalImage = async (path?: string): Promise<string | null> => {
   if (!path) return null
@@ -29,7 +28,6 @@ export function ContentDetailsModal({
 }: ContentDetailsModalProps) {
   const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null)
   const [posterImageUrl, setPosterImageUrl] = useState<string | null>(null)
-  const [runtimeMinutesOverride, setRuntimeMinutesOverride] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -38,7 +36,6 @@ export function ContentDetailsModal({
       if (!open || !item) {
         setHeroImageUrl(null)
         setPosterImageUrl(null)
-        setRuntimeMinutesOverride(null)
         return
       }
 
@@ -48,23 +45,6 @@ export function ContentDetailsModal({
       }
 
       const expectedType = item.media_type === "movie" ? "movie" : "tv"
-      const itemTmdbId = Number.parseInt(item.tmdb_id || "", 10)
-      const hasItemTmdbId = Number.isFinite(itemTmdbId) && itemTmdbId > 0
-      const cachedRuntime = runtimeMinutesCache.get(item.id)
-
-      if (!cancelled) {
-        setRuntimeMinutesOverride(cachedRuntime ?? null)
-      }
-
-      let movieDetails: Awaited<ReturnType<typeof getMovieDetails>> = null
-      if (item.media_type === "movie" && hasItemTmdbId && cachedRuntime === undefined) {
-        movieDetails = await getMovieDetails(itemTmdbId)
-        const runtime = movieDetails?.runtime && movieDetails.runtime > 0 ? movieDetails.runtime : null
-        runtimeMinutesCache.set(item.id, runtime)
-        if (!cancelled) {
-          setRuntimeMinutesOverride(runtime)
-        }
-      }
 
       const cachedHero = heroArtworkCache.get(item.id)
       if (cachedHero !== undefined) {
@@ -81,37 +61,20 @@ export function ContentDetailsModal({
           nextHero = await resolveLocalImage(item.still_path)
         }
 
-        if (!nextHero && item.media_type === "movie" && movieDetails?.backdrop_path) {
-          nextHero = getTmdbImageUrl(movieDetails.backdrop_path, "original")
-        }
-
         if (!nextHero) {
           const response = await searchTmdb(item.title)
 
           const exactMatch = response.results.find(
-            (result) => String(result.id) === item.tmdb_id && result.media_type === expectedType
+            (result: { id: number; media_type: "movie" | "tv" }) =>
+              String(result.id) === item.tmdb_id && result.media_type === expectedType
           )
           const fallbackMatch = response.results.find(
-            (result) => result.media_type === expectedType && !!result.backdrop_path
+            (result: { media_type: "movie" | "tv"; backdrop_path?: string }) =>
+              result.media_type === expectedType && !!result.backdrop_path
           )
 
           const chosen = exactMatch ?? fallbackMatch
           nextHero = getTmdbImageUrl(chosen?.backdrop_path, "original")
-
-          if (item.media_type === "movie" && runtimeMinutesCache.get(item.id) === undefined && chosen?.id) {
-            const resolvedMovieDetails = await getMovieDetails(chosen.id)
-            const runtime = resolvedMovieDetails?.runtime && resolvedMovieDetails.runtime > 0
-              ? resolvedMovieDetails.runtime
-              : null
-            runtimeMinutesCache.set(item.id, runtime)
-            if (!cancelled) {
-              setRuntimeMinutesOverride(runtime)
-            }
-
-            if (!nextHero && resolvedMovieDetails?.backdrop_path) {
-              nextHero = getTmdbImageUrl(resolvedMovieDetails.backdrop_path, "original")
-            }
-          }
         }
       } catch {
         // Fall through to poster fallback.
@@ -150,11 +113,10 @@ export function ContentDetailsModal({
   const runtimeMinutesFromDuration = item.duration_seconds && item.duration_seconds > 0
     ? Math.max(1, Math.round(item.duration_seconds / 60))
     : null
-  const runtimeMinutes = runtimeMinutesFromDuration ?? runtimeMinutesOverride
-  const runtimeLabel = runtimeMinutes
-    ? (runtimeMinutes >= 60
-      ? `${Math.floor(runtimeMinutes / 60)}h ${runtimeMinutes % 60}m`
-      : `${runtimeMinutes}m`)
+  const runtimeLabel = runtimeMinutesFromDuration !== null
+    ? (runtimeMinutesFromDuration >= 60
+      ? `${Math.floor(runtimeMinutesFromDuration / 60)}h ${runtimeMinutesFromDuration % 60}m`
+      : `${runtimeMinutesFromDuration}m`)
     : "Runtime N/A"
   const sourceTitleRaw = item.file_path?.trim() || ""
   const sourceTitle = sourceTitleRaw.replace(/\.[^/.\\]+$/, "")

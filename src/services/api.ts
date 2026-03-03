@@ -8,6 +8,7 @@ export interface MediaItem {
     title: string;
     year?: number;
     overview?: string;
+    cast_names?: string;
     poster_path?: string;
     file_path?: string;
     media_type: 'movie' | 'tvshow' | 'tvepisode';
