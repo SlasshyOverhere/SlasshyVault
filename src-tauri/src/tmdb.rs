@@ -1174,10 +1174,23 @@ fn create_slug(title: &str) -> String {
         .join("_")
 }
 
-/// Cache image with organized folder structure
-/// For series: image_cache/{series_slug}/{series_slug}_banner.jpg
-/// For episodes: image_cache/{series_slug}/{series_slug}_s{season}e{episode}_banner.jpg
-/// For movies: image_cache/{movie_slug}_banner.jpg
+fn image_cache_tag(image_path: &str) -> String {
+    let tag = Path::new(image_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(create_slug)
+        .unwrap_or_default();
+
+    if tag.is_empty() {
+        "img".to_string()
+    } else {
+        tag
+    }
+}
+
+/// Cache image with organized folder structure.
+/// Includes a source-image tag in filenames to avoid stale cache collisions
+/// when metadata is corrected but title stays the same.
 pub fn cache_image_organized(
     image_path: &str,
     cache_dir: &str,
@@ -1185,20 +1198,21 @@ pub fn cache_image_organized(
     image_type: ImageType,
 ) -> Option<String> {
     let slug = create_slug(title);
+    let source_tag = image_cache_tag(image_path);
 
     let (subfolder, filename) = match image_type {
         ImageType::SeriesBanner => {
             let subfolder = slug.clone();
-            let filename = format!("{}_banner.jpg", slug);
+            let filename = format!("{}_{}_banner.jpg", slug, source_tag);
             (Some(subfolder), filename)
         }
         ImageType::EpisodeBanner { season, episode } => {
             let subfolder = slug.clone();
-            let filename = format!("{}_s{}e{}_banner.jpg", slug, season, episode);
+            let filename = format!("{}_s{}e{}_{}_banner.jpg", slug, season, episode, source_tag);
             (Some(subfolder), filename)
         }
         ImageType::MovieBanner => {
-            let filename = format!("{}_banner.jpg", slug);
+            let filename = format!("{}_{}_banner.jpg", slug, source_tag);
             (None, filename)
         }
     };
