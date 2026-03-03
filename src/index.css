@@ -754,6 +754,14 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .grid-media > * {
+    /*
+     * Avoid paint containment clipping on hover (card lift/glow/top badges).
+     * Keep lightweight containment without cutting transformed content.
+     */
+    contain: layout style;
+  }
+
   @media (min-width: 640px) {
     .grid-media {
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -788,6 +796,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .list-media > * {
+    content-visibility: auto;
+    contain-intrinsic-size: 420px 160px;
   }
 
   /* ---- Outer wrapper (ContextMenu > ContextMenuTrigger > motion.div) ---- */
@@ -884,7 +897,8 @@
   }
 
   .list-media>*:hover img {
-    transform: scale(1.05) !important;
+    transform: none !important;
+    filter: brightness(1.05) saturate(1.05) !important;
   }
 
   /* Hide all absolute positioned elements in poster (overlays, badges, play btn) */
