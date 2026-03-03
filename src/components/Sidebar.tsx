@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Globe, Home, RotateCw, Cloud, Users, Film, Sparkles, Activity, Bot
+  Globe, Home, RotateCw, Cloud, Users, Sparkles, Bot
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect } from "react"
@@ -99,31 +99,7 @@ export function Sidebar({
       {/* Glossy Overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
 
-
-      <div className={cn("px-4 pt-24 pb-2", isCollapsed ? "px-2" : "")}>
-        {!isCollapsed ? (
-          <div className="flex items-center gap-3.5 px-2">
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white to-white/60 shadow-[0_0_15px_rgba(255,255,255,0.15)] ring-1 ring-white/20">
-              <div className="absolute inset-0 rounded-xl bg-white blur-lg opacity-20" />
-              <Film className="relative h-5 w-5 text-black fill-black/20" />
-            </div>
-            <div className="min-w-0 flex-1 flex flex-col justify-center">
-              <h1 className="text-lg font-bold tracking-tight text-white leading-none mb-0.5">
-                StreamVault
-              </h1>
-              <span className="text-[10px] font-medium text-white/50 tracking-widest uppercase">
-                Premium
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black shadow-lg shadow-white/10 ring-1 ring-white/20">
-            <Film className="h-5 w-5 fill-black/20" />
-          </div>
-        )}
-      </div>
-
-      <div className={cn("flex-1 px-4 pt-4 pb-3 flex flex-col", isCollapsed ? "px-2 pt-3" : "")}>
+      <div className={cn("flex-1 px-4 pt-14 pb-3 flex flex-col", isCollapsed ? "px-2 pt-12" : "")}>
         {/* Navigation Items (Middle) */}
         <div className="flex-1 flex items-center">
           <nav className="w-full space-y-2 overflow-y-auto overflow-x-hidden custom-scrollbar max-h-[45vh]">
@@ -208,40 +184,6 @@ export function Sidebar({
           </nav>
         </div>
 
-        {!isCollapsed ? (
-          <div className="mt-6 px-1">
-            <div className="flex items-center justify-between mb-3 px-1">
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">Media Space</p>
-              <Sparkles className="w-3 h-3 text-amber-300/80 drop-shadow-[0_0_8px_rgba(253,224,71,0.5)]" />
-            </div>
-
-            <div className="rounded-2xl border border-white/[0.04] bg-white/[0.02] p-3 backdrop-blur-sm">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Cloud className="w-4 h-4 text-blue-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Synced</span>
-                </div>
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Globe className="w-4 h-4 text-purple-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Online</span>
-                </div>
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Activity className="w-4 h-4 text-emerald-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Active</span>
-                </div>
-              </div>
-
-              <div className="mt-3 flex items-center gap-2 px-1">
-                <div className="h-1 lg:h-1.5 w-1 lg:w-1.5 rounded-full bg-neutral-600" />
-                <p className="text-[10px] sm:text-[11px] text-neutral-400 leading-tight line-clamp-2">
-                  <span className="text-white/80">Library Sync:</span> Auto-indexing enabled for new media.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto mt-4 w-8 h-[1px] bg-white/[0.08]" />
-        )}
       </div>
 
       {/* Footer / Status Area */}
