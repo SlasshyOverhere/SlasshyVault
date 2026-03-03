@@ -1022,39 +1022,44 @@ function App() {
       {isAuthenticated && (
         <>
           {/* Custom Title Bar */}
-          <div
-            onMouseDown={(e) => {
-              if (e.buttons === 1 && e.target === e.currentTarget) {
-                appWindow.startDragging()
-              }
-            }}
-            className="fixed top-0 left-0 right-0 h-10 z-[200] flex items-center justify-between bg-transparent pointer-events-none"
-          >
-            <div
-              onMouseDown={() => appWindow.startDragging()}
-              className="flex-1 h-full flex items-center pl-4 cursor-default pointer-events-auto"
-            >
-              {/* Empty space or minimal title can go here if needed */}
-            </div>
-            <div className="flex items-center h-full pointer-events-auto pr-2 gap-1">
-              <button
-                onClick={() => appWindow.minimize()}
-                className="w-10 h-8 rounded-lg hover:bg-white/10 transition-all flex items-center justify-center group"
-                title="Minimize"
-              >
-                <Minus className="w-4 h-4 text-neutral-500 group-hover:text-white" />
-              </button>
-              <button
-                onClick={async () => {
-                  await appWindow.hide()
+          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black/45 backdrop-blur-2xl">
+            <div data-tauri-drag-region className="h-full w-full flex items-center justify-between">
+              <div
+                data-tauri-drag-region
+                onMouseDown={(e) => {
+                  if (e.button === 0) {
+                    appWindow.startDragging()
+                  }
                 }}
-                className="w-10 h-8 rounded-lg hover:bg-rose-500/20 transition-all flex items-center justify-center group"
-                title="Close"
+                className="flex items-center gap-2 pl-3 select-none"
               >
-                <X className="w-4 h-4 text-neutral-500 group-hover:text-rose-400" />
-              </button>
+                <span data-tauri-drag-region className="pointer-events-none w-1.5 h-1.5 rounded-full bg-emerald-300/80 shadow-[0_0_8px_rgba(110,231,183,0.55)]" />
+                <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
+                  StreamVault
+                </span>
+              </div>
+              <div className="flex items-center gap-1 pr-1.5">
+                <button
+                  onClick={() => appWindow.minimize()}
+                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
+                  title="Minimize"
+                  aria-label="Minimize window"
+                >
+                  <Minus className="mx-auto h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={async () => {
+                    await appWindow.hide()
+                  }}
+                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+                  title="Close"
+                  aria-label="Hide window"
+                >
+                  <X className="mx-auto h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
-          </div>
+          </header>
           {/* Background decorative orbs */}
           <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
             <div className="bg-orb bg-orb-1" />
@@ -1091,7 +1096,7 @@ function App() {
                   initial={{ opacity: 0, y: -20, scale: 0.9 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                  className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/30 shadow-lg"
+                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/30 shadow-lg"
                 >
                   <div className="relative">
                     <Loader2 className="h-4 w-4 animate-spin text-white" />
@@ -1111,7 +1116,7 @@ function App() {
                   initial={{ opacity: 0, y: -20, scale: 0.9 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                  className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-card/95 backdrop-blur-xl border border-gray-500/30 shadow-glow"
+                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-card/95 backdrop-blur-xl border border-gray-500/30 shadow-glow"
                 >
                   <div className="relative">
                     <motion.div
@@ -1156,7 +1161,7 @@ function App() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -15 }}
                   transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                  className="fixed top-14 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4"
+                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4"
                 >
                   {/* Sub-tabs for Movies/TV */}
                   <div className="flex p-0.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/10 shadow-md">
@@ -1250,7 +1255,7 @@ function App() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -15 }}
                   transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                  className="fixed top-14 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4"
+                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4"
                 >
                   {/* Tab Pills */}
                   <div className="flex p-0.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/10 shadow-md">
