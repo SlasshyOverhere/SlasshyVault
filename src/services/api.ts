@@ -602,6 +602,43 @@ export const setPlayerPreference = (preference: PlayerPreference): void => {
     localStorage.setItem('playerPreference', preference);
 };
 
+const BROWSER_OPEN_KEY = 'streamvault_allow_browser_open';
+const STREAM_TAB_KEY = 'streamvault_stream_tab_enabled';
+
+export const isBrowserOpenEnabled = (): boolean => {
+    try {
+        return localStorage.getItem(BROWSER_OPEN_KEY) === '1';
+    } catch (error) {
+        console.error('Failed to read browser open setting:', error);
+        return false;
+    }
+};
+
+export const setBrowserOpenEnabled = (enabled: boolean): void => {
+    try {
+        localStorage.setItem(BROWSER_OPEN_KEY, enabled ? '1' : '0');
+    } catch (error) {
+        console.error('Failed to save browser open setting:', error);
+    }
+};
+
+export const isStreamTabEnabled = (): boolean => {
+    try {
+        return localStorage.getItem(STREAM_TAB_KEY) === '1';
+    } catch (error) {
+        console.error('Failed to read stream tab setting:', error);
+        return false;
+    }
+};
+
+export const setStreamTabEnabled = (enabled: boolean): void => {
+    try {
+        localStorage.setItem(STREAM_TAB_KEY, enabled ? '1' : '0');
+    } catch (error) {
+        console.error('Failed to save stream tab setting:', error);
+    }
+};
+
 // MPV Status types
 export interface MpvStatus {
     is_playing: boolean;

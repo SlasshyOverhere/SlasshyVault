@@ -1,5 +1,11 @@
-/* Import premium font - must come first */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+/* Load Inter from local bundled assets (works in both dev and packaged builds) */
+@import "@fontsource/inter/300.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/inter/800.css";
+@import "@fontsource/inter/900.css";
 
 @tailwind base;
 @tailwind components;
@@ -748,6 +754,14 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .grid-media > * {
+    /*
+     * Avoid paint containment clipping on hover (card lift/glow/top badges).
+     * Keep lightweight containment without cutting transformed content.
+     */
+    contain: layout style;
+  }
+
   @media (min-width: 640px) {
     .grid-media {
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -782,6 +796,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .list-media > * {
+    content-visibility: auto;
+    contain-intrinsic-size: 420px 160px;
   }
 
   /* ---- Outer wrapper (ContextMenu > ContextMenuTrigger > motion.div) ---- */
@@ -878,7 +897,8 @@
   }
 
   .list-media>*:hover img {
-    transform: scale(1.05) !important;
+    transform: none !important;
+    filter: brightness(1.05) saturate(1.05) !important;
   }
 
   /* Hide all absolute positioned elements in poster (overlays, badges, play btn) */

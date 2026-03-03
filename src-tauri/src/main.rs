@@ -434,6 +434,38 @@ struct CloudIndexResult {
     message: String,
 }
 
+/// Resolve an existing TV show using normalized/fuzzy matching to avoid split series
+/// when cloud filenames use slightly different punctuation or formatting.
+fn find_existing_cloud_tvshow(
+    db: &database::Database,
+    show_title: &str,
+    year: Option<i32>,
+) -> Option<database::MediaItem> {
+    let series_id = db
+        .find_series_by_tmdb_or_title(None, show_title, year)
+        .ok()
+        .flatten()?;
+    db.get_media_by_id(series_id).ok()
+}
+
+fn auto_merge_duplicate_tvshows(db: &database::Database, source: &str) -> i32 {
+    match db.merge_duplicate_tvshows() {
+        Ok(count) => {
+            if count > 0 {
+                println!(
+                    "[MERGE] Auto-merge from '{}' consolidated {} duplicate TV show entries",
+                    source, count
+                );
+            }
+            count
+        }
+        Err(e) => {
+            println!("[MERGE] Auto-merge from '{}' failed: {}", source, e);
+            0
+        }
+    }
+}
+
 /// Scan a cloud folder and index its contents
 /// Auto-detects movies vs TV shows based on filename patterns
 #[tauri::command]
@@ -518,10 +550,9 @@ async fn gdrive_scan_folder(
                 let (db_show_id, tmdb_id, show_folder_id) = if let Some(cached) = tv_show_cache.get(&show_title_lower) {
                     cached.clone()
                 } else {
-                    // Check if show already exists in database
-                    let existing = db.find_tvshow_by_title(&show_title);
-
-                    let result = if let Ok(Some(existing_show)) = existing {
+                    let result = if let Some(existing_show) =
+                        find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                    {
                         // Use existing show's folder or the episode's parent
                         (existing_show.id, existing_show.tmdb_id, episode_parent_folder.clone())
                     } else {
@@ -671,6 +702,15 @@ async fn gdrive_scan_folder(
     }).await.map_err(|e| format!("Task failed: {}", e))??;
 
     let (indexed_count, skipped_count, movies_count, tv_count) = result;
+
+    if indexed_count > 0 {
+        if let Ok(db) = state.db.lock() {
+            let merged = auto_merge_duplicate_tvshows(&db, "gdrive_scan_folder");
+            if merged > 0 {
+                window.emit("library-updated", ()).ok();
+            }
+        }
+    }
 
     // Emit completion
     window.emit("cloud-scan-complete", serde_json::json!({
@@ -862,8 +902,9 @@ async fn scan_all_cloud_folders(
                     let (db_show_id, tmdb_id) = if let Some(cached) = tv_show_cache.get(&show_title_lower) {
                         cached.clone()
                     } else {
-                        let existing = db.find_tvshow_by_title(&show_title);
-                        let result = if let Ok(Some(existing_show)) = existing {
+                        let result = if let Some(existing_show) =
+                            find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                        {
                             (existing_show.id, existing_show.tmdb_id)
                         } else {
                             let tmdb_result = tmdb::search_metadata(
@@ -952,6 +993,15 @@ async fn scan_all_cloud_folders(
 
         if indexed > 0 {
             window.emit("library-updated", ()).ok();
+        }
+    }
+
+    if total_indexed > 0 {
+        if let Ok(db) = state.db.lock() {
+            let merged = auto_merge_duplicate_tvshows(&db, "scan_all_cloud_folders");
+            if merged > 0 {
+                window.emit("library-updated", ()).ok();
+            }
         }
     }
 
@@ -1194,14 +1244,12 @@ async fn check_cloud_changes(
                         println!("[CLOUD CHANGES]   Using cached show ID {} for '{}'", cached_id, show_title);
                         cached_id
                     } else {
-                        // Check if show exists in DB
-                        let existing = db.find_tvshow_by_title(&show_title);
-                        let show_id = match existing {
-                            Ok(Some(existing_show)) => {
+                        let show_id = if let Some(existing_show) =
+                            find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                        {
                                 println!("[CLOUD CHANGES]   Found existing show '{}' with ID {}", show_title, existing_show.id);
                                 existing_show.id
-                            }
-                            Ok(None) => {
+                        } else {
                                 // Create TV show entry without metadata
                                 // Use a unique file_path combining folder ID and show title
                                 let show_path = format!("gdrive:{}:{}", folder_id, show_title.to_lowercase().replace(" ", "_"));
@@ -1217,11 +1265,6 @@ async fn check_cloud_changes(
                                         continue;
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                println!("[CLOUD CHANGES]   ERROR finding TV show: {}", e);
-                                continue;
-                            }
                         };
                         tv_show_cache.insert(show_title_lower, show_id);
                         show_id
@@ -1370,8 +1413,7 @@ async fn check_cloud_changes(
                             if let Some(ref meta) = show_meta {
                                 // Update the parent TV show with poster (only once per show)
                                 if !tv_show_updated.contains(&title_lower) {
-                                    // Find the TV show by title and update it
-                                    if let Ok(Some(show)) = db.find_tvshow_by_title(&title) {
+                                    if let Some(show) = find_existing_cloud_tvshow(&db, &title, None) {
                                         if db.update_metadata(show.id, meta).is_ok() {
                                             println!("[CLOUD CHANGES BG]   ✓ Updated TV show poster for '{}'", title);
                                         }
@@ -1455,6 +1497,15 @@ async fn check_cloud_changes(
             });
         } else {
             println!("[CLOUD CHANGES] No TMDB API key - skipping metadata fetch");
+        }
+    }
+
+    if indexed_count > 0 {
+        if let Ok(db) = state.db.lock() {
+            let merged = auto_merge_duplicate_tvshows(&db, "check_cloud_changes");
+            if merged > 0 {
+                window.emit("library-updated", ()).ok();
+            }
         }
     }
 
@@ -3766,17 +3817,16 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                     let db_show_id = if let Some(&cached_id) = tv_show_cache.get(&show_title_lower) {
                         cached_id
                     } else {
-                        let existing = db.find_tvshow_by_title(&show_title);
-                        let show_id = match existing {
-                            Ok(Some(existing_show)) => existing_show.id,
-                            Ok(None) => {
+                        let show_id = if let Some(existing_show) =
+                            find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                        {
+                            existing_show.id
+                        } else {
                                 let show_path = format!("gdrive:{}:{}", folder_id, show_title.to_lowercase().replace(" ", "_"));
                                 match db.insert_cloud_tvshow(&show_title, None, None, None, &show_path, &folder_id, None) {
                                     Ok(id) => id,
                                     Err(_) => continue,
                                 }
-                            }
-                            Err(_) => continue,
                         };
                         tv_show_cache.insert(show_title_lower, show_id);
                         show_id
@@ -3875,7 +3925,7 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
 
                         if let Some(ref meta) = show_meta {
                             if !tv_show_updated.contains(&title_lower) {
-                                if let Ok(Some(show)) = db.find_tvshow_by_title(&title) {
+                                if let Some(show) = find_existing_cloud_tvshow(&db, &title, None) {
                                     db.update_metadata(show.id, meta).ok();
                                 }
                                 tv_show_updated.insert(title_lower.clone());
@@ -3922,6 +3972,18 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                 window.emit("library-updated", ()).ok();
             }
         });
+    }
+
+    if indexed_count > 0 {
+        let db_path_merge = database::get_database_path();
+        if let Ok(db) = database::Database::new(&db_path_merge) {
+            let merged = auto_merge_duplicate_tvshows(&db, "background_check_cloud_changes");
+            if merged > 0 {
+                if let Some(window) = app_handle.get_window("main") {
+                    window.emit("library-updated", ()).ok();
+                }
+            }
+        }
     }
 
     let total_duration = start_time.elapsed();

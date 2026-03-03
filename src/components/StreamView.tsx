@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/tauri';
 import { EpisodeSelector } from './EpisodeSelector';
 import { useToast } from './ui/use-toast';
-import { saveStreamingProgress, getStreamingHistory, StreamingHistoryItem, openVideasyPlayer, getVideasyUrl } from '@/services/api';
+import { saveStreamingProgress, getStreamingHistory, StreamingHistoryItem, openVideasyPlayer, getVideasyUrl, isBrowserOpenEnabled } from '@/services/api';
 import { cn } from '@/lib/utils';
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
@@ -62,6 +62,15 @@ export function StreamView() {
         episode?: number
     ) => {
         try {
+            if (!isBrowserOpenEnabled()) {
+                toast({
+                    title: "Browser Streaming Disabled",
+                    description: "Enable it in Settings > General > Allow Browser Streaming.",
+                    variant: "destructive"
+                });
+                return;
+            }
+
             // Save initial entry to streaming history
             await saveStreamingProgress(
                 tmdbId,

@@ -110,7 +110,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     const { toast } = useToast()
 
     // TMDB episode metadata
-    const [tmdbEpisodes, setTmdbEpisodes] = useState<Map<number, TmdbEpisodeInfo>>(new Map())
+    const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<Map<number, Map<number, TmdbEpisodeInfo>>>(new Map())
     const [expandedEpisode, setExpandedEpisode] = useState<number | null>(null)
 
     // Player selection state
@@ -130,6 +130,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
 
     useEffect(() => {
         loadEpisodes()
+        setTmdbEpisodesBySeason(new Map())
 
         let unlistenMpvEnded: UnlistenFn | undefined;
         let unlistenMarkedComplete: UnlistenFn | undefined;
@@ -163,31 +164,38 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         loadPoster()
     }, [show.id, show.poster_path])
 
-    // Load TMDB episode metadata when season changes - only if local data is incomplete
+    // Load TMDB episode metadata when season changes if local runtime is missing
     useEffect(() => {
-        // Check if local episodes already have the metadata we need
         const seasonEpisodes = episodes.filter(ep => (ep.season_number || 1) === selectedSeason);
-        const hasLocalMetadata = seasonEpisodes.length > 0 && seasonEpisodes.some(ep => ep.episode_title || ep.still_path);
+        if (!show.tmdb_id || selectedSeason <= 0 || seasonEpisodes.length === 0) return;
 
-        // Only fetch from TMDB if we don't have local metadata
-        if (show.tmdb_id && selectedSeason > 0 && !hasLocalMetadata && seasonEpisodes.length === 0) {
-            loadTmdbEpisodes()
-        }
-    }, [show.tmdb_id, selectedSeason, episodes])
+        // If all episodes already have valid local duration, no need to fetch TMDB runtime.
+        const allLocalDurationsAvailable = seasonEpisodes.every(ep => (ep.duration_seconds || 0) >= 60);
+        if (allLocalDurationsAvailable) return;
 
-    const loadTmdbEpisodes = async () => {
+        // Avoid re-fetching for the same season.
+        if (tmdbEpisodesBySeason.has(selectedSeason)) return;
+
+        loadTmdbEpisodes(selectedSeason)
+    }, [show.tmdb_id, selectedSeason, episodes, tmdbEpisodesBySeason])
+
+    const loadTmdbEpisodes = async (season: number) => {
         if (!show.tmdb_id) return
 
         try {
             const tmdbId = parseInt(show.tmdb_id)
-            const seasonDetails = await getTvSeasonEpisodes(tmdbId, selectedSeason)
+            const seasonDetails = await getTvSeasonEpisodes(tmdbId, season)
 
             if (seasonDetails) {
                 const episodeMap = new Map<number, TmdbEpisodeInfo>()
                 seasonDetails.episodes.forEach(ep => {
                     episodeMap.set(ep.episode_number, ep)
                 })
-                setTmdbEpisodes(episodeMap)
+                setTmdbEpisodesBySeason(prev => {
+                    const next = new Map(prev)
+                    next.set(season, episodeMap)
+                    return next
+                })
             }
         } catch (error) {
             console.error("Failed to load TMDB episode metadata", error)
@@ -421,7 +429,9 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                             const hasProgress = progress > 0 && !isFinished;
 
                                             // Use local data first, fall back to TMDB data
-                                            const tmdbData = tmdbEpisodes.get(episode.episode_number || 0);
+                                            const tmdbData = tmdbEpisodesBySeason
+                                                .get(selectedSeason)
+                                                ?.get(episode.episode_number || 0);
                                             // Prefer local still_path over TMDB
                                             const localStillPath = episode.still_path;
                                             const stillUrl = localStillPath
@@ -430,9 +440,13 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                             // Use local episode title first, then TMDB, then fallback
                                             const episodeTitle = episode.episode_title || tmdbData?.name || episode.title || `Episode ${episode.episode_number}`;
                                             const isExpanded = expandedEpisode === episode.id;
-
-                                            // Debug logging for episode data
-                                            console.log(`[Episode S${episode.season_number}E${episode.episode_number}] still_path: ${episode.still_path}, episode_title: ${episode.episode_title}`);
+                                            const localRuntimeMinutes = episode.duration_seconds && episode.duration_seconds >= 60
+                                                ? Math.round(episode.duration_seconds / 60)
+                                                : null;
+                                            const tmdbRuntimeMinutes = tmdbData?.runtime && tmdbData.runtime > 0
+                                                ? tmdbData.runtime
+                                                : null;
+                                            const runtimeMinutes = localRuntimeMinutes ?? tmdbRuntimeMinutes;
 
                                             return (
                                                 <motion.div
@@ -537,13 +551,13 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                                                     </div>
                                                                 </div>
 
-                                                                {/* Metadata row - show duration from local file if available */}
-                                                                {((episode.duration_seconds && episode.duration_seconds >= 60) || (tmdbData?.vote_average && tmdbData.vote_average > 0)) && (
+                                                                {/* Metadata row - local duration first, fallback to TMDB runtime */}
+                                                                {(runtimeMinutes || (tmdbData?.vote_average && tmdbData.vote_average > 0)) && (
                                                                     <div className="flex items-center gap-2 lg:gap-3 mt-1 lg:mt-1.5 text-[10px] lg:text-xs text-muted-foreground">
-                                                                        {episode.duration_seconds && episode.duration_seconds >= 60 && (
+                                                                        {runtimeMinutes && (
                                                                             <span className="flex items-center gap-1">
                                                                                 <Timer className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
-                                                                                {Math.round(episode.duration_seconds / 60)} min
+                                                                                {runtimeMinutes} min
                                                                             </span>
                                                                         )}
                                                                         {tmdbData?.vote_average && tmdbData.vote_average > 0 && (

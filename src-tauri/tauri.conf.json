@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "StreamVault",
-    "version": "3.0.19"
+    "version": "3.0.20"
   },
   "tauri": {
     "allowlist": {
@@ -80,7 +80,7 @@
       },
       "externalBin": [],
       "icon": [
-        "icons/steamvault.jpeg",
+        "icons/steamvault.png",
         "icons/steamvault.ico"
       ],
       "identifier": "com.streamvault.app",

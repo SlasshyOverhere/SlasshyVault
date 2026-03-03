@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Globe, Home, RotateCw, Cloud, Users, Film, Sparkles, Activity, Bot
+  Globe, Home, RotateCw, Cloud, Users, Sparkles, Bot, ChevronLeft, ChevronRight
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect } from "react"
@@ -22,6 +22,7 @@ interface SidebarProps {
     total: number
   } | null
   showCloudTab?: boolean
+  showStreamTab?: boolean
   betaEnabled?: boolean
 }
 
@@ -34,12 +35,19 @@ export function Sidebar({
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
+  showStreamTab = false,
   betaEnabled = false,
 }: SidebarProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [isManualCollapsed, setIsManualCollapsed] = useState(() => {
+    return window.localStorage.getItem("sidebar-collapsed") === "1";
+  });
   const [gdriveConnected, setGdriveConnected] = useState(false);
   const [gdriveInfo, setGdriveInfo] = useState<DriveAccountInfo | null>(null);
+
+  const isForcedCollapsed = windowWidth < 800;
+  const isCollapsed = isForcedCollapsed || isManualCollapsed;
+  const sidebarWidth = isCollapsed ? (isForcedCollapsed ? 68 : 72) : (windowWidth < 1100 ? 240 : 280);
 
   // Fetch Google Drive info
   useEffect(() => {
@@ -59,16 +67,7 @@ export function Sidebar({
   // Responsive sidebar
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 800) {
-        setIsCollapsed(true);
-        setSidebarWidth(68);
-      } else if (window.innerWidth < 1100) {
-        setIsCollapsed(false);
-        setSidebarWidth(240);
-      } else {
-        setIsCollapsed(false);
-        setSidebarWidth(280);
-      }
+      setWindowWidth(window.innerWidth);
     };
 
     handleResize();
@@ -76,10 +75,16 @@ export function Sidebar({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem("sidebar-collapsed", isManualCollapsed ? "1" : "0");
+  }, [isManualCollapsed]);
+
+  const canToggleCollapse = !isForcedCollapsed;
+
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Google Drive", icon: Cloud, hidden: !showCloudTab },
-    { id: "stream", label: "Discover", icon: Globe },
+    { id: "stream", label: "Discover", icon: Globe, hidden: !showStreamTab },
     { id: "ai", label: "AI Chat", icon: Bot, hidden: !betaEnabled, isNew: true },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
@@ -99,34 +104,10 @@ export function Sidebar({
       {/* Glossy Overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
 
-
-      <div className={cn("px-4 pt-24 pb-2", isCollapsed ? "px-2" : "")}>
-        {!isCollapsed ? (
-          <div className="flex items-center gap-3.5 px-2">
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white to-white/60 shadow-[0_0_15px_rgba(255,255,255,0.15)] ring-1 ring-white/20">
-              <div className="absolute inset-0 rounded-xl bg-white blur-lg opacity-20" />
-              <Film className="relative h-5 w-5 text-black fill-black/20" />
-            </div>
-            <div className="min-w-0 flex-1 flex flex-col justify-center">
-              <h1 className="text-lg font-bold tracking-tight text-white leading-none mb-0.5">
-                StreamVault
-              </h1>
-              <span className="text-[10px] font-medium text-white/50 tracking-widest uppercase">
-                Premium
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black shadow-lg shadow-white/10 ring-1 ring-white/20">
-            <Film className="h-5 w-5 fill-black/20" />
-          </div>
-        )}
-      </div>
-
-      <div className={cn("flex-1 px-4 pt-4 pb-3 flex flex-col", isCollapsed ? "px-2 pt-3" : "")}>
+      <div className={cn("flex-1 px-4 pt-14 pb-3 flex flex-col", isCollapsed ? "px-2 pt-12" : "")}>
         {/* Navigation Items (Middle) */}
         <div className="flex-1 flex items-center">
-          <nav className="w-full space-y-2 overflow-y-auto overflow-x-hidden custom-scrollbar max-h-[45vh]">
+          <nav className="w-full space-y-2 overflow-visible">
             {menuItems.map((item) => {
               const isActive = currentView === item.id;
 
@@ -195,8 +176,8 @@ export function Sidebar({
 
                   {/* Tooltip for collapsed mode */}
                   {isCollapsed && (
-                    <div className="absolute left-full ml-4 hidden group-hover:flex items-center px-3 py-2 bg-[#141414] border border-white/10 rounded-lg shadow-2xl z-[60] whitespace-nowrap animate-in fade-in zoom-in-95 duration-200">
-                      <span className="text-xs text-white font-semibold">{item.label}</span>
+                    <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+                      <span className="text-xs font-semibold text-white">Open {item.label}</span>
                       {item.isNew && (
                         <span className="text-xs font-bold text-amber-300 tracking-wider">{" • NEW"}</span>
                       )}
@@ -208,44 +189,10 @@ export function Sidebar({
           </nav>
         </div>
 
-        {!isCollapsed ? (
-          <div className="mt-6 px-1">
-            <div className="flex items-center justify-between mb-3 px-1">
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">Media Space</p>
-              <Sparkles className="w-3 h-3 text-amber-300/80 drop-shadow-[0_0_8px_rgba(253,224,71,0.5)]" />
-            </div>
-
-            <div className="rounded-2xl border border-white/[0.04] bg-white/[0.02] p-3 backdrop-blur-sm">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Cloud className="w-4 h-4 text-blue-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Synced</span>
-                </div>
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Globe className="w-4 h-4 text-purple-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Online</span>
-                </div>
-                <div className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-white/[0.03] border border-white/[0.02] transition-colors hover:bg-white/[0.06]">
-                  <Activity className="w-4 h-4 text-emerald-400/80" />
-                  <span className="text-[9px] font-semibold text-neutral-300">Active</span>
-                </div>
-              </div>
-
-              <div className="mt-3 flex items-center gap-2 px-1">
-                <div className="h-1 lg:h-1.5 w-1 lg:w-1.5 rounded-full bg-neutral-600" />
-                <p className="text-[10px] sm:text-[11px] text-neutral-400 leading-tight line-clamp-2">
-                  <span className="text-white/80">Library Sync:</span> Auto-indexing enabled for new media.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto mt-4 w-8 h-[1px] bg-white/[0.08]" />
-        )}
       </div>
 
       {/* Footer / Status Area */}
-      <div className="p-4 mt-auto space-y-4 border-t border-white/[0.04] bg-white/[0.01]">
+      <div className={cn("mt-auto space-y-4 border-t border-white/[0.04] bg-white/[0.01]", isCollapsed ? "p-2.5" : "p-4")}>
 
         {/* Cloud Sync Status */}
         {gdriveConnected && (
@@ -301,22 +248,74 @@ export function Sidebar({
           </div>
         )}
 
-        {/* Settings */}
-        <button
-          onClick={onOpenSettings}
-          className={cn(
-            "w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition-all duration-300",
-            "hover:bg-white/[0.08] text-neutral-500 hover:text-white border border-transparent hover:border-white/5",
-            isCollapsed ? "justify-center px-0" : ""
-          )}
-        >
-          <div className="relative">
-            <Settings className="w-5 h-5 transition-transform group-hover:rotate-45" />
+        {/* Footer Actions */}
+        {isCollapsed ? (
+          <div className="space-y-1.5">
+            <div className="group relative">
+              <button
+                onClick={onOpenSettings}
+                title="Open settings"
+                className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+              >
+                <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
+              </button>
+              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+                <span className="text-xs font-semibold text-white">Open Settings</span>
+              </div>
+            </div>
+
+            <div className="group relative">
+              <button
+                onClick={() => {
+                  if (!canToggleCollapse) return;
+                  setIsManualCollapsed((prev) => !prev);
+                }}
+                disabled={!canToggleCollapse}
+                title={canToggleCollapse ? "Expand sidebar" : "Sidebar auto-collapses on small windows"}
+                className={cn(
+                  "w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200",
+                  "flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10",
+                  !canToggleCollapse && "cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-neutral-400 hover:border-white/[0.06]"
+                )}
+              >
+                <ChevronRight className="h-4.5 w-4.5" />
+              </button>
+              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+                <span className="text-xs font-semibold text-white">
+                  {canToggleCollapse ? "Expand Sidebar" : "Sidebar Auto-Collapsed"}
+                </span>
+              </div>
+            </div>
           </div>
-          {!isCollapsed && (
-            <span className="text-sm font-semibold tracking-wide">Settings</span>
-          )}
-        </button>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={onOpenSettings}
+              title="Open settings"
+              className="group h-11 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+            >
+              <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
+              <span className="text-xs font-semibold tracking-wide">Settings</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (!canToggleCollapse) return;
+                setIsManualCollapsed((prev) => !prev);
+              }}
+              disabled={!canToggleCollapse}
+              title={canToggleCollapse ? "Collapse sidebar" : "Sidebar auto-collapses on small windows"}
+              className={cn(
+                "h-11 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200",
+                "flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10",
+                !canToggleCollapse && "cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-neutral-400 hover:border-white/[0.06]"
+              )}
+            >
+              <ChevronLeft className="h-4.5 w-4.5" />
+              <span className="text-xs font-semibold tracking-wide">Collapse</span>
+            </button>
+          </div>
+        )}
       </div>
     </motion.aside>
   )

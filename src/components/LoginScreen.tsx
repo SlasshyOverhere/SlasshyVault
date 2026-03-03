@@ -7,6 +7,7 @@
 
 import { useState } from 'react'
 import { Loader2, Film, Users, Shield, Zap } from 'lucide-react'
+import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 
 interface LoginScreenProps {
   onLogin: () => void
@@ -22,8 +23,13 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
       <div className="flex-1 flex flex-col justify-center px-16 bg-gradient-to-br from-[#0a0a0a] via-[#111] to-[#0a0a0a]">
         {/* Logo and App Name */}
         <div className="flex items-center gap-4 mb-8">
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-white to-zinc-400 flex items-center justify-center shadow-lg shadow-white/20">
-            <Film className="w-7 h-7 text-black" />
+          <div className="w-14 h-14 rounded-xl border border-white/20 bg-white/5 flex items-center justify-center shadow-lg shadow-white/10">
+            <img
+              src={streamvaultIcon}
+              alt="StreamVault logo"
+              draggable={false}
+              className="w-10 h-10 object-contain"
+            />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">StreamVault</h1>
