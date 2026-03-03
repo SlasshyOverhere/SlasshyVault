@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Sparkles, CheckCircle, Bug } from 'lucide-react'
 
-const CURRENT_VERSION = '3.0.19'
+const CURRENT_VERSION = '3.0.21'
 
 interface UpdateNotesModalProps {
   open: boolean
@@ -68,9 +68,8 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
                   color="from-purple-500/20 to-purple-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• New AI Chat (Beta) for quicker in-app help and discovery.</li>
-                    <li>• Watch Together beta with shared playback rooms.</li>
-                    <li>• In-app update notifications with quick install flow.</li>
+                    <li>• Cleaner library card hover with reduced motion and better readability.</li>
+                    <li>• Updated release notes and versioning flow for faster rollout tracking.</li>
                   </ul>
                 </Section>
 
@@ -81,8 +80,8 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
                   color="from-orange-500/20 to-orange-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Fixed key Watch Together sync/reconnect reliability issues.</li>
-                    <li>• Improved safety checks for cloud folder operations.</li>
+                    <li>• Fixed top-edge clipping on library cards during hover animation.</li>
+                    <li>• Improved callback safety in concurrent rendering paths.</li>
                   </ul>
                 </Section>
 
@@ -93,8 +92,8 @@ export function UpdateNotesModal({ open, onOpenChange, isFromSettings = false }:
                   color="from-blue-500/20 to-blue-500/5"
                 >
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    <li>• Faster app startup checks and smoother playback readiness.</li>
-                    <li>• General stability and performance improvements.</li>
+                    <li>• Reduced unnecessary `MovieCard` re-renders in heavy library views.</li>
+                    <li>• Smoother interaction responsiveness while searching and managing history.</li>
                   </ul>
                 </Section>
               </div>
