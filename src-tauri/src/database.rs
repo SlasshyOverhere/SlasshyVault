@@ -299,6 +299,27 @@ impl Database {
             [],
         )?;
 
+        // Add indexes for frequently queried fields to improve performance
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_type_title ON media (media_type, title)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_parent_id ON media (parent_id)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_last_watched ON media (last_watched DESC)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_cloud_folder_id ON media (cloud_folder_id)",
+            [],
+        )?;
+
         // Create cloud_folders table for storing Google Drive folder configurations
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS cloud_folders (
