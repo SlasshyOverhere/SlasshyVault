@@ -1,8 +1,8 @@
-import { useState, useEffect, memo } from "react"
+import { useState, useEffect, useRef, memo } from "react"
 import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion } from "framer-motion"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -62,6 +62,9 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
   // Check visual properties
   return (
     pItem.title === nItem.title &&
+    pItem.overview === nItem.overview &&
+    pItem.cast_names === nItem.cast_names &&
+    pItem.file_path === nItem.file_path &&
     pItem.poster_path === nItem.poster_path &&
     pItem.progress_percent === nItem.progress_percent &&
     pItem.resume_position_seconds === nItem.resume_position_seconds &&
@@ -87,55 +90,106 @@ function MovieCardBase({
   className,
   index = 0,
 }: MovieCardProps) {
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
+  const [shouldLoadPoster, setShouldLoadPoster] = useState(index < 16)
   const [isHovered, setIsHovered] = useState(false)
   const [imageLoaded, setImageLoaded] = useState(false)
+  const shouldAnimateEntry = !disableEntryAnimation && index < 24
+  const enableMotionEffects = !disableEntryAnimation
 
   const progress = item.progress_percent || (item.resume_position_seconds && item.duration_seconds ? (item.resume_position_seconds / item.duration_seconds) * 100 : 0)
   const isFinished = progress >= 95
   const hasProgress = progress > 0 && !isFinished
 
   useEffect(() => {
+    if (shouldLoadPoster) return
+
+    if (typeof IntersectionObserver === "undefined") {
+      setShouldLoadPoster(true)
+      return
+    }
+
+    const node = cardRef.current
+    if (!node) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setShouldLoadPoster(true)
+            observer.disconnect()
+            break
+          }
+        }
+      },
+      { rootMargin: "700px 0px" }
+    )
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [shouldLoadPoster])
+
+  useEffect(() => {
+    if (!shouldLoadPoster) return
+
+    let cancelled = false
     const loadPoster = async () => {
       if (item.poster_path) {
         const filename = item.poster_path.replace('image_cache/', '')
         const url = await getCachedImageUrl(filename)
-        if (url) {
+        if (!cancelled && url) {
           setPosterUrl(url)
         }
       }
     }
     loadPoster()
-  }, [item.poster_path])
+    return () => {
+      cancelled = true
+    }
+  }, [item.poster_path, shouldLoadPoster])
+
+  const handleHoverStart = () => {
+    setIsHovered(true)
+  }
+
+  const handleHoverEnd = () => {
+    setIsHovered(false)
+  }
 
   const imageSrc = posterUrl || `https://placehold.co/400x600/0a0a0f/1a1a2e?text=${encodeURIComponent(item.title.slice(0, 2))}`
   const displayInfo = item.year || (item.season_number && item.episode_number ? `S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}` : null)
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger>
-        <motion.div
-          className={cn("group relative", className)}
-          onClick={() => onClick(item)}
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
-          initial={disableEntryAnimation ? false : { opacity: 0, y: 30, scale: 0.95 }}
-          animate={disableEntryAnimation ? undefined : { opacity: 1, y: 0, scale: 1 }}
-          transition={disableEntryAnimation
-            ? undefined
-            : {
-              duration: 0.5,
-              delay: index * 0.04,
-              ease: [0.22, 1, 0.36, 1]
-            }}
-        >
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <motion.div
+            ref={cardRef}
+            className={cn("group relative", className)}
+            onClick={() => onClick(item)}
+            onMouseEnter={handleHoverStart}
+            onMouseLeave={handleHoverEnd}
+            initial={shouldAnimateEntry ? { opacity: 0, y: 30, scale: 0.95 } : false}
+            animate={shouldAnimateEntry ? { opacity: 1, y: 0, scale: 1 } : undefined}
+            transition={shouldAnimateEntry
+              ? {
+                duration: 0.42,
+                delay: Math.min(index, 24) * 0.015,
+                ease: [0.22, 1, 0.36, 1]
+              }
+              : undefined}
+          >
           {/* Glow Effect Behind Card */}
           <motion.div
-            className="absolute -inset-2 rounded-3xl opacity-0 blur-2xl transition-opacity duration-500 pointer-events-none"
+            className={cn(
+              "absolute -inset-2 rounded-3xl blur-2xl transition-opacity duration-500 pointer-events-none",
+              isHovered ? "opacity-100" : "opacity-0"
+            )}
             style={{
               background: `radial-gradient(circle at center, rgba(255, 255, 255, 0.2) 0%, transparent 70%)`,
             }}
-            animate={{ opacity: isHovered ? 1 : 0 }}
+            animate={enableMotionEffects ? { opacity: isHovered ? 1 : 0 } : undefined}
           />
 
           {/* Card Container */}
@@ -147,14 +201,15 @@ function MovieCardBase({
               "transition-all duration-500 ease-out",
               isHovered && "border-white/30"
             )}
-            animate={{
-              y: isHovered ? -10 : 0,
-              scale: isHovered ? 1.02 : 1,
-            }}
-            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            animate={enableMotionEffects
+              ? {
+                y: isHovered ? -6 : 0,
+              }
+              : undefined}
+            transition={enableMotionEffects ? { duration: 0.4, ease: [0.22, 1, 0.36, 1] } : undefined}
             style={{
               boxShadow: isHovered
-                ? '0 25px 50px -12px rgba(0,0,0,0.6), 0 0 40px -10px rgba(255, 255, 255, 0.2)'
+                ? '0 20px 42px -14px rgba(0,0,0,0.58), 0 0 32px -12px rgba(255, 255, 255, 0.16)'
                 : '0 4px 6px -1px rgba(0,0,0,0.2)',
             }}
           >
@@ -164,15 +219,9 @@ function MovieCardBase({
               aspectRatio === "portrait" ? "aspect-[2/3]" : "aspect-square"
             )}>
               {/* Skeleton while loading */}
-              <AnimatePresence>
-                {!imageLoaded && (
-                  <motion.div
-                    className="absolute inset-0 skeleton-shimmer"
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.3 }}
-                  />
-                )}
-              </AnimatePresence>
+              {!imageLoaded && (
+                <div className="absolute inset-0 skeleton-shimmer" />
+              )}
 
               {/* Poster Image */}
               <motion.img
@@ -185,11 +234,15 @@ function MovieCardBase({
                   "transition-all duration-700 ease-out will-change-transform",
                   imageLoaded ? "opacity-100" : "opacity-0"
                 )}
-                animate={{
-                  scale: isHovered ? 1.12 : 1,
-                  filter: isHovered ? 'brightness(1.1) saturate(1.15)' : 'brightness(1) saturate(1)',
-                }}
-                transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                animate={enableMotionEffects
+                  ? {
+                    filter: isHovered ? 'brightness(1.08) saturate(1.12)' : 'brightness(1) saturate(1)',
+                  }
+                  : undefined}
+                transition={enableMotionEffects ? { duration: 0.7, ease: [0.22, 1, 0.36, 1] } : undefined}
+                style={!enableMotionEffects ? {
+                  filter: isHovered ? 'brightness(1.08) saturate(1.12)' : 'brightness(1) saturate(1)',
+                } : undefined}
               />
 
               {/* Gradient Overlay */}
@@ -197,48 +250,53 @@ function MovieCardBase({
                 className="absolute inset-0 pointer-events-none"
                 style={{
                   background: 'linear-gradient(to top, hsl(240 6% 4%) 0%, hsl(240 6% 4% / 0.85) 15%, hsl(240 6% 4% / 0.3) 50%, transparent 100%)',
+                  opacity: enableMotionEffects ? undefined : (isHovered ? 1 : 0.7),
                 }}
-                animate={{ opacity: isHovered ? 1 : 0.7 }}
-                transition={{ duration: 0.4 }}
+                animate={enableMotionEffects ? { opacity: isHovered ? 1 : 0.7 } : undefined}
+                transition={enableMotionEffects ? { duration: 0.4 } : undefined}
               />
 
               {/* Top Badges */}
               <div className="absolute top-3 left-3 right-3 flex items-start justify-between z-20">
                 {/* Progress or Finished Badge */}
-                <AnimatePresence>
-                  {hasProgress && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.8, x: -10 }}
-                      animate={{ opacity: 1, scale: 1, x: 0 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur-xl border border-white/10 text-xs font-bold text-white shadow-xl"
-                    >
-                      <Clock className="w-3 h-3 text-white" />
-                      <span>{Math.round(progress)}%</span>
-                    </motion.div>
-                  )}
-                  {isFinished && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.8, x: -10 }}
-                      animate={{ opacity: 1, scale: 1, x: 0 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-500/20 backdrop-blur-xl border border-gray-500/30 text-gray-400 text-xs font-bold shadow-xl"
-                    >
-                      <Check className="w-3 h-3" />
-                      <span>Watched</span>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {hasProgress && (
+                  <motion.div
+                    initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                    animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                    exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur-xl border border-white/10 text-xs font-bold text-white shadow-xl"
+                  >
+                    <Clock className="w-3 h-3 text-white" />
+                    <span>{Math.round(progress)}%</span>
+                  </motion.div>
+                )}
+                {isFinished && (
+                  <motion.div
+                    initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                    animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                    exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-500/20 backdrop-blur-xl border border-gray-500/30 text-gray-400 text-xs font-bold shadow-xl"
+                  >
+                    <Check className="w-3 h-3" />
+                    <span>Watched</span>
+                  </motion.div>
+                )}
 
                 {/* Options button on hover */}
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.5 }}
-                  animate={{
-                    opacity: isHovered ? 1 : 0,
-                    scale: isHovered ? 1 : 0.5
-                  }}
-                  transition={{ duration: 0.2 }}
+                  initial={enableMotionEffects ? { opacity: 0, scale: 0.5 } : false}
+                  animate={enableMotionEffects
+                    ? {
+                      opacity: isHovered ? 1 : 0,
+                      scale: isHovered ? 1 : 0.5
+                    }
+                    : undefined}
+                  transition={enableMotionEffects ? { duration: 0.2 } : undefined}
                   className="ml-auto flex items-center gap-1.5"
+                  style={!enableMotionEffects ? {
+                    opacity: isHovered ? 1 : 0,
+                    transform: isHovered ? 'scale(1)' : 'scale(0.9)',
+                  } : undefined}
                 >
                   {onAskAI && item.is_cloud && (
                     <button
@@ -274,64 +332,40 @@ function MovieCardBase({
                 </motion.div>
               </div>
 
-              {/* Play Button - Center */}
-              <motion.div
-                className="absolute inset-0 flex items-center justify-center z-20"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: isHovered ? 1 : 0 }}
-                transition={{ duration: 0.3 }}
-              >
+              {/* Progress Bar */}
+              {hasProgress && (
                 <motion.div
-                  className="relative"
-                  initial={{ scale: 0.5 }}
-                  animate={{ scale: isHovered ? 1 : 0.5 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                  className="absolute bottom-0 left-0 right-0 h-1 bg-white/10 backdrop-blur-sm z-20"
+                  initial={enableMotionEffects ? { opacity: 0 } : false}
+                  animate={enableMotionEffects ? { opacity: 1 } : undefined}
+                  exit={enableMotionEffects ? { opacity: 0 } : undefined}
                 >
-                  {/* Glow ring */}
-                  <div className="absolute inset-0 rounded-full bg-white blur-xl opacity-60 scale-150 animate-pulse" />
-
-                  {/* Play button */}
                   <motion.div
-                    className="relative w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-2xl cursor-pointer"
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.95 }}
+                    className="h-full bg-white relative"
+                    initial={enableMotionEffects ? { width: 0 } : false}
+                    animate={enableMotionEffects ? { width: `${progress}%` } : undefined}
+                    transition={enableMotionEffects ? { duration: 0.8, delay: 0.2, ease: "easeOut" } : undefined}
+                    style={!enableMotionEffects ? { width: `${progress}%` } : undefined}
                   >
-                    <Play className="w-7 h-7 text-black fill-black ml-1" />
+                    {/* Shimmer on progress bar */}
+                    <div className="absolute inset-0 overflow-hidden">
+                      <div className={cn(
+                        "absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent",
+                        enableMotionEffects ? "-translate-x-full animate-shimmer" : ""
+                      )} />
+                    </div>
                   </motion.div>
                 </motion.div>
-              </motion.div>
-
-              {/* Progress Bar */}
-              <AnimatePresence>
-                {hasProgress && (
-                  <motion.div
-                    className="absolute bottom-0 left-0 right-0 h-1 bg-white/10 backdrop-blur-sm z-20"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    <motion.div
-                      className="h-full bg-white relative"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${progress}%` }}
-                      transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
-                    >
-                      {/* Shimmer on progress bar */}
-                      <div className="absolute inset-0 overflow-hidden">
-                        <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-                      </div>
-                    </motion.div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              )}
             </div>
           </motion.div>
 
           {/* Info Below Card */}
           <motion.div
             className="mt-4 space-y-1.5 px-1"
-            animate={{ y: isHovered ? 2 : 0 }}
-            transition={{ duration: 0.3 }}
+            animate={enableMotionEffects ? { y: isHovered ? 2 : 0 } : undefined}
+            transition={enableMotionEffects ? { duration: 0.3 } : undefined}
+            style={!enableMotionEffects ? { transform: isHovered ? 'translateY(2px)' : 'translateY(0)' } : undefined}
           >
             <h3 className={cn(
               "font-semibold text-sm leading-tight line-clamp-1 tracking-tight",
@@ -352,11 +386,12 @@ function MovieCardBase({
               )}
             </div>
           </motion.div>
-        </motion.div>
-      </ContextMenuTrigger>
+
+          </motion.div>
+        </ContextMenuTrigger>
 
       {/* Context Menu */}
-      <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
         <ContextMenuItem
           onClick={() => onClick(item)}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
@@ -364,7 +399,7 @@ function MovieCardBase({
           <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
             <Play className="w-4 h-4 text-white" />
           </div>
-          <span>Play Now</span>
+          <span>Open Details</span>
         </ContextMenuItem>
 
         <ContextMenuSeparator className="bg-white/[0.08] my-2" />
@@ -435,8 +470,10 @@ function MovieCardBase({
             </ContextMenuItem>
           </>
         )}
-      </ContextMenuContent>
-    </ContextMenu>
+        </ContextMenuContent>
+      </ContextMenu>
+
+    </>
   )
 }
 
@@ -560,22 +597,6 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
           {/* Poster gradient fade */}
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-card pointer-events-none" />
 
-          {/* Play overlay */}
-          <motion.div
-            className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: isHovered ? 1 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <motion.div
-              className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-xl"
-              initial={{ scale: 0.5 }}
-              animate={{ scale: isHovered ? 1 : 0.5 }}
-              transition={{ duration: 0.2 }}
-            >
-              <Play className="w-5 h-5 text-black fill-black ml-0.5" />
-            </motion.div>
-          </motion.div>
         </div>
 
         {/* Content */}

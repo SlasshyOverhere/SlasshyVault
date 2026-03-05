@@ -60,8 +60,10 @@ pub struct TmdbMetadata {
     pub title: String,
     pub year: Option<i32>,
     pub overview: Option<String>,
+    pub cast_names: Option<String>,
     pub poster_path: Option<String>,
     pub tmdb_id: Option<String>,
+    pub runtime_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +121,18 @@ struct TmdbItem {
     vote_average: Option<f64>,
     popularity: Option<f64>,
     vote_count: Option<i64>,
+    runtime: Option<i32>,
+    credits: Option<TmdbCredits>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TmdbCredits {
+    cast: Option<Vec<TmdbCastMember>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TmdbCastMember {
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -722,6 +736,16 @@ fn do_search(
 
     if let Some(item) = best {
         if item.poster_path.is_some() || item.backdrop_path.is_some() || !strict {
+            let best_id = item.id.to_string();
+            match fetch_metadata_by_id(api_key, &best_id, media_type, image_cache_dir) {
+                Ok(metadata) => return Ok(Some(metadata)),
+                Err(err) => {
+                    println!(
+                        "[TMDB]   -> Detailed metadata fetch failed for {}: {} (falling back to search payload)",
+                        best_id, err
+                    );
+                }
+            }
             return create_metadata_from_item(&item, image_cache_dir, media_type);
         }
         println!("[TMDB]   -> Best match has no images, skipping in strict mode");
@@ -816,6 +840,18 @@ fn do_multi_search(
     if let Some((item, score)) = scored.first() {
         println!("[TMDB]   -> Best multi-search result: '{}' (score: {:.1})", 
                  item.title.as_deref().unwrap_or("?"), score);
+
+        let actual_type = item.media_type.as_deref().unwrap_or(preferred_type);
+        let best_id = item.id.to_string();
+        match fetch_metadata_by_id(api_key, &best_id, actual_type, image_cache_dir) {
+            Ok(metadata) => return Ok(Some(metadata)),
+            Err(err) => {
+                println!(
+                    "[TMDB]   -> Detailed multi-search metadata fetch failed for {}: {} (falling back to search payload)",
+                    best_id, err
+                );
+            }
+        }
         
         let tmdb_item = TmdbItem {
             id: item.id,
@@ -828,8 +864,9 @@ fn do_multi_search(
             vote_average: item.vote_average,
             popularity: item.popularity,
             vote_count: item.vote_count,
+            runtime: None,
+            credits: None,
         };
-        let actual_type = item.media_type.as_deref().unwrap_or(preferred_type);
         return create_metadata_from_item(&tmdb_item, image_cache_dir, actual_type);
     }
     
@@ -970,12 +1007,33 @@ fn create_metadata_from_item(
         None
     };
 
+    let cast_names = item
+        .credits
+        .as_ref()
+        .and_then(|credits| credits.cast.as_ref())
+        .map(|cast| {
+            cast.iter()
+                .filter_map(|member| member.name.as_ref())
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+                .take(8)
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|names| !names.is_empty())
+        .map(|names| names.join(", "));
+
     Ok(Some(TmdbMetadata {
         title: found_title,
         year: found_year,
         overview: item.overview.clone(),
+        cast_names,
         poster_path,
         tmdb_id: Some(item.id.to_string()),
+        runtime_seconds: item
+            .runtime
+            .filter(|minutes| *minutes > 0)
+            .map(|minutes| (minutes as f64) * 60.0),
     }))
 }
 
@@ -1039,7 +1097,7 @@ pub fn fetch_metadata_by_id(
     let url = build_tmdb_url(
         &format!("/{}/{}", media_type, final_id),
         api_key,
-        "language=en-US"
+        "language=en-US&append_to_response=credits"
     );
 
     let response = tmdb_request_with_retry(&client, &url, api_key, request_retries)?;
@@ -1050,7 +1108,7 @@ pub fn fetch_metadata_by_id(
         let alt_url = build_tmdb_url(
             &format!("/{}/{}", alt_type, final_id),
             api_key,
-            "language=en-US"
+            "language=en-US&append_to_response=credits"
         );
         let alt_response = tmdb_request_with_retry(&client, &alt_url, api_key, request_retries)?;
         if !alt_response.status().is_success() {

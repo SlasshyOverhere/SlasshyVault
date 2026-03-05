@@ -11,6 +11,7 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
 import { ResumeDialog } from "@/components/ResumeDialog"
+import { ContentDetailsModal } from "@/components/ContentDetailsModal"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 
@@ -117,6 +118,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     const [playerModalOpen, setPlayerModalOpen] = useState(false)
     const [pendingPlayEpisode, setPendingPlayEpisode] = useState<MediaItem | null>(null)
     const [pendingResumeTime, setPendingResumeTime] = useState(0)
+
+    // Details modal state
+    const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
+    const [contentDetailsItem, setContentDetailsItem] = useState<MediaItem | null>(null)
 
     // Resume dialog state
     const [resumeDialogOpen, setResumeDialogOpen] = useState(false)
@@ -261,6 +266,17 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             .filter(ep => (ep.season_number || 1) === selectedSeason)
             .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
     }, [episodes, selectedSeason])
+
+    const handleEpisodeClick = (episode: MediaItem) => {
+        setContentDetailsItem(episode);
+        setContentDetailsOpen(true);
+    }
+
+    const handleDetailsPrimaryAction = async (episode: MediaItem) => {
+        setContentDetailsOpen(false);
+        setContentDetailsItem(null);
+        await handlePlay(episode);
+    }
 
     const handlePlay = async (episode: MediaItem) => {
         try {
@@ -457,7 +473,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                                     className="hover:bg-muted/30 transition-colors"
                                                 >
                                                     <div
-                                                        onClick={() => handlePlay(episode)}
+                                                        onClick={() => handleEpisodeClick(episode)}
                                                         className="p-3 lg:p-4 cursor-pointer group"
                                                     >
                                                         <div className="flex gap-3 lg:gap-4">
@@ -528,7 +544,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                                                             size="sm"
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                handlePlay(episode);
+                                                                                handleEpisodeClick(episode);
                                                                             }}
                                                                         >
                                                                             <Play className="w-4 h-4 fill-current mr-1" />
@@ -633,6 +649,14 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                     onStartOver={() => handleResumeChoice(false)}
                 />
             )}
+
+            {/* Content Details Modal */}
+            <ContentDetailsModal
+                open={contentDetailsOpen}
+                onOpenChange={setContentDetailsOpen}
+                item={contentDetailsItem}
+                onPrimaryAction={handleDetailsPrimaryAction}
+            />
         </>
     )
 }

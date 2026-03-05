@@ -245,8 +245,10 @@ pub fn process_movie(
     let mut title = parsed.title.clone();
     let mut year = parsed.year;
     let mut overview: Option<String> = None;
+    let mut cast_names: Option<String> = None;
     let mut poster_path: Option<String> = None;
     let mut tmdb_id: Option<String> = None;
+    let mut tmdb_runtime_seconds: Option<f64> = None;
     
     // Fetch TMDB metadata
     if !api_key.is_empty() {
@@ -260,18 +262,27 @@ pub fn process_movie(
             title = metadata.title;
             year = metadata.year;
             overview = metadata.overview;
+            cast_names = metadata.cast_names;
             poster_path = metadata.poster_path;
             tmdb_id = metadata.tmdb_id;
+            tmdb_runtime_seconds = metadata.runtime_seconds;
         }
     }
+
+    let effective_duration = if duration > 0.0 {
+        duration
+    } else {
+        tmdb_runtime_seconds.unwrap_or(0.0)
+    };
     
     match db.insert_movie(
         &title,
         year,
         overview.as_deref(),
+        cast_names.as_deref(),
         poster_path.as_deref(),
         file_path,
-        duration,
+        effective_duration,
         tmdb_id.as_deref(),
     ) {
         Ok(_) => println!("Indexed Movie: {}", title),
@@ -294,7 +305,16 @@ pub fn process_tv_episode(
     // This ensures episodes group together even if TMDB search is inconsistent
     let existing_series = db.find_series_by_tmdb_or_title(None, &parsed.title, parsed.year);
 
-    let (series_title, series_year, series_overview, series_poster_path, series_tmdb_id, series_id, _is_new_series) =
+    let (
+        series_title,
+        series_year,
+        series_overview,
+        series_cast_names,
+        series_poster_path,
+        series_tmdb_id,
+        series_id,
+        _is_new_series,
+    ) =
         if let Ok(Some(existing_id)) = existing_series {
             // Found existing series - use its data
             println!("[TV] Found existing series by title match (ID: {})", existing_id);
@@ -303,19 +323,21 @@ pub fn process_tv_episode(
                     existing.title.clone(),
                     existing.year,
                     existing.overview.clone(),
+                    existing.cast_names.clone(),
                     existing.poster_path.clone(),
                     existing.tmdb_id.clone(),
                     Some(existing_id),
                     false
                 )
             } else {
-                (parsed.title.clone(), parsed.year, None, None, None, Some(existing_id), false)
+                (parsed.title.clone(), parsed.year, None, None, None, None, Some(existing_id), false)
             }
         } else {
             // No existing series - search TMDB
             let mut title = parsed.title.clone();
             let mut year = parsed.year;
             let mut overview: Option<String> = None;
+            let mut cast_names: Option<String> = None;
             let mut poster_path: Option<String> = None;
             let mut tmdb_id: Option<String> = None;
 
@@ -330,6 +352,7 @@ pub fn process_tv_episode(
                     title = metadata.title.clone();
                     year = metadata.year;
                     overview = metadata.overview;
+                    cast_names = metadata.cast_names;
                     tmdb_id = metadata.tmdb_id;
 
                     // Use organized image caching for series poster
@@ -341,7 +364,7 @@ pub fn process_tv_episode(
                 }
             }
 
-            (title, year, overview, poster_path, tmdb_id, None, true)
+            (title, year, overview, cast_names, poster_path, tmdb_id, None, true)
         };
 
     // Now get or create the series
@@ -361,13 +384,18 @@ pub fn process_tv_episode(
                 // Update metadata if needed
                 if let Some(ref tmdb_id) = series_tmdb_id {
                     if let Ok(existing) = db.get_media_by_id(id) {
-                        if existing.tmdb_id.is_none() || existing.poster_path.is_none() {
+                        if existing.tmdb_id.is_none()
+                            || existing.poster_path.is_none()
+                            || existing.cast_names.is_none()
+                        {
                             let metadata = tmdb::TmdbMetadata {
                                 title: series_title.clone(),
                                 year: series_year,
                                 overview: series_overview.clone(),
+                                cast_names: series_cast_names.clone(),
                                 poster_path: series_poster_path.clone(),
                                 tmdb_id: Some(tmdb_id.clone()),
+                                runtime_seconds: None,
                             };
                             if let Err(e) = db.update_metadata(id, &metadata) {
                                 println!("[TV] Warning: Failed to update series metadata: {}", e);
@@ -388,6 +416,7 @@ pub fn process_tv_episode(
                     &series_title,
                     series_year,
                     series_overview.as_deref(),
+                    series_cast_names.as_deref(),
                     series_poster_path.as_deref(),
                     &virtual_folder,
                     series_tmdb_id.as_deref(),
@@ -946,11 +975,15 @@ fn extract_year_from_title(title: &str) -> (String, Option<i32>) {
         if let Some(year_match) = caps.get(1) {
             let year_str = year_match.as_str();
             if let Ok(year) = year_str.parse::<i32>() {
-                // Split at year position  
-                let parts: Vec<&str> = title.splitn(2, year_str).collect();
-                let cleaned_title = parts.first()
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_else(|| title.to_string());
+                // Keep only the part before the detected year and trim dangling separators/brackets.
+                let before_year = &title[..year_match.start()];
+                let cleaned_title = before_year
+                    .trim()
+                    .trim_end_matches(|c: char| {
+                        c.is_whitespace() || matches!(c, '(' | '[' | '{' | '-' | '_' | '.')
+                    })
+                    .trim()
+                    .to_string();
                 
                 // Only use the year-less title if it's substantial
                 if !cleaned_title.is_empty() && cleaned_title.len() >= 2 {
@@ -1175,6 +1208,14 @@ mod tests {
         let parsed = parse_filename(&path);
         assert_eq!(parsed.title, "Inception");
         assert_eq!(parsed.year, Some(2010));
+        assert_eq!(parsed.media_type, MediaParseType::Movie);
+    }
+
+    #[test]
+    fn test_parse_cloud_movie_with_parenthesized_year() {
+        let parsed = parse_cloud_filename("Jeepers Creepers (2001).mkv");
+        assert_eq!(parsed.title, "Jeepers Creepers");
+        assert_eq!(parsed.year, Some(2001));
         assert_eq!(parsed.media_type, MediaParseType::Movie);
     }
     

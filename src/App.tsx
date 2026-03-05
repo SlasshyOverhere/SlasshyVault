@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { appWindow } from '@tauri-apps/api/window'
 import {
@@ -17,7 +17,8 @@ import {
   CURRENT_APP_VERSION,
   MarkCompleteDialog,
   WatchTogetherBanner,
-  LoginScreen
+  LoginScreen,
+  ContentDetailsModal
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -207,6 +208,8 @@ function App() {
     resumeInfo: ResumeInfo
     posterUrl?: string
   } | null>(null)
+  const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
+  const [contentDetailsItem, setContentDetailsItem] = useState<MediaItem | null>(null)
 
   // Delete modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
@@ -660,12 +663,9 @@ function App() {
     }
   }, [view, cloudSubTab, searchQuery])
 
-  // Stable ref for fetchData to prevent triggering massive re-renders
-  // when passed to memoized components like MovieCard
+  // Stable ref for fetchData to avoid callback identity churn in downstream handlers.
   const fetchDataRef = useRef(fetchData)
-  useEffect(() => {
-    fetchDataRef.current = fetchData
-  }, [fetchData])
+  fetchDataRef.current = fetchData
 
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
@@ -793,35 +793,55 @@ function App() {
     }
   }
 
-  const handleItemClick = useCallback(async (item: MediaItem) => {
+  const handleContentDetailsOpenChange = useCallback((open: boolean) => {
+    setContentDetailsOpen(open)
+    if (!open) {
+      setContentDetailsItem(null)
+    }
+  }, [])
+
+  const startPlaybackFlow = useCallback(async (item: MediaItem) => {
+    try {
+      const resumeInfo = await getResumeInfo(item.id)
+
+      if (resumeInfo.has_progress && resumeInfo.progress_percent < 95) {
+        let posterUrl: string | undefined
+        if (item.poster_path) {
+          try {
+            posterUrl = await getCachedImageUrl(item.poster_path.replace('image_cache/', '')) || undefined
+          } catch {
+            // Ignore cache lookup failures and continue playback.
+          }
+        }
+
+        setResumeDialogData({ item, resumeInfo, posterUrl })
+        setResumeDialogOpen(true)
+      } else {
+        await playMedia(item.id, false)
+        toast({ title: "Playing", description: `Now playing: ${item.title}` })
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
+    }
+  }, [toast])
+
+  const handleItemClick = useCallback((item: MediaItem) => {
+    setContentDetailsItem(item)
+    setContentDetailsOpen(true)
+  }, [])
+
+  const handleDetailsPrimaryAction = useCallback(async (item: MediaItem) => {
+    setContentDetailsOpen(false)
+    setContentDetailsItem(null)
+
     if (item.media_type === 'tvshow') {
       setSelectedShow(item)
       setView('episodes')
-    } else {
-      try {
-        const resumeInfo = await getResumeInfo(item.id)
-
-        if (resumeInfo.has_progress && resumeInfo.progress_percent < 95) {
-          let posterUrl: string | undefined
-          if (item.poster_path) {
-            try {
-              posterUrl = await getCachedImageUrl(item.poster_path.replace('image_cache/', '')) || undefined
-            } catch {
-              // Ignore cache lookup failures and continue playback.
-            }
-          }
-
-          setResumeDialogData({ item, resumeInfo, posterUrl })
-          setResumeDialogOpen(true)
-        } else {
-          await playMedia(item.id, false)
-          toast({ title: "Playing", description: `Now playing: ${item.title}` })
-        }
-      } catch {
-        toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
-      }
+      return
     }
-  }, [toast])
+
+    await startPlaybackFlow(item)
+  }, [startPlaybackFlow])
 
   const handleResumeChoice = async (resume: boolean) => {
     if (!resumeDialogData) return
@@ -1014,10 +1034,11 @@ function App() {
           const result = await deleteMediaFiles([item.id])
           if (result.success) {
             toast({ title: "Deleted", description: result.message })
+            await fetchDataRef.current()
           } else {
             toast({ title: "Partial Delete", description: result.message, variant: "destructive" })
+            await fetchDataRef.current()
           }
-          await fetchDataRef.current()
         } catch {
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
@@ -2355,6 +2376,13 @@ function App() {
               onSuccess={handleFixMatchSuccess}
             />
           </Suspense>
+
+          <ContentDetailsModal
+            open={contentDetailsOpen}
+            onOpenChange={handleContentDetailsOpenChange}
+            item={contentDetailsItem}
+            onPrimaryAction={handleDetailsPrimaryAction}
+          />
 
           {resumeDialogData && (
             <ResumeDialog

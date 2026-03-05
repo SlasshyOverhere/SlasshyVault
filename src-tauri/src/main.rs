@@ -567,15 +567,16 @@ async fn gdrive_scan_folder(
                         ).ok().flatten();
 
                         // Create the show
-                        let (title, year, overview, poster_path, tmdb_id_opt) = match &tmdb_result {
+                        let (title, year, overview, cast_names, poster_path, tmdb_id_opt) = match &tmdb_result {
                             Some(meta) => (
                                 meta.title.clone(),
                                 meta.year,
                                 meta.overview.clone(),
+                                meta.cast_names.clone(),
                                 meta.poster_path.clone(),
                                 meta.tmdb_id.clone(),
                             ),
-                            None => (show_title.clone(), None, None, None, None),
+                            None => (show_title.clone(), None, None, None, None, None),
                         };
 
                         // Use episode's parent folder as the show's folder ID (for deletion)
@@ -583,6 +584,7 @@ async fn gdrive_scan_folder(
                             &title,
                             year,
                             overview.as_deref(),
+                            cast_names.as_deref(),
                             poster_path.as_deref(),
                             &format!("gdrive:{}", episode_parent_folder),
                             &episode_parent_folder,  // Use episode's parent folder, not tracked folder
@@ -666,15 +668,17 @@ async fn gdrive_scan_folder(
                     &image_cache_dir,
                 ).ok().flatten();
 
-                let (title, year, overview, poster_path, tmdb_id) = match tmdb_result {
+                let (title, year, overview, cast_names, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
                     Some(meta) => (
                         meta.title,
                         meta.year,
                         meta.overview,
+                        meta.cast_names,
                         meta.poster_path,
                         meta.tmdb_id,
+                        meta.runtime_seconds.unwrap_or(0.0),
                     ),
-                    None => (parsed.title.clone(), parsed.year, None, None, None),
+                    None => (parsed.title.clone(), parsed.year, None, None, None, None, 0.0),
                 };
 
                 // Insert into database
@@ -682,10 +686,12 @@ async fn gdrive_scan_folder(
                     &title,
                     year,
                     overview.as_deref(),
+                    cast_names.as_deref(),
                     poster_path.as_deref(),
                     &file.name,
                     &file.id,
                     &folder_id_clone,
+                    runtime_seconds,
                     tmdb_id.as_deref(),
                 ) {
                     println!("[CLOUD] Failed to insert movie: {}", e);
@@ -911,13 +917,28 @@ async fn scan_all_cloud_folders(
                                 &api_key, &show_title, "tv", parsed.year, &image_cache_dir,
                             ).ok().flatten();
 
-                            let (title, year, overview, poster_path, tmdb_id_opt) = match &tmdb_result {
-                                Some(meta) => (meta.title.clone(), meta.year, meta.overview.clone(), meta.poster_path.clone(), meta.tmdb_id.clone()),
-                                None => (show_title.clone(), None, None, None, None),
+                            let (title, year, overview, cast_names, poster_path, tmdb_id_opt) = match &tmdb_result {
+                                Some(meta) => (
+                                    meta.title.clone(),
+                                    meta.year,
+                                    meta.overview.clone(),
+                                    meta.cast_names.clone(),
+                                    meta.poster_path.clone(),
+                                    meta.tmdb_id.clone(),
+                                ),
+                                None => (show_title.clone(), None, None, None, None, None),
                             };
 
-                            match db.insert_cloud_tvshow(&title, year, overview.as_deref(), poster_path.as_deref(),
-                                &format!("gdrive:{}", folder_id_clone), &folder_id_clone, tmdb_id_opt.as_deref()) {
+                            match db.insert_cloud_tvshow(
+                                &title,
+                                year,
+                                overview.as_deref(),
+                                cast_names.as_deref(),
+                                poster_path.as_deref(),
+                                &format!("gdrive:{}", folder_id_clone),
+                                &folder_id_clone,
+                                tmdb_id_opt.as_deref(),
+                            ) {
                                 Ok(show_id) => (show_id, tmdb_id_opt),
                                 Err(_) => continue,
                             }
@@ -962,13 +983,31 @@ async fn scan_all_cloud_folders(
                 } else {
                     let tmdb_result = tmdb::search_metadata(&api_key, &parsed.title, "movie", parsed.year, &image_cache_dir).ok().flatten();
 
-                    let (title, year, overview, poster_path, tmdb_id) = match tmdb_result {
-                        Some(meta) => (meta.title, meta.year, meta.overview, meta.poster_path, meta.tmdb_id),
-                        None => (parsed.title.clone(), parsed.year, None, None, None),
+                    let (title, year, overview, cast_names, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
+                        Some(meta) => (
+                            meta.title,
+                            meta.year,
+                            meta.overview,
+                            meta.cast_names,
+                            meta.poster_path,
+                            meta.tmdb_id,
+                            meta.runtime_seconds.unwrap_or(0.0),
+                        ),
+                        None => (parsed.title.clone(), parsed.year, None, None, None, None, 0.0),
                     };
 
-                    if db.insert_cloud_movie(&title, year, overview.as_deref(), poster_path.as_deref(),
-                        &file.name, &file.id, &folder_id_clone, tmdb_id.as_deref()).is_err() {
+                    if db.insert_cloud_movie(
+                        &title,
+                        year,
+                        overview.as_deref(),
+                        cast_names.as_deref(),
+                        poster_path.as_deref(),
+                        &file.name,
+                        &file.id,
+                        &folder_id_clone,
+                        runtime_seconds,
+                        tmdb_id.as_deref(),
+                    ).is_err() {
                         continue;
                     }
 
@@ -1254,8 +1293,16 @@ async fn check_cloud_changes(
                                 // Use a unique file_path combining folder ID and show title
                                 let show_path = format!("gdrive:{}:{}", folder_id, show_title.to_lowercase().replace(" ", "_"));
                                 println!("[CLOUD CHANGES]   Creating new TV show '{}' with path '{}'", show_title, show_path);
-                                match db.insert_cloud_tvshow(&show_title, None, None, None,
-                                    &show_path, &folder_id, None) {
+                                match db.insert_cloud_tvshow(
+                                    &show_title,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    &show_path,
+                                    &folder_id,
+                                    None,
+                                ) {
                                     Ok(id) => {
                                         println!("[CLOUD CHANGES]   Created TV show with ID {}", id);
                                         id
@@ -1286,8 +1333,18 @@ async fn check_cloud_changes(
                     }
                 } else {
                     // Insert movie without metadata
-                    match db.insert_cloud_movie(&parsed.title, parsed.year, None, None,
-                        &file_name, &file_id, &folder_id, None) {
+                    match db.insert_cloud_movie(
+                        &parsed.title,
+                        parsed.year,
+                        None,
+                        None,
+                        None,
+                        &file_name,
+                        &file_id,
+                        &folder_id,
+                        0.0,
+                        None,
+                    ) {
                         Ok(movie_id) => {
                             println!("[CLOUD CHANGES]   ✓ Added (no metadata): {}", parsed.title);
                             indexed_items.push((movie_id, parsed.title, file_id, false, None, None, folder_id));
@@ -2770,6 +2827,18 @@ struct TmdbSearchResponse {
     total_results: usize,
 }
 
+#[derive(serde::Serialize)]
+struct MovieDetails {
+    id: i64,
+    title: String,
+    poster_path: Option<String>,
+    backdrop_path: Option<String>,
+    overview: Option<String>,
+    release_date: Option<String>,
+    runtime: Option<i32>,
+    director: Option<String>,
+}
+
 // TV Show details for episode selection
 #[derive(serde::Serialize)]
 struct TvSeasonInfo {
@@ -2801,6 +2870,7 @@ struct TvShowDetails {
     overview: Option<String>,
     number_of_seasons: i32,
     seasons: Vec<TvSeasonInfo>,
+    creator: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -2808,6 +2878,70 @@ struct TvSeasonDetails {
     season_number: i32,
     name: String,
     episodes: Vec<TvEpisodeInfo>,
+}
+
+#[tauri::command]
+async fn get_movie_details(
+    state: State<'_, AppState>,
+    movie_id: i64,
+) -> Result<MovieDetails, String> {
+    let credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let url = build_tmdb_api_url(&format!("/movie/{}", movie_id), &credential, "append_to_response=credits");
+
+    let result = tokio::task::spawn_blocking(move || -> Result<MovieDetails, String> {
+        let response = http_get_with_retry_auth(&url, &credential, 3)?;
+
+        #[derive(serde::Deserialize)]
+        struct TmdbCrewMember {
+            job: String,
+            name: String,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct TmdbCredits {
+            crew: Option<Vec<TmdbCrewMember>>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawMovieDetails {
+            id: i64,
+            title: Option<String>,
+            original_title: Option<String>,
+            poster_path: Option<String>,
+            backdrop_path: Option<String>,
+            overview: Option<String>,
+            release_date: Option<String>,
+            runtime: Option<i32>,
+            credits: Option<TmdbCredits>,
+        }
+
+        let raw: RawMovieDetails = response.json().map_err(|e| e.to_string())?;
+
+        let director = raw.credits.as_ref()
+            .and_then(|c| c.crew.as_ref())
+            .and_then(|crew| crew.iter().find(|m| m.job == "Director"))
+            .map(|m| m.name.clone());
+
+        Ok(MovieDetails {
+            id: raw.id,
+            title: raw
+                .title
+                .or(raw.original_title)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            poster_path: raw.poster_path,
+            backdrop_path: raw.backdrop_path,
+            overview: raw.overview,
+            release_date: raw.release_date,
+            runtime: raw.runtime,
+            director,
+        })
+    }).await.map_err(|e| e.to_string())??;
+
+    Ok(result)
 }
 
 // Get TV show details including seasons
@@ -2837,6 +2971,11 @@ async fn get_tv_details(
         }
         
         #[derive(serde::Deserialize)]
+        struct TmdbCreator {
+            name: String,
+        }
+
+        #[derive(serde::Deserialize)]
         struct RawTvShow {
             id: i64,
             name: Option<String>,
@@ -2845,10 +2984,15 @@ async fn get_tv_details(
             overview: Option<String>,
             number_of_seasons: Option<i32>,
             seasons: Option<Vec<RawSeason>>,
+            created_by: Option<Vec<TmdbCreator>>,
         }
-        
+
         let raw: RawTvShow = response.json().map_err(|e| e.to_string())?;
-        
+
+        let creator = raw.created_by.as_ref()
+            .and_then(|c| c.first())
+            .map(|c| c.name.clone());
+
         let seasons: Vec<TvSeasonInfo> = raw.seasons.unwrap_or_default()
             .into_iter()
             .filter(|s| s.season_number > 0) // Filter out specials (season 0)
@@ -2861,7 +3005,7 @@ async fn get_tv_details(
                 air_date: s.air_date,
             })
             .collect();
-        
+
         Ok(TvShowDetails {
             id: raw.id,
             name: raw.name.unwrap_or_else(|| "Unknown".to_string()),
@@ -2870,7 +3014,9 @@ async fn get_tv_details(
             overview: raw.overview,
             number_of_seasons: raw.number_of_seasons.unwrap_or(0),
             seasons,
+            creator,
         })
+
     }).await.map_err(|e| e.to_string())??;
     
     Ok(result)
@@ -3823,7 +3969,16 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                             existing_show.id
                         } else {
                                 let show_path = format!("gdrive:{}:{}", folder_id, show_title.to_lowercase().replace(" ", "_"));
-                                match db.insert_cloud_tvshow(&show_title, None, None, None, &show_path, &folder_id, None) {
+                                match db.insert_cloud_tvshow(
+                                    &show_title,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    &show_path,
+                                    &folder_id,
+                                    None,
+                                ) {
                                     Ok(id) => id,
                                     Err(_) => continue,
                                 }
@@ -3841,8 +3996,18 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                         Err(_) => continue,
                     }
                 } else {
-                    match db.insert_cloud_movie(&parsed.title, parsed.year, None, None,
-                        &file_name, &file_id, &folder_id, None) {
+                    match db.insert_cloud_movie(
+                        &parsed.title,
+                        parsed.year,
+                        None,
+                        None,
+                        None,
+                        &file_name,
+                        &file_id,
+                        &folder_id,
+                        0.0,
+                        None,
+                    ) {
                         Ok(movie_id) => {
                             indexed_items.push((movie_id, parsed.title, file_id, false, None, None, folder_id));
                             movies_count += 1;
@@ -4612,6 +4777,168 @@ async fn wt_send_mpv_command(
     }
 }
 
+const METADATA_ENRICHMENT_FLAG_KEY: &str = "metadata_hover_enrichment_done_v1";
+
+async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
+    let state = app_handle.state::<AppState>();
+
+    let credential = {
+        let config = match state.config.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[STARTUP] Metadata enrichment skipped (config lock): {}", e);
+                return;
+            }
+        };
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let candidates = {
+        let db = match state.db.lock() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("[STARTUP] Metadata enrichment skipped (db lock): {}", e);
+                return;
+            }
+        };
+
+        if matches!(
+            db.get_setting(METADATA_ENRICHMENT_FLAG_KEY),
+            Ok(Some(value)) if value == "1"
+        ) {
+            println!("[STARTUP] Metadata enrichment already completed.");
+            return;
+        }
+
+        match db.get_media_needing_metadata_enrichment(5000) {
+            Ok(rows) => rows,
+            Err(e) => {
+                println!("[STARTUP] Failed to load metadata enrichment candidates: {}", e);
+                return;
+            }
+        }
+    };
+
+    if candidates.is_empty() {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.set_setting(METADATA_ENRICHMENT_FLAG_KEY, "1");
+        }
+        println!("[STARTUP] Metadata enrichment not needed.");
+        return;
+    }
+
+    println!(
+        "[STARTUP] Metadata enrichment queued for {} item(s)...",
+        candidates.len()
+    );
+
+    let db_path = database::get_database_path();
+    let image_cache_dir = database::get_image_cache_dir();
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize), String> {
+        let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
+        let mut updated = 0usize;
+        let mut failed = 0usize;
+        let mut no_match = 0usize;
+
+        for (idx, item) in candidates.iter().enumerate() {
+            let tmdb_media_type = if item.media_type == "tvshow" { "tv" } else { "movie" };
+
+            let metadata_result = if let Some(ref tid) = item.tmdb_id {
+                let cleaned = tid.trim();
+                if cleaned.is_empty() {
+                    tmdb::search_metadata(
+                        &credential,
+                        &item.title,
+                        tmdb_media_type,
+                        item.year,
+                        &image_cache_dir,
+                    )
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "No TMDB match found".to_string())
+                } else {
+                    tmdb::fetch_metadata_by_id(&credential, cleaned, tmdb_media_type, &image_cache_dir)
+                        .map_err(|e| e.to_string())
+                }
+            } else {
+                tmdb::search_metadata(
+                    &credential,
+                    &item.title,
+                    tmdb_media_type,
+                    item.year,
+                    &image_cache_dir,
+                )
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "No TMDB match found".to_string())
+            };
+
+            match metadata_result {
+                Ok(metadata) => {
+                    if db.update_metadata(item.id, &metadata).is_ok() {
+                        updated += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+                Err(err) => {
+                    if err.contains("No TMDB match found") {
+                        no_match += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+            }
+
+            if (idx + 1) % 25 == 0 {
+                println!(
+                    "[STARTUP] Metadata enrichment progress: {}/{}",
+                    idx + 1,
+                    candidates.len()
+                );
+            }
+        }
+
+        let remaining = db
+            .get_media_needing_metadata_enrichment(1)
+            .map(|rows| rows.len())
+            .unwrap_or(1);
+
+        println!(
+            "[STARTUP] Metadata enrichment done. updated={}, failed={}, unmatched={}, remaining={}",
+            updated, failed, no_match, remaining
+        );
+
+        Ok((updated, failed + no_match, remaining))
+    })
+    .await;
+
+    let (updated, _not_updated, remaining) = match result {
+        Ok(Ok(values)) => values,
+        Ok(Err(err)) => {
+            println!("[STARTUP] Metadata enrichment failed: {}", err);
+            return;
+        }
+        Err(err) => {
+            println!("[STARTUP] Metadata enrichment task join error: {}", err);
+            return;
+        }
+    };
+
+    if remaining == 0 {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.set_setting(METADATA_ENRICHMENT_FLAG_KEY, "1");
+        }
+    }
+
+    if updated > 0 {
+        if let Some(window) = app_handle.get_window("main") {
+            let _ = window.emit(
+                "library-updated",
+                serde_json::json!({ "type": "metadata-enriched", "updated": updated }),
+            );
+        }
+    }
+}
+
 fn main() {
     // Load .env file from project root (for development)
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
@@ -4797,6 +5124,12 @@ fn main() {
                 background_cloud_poll(app_handle_for_polling).await;
             });
 
+            // One-time metadata enrichment pass for existing libraries.
+            let app_handle_for_metadata_enrichment = app.handle();
+            tauri::async_runtime::spawn(async move {
+                run_startup_metadata_enrichment(app_handle_for_metadata_enrichment).await;
+            });
+
             Ok(())
         })
         .on_page_load(|window, payload| {
@@ -4932,6 +5265,7 @@ fn main() {
             stop_transcode_stream,
             get_stream_info_with_transcode,
             search_tmdb,
+            get_movie_details,
             get_tv_details,
             get_tv_season_episodes,
             refresh_series_metadata,

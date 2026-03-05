@@ -718,7 +718,29 @@ export interface TmdbShowDetails {
         poster_path?: string;
         air_date?: string;
     }[];
+    creator?: string;
 }
+
+export interface TmdbMovieDetails {
+    id: number;
+    title: string;
+    poster_path?: string;
+    backdrop_path?: string;
+    overview?: string;
+    release_date?: string;
+    runtime?: number;
+    director?: string;
+}
+
+export const getMovieDetails = async (movieId: number): Promise<TmdbMovieDetails | null> => {
+    try {
+        const details = await invoke<TmdbMovieDetails>('get_movie_details', { movieId });
+        return details;
+    } catch (error) {
+        console.error('Failed to get movie details:', error);
+        return null;
+    }
+};
 
 // Get TV show details including seasons from TMDB
 export const getTvDetails = async (tvId: number): Promise<TmdbShowDetails | null> => {

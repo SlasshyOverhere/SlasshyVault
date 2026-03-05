@@ -53,6 +53,7 @@ pub struct MediaItem {
     pub title: String,
     pub year: Option<i32>,
     pub overview: Option<String>,
+    pub cast_names: Option<String>,
     pub poster_path: Option<String>,
     pub file_path: Option<String>,
     pub media_type: String,
@@ -69,6 +70,15 @@ pub struct MediaItem {
     // Cloud storage fields
     pub is_cloud: Option<bool>,
     pub cloud_file_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetadataEnrichmentCandidate {
+    pub id: i64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub media_type: String,
+    pub tmdb_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +168,7 @@ impl Database {
                 title TEXT NOT NULL,
                 year INTEGER,
                 overview TEXT,
+                cast_names TEXT,
                 poster_path TEXT,
                 file_path TEXT NOT NULL UNIQUE,
                 media_type TEXT NOT NULL,
@@ -223,6 +234,12 @@ impl Database {
         if !columns.contains(&"still_path".to_string()) {
             self.conn.execute(
                 "ALTER TABLE media ADD COLUMN still_path TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"cast_names".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN cast_names TEXT DEFAULT NULL",
                 [],
             )?;
         }
@@ -335,7 +352,7 @@ impl Database {
 
     pub fn get_library(&self, media_type: &str, search: Option<&str>) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -375,7 +392,7 @@ impl Database {
         is_cloud: Option<bool>,
     ) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -418,7 +435,7 @@ impl Database {
 
     pub fn get_episodes(&self, series_id: i64) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -442,6 +459,7 @@ impl Database {
                 CASE WHEN m.media_type = 'tvepisode' THEN p.title ELSE m.title END as title,
                 CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END as year,
                 m.overview,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.cast_names ELSE m.cast_names END as cast_names,
                 CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END as poster_path,
                 m.file_path,
                 m.media_type,
@@ -473,7 +491,7 @@ impl Database {
 
     pub fn get_media_by_id(&self, id: i64) -> Result<MediaItem> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -748,8 +766,29 @@ impl Database {
         metadata: &super::tmdb::TmdbMetadata,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE media SET title = ?, year = ?, overview = ?, poster_path = ?, tmdb_id = ? WHERE id = ?",
-            params![metadata.title, metadata.year, metadata.overview, metadata.poster_path, metadata.tmdb_id, media_id],
+            "UPDATE media
+             SET title = ?,
+                 year = ?,
+                 overview = ?,
+                 cast_names = ?,
+                 poster_path = ?,
+                 tmdb_id = ?,
+                 duration_seconds = CASE
+                     WHEN duration_seconds <= 0 AND ? > 0 THEN ?
+                     ELSE duration_seconds
+                 END
+             WHERE id = ?",
+            params![
+                metadata.title,
+                metadata.year,
+                metadata.overview,
+                metadata.cast_names,
+                metadata.poster_path,
+                metadata.tmdb_id,
+                metadata.runtime_seconds.unwrap_or(0.0),
+                metadata.runtime_seconds.unwrap_or(0.0),
+                media_id
+            ],
         )?;
         Ok(())
     }
@@ -793,7 +832,7 @@ impl Database {
     /// Get media item by file path - used for file watcher to identify media for removal
     pub fn get_media_by_file_path(&self, file_path: &str) -> Result<Option<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1015,15 +1054,16 @@ impl Database {
         title: &str,
         year: Option<i32>,
         overview: Option<&str>,
+        cast_names: Option<&str>,
         poster_path: Option<&str>,
         file_path: &str,
         duration: f64,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, duration_seconds, tmdb_id) 
-             VALUES (?, ?, ?, ?, ?, 'movie', ?, ?)",
-            params![title, year, overview, poster_path, file_path, duration, tmdb_id],
+            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, duration_seconds, tmdb_id) 
+             VALUES (?, ?, ?, ?, ?, ?, 'movie', ?, ?)",
+            params![title, year, overview, cast_names, poster_path, file_path, duration, tmdb_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1033,14 +1073,15 @@ impl Database {
         title: &str,
         year: Option<i32>,
         overview: Option<&str>,
+        cast_names: Option<&str>,
         poster_path: Option<&str>,
         folder_path: &str,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, tmdb_id) 
-             VALUES (?, ?, ?, ?, ?, 'tvshow', ?)",
-            params![title, year, overview, poster_path, folder_path, tmdb_id],
+            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, tmdb_id) 
+             VALUES (?, ?, ?, ?, ?, ?, 'tvshow', ?)",
+            params![title, year, overview, cast_names, poster_path, folder_path, tmdb_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1106,16 +1147,18 @@ impl Database {
         title: &str,
         year: Option<i32>,
         overview: Option<&str>,
+        cast_names: Option<&str>,
         poster_path: Option<&str>,
         file_name: &str,
         cloud_file_id: &str,
         cloud_folder_id: &str,
+        duration: f64,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, tmdb_id, is_cloud, cloud_file_id, cloud_folder_id)
-             VALUES (?, ?, ?, ?, ?, 'movie', ?, 1, ?, ?)",
-            params![title, year, overview, poster_path, file_name, tmdb_id, cloud_file_id, cloud_folder_id],
+            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, duration_seconds, tmdb_id, is_cloud, cloud_file_id, cloud_folder_id)
+             VALUES (?, ?, ?, ?, ?, ?, 'movie', ?, ?, 1, ?, ?)",
+            params![title, year, overview, cast_names, poster_path, file_name, duration, tmdb_id, cloud_file_id, cloud_folder_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1126,15 +1169,16 @@ impl Database {
         title: &str,
         year: Option<i32>,
         overview: Option<&str>,
+        cast_names: Option<&str>,
         poster_path: Option<&str>,
         folder_name: &str,
         cloud_folder_id: &str,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, poster_path, file_path, media_type, tmdb_id, is_cloud, cloud_folder_id)
-             VALUES (?, ?, ?, ?, ?, 'tvshow', ?, 1, ?)",
-            params![title, year, overview, poster_path, folder_name, tmdb_id, cloud_folder_id],
+            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, tmdb_id, is_cloud, cloud_folder_id)
+             VALUES (?, ?, ?, ?, ?, ?, 'tvshow', ?, 1, ?)",
+            params![title, year, overview, cast_names, poster_path, folder_name, tmdb_id, cloud_folder_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1177,7 +1221,7 @@ impl Database {
     /// Get cloud media by folder ID
     pub fn get_cloud_media_by_folder(&self, cloud_folder_id: &str) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1295,6 +1339,38 @@ impl Database {
         self.set_setting("gdrive_changes_token", token)
     }
 
+    /// Get movie/TV entries that still need enriched metadata for hover cards.
+    pub fn get_media_needing_metadata_enrichment(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MetadataEnrichmentCandidate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, media_type, tmdb_id
+             FROM media
+             WHERE media_type IN ('movie', 'tvshow')
+               AND (
+                   tmdb_id IS NULL OR tmdb_id = ''
+                   OR overview IS NULL OR TRIM(overview) = ''
+                   OR cast_names IS NULL OR TRIM(cast_names) = ''
+                   OR (media_type = 'movie' AND (duration_seconds IS NULL OR duration_seconds <= 0))
+               )
+             ORDER BY id ASC
+             LIMIT ?",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(MetadataEnrichmentCandidate {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                year: row.get(2)?,
+                media_type: row.get(3)?,
+                tmdb_id: row.get(4)?,
+            })
+        })?;
+
+        rows.collect()
+    }
+
     /// Get all episodes user has for a series (returns id, season_number, episode_number)
     pub fn get_owned_episodes_for_series(&self, series_id: i64) -> Result<Vec<(i64, i32, i32)>> {
         let mut stmt = self.conn.prepare(
@@ -1330,7 +1406,7 @@ impl Database {
     /// Find a TV show by title (case-insensitive) - returns the MediaItem
     pub fn find_tvshow_by_title(&self, title: &str) -> Result<Option<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1483,7 +1559,7 @@ impl Database {
     /// Get all media entries (for cleanup purposes)
     pub fn get_all_media(&self) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -2095,9 +2171,9 @@ impl Database {
     }
 
     fn map_media_item(row: &rusqlite::Row) -> rusqlite::Result<MediaItem> {
-        let duration: Option<f64> = row.get(7)?;
-        let resume_pos: Option<f64> = row.get(8)?;
-        let last_watched: Option<String> = row.get(9)?;
+        let duration: Option<f64> = row.get("duration_seconds").unwrap_or(None);
+        let resume_pos: Option<f64> = row.get("resume_position_seconds").unwrap_or(None);
+        let last_watched: Option<String> = row.get("last_watched").unwrap_or(None);
 
         // Calculate progress_percent
         // If resume_position is 0 but last_watched is set and duration > 0,
@@ -2112,29 +2188,30 @@ impl Database {
         };
 
         // Get is_cloud as integer and convert to bool
-        let is_cloud_int: Option<i32> = row.get(16).ok();
+        let is_cloud_int: Option<i32> = row.get("is_cloud").unwrap_or(None);
         let is_cloud = is_cloud_int.map(|v| v != 0);
 
         Ok(MediaItem {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            year: row.get(2)?,
-            overview: row.get(3)?,
-            poster_path: row.get(4)?,
-            file_path: row.get(5)?,
-            media_type: row.get(6)?,
+            id: row.get("id")?,
+            title: row.get("title")?,
+            year: row.get("year").unwrap_or(None),
+            overview: row.get("overview").unwrap_or(None),
+            cast_names: row.get("cast_names").unwrap_or(None),
+            poster_path: row.get("poster_path").unwrap_or(None),
+            file_path: row.get("file_path").unwrap_or(None),
+            media_type: row.get("media_type")?,
             duration_seconds: duration,
             resume_position_seconds: resume_pos,
-            last_watched: row.get(9)?,
-            season_number: row.get(10)?,
-            episode_number: row.get(11)?,
-            parent_id: row.get(12)?,
+            last_watched,
+            season_number: row.get("season_number").unwrap_or(None),
+            episode_number: row.get("episode_number").unwrap_or(None),
+            parent_id: row.get("parent_id").unwrap_or(None),
             progress_percent,
-            tmdb_id: row.get(13)?,
-            episode_title: row.get(14)?,
-            still_path: row.get(15)?,
+            tmdb_id: row.get("tmdb_id").unwrap_or(None),
+            episode_title: row.get("episode_title").unwrap_or(None),
+            still_path: row.get("still_path").unwrap_or(None),
             is_cloud,
-            cloud_file_id: row.get(17).ok(),
+            cloud_file_id: row.get("cloud_file_id").unwrap_or(None),
         })
     }
 }
