@@ -173,6 +173,14 @@ impl Database {
             [],
         )?;
 
+        // Add indexes for frequently queried fields to improve search and filter performance
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON media (media_type)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_is_cloud ON media (is_cloud)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_title ON media (title COLLATE NOCASE)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_parent_id ON media (parent_id)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_cloud_folder_id ON media (cloud_folder_id)", [])?;
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_last_watched ON media (last_watched)", [])?;
+
         // Check for missing columns and add them
         let columns: Vec<String> = self
             .conn
