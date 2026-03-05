@@ -332,7 +332,7 @@ export function ContentDetailsModal({
 
           {/* Content Layer */}
           <div className="relative z-10 flex flex-col h-full min-h-0">
-            <div className={cn("p-6 sm:p-10 shrink-0", isShow ? "pb-4 pt-12" : "mt-auto pb-12")}>
+            <div className={cn("p-6 sm:p-10 shrink-0", isShow ? "pb-0 pt-8" : "mt-auto pb-12")}>
               <div className="flex flex-col sm:flex-row items-end gap-8">
                 {posterImageUrl && !isShow && (
                   <div className="hidden sm:block w-[160px] aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border border-white/10 shrink-0 scale-100 hover:scale-[1.02] transition-transform duration-500">
@@ -340,15 +340,18 @@ export function ContentDetailsModal({
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/50 mb-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/50 mb-2">
                     {isShow ? "TV Series" : isEpisode ? "TV Episode" : "Movie"}
                   </p>
                   <h2 className={cn(
-                    "font-bold leading-tight mb-4 tracking-tight text-white",
-                    isShow ? "text-3xl sm:text-5xl" : "text-4xl sm:text-6xl"
+                    "font-bold leading-tight tracking-tight text-white",
+                    isShow ? "text-3xl sm:text-5xl mb-2" : "text-4xl sm:text-6xl mb-4"
                   )}>{displayTitle}</h2>
                   
-                  <div className="flex flex-wrap items-center gap-5 text-sm font-semibold text-white/90 mb-5">
+                  <div className={cn(
+                    "flex flex-wrap items-center gap-5 text-sm font-semibold text-white/90",
+                    isShow ? "mb-3" : "mb-5"
+                  )}>
                     <span className="flex items-center gap-2"><Calendar className="w-4 h-4 text-white/60" />{displayItem.year || "N/A"}</span>
                     {!isShow && <span className="flex items-center gap-2"><Clock className="w-4 h-4 text-white/60" />{runtimeLabel}</span>}
                     {isShow && <span className="flex items-center gap-2"><Tv className="w-4 h-4 text-white/60" />{seasons.length} Seasons</span>}
@@ -361,8 +364,8 @@ export function ContentDetailsModal({
                   </div>
                   
                   <p className={cn(
-                    "text-sm sm:text-base text-white/80 leading-relaxed max-w-3xl mb-6",
-                    isShow ? "line-clamp-2" : "line-clamp-3"
+                    "text-sm sm:text-base text-white/80 leading-relaxed max-w-3xl",
+                    isShow ? "line-clamp-2 mb-2" : "line-clamp-3 mb-4"
                   )}>
                     {displayItem.overview || "No synopsis available."}
                   </p>
@@ -393,7 +396,7 @@ export function ContentDetailsModal({
 
             {isShow && (
               <div className="flex-1 min-h-0 flex flex-col p-6 sm:p-10 pt-0">
-                <div className="flex justify-between items-center mb-6 shrink-0">
+                <div className="flex justify-between items-center mb-3 shrink-0">
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
                       <button 
@@ -448,7 +451,7 @@ export function ContentDetailsModal({
                                 <EpisodeThumbnailImage 
                                   localStillPath={ep.still_path} 
                                   tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')} 
-                                  episodeTitle={ep.title} 
+                                  episodeTitle={tmdbData?.name || ep.title} 
                                   episodeNumber={ep.episode_number || 0} 
                                 />
                                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 backdrop-blur-[2px]">
@@ -474,7 +477,7 @@ export function ContentDetailsModal({
                                 <div className="flex justify-between items-start mb-2">
                                   <div className="min-w-0">
                                     <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] mb-1">EPISODE {ep.episode_number}</p>
-                                    <h4 className="text-lg font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{ep.title}</h4>
+                                    <h4 className="text-lg font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-4 shrink-0 mt-1">
                                     {rating && rating > 0 && (
