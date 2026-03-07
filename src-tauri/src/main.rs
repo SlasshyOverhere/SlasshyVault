@@ -4343,29 +4343,54 @@ async fn download_update(
     Ok(file_path.to_string_lossy().to_string())
 }
 
+/// Validate the installer path to prevent Command Injection and Path Traversal
+fn get_valid_installer_path(path: &str) -> Result<String, String> {
+    let file_path = std::path::Path::new(path);
+
+    // Ensure the file exists
+    if !file_path.exists() {
+        return Err("Installer file does not exist".to_string());
+    }
+
+    // Canonicalize the path to resolve symlinks and '..'
+    let canonical_path = file_path.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
+
+    // Ensure the file resides within the system temporary directory
+    let temp_dir = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize temp dir: {}", e))?;
+
+    if !canonical_path.starts_with(&temp_dir) {
+        return Err("Installer path must be within the system temporary directory".to_string());
+    }
+
+    // Check for permitted extensions
+    if let Some(ext) = canonical_path.extension().and_then(|s| s.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        if ext_lower != "exe" && ext_lower != "msi" && ext_lower != "dmg" && ext_lower != "pkg" && ext_lower != "appimage" && ext_lower != "deb" {
+            return Err("Invalid installer file extension".to_string());
+        }
+    } else {
+        return Err("Installer file must have an extension".to_string());
+    }
+
+    Ok(canonical_path.to_string_lossy().to_string())
+}
+
 /// Install update and restart app
 #[tauri::command]
 async fn install_update(installer_path: String) -> Result<(), String> {
-    use std::process::Command;
+    println!("[UPDATE] Validating installer path: {}", installer_path);
 
-    println!("[UPDATE] Installing update from: {}", installer_path);
+    // Validate the path to prevent Command Injection and Arbitrary File Execution
+    let valid_path = get_valid_installer_path(&installer_path)?;
 
-    // Launch the installer
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &installer_path])
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
-    }
+    println!("[UPDATE] Installing update from safe path: {}", valid_path);
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("open")
-            .arg(&installer_path)
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
-    }
+    // Launch the installer securely using the open crate
+    // This avoids using cmd /C start or open which are vulnerable to injection
+    open::that(&valid_path).map_err(|e| format!("Failed to launch installer securely: {}", e))?;
 
     // Exit the app to allow installer to run
     println!("[UPDATE] Exiting app for update installation...");
