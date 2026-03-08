@@ -348,24 +348,37 @@ impl Database {
         )?;
 
 
-        // Performance optimizations: Explicit indexes for frequently queried fields
-        // parent_id is used for episodes -> series lookups and cascade deletes
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_parent_id ON media(parent_id)", [])?;
+        // Cover the common library list queries: filter by media_type, then order by title.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_type_title ON media(media_type, title)",
+            [],
+        )?;
 
-        // media_type and is_cloud are used in almost every list view query
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_type_cloud ON media(media_type, is_cloud)", [])?;
+        // Episode lists always fetch by parent_id and then sort by season/episode.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_parent_order ON media(parent_id, season_number, episode_number)",
+            [],
+        )?;
 
-        // title with COLLATE NOCASE is essential for fast text searching
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_title ON media(title COLLATE NOCASE)", [])?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_last_watched ON media(last_watched DESC) WHERE last_watched IS NOT NULL",
+            [],
+        )?;
 
-        // last_watched is queried constantly for the 'Continue Watching' and 'Recent Activity' sections
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_last_watched ON media(last_watched) WHERE last_watched IS NOT NULL", [])?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_cloud_folder_id ON media(cloud_folder_id) WHERE cloud_folder_id IS NOT NULL",
+            [],
+        )?;
 
-        // tmdb_id is used for deduplication, merging, and metadata fetching
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_tmdb_id ON media(tmdb_id) WHERE tmdb_id IS NOT NULL", [])?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_type_tmdb_id ON media(media_type, tmdb_id) WHERE tmdb_id IS NOT NULL AND tmdb_id != ''",
+            [],
+        )?;
 
-        // cloud_folder_id is used when scanning, updating or deleting cloud folders
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_cloud_folder_id ON media(cloud_folder_id) WHERE cloud_folder_id IS NOT NULL", [])?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_cloud_file_id ON media(cloud_file_id) WHERE cloud_file_id IS NOT NULL",
+            [],
+        )?;
         Ok(())
     }
 
@@ -2232,5 +2245,65 @@ impl Database {
             is_cloud,
             cloud_file_id: row.get("cloud_file_id").unwrap_or(None),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+    use rusqlite::Connection;
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn init_migrates_legacy_media_table_before_creating_indexes() {
+        let db_path = std::env::temp_dir().join(format!("streamvault-db-test-{}.db", Uuid::new_v4()));
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "CREATE TABLE media (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    year INTEGER,
+                    overview TEXT,
+                    poster_path TEXT,
+                    file_path TEXT NOT NULL UNIQUE,
+                    media_type TEXT NOT NULL,
+                    parent_id INTEGER,
+                    season_number INTEGER,
+                    episode_number INTEGER,
+                    duration_seconds REAL DEFAULT 0,
+                    resume_position_seconds REAL DEFAULT 0,
+                    last_watched TIMESTAMP DEFAULT NULL,
+                    tmdb_id TEXT DEFAULT NULL,
+                    FOREIGN KEY (parent_id) REFERENCES media (id) ON DELETE CASCADE
+                )",
+                [],
+            ).unwrap();
+        }
+
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        let index_names: Vec<String> = {
+            let mut stmt = db.conn.prepare("PRAGMA index_list('media')").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+
+        for expected in [
+            "idx_media_type_title",
+            "idx_media_parent_order",
+            "idx_media_last_watched",
+            "idx_media_cloud_folder_id",
+            "idx_media_type_tmdb_id",
+            "idx_media_cloud_file_id",
+        ] {
+            assert!(index_names.iter().any(|name| name == expected), "missing index: {}", expected);
+        }
+
+        drop(db);
+        let _ = fs::remove_file(db_path);
     }
 }
