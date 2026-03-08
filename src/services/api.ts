@@ -62,6 +62,12 @@ export interface StreamInfo {
     access_token?: string;
 }
 
+export interface LibraryStats {
+    movies: number;
+    shows: number;
+    episodes: number;
+}
+
 // TMDB search result
 export interface TmdbSearchResult {
     id: number;
@@ -111,6 +117,17 @@ export const getLibraryFiltered = async (
     } catch (error) {
         console.error('Failed to get filtered library:', error);
         return [];
+    }
+};
+
+export const getLibraryStats = async (isCloud?: boolean): Promise<LibraryStats> => {
+    try {
+        return await invoke<LibraryStats>('get_library_stats', {
+            isCloud: isCloud ?? null
+        });
+    } catch (error) {
+        console.error('Failed to get library stats:', error);
+        return { movies: 0, shows: 0, episodes: 0 };
     }
 };
 

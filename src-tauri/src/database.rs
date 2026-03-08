@@ -134,6 +134,13 @@ pub struct WatchStatsAggregated {
     pub total_watch_time_seconds: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryStats {
+    pub movies: i64,
+    pub shows: i64,
+    pub episodes: i64,
+}
+
 /// A recently completed watch activity for social sync
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchActivityItem {
@@ -2101,6 +2108,32 @@ impl Database {
         })
     }
 
+    pub fn get_library_stats(&self, is_cloud: Option<bool>) -> Result<LibraryStats> {
+        let mut sql = String::from(
+            "SELECT
+                COALESCE(SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'tvshow' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'tvepisode' THEN 1 ELSE 0 END), 0)
+             FROM media",
+        );
+
+        let map_row = |row: &rusqlite::Row| -> rusqlite::Result<LibraryStats> {
+            Ok(LibraryStats {
+                movies: row.get(0)?,
+                shows: row.get(1)?,
+                episodes: row.get(2)?,
+            })
+        };
+
+        if let Some(cloud) = is_cloud {
+            sql.push_str(" WHERE COALESCE(is_cloud, 0) = ?");
+            let cloud_value = if cloud { 1 } else { 0 };
+            self.conn.query_row(&sql, params![cloud_value], map_row)
+        } else {
+            self.conn.query_row(&sql, [], map_row)
+        }
+    }
+
     /// Get recently completed watch activities since a given timestamp.
     /// Returns items from both media and streaming_history tables,
     /// unified into WatchActivityItem structs ready for social API.
@@ -2302,6 +2335,31 @@ mod tests {
         ] {
             assert!(index_names.iter().any(|name| name == expected), "missing index: {}", expected);
         }
+
+        drop(db);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn get_library_stats_returns_counts_without_loading_rows() {
+        let db_path = std::env::temp_dir().join(format!("streamvault-db-stats-test-{}.db", Uuid::new_v4()));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+
+        db.insert_movie("Movie One", Some(2024), None, None, None, "movie-1.mkv", 120.0, None).unwrap();
+        db.insert_tvshow("Show One", Some(2024), None, None, None, "show-1", None).unwrap();
+        db.insert_episode("Episode One", "episode-1.mkv", 2, 1, 1, 42.0).unwrap();
+        db.insert_cloud_movie("Cloud Movie", Some(2024), None, None, None, "cloud-movie.mkv", "cloud-file-1", "cloud-folder-1", 90.0, None).unwrap();
+        db.insert_cloud_tvshow("Cloud Show", Some(2024), None, None, None, "cloud-show", "cloud-folder-2", None).unwrap();
+
+        let all_stats = db.get_library_stats(None).unwrap();
+        assert_eq!(all_stats.movies, 2);
+        assert_eq!(all_stats.shows, 2);
+        assert_eq!(all_stats.episodes, 1);
+
+        let cloud_stats = db.get_library_stats(Some(true)).unwrap();
+        assert_eq!(cloud_stats.movies, 1);
+        assert_eq!(cloud_stats.shows, 1);
+        assert_eq!(cloud_stats.episodes, 0);
 
         drop(db);
         let _ = fs::remove_file(db_path);
