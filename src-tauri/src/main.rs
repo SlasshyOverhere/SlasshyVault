@@ -4343,28 +4343,69 @@ async fn download_update(
     Ok(file_path.to_string_lossy().to_string())
 }
 
+fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(path_str);
+
+    // Canonicalize resolves symlinks and ../ sequences, and checks if file exists
+    let mut canonical_path = path.canonicalize()
+        .map_err(|e| format!("Invalid installer path: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        canonical_path = dunce::canonicalize(&canonical_path)
+            .unwrap_or(canonical_path);
+    }
+
+    let temp_dir = std::env::temp_dir();
+    let mut canonical_temp = temp_dir.canonicalize()
+        .map_err(|e| format!("Failed to resolve temp directory: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        canonical_temp = dunce::canonicalize(&canonical_temp)
+            .unwrap_or(canonical_temp);
+    }
+
+    // Ensure it's inside the temporary directory
+    if !canonical_path.starts_with(&canonical_temp) {
+        return Err("Installer must be located in the system temporary directory".to_string());
+    }
+
+    // Check extensions
+    let ext = canonical_path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    #[cfg(target_os = "windows")]
+    if ext != "exe" && ext != "msi" {
+        return Err("Only .exe or .msi installers are allowed".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    if ext != "dmg" && ext != "pkg" && ext != "app" {
+        return Err("Only .dmg, .pkg, or .app installers are allowed".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    if ext != "deb" && ext != "rpm" && ext != "appimage" {
+        return Err("Only .deb, .rpm, or .AppImage installers are allowed".to_string());
+    }
+
+    Ok(canonical_path)
+}
+
 /// Install update and restart app
 #[tauri::command]
 async fn install_update(installer_path: String) -> Result<(), String> {
-    use std::process::Command;
-
     println!("[UPDATE] Installing update from: {}", installer_path);
 
-    // Launch the installer
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &installer_path])
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
-    }
+    let safe_path = get_valid_installer_path(&installer_path)?;
+    let safe_path_str = safe_path.to_string_lossy().to_string();
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("open")
-            .arg(&installer_path)
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+    // Launch the installer securely
+    if let Err(e) = open::that(&safe_path_str) {
+        return Err(format!("Failed to launch installer: {}", e));
     }
 
     // Exit the app to allow installer to run

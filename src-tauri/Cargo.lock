@@ -3971,6 +3971,7 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "dotenvy",
+ "dunce",
  "futures-util",
  "lazy_static",
  "notify-rust",
