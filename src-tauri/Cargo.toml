@@ -36,7 +36,7 @@ futures-util = "0.3"
 notify-rust = "4"
 oauth2 = "4.4"
 base64 = "0.21"
-open = "5"
+open = { version = "5", features = ["shellexecute-on-windows"] }
 dotenvy = "0.15"
 tiny_http = "0.12"
 lazy_static = "1.4"
