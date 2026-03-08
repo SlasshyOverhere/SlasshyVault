@@ -347,6 +347,25 @@ impl Database {
             [],
         )?;
 
+
+        // Performance optimizations: Explicit indexes for frequently queried fields
+        // parent_id is used for episodes -> series lookups and cascade deletes
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_parent_id ON media(parent_id)", [])?;
+
+        // media_type and is_cloud are used in almost every list view query
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_type_cloud ON media(media_type, is_cloud)", [])?;
+
+        // title with COLLATE NOCASE is essential for fast text searching
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_title ON media(title COLLATE NOCASE)", [])?;
+
+        // last_watched is queried constantly for the 'Continue Watching' and 'Recent Activity' sections
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_last_watched ON media(last_watched) WHERE last_watched IS NOT NULL", [])?;
+
+        // tmdb_id is used for deduplication, merging, and metadata fetching
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_tmdb_id ON media(tmdb_id) WHERE tmdb_id IS NOT NULL", [])?;
+
+        // cloud_folder_id is used when scanning, updating or deleting cloud folders
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_media_cloud_folder_id ON media(cloud_folder_id) WHERE cloud_folder_id IS NOT NULL", [])?;
         Ok(())
     }
 
