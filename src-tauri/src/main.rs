@@ -123,6 +123,15 @@ async fn get_watch_history(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_library_stats(
+    state: State<'_, AppState>,
+    is_cloud: Option<bool>,
+) -> Result<database::LibraryStats, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_library_stats(is_cloud).map_err(|e| e.to_string())
+}
+
 // Remove a single item from watch history
 #[tauri::command]
 async fn remove_from_watch_history(
@@ -5382,6 +5391,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_library,
             get_library_filtered,
+            get_library_stats,
             get_episodes,
             get_watch_history,
             remove_from_watch_history,

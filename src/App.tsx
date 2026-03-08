@@ -24,6 +24,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
 import {
   getLibraryFiltered,
+  getLibraryStats,
   getWatchHistory,
   removeFromWatchHistory,
   clearAllWatchHistory,
@@ -573,16 +574,8 @@ function App() {
   // Load library stats - cloud only
   const loadLibraryStats = useCallback(async () => {
     try {
-      const [cloudMovies, cloudShows] = await Promise.all([
-        getLibraryFiltered('movie', '', true),
-        getLibraryFiltered('tv', '', true)
-      ])
-
-      setLibraryStats({
-        movies: cloudMovies.length,
-        shows: cloudShows.length,
-        episodes: 0
-      })
+      const stats = await getLibraryStats(true)
+      setLibraryStats(stats)
     } catch (error) {
       console.error('Failed to load stats', error)
     }
