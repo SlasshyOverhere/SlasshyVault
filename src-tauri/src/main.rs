@@ -21,6 +21,7 @@ use serde::Serialize;
 use notify_rust::Notification;
 use std::sync::mpsc;
 use std::time::Duration;
+use uuid::Uuid;
 
 // Channel for receiving OAuth codes from deep links
 lazy_static::lazy_static! {
@@ -4311,9 +4312,11 @@ async fn download_update(
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    let filename = url.split('/').last().unwrap_or("update.exe");
-    let temp_dir = std::env::temp_dir();
-    let file_path = temp_dir.join(filename);
+    let filename = sanitize_update_filename(&parsed_url);
+    let staging_dir = updater_staging_root().join(Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&staging_dir)
+        .map_err(|e| format!("Failed to create updater staging directory: {}", e))?;
+    let file_path = staging_dir.join(filename);
 
     let mut file = std::fs::File::create(&file_path)
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
@@ -4343,28 +4346,119 @@ async fn download_update(
     Ok(file_path.to_string_lossy().to_string())
 }
 
+fn updater_staging_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("streamvault-updater")
+}
+
+fn sanitize_update_filename(parsed_url: &url::Url) -> String {
+    let fallback = "streamvault-update.bin";
+    let Some(raw_filename) = parsed_url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .filter(|segment| !segment.is_empty())
+    else {
+        return fallback.to_string();
+    };
+
+    let sanitized = raw_filename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let trimmed = sanitized.trim_matches('.');
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(path_str);
+
+    // Canonicalize resolves symlinks and ../ sequences, and checks if file exists
+    let mut canonical_path = path.canonicalize()
+        .map_err(|e| format!("Invalid installer path: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        canonical_path = dunce::canonicalize(&canonical_path)
+            .unwrap_or(canonical_path);
+    }
+
+    let staging_dir = updater_staging_root();
+    let mut canonical_staging = staging_dir.canonicalize()
+        .map_err(|e| format!("Failed to resolve updater staging directory: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        canonical_staging = dunce::canonicalize(&canonical_staging)
+            .unwrap_or(canonical_staging);
+    }
+
+    // Ensure it's inside the app-owned updater staging directory
+    if !canonical_path.starts_with(&canonical_staging) {
+        return Err("Installer must be located in the updater staging directory".to_string());
+    }
+
+    // Check extensions
+    let ext = canonical_path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    #[cfg(target_os = "windows")]
+    if ext != "exe" && ext != "msi" {
+        return Err("Only .exe or .msi installers are allowed".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    if ext != "dmg" && ext != "pkg" && ext != "app" {
+        return Err("Only .dmg, .pkg, or .app installers are allowed".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    if ext != "deb" && ext != "rpm" && ext != "appimage" {
+        return Err("Only .deb, .rpm, or .AppImage installers are allowed".to_string());
+    }
+
+    let metadata = std::fs::metadata(&canonical_path)
+        .map_err(|e| format!("Failed to inspect installer path: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    if ext == "app" {
+        if !metadata.is_dir() {
+            return Err("A .app installer must be a directory bundle".to_string());
+        }
+    } else if !metadata.is_file() {
+        return Err("Installer path must point to a file".to_string());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if !metadata.is_file() {
+        return Err("Installer path must point to a file".to_string());
+    }
+
+    Ok(canonical_path)
+}
+
 /// Install update and restart app
 #[tauri::command]
 async fn install_update(installer_path: String) -> Result<(), String> {
-    use std::process::Command;
+    println!("[UPDATE] Validating installer path before launch");
 
-    println!("[UPDATE] Installing update from: {}", installer_path);
+    let safe_path = get_valid_installer_path(&installer_path)?;
+    println!("[UPDATE] Installing update from safe path: {}", safe_path.display());
 
-    // Launch the installer
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &installer_path])
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("open")
-            .arg(&installer_path)
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+    // Launch the installer securely without tying the child process to this app.
+    if let Err(e) = open::that_detached(&safe_path) {
+        return Err(format!("Failed to launch installer: {}", e));
     }
 
     // Exit the app to allow installer to run
@@ -4376,6 +4470,76 @@ async fn install_update(installer_path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[cfg(test)]
+mod install_update_tests {
+    use super::{get_valid_installer_path, updater_staging_root};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    #[cfg(target_os = "windows")]
+    const TEST_INSTALLER_NAME: &str = "streamvault-update.exe";
+    #[cfg(target_os = "macos")]
+    const TEST_INSTALLER_NAME: &str = "streamvault-update.pkg";
+    #[cfg(target_os = "linux")]
+    const TEST_INSTALLER_NAME: &str = "streamvault-update.deb";
+
+    fn remove_test_artifact(path: &Path) {
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    fn create_temp_installer(name: &str) -> PathBuf {
+        let dir = updater_staging_root().join(format!("streamvault-installer-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+
+        #[cfg(target_os = "macos")]
+        if name.ends_with(".app") {
+            fs::create_dir_all(&path).unwrap();
+            return path;
+        }
+
+        fs::write(&path, b"test-installer").unwrap();
+        path
+    }
+
+    #[test]
+    fn accepts_allowed_installer_in_staging_dir() {
+        let installer_path = create_temp_installer(TEST_INSTALLER_NAME);
+        let validated = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap();
+        assert!(validated.starts_with(updater_staging_root()));
+        remove_test_artifact(&installer_path);
+    }
+
+    #[test]
+    fn rejects_disallowed_extension_in_temp_dir() {
+        let installer_path = create_temp_installer("streamvault-update.txt");
+        let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("allowed"));
+        remove_test_artifact(&installer_path);
+    }
+
+    #[test]
+    fn rejects_installer_outside_staging_dir() {
+        let installer_path = std::env::current_dir()
+            .unwrap()
+            .join(format!("streamvault-outside-temp-{}", TEST_INSTALLER_NAME));
+        fs::write(&installer_path, b"test-installer").unwrap();
+
+        let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("updater staging directory"));
+        remove_test_artifact(&installer_path);
+    }
 }
 
 // ==================== WATCH TOGETHER COMMANDS ====================

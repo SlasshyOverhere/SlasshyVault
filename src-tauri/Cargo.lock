@@ -2703,6 +2703,7 @@ version = "5.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43bb73a7fa3799b198970490a51174027ba0d4ec504b03cd08caf513d40024bc"
 dependencies = [
+ "dunce",
  "is-wsl",
  "libc",
  "pathdiff",
@@ -3971,6 +3972,7 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "dotenvy",
+ "dunce",
  "futures-util",
  "lazy_static",
  "notify-rust",
