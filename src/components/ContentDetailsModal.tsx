@@ -95,6 +95,18 @@ function EpisodeThumbnailImage({
   );
 }
 
+/**
+ * Render a content details modal for a movie, TV show, or TV episode.
+ *
+ * Displays title, artwork, metadata, overview, cast, and — for TV shows — season and episode lists.
+ * While open, the component loads poster/hero artwork, runtime and crew metadata from TMDB, fetches episodes for TV shows, and fetches per-season TMDB episode metadata as needed. Selecting an episode or pressing the primary action invokes the provided callback with the corresponding MediaItem.
+ *
+ * @param open - Controls modal visibility
+ * @param item - The MediaItem to show details for (may be null)
+ * @param onOpenChange - Callback invoked when the modal open state changes
+ * @param onPrimaryAction - Callback invoked when the primary action is triggered; receives the selected MediaItem
+ * @returns The rendered modal element, or `null` when there is no item to display
+ */
 export function ContentDetailsModal({
   open,
   item,
@@ -283,6 +295,14 @@ export function ContentDetailsModal({
     return target.cast_names.split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
   }, [item?.id, activeItem?.id])
 
+  const seasons = useMemo(() => {
+    return [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+  }, [episodes])
+
+  const filteredEpisodes = useMemo(() => {
+    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+  }, [episodes, selectedSeason])
+
   if (!activeItem && !item) return null
   const displayItem = item || activeItem
   if (!displayItem) return null
@@ -300,9 +320,6 @@ export function ContentDetailsModal({
   const displayTitle = isEpisode && displayItem.season_number && displayItem.episode_number
     ? `S${String(displayItem.season_number).padStart(2, "0")}E${String(displayItem.episode_number).padStart(2, "0")} · ${displayItem.title}`
     : displayItem.title
-
-  const seasons = [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
-  const filteredEpisodes = episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
