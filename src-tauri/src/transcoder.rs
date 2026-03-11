@@ -52,6 +52,8 @@ pub fn start_transcode(
     file_path: &str,
     start_time: Option<f64>,
 ) -> Result<(u64, String), String> {
+    crate::config::validate_executable_path(ffmpeg_path, "ffmpeg")?;
+
     if !std::path::Path::new(ffmpeg_path).exists() {
         return Err("FFmpeg not found. Please configure FFmpeg path in Settings.".to_string());
     }
@@ -163,6 +165,15 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
         println!("[TRANSCODE] Request: {} {}", request.method(), url);
 
         if url.starts_with("/stream") {
+            // Validate ffmpeg path before executing
+            if let Err(e) = crate::config::validate_executable_path(ffmpeg_path, "ffmpeg") {
+                println!("[TRANSCODE] Validation failed: {}", e);
+                let response = Response::from_string(format!("FFmpeg validation error: {}", e))
+                    .with_status_code(500);
+                let _ = request.respond(response);
+                break;
+            }
+
             // Start FFmpeg and stream output
             let mut args = vec![
                 "-hide_banner",

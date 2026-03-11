@@ -143,6 +143,32 @@ fn search_directory_for_mpv(dir: &str, max_depth: u32) -> Option<String> {
     None
 }
 
+/// Validates an executable path to ensure it points to the expected binary.
+/// This prevents arbitrary command execution vulnerabilities where a malicious
+/// user might set the path to a different executable (like cmd.exe or calc.exe).
+pub fn validate_executable_path(path: &str, expected_name: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    let path = Path::new(path);
+
+    // Extract the file stem (filename without extension)
+    let file_stem = path.file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("Invalid executable path: {}", path.display()))?;
+
+    // Compare case-insensitively
+    if file_stem.to_lowercase() != expected_name.to_lowercase() {
+        return Err(format!(
+            "Security violation: Executable name must be '{}' or '{}.exe', but got '{}'",
+            expected_name, expected_name, file_stem
+        ));
+    }
+
+    Ok(())
+}
+
 /// Auto-detect and save MPV path if not already configured
 pub fn auto_detect_mpv(config: &mut Config) -> Option<String> {
     // If already configured and exists, use it
