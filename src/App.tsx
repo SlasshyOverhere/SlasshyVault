@@ -22,7 +22,6 @@ import {
   getLibraryStats,
   getWatchHistory,
   removeFromWatchHistory,
-  clearAllWatchHistory,
   deleteMediaFiles,
   MediaItem,
   WatchRoom,
