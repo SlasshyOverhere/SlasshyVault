@@ -224,6 +224,8 @@ pub fn launch_mpv_with_tracking(
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
 ) -> Result<u32, String> {
+    crate::config::validate_executable_path(mpv_path, "mpv")?;
+
     println!("[MPV] ========== LAUNCHING MPV ==========");
     println!("[MPV] Media ID: {}", media_id);
     println!("[MPV] MPV Path: {}", mpv_path);
@@ -708,6 +710,8 @@ pub fn launch_mpv_with_sync(
     start_position: f64,
     auth_header: Option<&str>,
 ) -> Result<u32, String> {
+    crate::config::validate_executable_path(mpv_path, "mpv")?;
+
     println!("[MPV-SYNC] ========== LAUNCHING MPV (WATCH TOGETHER) ==========");
     println!("[MPV-SYNC] Media ID: {}", media_id);
     println!("[MPV-SYNC] Session ID: {}", session_id);

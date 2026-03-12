@@ -584,6 +584,8 @@ pub fn launch_mpv_wt(
     auth_header: Option<&str>,
     is_host: bool,
 ) -> Result<(u32, WatchTogetherController), String> {
+    crate::config::validate_executable_path(mpv_path, "mpv")?;
+
     println!("[WT-MPV] ========== LAUNCHING MPV (WATCH TOGETHER v2) ==========");
     println!("[WT-MPV] Media ID: {}", media_id);
     println!("[WT-MPV] Session ID: {}", session_id);

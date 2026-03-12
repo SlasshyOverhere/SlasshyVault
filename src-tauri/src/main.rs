@@ -2308,6 +2308,8 @@ async fn play_with_mpv(
         0.0
     };
 
+    config::validate_executable_path(&mpv_path, "mpv")?;
+
     // Launch MPV with progress tracking
     let mpv_path_clone = mpv_path.clone();
     let playback_url_clone = playback_url.clone();
