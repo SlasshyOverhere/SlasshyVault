@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, memo } from "react"
+import { useEffect, useState, useMemo, useCallback, memo } from "react"
 import { listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
