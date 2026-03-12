@@ -283,6 +283,15 @@ export function ContentDetailsModal({
     return target.cast_names.split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
   }, [item?.id, activeItem?.id])
 
+  // Memoize seasons and episodes to prevent unnecessary mapping, filtering, and sorting on every render
+  const seasons = useMemo(() => {
+    return [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+  }, [episodes])
+
+  const filteredEpisodes = useMemo(() => {
+    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+  }, [episodes, selectedSeason])
+
   if (!activeItem && !item) return null
   const displayItem = item || activeItem
   if (!displayItem) return null
@@ -300,9 +309,6 @@ export function ContentDetailsModal({
   const displayTitle = isEpisode && displayItem.season_number && displayItem.episode_number
     ? `S${String(displayItem.season_number).padStart(2, "0")}E${String(displayItem.episode_number).padStart(2, "0")} · ${displayItem.title}`
     : displayItem.title
-
-  const seasons = [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
-  const filteredEpisodes = episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
