@@ -45,7 +45,7 @@ import {
   UpdateInfo,
 } from '@/services/api'
 import {
-  Search, Loader2, Trash2, Play, Film, Tv, Clock,
+  Search, Loader2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
   TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, X, Cloud, RefreshCw, Minus, Bot, Download,
   Maximize2, Minimize2
@@ -924,18 +924,6 @@ function App() {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
   }, [toast, loadContinueWatching])
-
-  const handleClearAllHistory = async () => {
-    if (!confirm("Are you sure you want to clear all watch history?")) return
-    try {
-      await clearAllWatchHistory()
-      toast({ title: "Cleared", description: "All watch history has been cleared." })
-      await fetchDataRef.current()
-      await loadContinueWatching()
-    } catch {
-      toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
-    }
-  }
 
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
