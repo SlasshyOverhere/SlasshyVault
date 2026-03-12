@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Trash2, Check, X, AlertTriangle, Loader2, FolderX } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -119,18 +119,32 @@ export function DeleteEpisodesModal({
     };
 
     // Group episodes by season
-    const episodesBySeason = episodes.reduce((acc, ep) => {
-        const season = ep.season_number ?? 0;
-        if (!acc[season]) {
-            acc[season] = [];
-        }
-        acc[season].push(ep);
-        return acc;
-    }, {} as Record<number, EpisodeDeleteInfo[]>);
+    const episodesBySeason = useMemo(() => {
+        return episodes.reduce((acc, ep) => {
+            const season = ep.season_number ?? 0;
+            if (!acc[season]) {
+                acc[season] = [];
+            }
+            acc[season].push(ep);
+            return acc;
+        }, {} as Record<number, EpisodeDeleteInfo[]>);
+    }, [episodes]);
 
-    const sortedSeasons = Object.keys(episodesBySeason)
-        .map(Number)
-        .sort((a, b) => a - b);
+    const sortedSeasons = useMemo(() => {
+        return Object.keys(episodesBySeason)
+            .map(Number)
+            .sort((a, b) => a - b);
+    }, [episodesBySeason]);
+
+    // Pre-sort episodes within each season to avoid sorting on every render
+    const sortedEpisodesBySeason = useMemo(() => {
+        const sorted = { ...episodesBySeason };
+        Object.keys(sorted).forEach(seasonStr => {
+            const season = Number(seasonStr);
+            sorted[season] = [...sorted[season]].sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0));
+        });
+        return sorted;
+    }, [episodesBySeason]);
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -217,8 +231,7 @@ export function DeleteEpisodesModal({
                                         Season {season}
                                     </h3>
                                     <AnimatePresence>
-                                        {episodesBySeason[season]
-                                            .sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0))
+                                        {sortedEpisodesBySeason[season]
                                             .map((ep) => (
                                                 <motion.div
                                                     key={ep.id}
