@@ -68,17 +68,6 @@ const cargoLockNext = cargoLock.replace(
 );
 writeText('src-tauri/Cargo.lock', cargoLockNext);
 
-const updateNotes = readText('src/components/UpdateNotesModal.tsx');
-const updateNotesPattern = /(const CURRENT_VERSION = ')[^']+(')/;
-if (!updateNotesPattern.test(updateNotes)) {
-  throw new Error('Failed to find CURRENT_VERSION in src/components/UpdateNotesModal.tsx');
-}
-const updateNotesNext = updateNotes.replace(
-  updateNotesPattern,
-  `$1${version}$2`
-);
-writeText('src/components/UpdateNotesModal.tsx', updateNotesNext);
-
 if (changed.length === 0) {
   console.log(`Version already synchronized at ${version}`);
 } else {
