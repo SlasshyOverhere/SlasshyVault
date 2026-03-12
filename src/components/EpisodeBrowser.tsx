@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useCallback, memo } from "react"
 import { listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -22,7 +22,7 @@ interface EpisodeBrowserProps {
 }
 
 // Component to handle episode thumbnail loading from local cache or TMDB
-function EpisodeThumbnailImage({
+const EpisodeThumbnailImage = memo(function EpisodeThumbnailImage({
     localStillPath,
     tmdbStillUrl,
     episodeTitle,
@@ -101,7 +101,229 @@ function EpisodeThumbnailImage({
             </span>
         </div>
     );
+});
+
+
+/**
+ * ⚡ Bolt: Performance Optimization
+ *
+ * What: Extracted `EpisodeItem` and `EpisodeThumbnailImage` into separate `React.memo` components.
+ *       Memoized callback functions (`handleEpisodeClick`, `handleToggleExpand`) using `useCallback`.
+ * Why:  Previously, the entire list of episodes re-rendered every time the parent component's state changed
+ *       (e.g., toggling `expandedEpisode`, opening the player modal).
+ * Impact: Prevents O(N) re-renders when interacting with a single episode in a season.
+ *         Reduces rendering time for large seasons significantly.
+ */
+interface EpisodeItemProps {
+    episode: MediaItem;
+    index: number;
+    tmdbData?: TmdbEpisodeInfo;
+    isExpanded: boolean;
+    onEpisodeClick: (episode: MediaItem) => void;
+    onToggleExpand: (episodeId: number) => void;
+    onWatchTogether?: (episode: MediaItem) => void;
 }
+
+const EpisodeItemBase = ({
+    episode,
+    index,
+    tmdbData,
+    isExpanded,
+    onEpisodeClick,
+    onToggleExpand,
+    onWatchTogether
+}: EpisodeItemProps) => {
+    const progress = episode.progress_percent ||
+        (episode.resume_position_seconds && episode.duration_seconds
+            ? (episode.resume_position_seconds / episode.duration_seconds) * 100
+            : 0);
+    const isFinished = progress >= 95;
+    const hasProgress = progress > 0 && !isFinished;
+
+    // Prefer local still_path over TMDB
+    const localStillPath = episode.still_path;
+    const stillUrl = localStillPath
+        ? null // Will be loaded from cache below
+        : getTmdbImageUrl(tmdbData?.still_path, 'w300');
+    // Use local episode title first, then TMDB, then fallback
+    const episodeTitle = episode.episode_title || tmdbData?.name || episode.title || `Episode ${episode.episode_number}`;
+    const localRuntimeMinutes = episode.duration_seconds && episode.duration_seconds >= 60
+        ? Math.round(episode.duration_seconds / 60)
+        : null;
+    const tmdbRuntimeMinutes = tmdbData?.runtime && tmdbData.runtime > 0
+        ? tmdbData.runtime
+        : null;
+    const runtimeMinutes = localRuntimeMinutes ?? tmdbRuntimeMinutes;
+
+    return (
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.02 }}
+            className="hover:bg-muted/30 transition-colors"
+        >
+            <div
+                onClick={() => onEpisodeClick(episode)}
+                className="p-3 lg:p-4 cursor-pointer group"
+            >
+                <div className="flex gap-3 lg:gap-4">
+                    {/* Episode Thumbnail */}
+                    <div className="relative flex-shrink-0 w-28 md:w-36 lg:w-40 aspect-video rounded-lg overflow-hidden bg-muted">
+                        <EpisodeThumbnailImage
+                            localStillPath={localStillPath}
+                            tmdbStillUrl={stillUrl}
+                            episodeTitle={episodeTitle}
+                            episodeNumber={episode.episode_number || 0}
+                        />
+
+                        {/* Play overlay */}
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-white flex items-center justify-center">
+                                <Play className="w-4 h-4 lg:w-5 lg:h-5 text-black fill-black ml-0.5" />
+                            </div>
+                        </div>
+
+                        {/* Progress bar on thumbnail */}
+                        {hasProgress && (
+                            <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+                                <div
+                                    className="h-full bg-white"
+                                    style={{ width: `${progress}%` }}
+                                />
+                            </div>
+                        )}
+
+                        {/* Watched badge */}
+                        {isFinished && (
+                            <div className="absolute top-1.5 right-1.5 lg:top-2 lg:right-2 px-1.5 py-0.5 rounded bg-gray-500 text-white text-[10px] lg:text-xs font-medium flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Episode Info */}
+                    <div className="flex-1 min-w-0 py-0.5 lg:py-1">
+                        {/* Header row */}
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5 lg:mb-1">
+                                    <span className="text-[10px] lg:text-xs font-medium text-white">
+                                        Episode {episode.episode_number}
+                                    </span>
+                                    {isFinished && (
+                                        <span className="flex items-center gap-1 text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">
+                                            <Check className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
+                                            Watched
+                                        </span>
+                                    )}
+                                    {hasProgress && (
+                                        <span className="flex items-center gap-1 text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-white/15 text-white border border-white/20">
+                                            <Clock className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
+                                            {Math.round(progress)}%
+                                        </span>
+                                    )}
+                                </div>
+                                <h4 className="font-semibold text-foreground line-clamp-1 text-sm lg:text-base">
+                                    {episodeTitle}
+                                </h4>
+                            </div>
+
+                            {/* Play button - hidden on small screens */}
+                            <div className="flex items-center gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex">
+                                <Button
+                                    size="sm"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onEpisodeClick(episode);
+                                    }}
+                                >
+                                    <Play className="w-4 h-4 fill-current mr-1" />
+                                    Play
+                                </Button>
+                                {onWatchTogether && (
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="border-purple-500/50 text-purple-400 hover:bg-purple-500/20"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onWatchTogether(episode);
+                                        }}
+                                    >
+                                        <Users className="w-4 h-4 mr-1" />
+                                        Together
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Metadata row - local duration first, fallback to TMDB runtime */}
+                        {(runtimeMinutes || (tmdbData?.vote_average && tmdbData.vote_average > 0)) && (
+                            <div className="flex items-center gap-2 lg:gap-3 mt-1 lg:mt-1.5 text-[10px] lg:text-xs text-muted-foreground">
+                                {runtimeMinutes && (
+                                    <span className="flex items-center gap-1">
+                                        <Timer className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
+                                        {runtimeMinutes} min
+                                    </span>
+                                )}
+                                {tmdbData?.vote_average && tmdbData.vote_average > 0 && (
+                                    <span className="flex items-center gap-1">
+                                        <Star className="w-2.5 h-2.5 lg:w-3 lg:h-3 text-gray-400 fill-gray-400" />
+                                        {tmdbData.vote_average.toFixed(1)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Overview/Description - hidden on small screens */}
+                        {(episode.overview || tmdbData?.overview) && (
+                            <div className="mt-1.5 lg:mt-2 hidden md:block">
+                                <p className={cn(
+                                    "text-xs lg:text-sm text-muted-foreground",
+                                    isExpanded ? "" : "line-clamp-2"
+                                )}>
+                                    {episode.overview || tmdbData?.overview}
+                                </p>
+                                {((episode.overview || tmdbData?.overview) || '').length > 150 && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onToggleExpand(episode.id);
+                                        }}
+                                        className="text-[10px] lg:text-xs text-white hover:underline mt-1 flex items-center gap-0.5"
+                                    >
+                                        {isExpanded ? (
+                                            <>Show less <ChevronUp className="w-2.5 h-2.5 lg:w-3 lg:h-3" /></>
+                                        ) : (
+                                            <>Show more <ChevronDown className="w-2.5 h-2.5 lg:w-3 lg:h-3" /></>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </motion.div>
+    );
+};
+
+const areEpisodeItemPropsEqual = (prevProps: EpisodeItemProps, nextProps: EpisodeItemProps) => {
+    // ⚡ Bolt: Custom equality check for memoization to prevent brittle property comparisons.
+    // Shallow compares the episode object itself (reference should be stable from API),
+    // and scalar/function props to avoid unnecessary re-renders.
+    return (
+        prevProps.episode === nextProps.episode &&
+        prevProps.isExpanded === nextProps.isExpanded &&
+        prevProps.index === nextProps.index &&
+        prevProps.tmdbData === nextProps.tmdbData &&
+        prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
+        prevProps.onToggleExpand === nextProps.onToggleExpand &&
+        prevProps.onWatchTogether === nextProps.onWatchTogether
+    );
+};
+
+const EpisodeItem = memo(EpisodeItemBase, areEpisodeItemPropsEqual);
 
 export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowserProps) {
     const [episodes, setEpisodes] = useState<MediaItem[]>([])
@@ -267,10 +489,14 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
     }, [episodes, selectedSeason])
 
-    const handleEpisodeClick = (episode: MediaItem) => {
+    const handleEpisodeClick = useCallback((episode: MediaItem) => {
         setContentDetailsItem(episode);
         setContentDetailsOpen(true);
-    }
+    }, []);
+
+    const handleToggleExpand = useCallback((id: number) => {
+        setExpandedEpisode(prev => prev === id ? null : id);
+    }, []);
 
     const handleDetailsPrimaryAction = async (episode: MediaItem) => {
         setContentDetailsOpen(false);
@@ -437,185 +663,22 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                 ) : (
                                     <div className="divide-y divide-border">
                                         {filteredEpisodes.map((episode, index) => {
-                                            const progress = episode.progress_percent ||
-                                                (episode.resume_position_seconds && episode.duration_seconds
-                                                    ? (episode.resume_position_seconds / episode.duration_seconds) * 100
-                                                    : 0);
-                                            const isFinished = progress >= 95;
-                                            const hasProgress = progress > 0 && !isFinished;
-
-                                            // Use local data first, fall back to TMDB data
                                             const tmdbData = tmdbEpisodesBySeason
                                                 .get(selectedSeason)
                                                 ?.get(episode.episode_number || 0);
-                                            // Prefer local still_path over TMDB
-                                            const localStillPath = episode.still_path;
-                                            const stillUrl = localStillPath
-                                                ? null // Will be loaded from cache below
-                                                : getTmdbImageUrl(tmdbData?.still_path, 'w300');
-                                            // Use local episode title first, then TMDB, then fallback
-                                            const episodeTitle = episode.episode_title || tmdbData?.name || episode.title || `Episode ${episode.episode_number}`;
-                                            const isExpanded = expandedEpisode === episode.id;
-                                            const localRuntimeMinutes = episode.duration_seconds && episode.duration_seconds >= 60
-                                                ? Math.round(episode.duration_seconds / 60)
-                                                : null;
-                                            const tmdbRuntimeMinutes = tmdbData?.runtime && tmdbData.runtime > 0
-                                                ? tmdbData.runtime
-                                                : null;
-                                            const runtimeMinutes = localRuntimeMinutes ?? tmdbRuntimeMinutes;
 
                                             return (
-                                                <motion.div
+                                                <EpisodeItem
                                                     key={episode.id}
-                                                    initial={{ opacity: 0, y: 10 }}
-                                                    animate={{ opacity: 1, y: 0 }}
-                                                    transition={{ delay: index * 0.02 }}
-                                                    className="hover:bg-muted/30 transition-colors"
-                                                >
-                                                    <div
-                                                        onClick={() => handleEpisodeClick(episode)}
-                                                        className="p-3 lg:p-4 cursor-pointer group"
-                                                    >
-                                                        <div className="flex gap-3 lg:gap-4">
-                                                            {/* Episode Thumbnail */}
-                                                            <div className="relative flex-shrink-0 w-28 md:w-36 lg:w-40 aspect-video rounded-lg overflow-hidden bg-muted">
-                                                                <EpisodeThumbnailImage
-                                                                    localStillPath={localStillPath}
-                                                                    tmdbStillUrl={stillUrl}
-                                                                    episodeTitle={episodeTitle}
-                                                                    episodeNumber={episode.episode_number || 0}
-                                                                />
-
-                                                                {/* Play overlay */}
-                                                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                    <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-white flex items-center justify-center">
-                                                                        <Play className="w-4 h-4 lg:w-5 lg:h-5 text-black fill-black ml-0.5" />
-                                                                    </div>
-                                                                </div>
-
-                                                                {/* Progress bar on thumbnail */}
-                                                                {hasProgress && (
-                                                                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
-                                                                        <div
-                                                                            className="h-full bg-white"
-                                                                            style={{ width: `${progress}%` }}
-                                                                        />
-                                                                    </div>
-                                                                )}
-
-                                                                {/* Watched badge */}
-                                                                {isFinished && (
-                                                                    <div className="absolute top-1.5 right-1.5 lg:top-2 lg:right-2 px-1.5 py-0.5 rounded bg-gray-500 text-white text-[10px] lg:text-xs font-medium flex items-center gap-1">
-                                                                        <Check className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
-                                                                    </div>
-                                                                )}
-                                                            </div>
-
-                                                            {/* Episode Info */}
-                                                            <div className="flex-1 min-w-0 py-0.5 lg:py-1">
-                                                                {/* Header row */}
-                                                                <div className="flex items-start justify-between gap-2">
-                                                                    <div className="flex-1 min-w-0">
-                                                                        <div className="flex items-center gap-2 mb-0.5 lg:mb-1">
-                                                                            <span className="text-[10px] lg:text-xs font-medium text-white">
-                                                                                Episode {episode.episode_number}
-                                                                            </span>
-                                                                            {isFinished && (
-                                                                                <span className="flex items-center gap-1 text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">
-                                                                                    <Check className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
-                                                                                    Watched
-                                                                                </span>
-                                                                            )}
-                                                                            {hasProgress && (
-                                                                                <span className="flex items-center gap-1 text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-white/15 text-white border border-white/20">
-                                                                                    <Clock className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
-                                                                                    {Math.round(progress)}%
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-                                                                        <h4 className="font-semibold text-foreground line-clamp-1 text-sm lg:text-base">
-                                                                            {episodeTitle}
-                                                                        </h4>
-                                                                    </div>
-
-                                                                    {/* Play button - hidden on small screens */}
-                                                                    <div className="flex items-center gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex">
-                                                                        <Button
-                                                                            size="sm"
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                handleEpisodeClick(episode);
-                                                                            }}
-                                                                        >
-                                                                            <Play className="w-4 h-4 fill-current mr-1" />
-                                                                            Play
-                                                                        </Button>
-                                                                        {onWatchTogether && (
-                                                                            <Button
-                                                                                size="sm"
-                                                                                variant="outline"
-                                                                                className="border-purple-500/50 text-purple-400 hover:bg-purple-500/20"
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation();
-                                                                                    onWatchTogether(episode);
-                                                                                }}
-                                                                            >
-                                                                                <Users className="w-4 h-4 mr-1" />
-                                                                                Together
-                                                                            </Button>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-
-                                                                {/* Metadata row - local duration first, fallback to TMDB runtime */}
-                                                                {(runtimeMinutes || (tmdbData?.vote_average && tmdbData.vote_average > 0)) && (
-                                                                    <div className="flex items-center gap-2 lg:gap-3 mt-1 lg:mt-1.5 text-[10px] lg:text-xs text-muted-foreground">
-                                                                        {runtimeMinutes && (
-                                                                            <span className="flex items-center gap-1">
-                                                                                <Timer className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
-                                                                                {runtimeMinutes} min
-                                                                            </span>
-                                                                        )}
-                                                                        {tmdbData?.vote_average && tmdbData.vote_average > 0 && (
-                                                                            <span className="flex items-center gap-1">
-                                                                                <Star className="w-2.5 h-2.5 lg:w-3 lg:h-3 text-gray-400 fill-gray-400" />
-                                                                                {tmdbData.vote_average.toFixed(1)}
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                )}
-
-                                                                {/* Overview/Description - hidden on small screens */}
-                                                                {(episode.overview || tmdbData?.overview) && (
-                                                                    <div className="mt-1.5 lg:mt-2 hidden md:block">
-                                                                        <p className={cn(
-                                                                            "text-xs lg:text-sm text-muted-foreground",
-                                                                            isExpanded ? "" : "line-clamp-2"
-                                                                        )}>
-                                                                            {episode.overview || tmdbData?.overview}
-                                                                        </p>
-                                                                        {((episode.overview || tmdbData?.overview) || '').length > 150 && (
-                                                                            <button
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation();
-                                                                                    setExpandedEpisode(isExpanded ? null : episode.id);
-                                                                                }}
-                                                                                className="text-[10px] lg:text-xs text-white hover:underline mt-1 flex items-center gap-0.5"
-                                                                            >
-                                                                                {isExpanded ? (
-                                                                                    <>Show less <ChevronUp className="w-2.5 h-2.5 lg:w-3 lg:h-3" /></>
-                                                                                ) : (
-                                                                                    <>Show more <ChevronDown className="w-2.5 h-2.5 lg:w-3 lg:h-3" /></>
-                                                                                )}
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </motion.div>
-                                            )
+                                                    episode={episode}
+                                                    index={index}
+                                                    tmdbData={tmdbData}
+                                                    isExpanded={expandedEpisode === episode.id}
+                                                    onEpisodeClick={handleEpisodeClick}
+                                                    onToggleExpand={handleToggleExpand}
+                                                    onWatchTogether={onWatchTogether}
+                                                />
+                                            );
                                         })}
                                     </div>
                                 )}
