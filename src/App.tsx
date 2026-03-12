@@ -1,20 +1,15 @@
 import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/tauri'
 import { appWindow } from '@tauri-apps/api/window'
 import {
   Sidebar,
   MovieCard,
   ContinueCard,
-  UpdateNotification,
-  isUpdateDismissed,
-  dismissUpdate,
   ResumeDialog,
   DeleteEpisodesModal,
   OnboardingModal,
   MainAppTour,
-  UpdateNotesModal,
-  shouldShowUpdateNotes,
-  CURRENT_APP_VERSION,
   MarkCompleteDialog,
   WatchTogetherBanner,
   LoginScreen,
@@ -36,14 +31,6 @@ import {
   getMediaInfo,
   ResumeInfo,
   getCachedImageUrl,
-  StreamingHistoryItem,
-  getStreamingHistory,
-  removeFromStreamingHistory,
-  clearAllStreamingHistory,
-  getVideasyUrl,
-  openVideasyPlayer,
-  isBrowserOpenEnabled,
-  isStreamTabEnabled,
   hasCompletedOnboarding,
   completeOnboarding,
   getTabVisibility,
@@ -53,13 +40,15 @@ import {
   isBetaEnabled,
   setBetaEnabled,
   checkForUpdates,
+  downloadUpdate,
+  installUpdate,
   UpdateInfo,
 } from '@/services/api'
-import { initAdBlocker } from '@/utils/adBlocker'
 import {
   Search, Loader2, Trash2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
-  TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, Globe, X, Cloud, RefreshCw, Minus, Bot
+  TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, X, Cloud, RefreshCw, Minus, Bot, Download,
+  Maximize2, Minimize2
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -70,7 +59,6 @@ import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
 const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
-const loadStreamView = () => import('@/components/StreamView')
 const loadSocialView = () => import('@/components/Social')
 const loadAIChatView = () => import('@/components/AI/AIChatView')
 const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
@@ -78,13 +66,11 @@ const loadFixMatchModal = () => import('@/components/FixMatchModal')
 
 const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
 const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
-const StreamView = lazy(() => loadStreamView().then(module => ({ default: module.StreamView })))
 const SocialView = lazy(() => loadSocialView().then(module => ({ default: module.SocialView })))
 const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module.AIChatView })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 
-initAdBlocker()
 
 interface ScanProgressPayload {
   title: string
@@ -115,6 +101,7 @@ type MediaSubTab = 'movies' | 'tv'
 const LARGE_LIBRARY_THRESHOLD = 120
 const CLOUD_INITIAL_RENDER_COUNT = 48
 const CLOUD_CHUNK_RENDER_COUNT = 96
+const VIEW_MODE_STORAGE_KEY = 'streamvault.view_mode'
 
 const LoadingFallback = () => (
   <div className="flex h-full w-full items-center justify-center min-h-[50vh]">
@@ -127,18 +114,30 @@ function App() {
   const [items, setItems] = useState<MediaItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
+  const [isMaximized, setIsMaximized] = useState(false)
 
   // Sub-tabs for Cloud view
   const [cloudSubTab, setCloudSubTab] = useState<MediaSubTab>('movies')
 
   // View mode and sort
-  const [viewMode, setViewMode] = useState<ViewMode>('grid')
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY)
+      return saved === 'list' || saved === 'grid' ? saved : 'grid'
+    } catch {
+      return 'grid'
+    }
+  })
   const [sortBy] = useState<SortOption>('title')
 
   // Memoized sorted items to prevent re-sorting on every render
   const sortedItems = useMemo(() => {
     return sortMediaItems(items, sortBy)
   }, [items, sortBy])
+
+  const refreshWindowState = useCallback(async () => {
+    setIsMaximized(await appWindow.isMaximized())
+  }, [])
 
   // Incremental rendering for very large cloud libraries to avoid view-switch stutter
   const [visibleCloudItemsCount, setVisibleCloudItemsCount] = useState(CLOUD_INITIAL_RENDER_COUNT)
@@ -150,6 +149,28 @@ function App() {
   }, [sortedItems, isChunkedCloudRender, visibleCloudItemsCount])
   const disableCloudEntryAnimation = false
   const disableHistoryEntryAnimation = false
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null
+    const setup = async () => {
+      await refreshWindowState()
+      unlisten = await appWindow.onResized(async () => {
+        await refreshWindowState()
+      })
+    }
+    setup()
+    return () => {
+      unlisten?.()
+    }
+  }, [refreshWindowState])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode)
+    } catch {
+      // ignore storage errors (private mode, quota, etc.)
+    }
+  }, [viewMode])
 
   // Home search state
   const [homeSearchQuery, setHomeSearchQuery] = useState('')
@@ -192,7 +213,6 @@ function App() {
     const preloadTimer = window.setTimeout(() => {
       void loadSettingsModal()
       void loadEpisodeBrowser()
-      void loadStreamView()
       void loadSocialView()
       void loadAIChatView()
       void loadWatchTogetherModal()
@@ -219,10 +239,6 @@ function App() {
     seriesTitle: string
   } | null>(null)
 
-  // History tab state
-  const [historyTab, setHistoryTab] = useState<'local' | 'streaming'>('local')
-  const [streamingHistoryItems, setStreamingHistoryItems] = useState<StreamingHistoryItem[]>([])
-
   // Watch Together state
   const [watchTogetherOpen, setWatchTogetherOpen] = useState(false)
   const [watchTogetherMedia, setWatchTogetherMedia] = useState<MediaItem | null>(null)
@@ -233,17 +249,11 @@ function App() {
   const [wtIsPlaying, setWtIsPlaying] = useState(false)
   const [wtSessionMedia, setWtSessionMedia] = useState<MediaItem | null>(null) // Media for the session
 
-  // Streaming resume dialog state
-  const [streamingResumeDialogOpen, setStreamingResumeDialogOpen] = useState(false)
-  const [streamingResumeData, setStreamingResumeData] = useState<StreamingHistoryItem | null>(null)
-
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [showMainAppTour, setShowMainAppTour] = useState(false)
 
   // Update notes state
-  const [showUpdateNotes, setShowUpdateNotes] = useState(false)
-
   // Tab visibility state - cloud-only mode
   const [tabVisibility, setTabVisibilityState] = useState<TabVisibility>({ showLocal: false, showCloud: true })
 
@@ -265,20 +275,18 @@ function App() {
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
-  const [streamTabEnabled, setStreamTabEnabledState] = useState(false)
 
   // Update notification state
-  const [updateAvailable, setUpdateAvailable] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [autoCheckUpdate, setAutoCheckUpdate] = useState(false)
+  const [updateGateStatus, setUpdateGateStatus] = useState<'checking' | 'downloading' | 'installing' | 'error' | 'idle'>('checking')
+  const [updateGateMessage, setUpdateGateMessage] = useState('Checking for updates...')
+  const [updateGateError, setUpdateGateError] = useState<string | null>(null)
+  const [updateProgress, setUpdateProgress] = useState(0)
 
   // Check onboarding status and load tab visibility on mount
   useEffect(() => {
     if (!hasCompletedOnboarding()) {
       setShowOnboarding(true)
-    } else if (shouldShowUpdateNotes()) {
-      // Show update notes if onboarding is done and notes haven't been shown
-      setTimeout(() => setShowUpdateNotes(true), 500)
     }
     // Load tab visibility settings
     setTabVisibilityState(getTabVisibility())
@@ -287,27 +295,60 @@ function App() {
   // Initialize beta features
   useEffect(() => {
     setBetaEnabledState(isBetaEnabled())
-    setStreamTabEnabledState(isStreamTabEnabled())
   }, [])
 
-  // Silent background update check after authentication
-  useEffect(() => {
-    if (!isAuthenticated || isAuthLoading) return
+  const runMandatoryUpdate = useCallback(async () => {
+    setUpdateGateStatus('checking')
+    setUpdateGateMessage('Checking for updates...')
+    setUpdateGateError(null)
+    setUpdateProgress(0)
 
-    const timer = setTimeout(async () => {
-      try {
-        const info = await checkForUpdates()
-        if (info.available && !isUpdateDismissed(info.latest_version)) {
-          setUpdateInfo(info)
-          setUpdateAvailable(true)
-        }
-      } catch (error) {
-        console.log('[Update] Silent check failed (non-critical):', error)
+    let unlistenProgress: UnlistenFn | null = null
+
+    try {
+      const info = await checkForUpdates()
+      if (!info.available) {
+        setUpdateInfo(null)
+        setUpdateGateStatus('idle')
+        return
       }
-    }, 3000)
 
-    return () => clearTimeout(timer)
-  }, [isAuthenticated, isAuthLoading])
+      if (!info.download_url) {
+        throw new Error('Missing update download URL.')
+      }
+
+      setUpdateInfo(info)
+      setUpdateGateStatus('downloading')
+      setUpdateGateMessage(`Downloading update v${info.latest_version}...`)
+
+      unlistenProgress = await listen<{ progress: number }>('update-download-progress', (event) => {
+        const value = Math.max(0, Math.min(100, Math.round(event.payload.progress)))
+        setUpdateProgress(value)
+      })
+
+      await invoke('plugin:autostart|enable')
+
+      const installerPath = await downloadUpdate(info.download_url)
+
+      setUpdateGateStatus('installing')
+      setUpdateGateMessage('Installing update and restarting...')
+      await installUpdate(installerPath)
+    } catch (error) {
+      console.error('[Update] Mandatory update failed:', error)
+      setUpdateGateStatus('error')
+      setUpdateGateMessage('Update required to continue.')
+      setUpdateGateError(error instanceof Error ? error.message : 'Unknown update error.')
+    } finally {
+      if (unlistenProgress) {
+        unlistenProgress()
+      }
+    }
+  }, [])
+
+  // Mandatory update check on app start
+  useEffect(() => {
+    void runMandatoryUpdate()
+  }, [runMandatoryUpdate])
 
   // Handle beta toggle
   const handleBetaToggle = (enabled: boolean) => {
@@ -322,31 +363,6 @@ function App() {
         ? "Watch Together and Social features are now available"
         : "Watch Together and Social features are now hidden"
     })
-  }
-
-  const handleStreamTabToggle = (enabled: boolean) => {
-    setStreamTabEnabledState(enabled)
-    if (!enabled && view === 'stream') {
-      setView('home')
-    }
-  }
-
-  // Handle update notification actions
-  const handleUpdateNow = () => {
-    setUpdateAvailable(false)
-    if (updateInfo) {
-      dismissUpdate(updateInfo.latest_version)
-    }
-    setSettingsInitialTab('updates')
-    setAutoCheckUpdate(true)
-    setSettingsOpen(true)
-  }
-
-  const handleDismissUpdate = () => {
-    setUpdateAvailable(false)
-    if (updateInfo) {
-      dismissUpdate(updateInfo.latest_version)
-    }
   }
 
   const handleOnboardingComplete = () => {
@@ -401,12 +417,6 @@ function App() {
       setView('home')
     }
   }
-
-  useEffect(() => {
-    if (!streamTabEnabled && view === 'stream') {
-      setView('home')
-    }
-  }, [streamTabEnabled, view])
 
   // Listen for Tauri events - depends on view to properly refresh data
   useEffect(() => {
@@ -645,8 +655,6 @@ function App() {
         data = await getLibraryFiltered(mediaType, searchQuery, true)
       } else if (view === 'history') {
         data = await getWatchHistory()
-        const streamingData = await getStreamingHistory(50)
-        setStreamingHistoryItems(streamingData)
       }
 
       // Sorting is now handled by useMemo (sortedItems)
@@ -661,7 +669,7 @@ function App() {
   fetchDataRef.current = fetchData
 
   useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'stream' && view !== 'social' && view !== 'ai') {
+    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
@@ -929,93 +937,6 @@ function App() {
     }
   }
 
-  const handleRemoveFromStreamingHistory = async (item: StreamingHistoryItem) => {
-    try {
-      await removeFromStreamingHistory(item.id)
-      toast({ title: "Removed", description: `"${item.title}" removed from streaming history.` })
-      await fetchDataRef.current()
-    } catch {
-      toast({ title: "Error", description: "Failed to remove from streaming history", variant: "destructive" })
-    }
-  }
-
-  const handleClearAllStreamingHistory = async () => {
-    if (!confirm("Are you sure you want to clear all streaming history?")) return
-    try {
-      await clearAllStreamingHistory()
-      toast({ title: "Cleared", description: "All streaming history has been cleared." })
-      await fetchDataRef.current()
-    } catch {
-      toast({ title: "Error", description: "Failed to clear streaming history", variant: "destructive" })
-    }
-  }
-
-  const handleStreamingItemClick = async (item: StreamingHistoryItem) => {
-    setStreamingResumeData(item)
-    setStreamingResumeDialogOpen(true)
-  }
-
-  const openStreamingContent = async (item: StreamingHistoryItem) => {
-    const STREAMVAULT_COLOR = 'FFFFFF'
-
-    if (!isBrowserOpenEnabled()) {
-      toast({
-        title: "Browser Streaming Disabled",
-        description: "Enable it in Settings > General > Allow Browser Streaming.",
-        variant: "destructive"
-      })
-      return
-    }
-
-    let displayTitle = item.title
-    if (item.media_type !== 'movie') {
-      const season = item.season || 1
-      const episode = item.episode || 1
-      displayTitle = `${item.title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
-    }
-
-    const url = getVideasyUrl(
-      item.tmdb_id,
-      item.media_type,
-      item.season || 1,
-      item.episode || 1,
-      { color: STREAMVAULT_COLOR }
-    )
-
-    if (!url) {
-      toast({ title: "Error", description: "Could not generate streaming URL", variant: "destructive" })
-      return
-    }
-
-    // Extract poster path from full URL
-    const posterPath = item.poster_path?.includes('/t/p/')
-      ? item.poster_path.split('/t/p/')[1]?.replace('w342', '').replace('w300', '')
-      : undefined
-
-    try {
-      await openVideasyPlayer(
-        url,
-        item.tmdb_id,
-        item.media_type as 'movie' | 'tv',
-        displayTitle,
-        posterPath,
-        item.season || undefined,
-        item.episode || undefined
-      )
-      toast({ title: "Opening in Browser", description: `Streaming "${displayTitle}" in your default browser` })
-    } catch {
-      toast({ title: "Failed to Open Player", description: "Could not open the streaming player", variant: "destructive" })
-    }
-  }
-
-  const handleStreamingResumeChoice = async (_resume: boolean) => {
-    if (streamingResumeData) {
-      await openStreamingContent(streamingResumeData)
-      setStreamingResumeDialogOpen(false)
-      setStreamingResumeData(null)
-    }
-  }
-
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
@@ -1091,8 +1012,66 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
+  const isUpdateGateActive = updateGateStatus !== 'idle'
+
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
+      {isUpdateGateActive && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-lg mx-4 rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2.5 rounded-xl bg-white/10">
+                <Download className="w-5 h-5 text-neutral-200" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Updating StreamVault</h2>
+                <p className="text-sm text-neutral-400">
+                  {updateInfo?.latest_version ? `v${updateInfo.latest_version}` : 'Checking version...'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-sm text-neutral-300 mb-4">
+              {updateGateMessage}
+            </p>
+
+            {updateGateStatus === 'downloading' && (
+              <div className="space-y-2">
+                <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-white/60 transition-all"
+                    style={{ width: `${updateProgress}%` }}
+                  />
+                </div>
+                <div className="text-xs text-neutral-500">{updateProgress}%</div>
+              </div>
+            )}
+
+            {updateGateStatus === 'installing' && (
+              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Installing and restarting...
+              </div>
+            )}
+
+            {updateGateStatus === 'error' && (
+              <div className="mt-4 space-y-3">
+                {updateGateError && (
+                  <div className="text-xs text-red-300/90 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                    {updateGateError}
+                  </div>
+                )}
+                <button
+                  onClick={() => void runMandatoryUpdate()}
+                  className="w-full py-2.5 px-4 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 text-sm font-medium transition-colors border border-white/10"
+                >
+                  Retry Update
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* Show login screen if not authenticated */}
       {!isAuthenticated && !isAuthLoading && (
         <LoginScreen onLogin={handleLogin} isLoading={isLoggingIn} />
@@ -1108,32 +1087,22 @@ function App() {
         </div>
       )}
 
-      {/* Update notification banner */}
-      <AnimatePresence>
-        {updateAvailable && updateInfo && (
-          <UpdateNotification
-            updateInfo={updateInfo}
-            onUpdateNow={handleUpdateNow}
-            onDismiss={handleDismissUpdate}
-          />
-        )}
-      </AnimatePresence>
-
       {/* Main app content - only show when authenticated */}
       {isAuthenticated && (
         <>
           {/* Custom Title Bar */}
           <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black/45 backdrop-blur-2xl">
-            <div data-tauri-drag-region className="h-full w-full flex items-center justify-between">
+            <div className="relative h-full w-full flex items-center justify-between">
+              <div className="absolute top-0 left-0 right-0 h-1.5" />
               <div
                 data-tauri-drag-region
-                onMouseDown={(e) => {
-                  if (e.button === 0) {
-                    appWindow.startDragging()
-                  }
+                onDoubleClick={async () => {
+                  await appWindow.toggleMaximize()
+                  await refreshWindowState()
                 }}
-                className="flex items-center gap-2 pl-3 select-none"
-              >
+                className="absolute left-0 top-1.5 bottom-0 right-[120px]"
+              />
+              <div className="flex items-center gap-2 pl-3 select-none">
                 <img
                   data-tauri-drag-region
                   src={streamvaultIcon}
@@ -1148,6 +1117,7 @@ function App() {
               <div className="flex items-center gap-1 pr-1.5">
                 <button
                   onClick={() => appWindow.minimize()}
+                  onDoubleClick={(event) => event.stopPropagation()}
                   className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
                   title="Minimize"
                   aria-label="Minimize window"
@@ -1156,8 +1126,21 @@ function App() {
                 </button>
                 <button
                   onClick={async () => {
+                    await appWindow.toggleMaximize()
+                    await refreshWindowState()
+                  }}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
+                  title={isMaximized ? "Restore" : "Maximize"}
+                  aria-label={isMaximized ? "Restore window" : "Maximize window"}
+                >
+                  {isMaximized ? <Minimize2 className="mx-auto h-3.5 w-3.5" /> : <Maximize2 className="mx-auto h-3.5 w-3.5" />}
+                </button>
+                <button
+                  onClick={async () => {
                     await appWindow.hide()
                   }}
+                  onDoubleClick={(event) => event.stopPropagation()}
                   className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
                   title="Close"
                   aria-label="Hide window"
@@ -1177,7 +1160,6 @@ function App() {
           <Sidebar
             currentView={view === 'episodes' ? 'cloud' : view}
             setView={(v) => {
-              if (v === 'stream' && !streamTabEnabled) return
               setView(v)
               setSelectedShow(null)
               setSearchQuery('')
@@ -1192,7 +1174,6 @@ function App() {
             isCloudIndexing={isCloudIndexing}
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
-            showStreamTab={streamTabEnabled}
             betaEnabled={betaEnabled}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
@@ -1356,62 +1337,6 @@ function App() {
               )}
             </AnimatePresence>
 
-            {/* Floating History Tabs */}
-            <AnimatePresence>
-              {view === 'history' && (
-                <motion.div
-                  initial={{ opacity: 0, y: -15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -15 }}
-                  transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4"
-                >
-                  {/* Tab Pills */}
-                  <div className="flex p-0.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/10 shadow-md">
-                    <motion.button
-                      onClick={() => setHistoryTab('local')}
-                      whileTap={{ scale: 0.95 }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${historyTab === 'local'
-                        ? 'bg-white text-black shadow-md'
-                        : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                    >
-                      <Film className="w-3.5 h-3.5" />
-                      <span>Local</span>
-                      <span className="text-[10px] opacity-70">({items.length})</span>
-                    </motion.button>
-                    <motion.button
-                      onClick={() => setHistoryTab('streaming')}
-                      whileTap={{ scale: 0.95 }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${historyTab === 'streaming'
-                        ? 'bg-white text-black shadow-md'
-                        : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                    >
-                      <Globe className="w-3.5 h-3.5" />
-                      <span>Stream</span>
-                      <span className="text-[10px] opacity-70">({streamingHistoryItems.length})</span>
-                    </motion.button>
-                  </div>
-
-                  {/* Clear Button */}
-                  {((historyTab === 'local' && items.length > 0) || (historyTab === 'streaming' && streamingHistoryItems.length > 0)) && (
-                    <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      onClick={historyTab === 'local' ? handleClearAllHistory : handleClearAllStreamingHistory}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="p-1.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/10 text-muted-foreground hover:text-destructive hover:border-destructive/30 shadow-md transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </motion.button>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             {/* Content - Episodes and AI chat have their own fixed layout/scroll behavior */}
             {view === 'episodes' && selectedShow ? (
               <div className="flex-1 overflow-hidden px-3 pb-3 pt-12">
@@ -1497,7 +1422,7 @@ function App() {
                               </h2>
 
                               <p className="text-sm text-muted-foreground mb-4">
-                                Search across your library and streaming services
+                                Search across your library
                               </p>
                             </motion.div>
 
@@ -1540,15 +1465,6 @@ function App() {
                                 >
                                   <Cloud className="w-4 h-4 text-gray-400" />
                                   <span>Google Drive</span>
-                                </button>
-                              )}
-                              {streamTabEnabled && (
-                                <button
-                                  onClick={() => setView('stream')}
-                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                                >
-                                  <Globe className="w-4 h-4 text-gray-400" />
-                                  <span>Browse Online</span>
                                 </button>
                               )}
                               <button
@@ -1938,20 +1854,6 @@ function App() {
                       </motion.div>
                     )}
 
-                    {/* Stream View */}
-                    {view === 'stream' && streamTabEnabled && (
-                      <motion.div
-                        key="stream"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                      >
-                        <Suspense fallback={<LoadingFallback />}>
-                          <StreamView />
-                        </Suspense>
-                      </motion.div>
-                    )}
-
                     {/* AI Chat View */}
                     {view === 'ai' && (
                       <motion.div
@@ -1989,144 +1891,46 @@ function App() {
                     {/* History View */}
                     {view === 'history' && (
                       <motion.div
-                        key={`history-${historyTab}`}
+                        key="history"
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         className="pt-24"
                       >
-                        {historyTab === 'local' ? (
-                          <div className="grid-media">
-                            {sortedItems.map((item, index) => (
-                              <MovieCard
-                                key={item.id}
-                                item={item}
-                                index={index}
-                                disableEntryAnimation={disableHistoryEntryAnimation}
-                                onClick={handleItemClick}
-                                onFixMatch={handleFixMatch}
-                                onRemoveFromHistory={handleRemoveFromHistory}
-                                onDelete={handleDelete}
-                                onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
-                              />
-                            ))}
-                            {sortedItems.length === 0 && (
-                              <div className="col-span-full flex items-center justify-center min-h-[60vh]">
-                                <motion.div
-                                  className="empty-state-enhanced flex flex-col items-center text-center"
-                                  initial={{ opacity: 0, scale: 0.9 }}
-                                  animate={{ opacity: 1, scale: 1 }}
-                                >
-                                  <div className="icon-wrapper mb-4">
-                                    <div className="icon-bg">
-                                      <Film className="w-10 h-10 text-muted-foreground" />
-                                    </div>
-                                  </div>
-                                  <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No local watch history</h3>
-                                  <p className="text-muted-foreground max-w-sm text-center mx-auto">
-                                    Start watching content from your library
-                                  </p>
-                                </motion.div>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="grid-media">
-                            {streamingHistoryItems.map((item, index) => (
+                        <div className="grid-media">
+                          {sortedItems.map((item, index) => (
+                            <MovieCard
+                              key={item.id}
+                              item={item}
+                              index={index}
+                              disableEntryAnimation={disableHistoryEntryAnimation}
+                              onClick={handleItemClick}
+                              onFixMatch={handleFixMatch}
+                              onRemoveFromHistory={handleRemoveFromHistory}
+                              onDelete={handleDelete}
+                              onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                            />
+                          ))}
+                          {sortedItems.length === 0 && (
+                            <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                               <motion.div
-                                key={item.id}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: index * 0.03 }}
-                                onClick={() => handleStreamingItemClick(item)}
-                                className="group relative overflow-hidden rounded-xl bg-card border border-border/50 cursor-pointer transition-all duration-300 hover:border-white/40 hover:shadow-lg"
-                                style={{
-                                  transform: 'translateY(0)',
-                                }}
-                                whileHover={{ y: -6, scale: 1.02 }}
+                                className="empty-state-enhanced flex flex-col items-center text-center"
+                                initial={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
                               >
-                                <div className="aspect-[2/3] relative overflow-hidden">
-                                  {item.poster_path ? (
-                                    <img
-                                      src={item.poster_path}
-                                      alt={item.title}
-                                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full flex items-center justify-center bg-muted">
-                                      <Tv className="w-12 h-12 text-muted-foreground" />
-                                    </div>
-                                  )}
-
-                                  {/* Gradient Overlay */}
-                                  <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent opacity-60 group-hover:opacity-100 transition-opacity" />
-
-                                  {/* Play Button */}
-                                  <motion.div
-                                    className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <div className="relative">
-                                      <div className="absolute inset-0 rounded-full bg-white/30 blur-xl scale-150" />
-                                      <div className="relative w-14 h-14 rounded-full bg-white flex items-center justify-center shadow-lg">
-                                        <Play className="w-6 h-6 text-black fill-black ml-0.5" />
-                                      </div>
-                                    </div>
-                                  </motion.div>
-
-                                  {/* Progress Bar */}
-                                  {item.progress_percent > 0 && item.progress_percent < 95 && (
-                                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-background/50">
-                                      <motion.div
-                                        className="h-full bg-white"
-                                        initial={{ width: 0 }}
-                                        animate={{ width: `${item.progress_percent}%` }}
-                                        transition={{ duration: 0.8, delay: 0.2 }}
-                                      />
-                                    </div>
-                                  )}
-
-                                  {/* Media Type Badge */}
-                                  <div className={`media-type-badge ${item.media_type}`}>
-                                    {item.media_type === 'movie' ? 'Movie' : 'TV'}
+                                <div className="icon-wrapper mb-4">
+                                  <div className="icon-bg">
+                                    <Film className="w-10 h-10 text-muted-foreground" />
                                   </div>
                                 </div>
-                                <div className="p-3">
-                                  <h4 className="font-medium text-sm truncate group-hover:text-white transition-colors">{item.title}</h4>
-                                  {item.media_type === 'tv' && item.season && item.episode && (
-                                    <p className="text-xs text-muted-foreground mt-0.5">
-                                      Season {item.season} · Episode {item.episode}
-                                    </p>
-                                  )}
-                                </div>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleRemoveFromStreamingHistory(item) }}
-                                  className="absolute top-2 right-2 p-2 rounded-full bg-background/80 backdrop-blur-sm text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-all"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No watch history yet</h3>
+                                <p className="text-muted-foreground max-w-sm text-center mx-auto">
+                                  Start watching content from your library
+                                </p>
                               </motion.div>
-                            ))}
-                            {streamingHistoryItems.length === 0 && (
-                              <div className="col-span-full flex items-center justify-center min-h-[60vh]">
-                                <motion.div
-                                  className="empty-state-enhanced flex flex-col items-center text-center"
-                                  initial={{ opacity: 0, scale: 0.9 }}
-                                  animate={{ opacity: 1, scale: 1 }}
-                                >
-                                  <div className="icon-wrapper mb-4">
-                                    <div className="icon-bg">
-                                      <Tv className="w-10 h-10 text-muted-foreground" />
-                                    </div>
-                                  </div>
-                                  <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No streaming history</h3>
-                                  <p className="text-muted-foreground max-w-sm text-center mx-auto">
-                                    Stream content from the Stream tab
-                                  </p>
-                                </motion.div>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                            </div>
+                          )}
+                        </div>
                       </motion.div>
                     )}
 
@@ -2145,6 +1949,7 @@ function App() {
                               key={item.id}
                               item={item}
                               index={index}
+                              layout={viewMode}
                               disableEntryAnimation={disableCloudEntryAnimation}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
@@ -2314,9 +2119,7 @@ function App() {
             isActive={showMainAppTour}
             onComplete={handleMainAppTourComplete}
             onSkip={handleMainAppTourSkip}
-            showStreamTab={streamTabEnabled}
             setView={(v) => {
-              if (v === 'stream' && !streamTabEnabled) return
               setView(v)
               setSelectedShow(null)
               setSearchQuery('')
@@ -2332,32 +2135,15 @@ function App() {
                 setSettingsOpen(open)
                 if (!open) {
                   setSettingsInitialTab('general')
-                  setAutoCheckUpdate(false)
                 }
               }}
               onRestartOnboarding={handleRestartOnboarding}
-              onViewUpdateNotes={() => setShowUpdateNotes(true)}
               initialTab={settingsInitialTab}
               tabVisibility={tabVisibility}
               onTabVisibilityChange={handleTabVisibilityChange}
               onLogout={handleLogout}
               betaEnabled={betaEnabled}
               onBetaToggle={handleBetaToggle}
-              streamTabEnabled={streamTabEnabled}
-              onStreamTabToggle={handleStreamTabToggle}
-              autoCheckUpdate={autoCheckUpdate}
-              onSimulateUpdate={() => {
-                const fakeUpdate: UpdateInfo = {
-                  available: true,
-                  current_version: CURRENT_APP_VERSION,
-                  latest_version: '99.0.0',
-                  release_notes: '- Critical bug fixes\n- Stability improvements\n- New features',
-                  download_url: 'https://fake-url.test/update.exe',
-                  published_at: new Date().toISOString(),
-                }
-                setUpdateInfo(fakeUpdate)
-                setUpdateAvailable(true)
-              }}
             />
           </Suspense>
 
@@ -2396,29 +2182,6 @@ function App() {
             />
           )}
 
-          {streamingResumeData && (
-            <ResumeDialog
-              open={streamingResumeDialogOpen}
-              onOpenChange={(open) => {
-                setStreamingResumeDialogOpen(open)
-                if (!open) setStreamingResumeData(null)
-              }}
-              title={streamingResumeData.title}
-              mediaType={streamingResumeData.media_type === 'movie' ? 'movie' : 'tvepisode'}
-              seasonEpisode={
-                streamingResumeData.media_type === 'tv' && streamingResumeData.season && streamingResumeData.episode
-                  ? `S${String(streamingResumeData.season).padStart(2, '0')}E${String(streamingResumeData.episode).padStart(2, '0')}`
-                  : undefined
-              }
-              currentPosition={streamingResumeData.resume_position_seconds}
-              duration={streamingResumeData.duration_seconds}
-              posterUrl={streamingResumeData.poster_path || undefined}
-              onResume={() => handleStreamingResumeChoice(true)}
-              onStartOver={() => handleStreamingResumeChoice(false)}
-              isStreaming={true}
-            />
-          )}
-
           {deleteModalData && (
             <DeleteEpisodesModal
               isOpen={deleteModalOpen}
@@ -2428,12 +2191,6 @@ function App() {
               onDeleteComplete={handleDeleteComplete}
             />
           )}
-
-          {/* Update Notes Modal */}
-          <UpdateNotesModal
-            open={showUpdateNotes}
-            onOpenChange={setShowUpdateNotes}
-          />
 
           {/* Mark Complete Dialog */}
           {markCompleteData && (

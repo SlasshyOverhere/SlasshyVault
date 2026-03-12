@@ -66,6 +66,13 @@
     @apply border-border;
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
@@ -802,163 +809,128 @@
      ========================================== */
 
   .list-media {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+    gap: 10px;
   }
 
   .list-media > * {
     content-visibility: auto;
-    contain-intrinsic-size: 420px 160px;
+    contain-intrinsic-size: 600px 120px;
   }
 
-  /* ---- Outer wrapper (ContextMenu > ContextMenuTrigger > motion.div) ---- */
-  .list-media>* {
-    /* Reset any grid-card sizing */
-    height: auto !important;
-    min-height: unset !important;
-    max-height: unset !important;
+  @media (min-width: 900px) {
+    .list-media {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
   }
 
-  /* ---- The motion.div that is the actual card ---- */
-  .list-media>*>*>* {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    background: hsl(var(--card) / 0.4) !important;
-    border: 1px solid hsl(0 0% 100% / 0.06) !important;
-    border-left: 3px solid transparent !important;
-    border-radius: 14px !important;
-    padding: 10px 16px 10px 10px !important;
-    gap: 16px !important;
-    height: auto !important;
-    min-height: unset !important;
-    max-height: unset !important;
-    transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1) !important;
-    transform: none !important;
-    box-shadow: none !important;
+  .media-list-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-radius: 14px;
+    background: linear-gradient(120deg, hsl(var(--card) / 0.5), hsl(var(--card) / 0.2));
+    border: 1px solid hsl(0 0% 100% / 0.06);
+    transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: 0 6px 18px -16px rgba(0, 0, 0, 0.6);
   }
 
-  .list-media>*>*>*:hover {
-    background: hsl(var(--card) / 0.7) !important;
-    border-color: hsl(0 0% 100% / 0.12) !important;
-    border-left-color: hsl(0 0% 100% / 0.5) !important;
-    transform: translateX(6px) !important;
-    box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.4),
-      0 0 0 1px hsl(0 0% 100% / 0.04) !important;
+  .media-list-card[data-has-actions="true"] {
+    grid-template-columns: 64px minmax(0, 1fr) auto;
   }
 
-  /* Hide the glow effect behind card */
-  .list-media>*>*>*>div:first-child {
-    display: none !important;
+  .media-card[data-layout="list"]:hover .media-list-card {
+    border-color: hsl(0 0% 100% / 0.12);
+    background: linear-gradient(120deg, hsl(var(--card) / 0.75), hsl(var(--card) / 0.35));
+    box-shadow: 0 14px 30px -18px rgba(0, 0, 0, 0.7);
   }
 
-  /* ---- Card inner container (holds poster + info) ---- */
-  .list-media>*>*>*>div:nth-child(2) {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    gap: 16px !important;
-    width: 100% !important;
-    border-radius: 0 !important;
-    border: none !important;
-    background: none !important;
-    box-shadow: none !important;
-    overflow: visible !important;
-    transform: none !important;
-    height: auto !important;
+  .media-list-poster {
+    width: 64px;
+    height: 96px;
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+    background: hsl(var(--muted));
+    border: 1px solid hsl(0 0% 100% / 0.08);
+    box-shadow: 0 6px 16px -10px rgba(0, 0, 0, 0.6);
   }
 
-  /* ---- Poster container ---- */
-  .list-media>*>*>*>div:nth-child(2)>div:first-child {
-    width: 60px !important;
-    min-width: 60px !important;
-    max-width: 60px !important;
-    height: 90px !important;
-    flex-shrink: 0 !important;
-    border-radius: 10px !important;
-    overflow: hidden !important;
-    transform: none !important;
-    box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.5) !important;
-    border: 1px solid hsl(0 0% 100% / 0.08) !important;
-    background: hsl(var(--muted)) !important;
-    position: relative !important;
+  .media-list-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: filter 0.3s ease;
   }
 
-  /* Poster aspect container */
-  .list-media .aspect-\[2\/3\] {
-    width: 60px !important;
-    height: 90px !important;
-    aspect-ratio: unset !important;
+  .media-card[data-layout="list"]:hover .media-list-image {
+    filter: brightness(1.05) saturate(1.05);
   }
 
-  /* The actual poster image */
-  .list-media .aspect-\[2\/3\] img,
-  .list-media img {
-    width: 60px !important;
-    height: 90px !important;
-    object-fit: cover !important;
-    transform: none !important;
-    filter: none !important;
-    opacity: 1 !important;
-    border-radius: 10px !important;
-    transition: transform 0.3s ease !important;
+  .media-list-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
   }
 
-  .list-media>*:hover img {
-    transform: none !important;
-    filter: brightness(1.05) saturate(1.05) !important;
+  .media-list-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+    letter-spacing: -0.01em;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
 
-  /* Hide all absolute positioned elements in poster (overlays, badges, play btn) */
-  .list-media .aspect-\[2\/3\] .absolute,
-  .list-media .aspect-\[2\/3\]>div:not(:has(img)) {
-    display: none !important;
+  .media-list-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: hsl(var(--muted-foreground));
+    flex-wrap: wrap;
   }
 
-  /* ---- Info section - title and year ---- */
-  .list-media>*>*>*>div:nth-child(2)>div:last-child,
-  .list-media>*>*>*>div:last-child {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: center !important;
-    flex: 1 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    gap: 4px !important;
-    min-width: 0 !important;
+  .media-list-synopsis {
+    font-size: 12px;
+    color: hsl(var(--muted-foreground) / 0.9);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
 
-  .list-media h3 {
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    color: hsl(var(--foreground)) !important;
-    margin: 0 !important;
-    line-height: 1.4 !important;
-    letter-spacing: -0.01em !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+  .media-list-meta-item {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid hsl(0 0% 100% / 0.08);
+    background: hsl(var(--card) / 0.4);
   }
 
-  .list-media>*:hover h3 {
-    color: white !important;
+  .media-list-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
   }
 
-  .list-media>*>*>*>div:last-child>div,
-  .list-media>*>*>*>div:nth-child(2)>div:last-child>div {
-    font-size: 12px !important;
-    color: hsl(var(--muted-foreground)) !important;
-    margin: 0 !important;
-    display: flex !important;
-    align-items: center !important;
-    gap: 6px !important;
-  }
-
-  /* Hide progress bars in list layout - they look bad as rows */
-  .list-media>*>*>*>div:nth-child(2)>div:first-child>div:first-child>div:nth-child(2),
-  .list-media>*>*>*>div:nth-child(2)>div:first-child>div:first-child>div:nth-child(3) {
-    display: none !important;
+  .media-list-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: hsl(0 0% 100% / 0.1);
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(0 0% 100% / 0.12);
   }
 
   @media (min-width: 1600px) {

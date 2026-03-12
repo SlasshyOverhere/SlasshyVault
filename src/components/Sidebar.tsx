@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Globe, Home, RotateCw, Cloud, Users, Sparkles, Bot, ChevronLeft, ChevronRight
+  Home, RotateCw, Cloud, Users, Sparkles, Bot, ChevronLeft, ChevronRight
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect } from "react"
@@ -22,7 +22,6 @@ interface SidebarProps {
     total: number
   } | null
   showCloudTab?: boolean
-  showStreamTab?: boolean
   betaEnabled?: boolean
 }
 
@@ -35,7 +34,6 @@ export function Sidebar({
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
-  showStreamTab = false,
   betaEnabled = false,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -84,8 +82,7 @@ export function Sidebar({
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Google Drive", icon: Cloud, hidden: !showCloudTab },
-    { id: "stream", label: "Discover", icon: Globe, hidden: !showStreamTab },
-    { id: "ai", label: "AI Chat", icon: Bot, hidden: !betaEnabled, isNew: true },
+    { id: "ai", label: "AI Chat", icon: Bot, isNew: true },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);

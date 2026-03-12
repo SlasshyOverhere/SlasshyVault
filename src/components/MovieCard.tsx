@@ -23,6 +23,7 @@ export interface MovieCardProps {
   aspectRatio?: "portrait" | "square"
   className?: string
   index?: number
+  layout?: "grid" | "list"
 }
 
 // Custom comparison function for React.memo to prevent unnecessary re-renders
@@ -31,7 +32,8 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
   if (
     prev.index !== next.index ||
     prev.className !== next.className ||
-    prev.aspectRatio !== next.aspectRatio
+    prev.aspectRatio !== next.aspectRatio ||
+    prev.layout !== next.layout
   ) {
     return false
   }
@@ -89,6 +91,7 @@ function MovieCardBase({
   aspectRatio = "portrait",
   className,
   index = 0,
+  layout = "grid",
 }: MovieCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [posterUrl, setPosterUrl] = useState<string | null>(null)
@@ -101,6 +104,8 @@ function MovieCardBase({
   const progress = item.progress_percent || (item.resume_position_seconds && item.duration_seconds ? (item.resume_position_seconds / item.duration_seconds) * 100 : 0)
   const isFinished = progress >= 95
   const hasProgress = progress > 0 && !isFinished
+  const leadActor = item.cast_names?.split(',')[0]?.trim()
+  const directorName = item.director?.trim()
 
   useEffect(() => {
     if (shouldLoadPoster) return
@@ -159,6 +164,172 @@ function MovieCardBase({
 
   const imageSrc = posterUrl || `https://placehold.co/400x600/0a0a0f/1a1a2e?text=${encodeURIComponent(item.title.slice(0, 2))}`
   const displayInfo = item.year || (item.season_number && item.episode_number ? `S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}` : null)
+
+  if (layout === "list") {
+    const showStatus = isFinished || hasProgress
+    return (
+      <>
+        <ContextMenu>
+          <ContextMenuTrigger>
+            <motion.div
+              ref={cardRef}
+              className={cn("media-card group", className)}
+              data-layout="list"
+              onClick={() => onClick(item)}
+              onMouseEnter={handleHoverStart}
+              onMouseLeave={handleHoverEnd}
+              initial={shouldAnimateEntry ? { opacity: 0, y: 12 } : false}
+              animate={shouldAnimateEntry ? { opacity: 1, y: 0 } : undefined}
+              transition={shouldAnimateEntry
+                ? {
+                  duration: 0.35,
+                  delay: Math.min(index, 24) * 0.01,
+                  ease: [0.22, 1, 0.36, 1]
+                }
+                : undefined}
+            >
+              <div className="media-list-card" data-has-actions={showStatus ? "true" : "false"}>
+                <div className="media-list-poster">
+                  {!imageLoaded && (
+                    <div className="absolute inset-0 skeleton-shimmer" />
+                  )}
+                  <img
+                    src={imageSrc}
+                    alt={item.title}
+                    loading="lazy"
+                    onLoad={() => setImageLoaded(true)}
+                    className={cn(
+                      "media-list-image",
+                      imageLoaded ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                </div>
+
+                <div className="media-list-info">
+                  <h3 className="media-list-title">{item.title}</h3>
+                  <div className="media-list-meta">
+                    {displayInfo && (
+                      <span className="media-list-meta-item">{displayInfo}</span>
+                    )}
+                    {leadActor && (
+                      <span className="media-list-meta-item">{leadActor}</span>
+                    )}
+                    {directorName && (
+                      <span className="media-list-meta-item">Dir. {directorName}</span>
+                    )}
+                    {item.media_type === "tvshow" && (
+                      <span className="media-list-meta-item">Series</span>
+                    )}
+                    {item.media_type === "tvepisode" && !displayInfo && item.season_number && item.episode_number && (
+                      <span className="media-list-meta-item">
+                        Season {item.season_number} · Episode {item.episode_number}
+                      </span>
+                    )}
+                  </div>
+                  {item.overview && (
+                    <p className="media-list-synopsis">{item.overview}</p>
+                  )}
+                </div>
+
+                {showStatus && (
+                  <div className="media-list-actions">
+                    {isFinished && (
+                      <span className="media-list-pill">Watched</span>
+                    )}
+                    {!isFinished && hasProgress && (
+                      <span className="media-list-pill">{Math.round(progress)}%</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </ContextMenuTrigger>
+
+          {/* Context Menu */}
+          <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <ContextMenuItem
+              onClick={() => onClick(item)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                <Play className="w-4 h-4 text-white" />
+              </div>
+              <span>Open Details</span>
+            </ContextMenuItem>
+
+            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+
+            <ContextMenuItem
+              onClick={() => onFixMatch(item)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
+                <Edit className="w-4 h-4 text-muted-foreground" />
+              </div>
+              <span>Fix Match</span>
+            </ContextMenuItem>
+
+            {onAskAI && item.is_cloud && (
+              <ContextMenuItem
+                onClick={() => onAskAI(item)}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-300 text-amber-300 transition-colors"
+              >
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/35 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-amber-300" />
+                </div>
+                <span>Ask AI (New)</span>
+              </ContextMenuItem>
+            )}
+
+            {onWatchTogether && (
+              <>
+                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+                <ContextMenuItem
+                  onClick={() => onWatchTogether(item)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                    <Users className="w-4 h-4 text-white" />
+                  </div>
+                  <span>Watch Together</span>
+                </ContextMenuItem>
+              </>
+            )}
+
+            {onRemoveFromHistory && (
+              <>
+                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+                <ContextMenuItem
+                  onClick={() => onRemoveFromHistory(item)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
+                    <X className="w-4 h-4 text-muted-foreground" />
+                  </div>
+                  <span>Remove from History</span>
+                </ContextMenuItem>
+              </>
+            )}
+
+            {onDelete && (
+              <>
+                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+                <ContextMenuItem
+                  onClick={() => onDelete(item)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </div>
+                  <span>Delete from Drive</span>
+                </ContextMenuItem>
+              </>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
+      </>
+    )
+  }
 
   return (
     <>

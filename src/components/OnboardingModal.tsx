@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
-  Play, Film, Tv, Globe, History, Search, Settings,
-  Sparkles, ArrowRight, Check, Zap, FolderOpen, ChevronRight,
+  Play, Film, Tv, History, Settings,
+  Sparkles, ArrowRight, Check, FolderOpen, ChevronRight,
   MonitorPlay, Clock, Star, Rocket
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -123,66 +123,6 @@ export function OnboardingModal({ open, onComplete }: OnboardingModalProps) {
                 {i === 2 ? <Tv className="w-3 h-3" /> : <Film className="w-3 h-3" />}
               </div>
             </motion.div>
-          ))}
-        </div>
-      )
-    },
-    {
-      id: "discover",
-      title: "Discover & Stream",
-      subtitle: "Explore New Content",
-      description: "Browse trending movies and TV shows. Stream directly or find where to watch your favorites.",
-      icon: <Globe className="w-8 h-8" />,
-      color: "#AAAAAA",
-      features: [
-        { icon: <Search className="w-4 h-4" />, text: "Search millions of titles" },
-        { icon: <Zap className="w-4 h-4" />, text: "Stream instantly online" },
-        { icon: <Sparkles className="w-4 h-4" />, text: "Discover trending content" },
-      ],
-      visual: (
-        <div className="relative w-full h-48 flex items-center justify-center">
-          {/* Globe animation */}
-          <motion.div
-            className="relative"
-            animate={{ rotate: 360 }}
-            transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          >
-            <div className="w-32 h-32 rounded-full border-2 border-gray-500/30 border-dashed" />
-          </motion.div>
-          <motion.div
-            className="absolute"
-            animate={{ rotate: -360 }}
-            transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-          >
-            <div className="w-24 h-24 rounded-full border-2 border-gray-500/30 border-dashed" />
-          </motion.div>
-          <motion.div
-            className="absolute w-16 h-16 rounded-2xl bg-gradient-to-br from-gray-500/20 to-gray-500/20 flex items-center justify-center border border-white/10"
-            animate={{ scale: [1, 1.1, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            <Globe className="w-8 h-8 text-gray-400" />
-          </motion.div>
-
-          {/* Floating content cards */}
-          {[0, 1, 2, 3].map((i) => (
-            <motion.div
-              key={i}
-              className="absolute w-8 h-8 rounded-lg bg-gradient-to-br from-gray-500/20 to-gray-500/20 border border-white/10"
-              style={{
-                top: `${20 + Math.sin(i * 1.5) * 30}%`,
-                left: `${15 + i * 20}%`,
-              }}
-              animate={{
-                y: [0, -15, 0],
-                opacity: [0.5, 1, 0.5],
-              }}
-              transition={{
-                duration: 2,
-                repeat: Infinity,
-                delay: i * 0.3,
-              }}
-            />
           ))}
         </div>
       )

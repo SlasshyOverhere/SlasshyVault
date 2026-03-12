@@ -538,7 +538,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         }
     }
 
-    const handlePlayerSelect = async (player: 'mpv' | 'vlc' | 'builtin' | 'stream') => {
+    const handlePlayerSelect = async (player: 'mpv' | 'vlc' | 'builtin') => {
         if (!pendingPlayEpisode) return;
 
         // Only MPV is supported now

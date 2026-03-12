@@ -5,10 +5,9 @@ interface MainAppTourProps {
   onComplete: () => void
   onSkip: () => void
   setView: (view: string) => void
-  showStreamTab?: boolean
 }
 
-export function MainAppTour({ isActive, onComplete, onSkip, setView, showStreamTab = false }: MainAppTourProps) {
+export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTourProps) {
   const allSteps: TourStep[] = [
     // Sidebar Overview
     {
@@ -50,22 +49,12 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView, showStreamT
       action: () => setView('cloud'),
     },
 
-    // Discover Tab
-    {
-      id: 'nav-stream',
-      target: '[data-tour="nav-stream"]',
-      title: 'Discover & Stream',
-      description: 'Search for any movie or TV show online. Stream content directly or find where to watch. Powered by TMDB and streaming providers.',
-      position: 'right',
-      action: () => setView('stream'),
-    },
-
     // History Tab
     {
       id: 'nav-history',
       target: '[data-tour="nav-history"]',
       title: 'Watch History',
-      description: 'Track what you\'ve watched! Switch between Local (your library) and Streaming history. Resume from where you left off anytime.',
+      description: 'Track what you\'ve watched! Resume from where you left off anytime.',
       position: 'right',
       action: () => setView('history'),
     },
@@ -137,11 +126,9 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView, showStreamT
     },
   ]
 
-  const tourSteps = allSteps.filter((step) => showStreamTab || step.id !== 'nav-stream')
-
   return (
     <GuidedTour
-      steps={tourSteps}
+      steps={allSteps}
       isActive={isActive}
       onComplete={onComplete}
       onSkip={onSkip}

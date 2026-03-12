@@ -54,6 +54,7 @@ pub struct MediaItem {
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub cast_names: Option<String>,
+    pub director: Option<String>,
     pub poster_path: Option<String>,
     pub file_path: Option<String>,
     pub media_type: String,
@@ -176,6 +177,7 @@ impl Database {
                 year INTEGER,
                 overview TEXT,
                 cast_names TEXT,
+                director TEXT,
                 poster_path TEXT,
                 file_path TEXT NOT NULL UNIQUE,
                 media_type TEXT NOT NULL,
@@ -247,6 +249,12 @@ impl Database {
         if !columns.contains(&"cast_names".to_string()) {
             self.conn.execute(
                 "ALTER TABLE media ADD COLUMN cast_names TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"director".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN director TEXT DEFAULT NULL",
                 [],
             )?;
         }
@@ -354,7 +362,6 @@ impl Database {
             [],
         )?;
 
-
         // Cover the common library list queries: filter by media_type, then order by title.
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_type_title ON media(media_type, title)",
@@ -391,7 +398,7 @@ impl Database {
 
     pub fn get_library(&self, media_type: &str, search: Option<&str>) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -431,7 +438,7 @@ impl Database {
         is_cloud: Option<bool>,
     ) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -474,7 +481,7 @@ impl Database {
 
     pub fn get_episodes(&self, series_id: i64) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id,
@@ -499,6 +506,7 @@ impl Database {
                 CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END as year,
                 m.overview,
                 CASE WHEN m.media_type = 'tvepisode' THEN p.cast_names ELSE m.cast_names END as cast_names,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.director ELSE m.director END as director,
                 CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END as poster_path,
                 m.file_path,
                 m.media_type,
@@ -530,7 +538,7 @@ impl Database {
 
     pub fn get_media_by_id(&self, id: i64) -> Result<MediaItem> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -810,6 +818,7 @@ impl Database {
                  year = ?,
                  overview = ?,
                  cast_names = ?,
+                 director = ?,
                  poster_path = ?,
                  tmdb_id = ?,
                  duration_seconds = CASE
@@ -822,6 +831,7 @@ impl Database {
                 metadata.year,
                 metadata.overview,
                 metadata.cast_names,
+                metadata.director,
                 metadata.poster_path,
                 metadata.tmdb_id,
                 metadata.runtime_seconds.unwrap_or(0.0),
@@ -871,7 +881,7 @@ impl Database {
     /// Get media item by file path - used for file watcher to identify media for removal
     pub fn get_media_by_file_path(&self, file_path: &str) -> Result<Option<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1072,20 +1082,34 @@ impl Database {
             return true;
         }
 
-        // Check if one contains the other
-        if norm_a.contains(&norm_b) || norm_b.contains(&norm_a) {
-            return true;
-        }
-
-        // Check word overlap
+        // Check word overlap with stricter thresholds to avoid false merges
         let words_a: std::collections::HashSet<&str> = norm_a.split_whitespace().collect();
         let words_b: std::collections::HashSet<&str> = norm_b.split_whitespace().collect();
 
-        let intersection = words_a.intersection(&words_b).count();
-        let smaller = words_a.len().min(words_b.len());
+        let len_a = words_a.len();
+        let len_b = words_b.len();
 
-        // If most words match, consider them similar
-        smaller > 0 && intersection >= smaller.saturating_sub(1)
+        // If either title is a single word, only an exact match should pass (handled above)
+        if len_a <= 1 || len_b <= 1 {
+            return false;
+        }
+
+        let intersection = words_a.intersection(&words_b).count();
+        if intersection == 0 {
+            return false;
+        }
+
+        let union = words_a.union(&words_b).count();
+        let jaccard = intersection as f32 / union as f32;
+        let smaller = len_a.min(len_b);
+
+        // For short titles (2 words), require all words to match
+        if smaller <= 2 {
+            return intersection == smaller;
+        }
+
+        // For longer titles, require high overlap and at least 2 matching words
+        intersection >= smaller.saturating_sub(1) && intersection >= 2 && jaccard >= 0.6
     }
 
     pub fn insert_movie(
@@ -1094,15 +1118,16 @@ impl Database {
         year: Option<i32>,
         overview: Option<&str>,
         cast_names: Option<&str>,
+        director: Option<&str>,
         poster_path: Option<&str>,
         file_path: &str,
         duration: f64,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, duration_seconds, tmdb_id) 
-             VALUES (?, ?, ?, ?, ?, ?, 'movie', ?, ?)",
-            params![title, year, overview, cast_names, poster_path, file_path, duration, tmdb_id],
+            "INSERT INTO media (title, year, overview, cast_names, director, poster_path, file_path, media_type, duration_seconds, tmdb_id) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'movie', ?, ?)",
+            params![title, year, overview, cast_names, director, poster_path, file_path, duration, tmdb_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1187,6 +1212,7 @@ impl Database {
         year: Option<i32>,
         overview: Option<&str>,
         cast_names: Option<&str>,
+        director: Option<&str>,
         poster_path: Option<&str>,
         file_name: &str,
         cloud_file_id: &str,
@@ -1195,9 +1221,9 @@ impl Database {
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, duration_seconds, tmdb_id, is_cloud, cloud_file_id, cloud_folder_id)
-             VALUES (?, ?, ?, ?, ?, ?, 'movie', ?, ?, 1, ?, ?)",
-            params![title, year, overview, cast_names, poster_path, file_name, duration, tmdb_id, cloud_file_id, cloud_folder_id],
+            "INSERT INTO media (title, year, overview, cast_names, director, poster_path, file_path, media_type, duration_seconds, tmdb_id, is_cloud, cloud_file_id, cloud_folder_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'movie', ?, ?, 1, ?, ?)",
+            params![title, year, overview, cast_names, director, poster_path, file_name, duration, tmdb_id, cloud_file_id, cloud_folder_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1260,7 +1286,7 @@ impl Database {
     /// Get cloud media by folder ID
     pub fn get_cloud_media_by_folder(&self, cloud_folder_id: &str) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1276,6 +1302,26 @@ impl Database {
             .collect()
     }
 
+    /// Get all cloud media IDs for logging/indexing purposes
+    pub fn get_cloud_media_index_list(
+        &self,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, title, file_path, cloud_file_id FROM media WHERE is_cloud = 1")?;
+
+        let items = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+
+        Ok(items.filter_map(|r| r.ok()).collect())
+    }
+
     /// Delete all cloud media for a folder
     pub fn delete_cloud_folder_media(&self, cloud_folder_id: &str) -> Result<usize> {
         let deleted = self.conn.execute(
@@ -1283,6 +1329,27 @@ impl Database {
             params![cloud_folder_id],
         )?;
         Ok(deleted)
+    }
+
+    /// Check how many media entries are tied to a cloud folder and how many belong to a series
+    pub fn get_cloud_folder_usage_counts(
+        &self,
+        cloud_folder_id: &str,
+        series_id: i64,
+    ) -> Result<(i64, i64)> {
+        let total: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM media WHERE cloud_folder_id = ?",
+            params![cloud_folder_id],
+            |row| row.get(0),
+        )?;
+
+        let series_related: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM media WHERE cloud_folder_id = ? AND (id = ? OR parent_id = ?)",
+            params![cloud_folder_id, series_id, series_id],
+            |row| row.get(0),
+        )?;
+
+        Ok((total, series_related))
     }
 
     // ==================== CLOUD FOLDER MANAGEMENT ====================
@@ -1389,10 +1456,12 @@ impl Database {
              WHERE media_type IN ('movie', 'tvshow')
                AND (
                    tmdb_id IS NULL OR tmdb_id = ''
-                   OR overview IS NULL OR TRIM(overview) = ''
-                   OR cast_names IS NULL OR TRIM(cast_names) = ''
-                   OR (media_type = 'movie' AND (duration_seconds IS NULL OR duration_seconds <= 0))
-               )
+                    OR overview IS NULL OR TRIM(overview) = ''
+                    OR cast_names IS NULL OR TRIM(cast_names) = ''
+                    OR director IS NULL OR TRIM(director) = ''
+                    OR poster_path IS NULL OR TRIM(poster_path) = ''
+                    OR (media_type = 'movie' AND (duration_seconds IS NULL OR duration_seconds <= 0))
+                )
              ORDER BY id ASC
              LIMIT ?",
         )?;
@@ -1408,6 +1477,28 @@ impl Database {
         })?;
 
         rows.collect()
+    }
+
+    /// Remove media by cloud file ID and return basic info
+    pub fn remove_media_by_cloud_file_id(
+        &self,
+        cloud_file_id: &str,
+    ) -> Result<Option<(i64, String, String, Option<i64>)>> {
+        let media_info: Option<(i64, String, String, Option<i64>)> = self
+            .conn
+            .query_row(
+                "SELECT id, title, media_type, parent_id FROM media WHERE cloud_file_id = ?",
+                params![cloud_file_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
+
+        if let Some((id, _, _, _)) = &media_info {
+            self.conn
+                .execute("DELETE FROM media WHERE id = ?", params![id])?;
+        }
+
+        Ok(media_info)
     }
 
     /// Get all episodes user has for a series (returns id, season_number, episode_number)
@@ -1445,7 +1536,7 @@ impl Database {
     /// Find a TV show by title (case-insensitive) - returns the MediaItem
     pub fn find_tvshow_by_title(&self, title: &str) -> Result<Option<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1598,7 +1689,7 @@ impl Database {
     /// Get all media entries (for cleanup purposes)
     pub fn get_all_media(&self) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, poster_path, file_path, media_type,
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     is_cloud, cloud_file_id
@@ -1749,6 +1840,27 @@ impl Database {
             .collect()
     }
 
+    /// Get parent series IDs for a list of episode IDs
+    pub fn get_parent_series_ids(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT DISTINCT parent_id FROM media WHERE id IN ({}) AND media_type = 'tvepisode' AND parent_id IS NOT NULL",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+        let results = stmt.query_map(params.as_slice(), |row| row.get::<_, i64>(0))?;
+
+        Ok(results.filter_map(|r| r.ok()).collect())
+    }
+
     /// Delete multiple media entries and return their file paths for cleanup
     pub fn delete_media_entries(&self, ids: &[i64]) -> Result<Vec<String>> {
         if ids.is_empty() {
@@ -1878,10 +1990,7 @@ impl Database {
                 let mut years: Vec<i32> = Vec::new();
 
                 for (_, tmdb_id, year) in &entries {
-                    if let Some(tid) = tmdb_id
-                        .as_ref()
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
+                    if let Some(tid) = tmdb_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
                     {
                         tmdb_ids.insert(tid.to_string());
                     }
@@ -2262,6 +2371,7 @@ impl Database {
             year: row.get("year").unwrap_or(None),
             overview: row.get("overview").unwrap_or(None),
             cast_names: row.get("cast_names").unwrap_or(None),
+            director: row.get("director").unwrap_or(None),
             poster_path: row.get("poster_path").unwrap_or(None),
             file_path: row.get("file_path").unwrap_or(None),
             media_type: row.get("media_type")?,
@@ -2290,7 +2400,8 @@ mod tests {
 
     #[test]
     fn init_migrates_legacy_media_table_before_creating_indexes() {
-        let db_path = std::env::temp_dir().join(format!("streamvault-db-test-{}.db", Uuid::new_v4()));
+        let db_path =
+            std::env::temp_dir().join(format!("streamvault-db-test-{}.db", Uuid::new_v4()));
 
         {
             let conn = Connection::open(&db_path).unwrap();
@@ -2313,7 +2424,8 @@ mod tests {
                     FOREIGN KEY (parent_id) REFERENCES media (id) ON DELETE CASCADE
                 )",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let db = Database::new(db_path.to_str().unwrap()).unwrap();
@@ -2333,7 +2445,11 @@ mod tests {
             "idx_media_type_tmdb_id",
             "idx_media_cloud_file_id",
         ] {
-            assert!(index_names.iter().any(|name| name == expected), "missing index: {}", expected);
+            assert!(
+                index_names.iter().any(|name| name == expected),
+                "missing index: {}",
+                expected
+            );
         }
 
         drop(db);
@@ -2342,14 +2458,51 @@ mod tests {
 
     #[test]
     fn get_library_stats_returns_counts_without_loading_rows() {
-        let db_path = std::env::temp_dir().join(format!("streamvault-db-stats-test-{}.db", Uuid::new_v4()));
+        let db_path =
+            std::env::temp_dir().join(format!("streamvault-db-stats-test-{}.db", Uuid::new_v4()));
         let db = Database::new(db_path.to_str().unwrap()).unwrap();
 
-        db.insert_movie("Movie One", Some(2024), None, None, None, "movie-1.mkv", 120.0, None).unwrap();
-        db.insert_tvshow("Show One", Some(2024), None, None, None, "show-1", None).unwrap();
-        db.insert_episode("Episode One", "episode-1.mkv", 2, 1, 1, 42.0).unwrap();
-        db.insert_cloud_movie("Cloud Movie", Some(2024), None, None, None, "cloud-movie.mkv", "cloud-file-1", "cloud-folder-1", 90.0, None).unwrap();
-        db.insert_cloud_tvshow("Cloud Show", Some(2024), None, None, None, "cloud-show", "cloud-folder-2", None).unwrap();
+        db.insert_movie(
+            "Movie One",
+            Some(2024),
+            None,
+            None,
+            None,
+            None,
+            "movie-1.mkv",
+            120.0,
+            None,
+        )
+        .unwrap();
+        db.insert_tvshow("Show One", Some(2024), None, None, None, "show-1", None)
+            .unwrap();
+        db.insert_episode("Episode One", "episode-1.mkv", 2, 1, 1, 42.0)
+            .unwrap();
+        db.insert_cloud_movie(
+            "Cloud Movie",
+            Some(2024),
+            None,
+            None,
+            None,
+            None,
+            "cloud-movie.mkv",
+            "cloud-file-1",
+            "cloud-folder-1",
+            90.0,
+            None,
+        )
+        .unwrap();
+        db.insert_cloud_tvshow(
+            "Cloud Show",
+            Some(2024),
+            None,
+            None,
+            None,
+            "cloud-show",
+            "cloud-folder-2",
+            None,
+        )
+        .unwrap();
 
         let all_stats = db.get_library_stats(None).unwrap();
         assert_eq!(all_stats.movies, 2);

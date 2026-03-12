@@ -26,7 +26,6 @@ A modern, cloud-first media library manager built with **Tauri**, **Rust**, and 
 - **MPV Integration** - Native playback of any format (MKV, MP4, AVI, HDR, etc.) without transcoding
 - **Resume Playback** - Remembers your position across all media
 - **Watch History** - Track what you've watched
-- **Streaming Support** - Built-in Videasy player for online content
 
 ### User Experience
 - **Monochrome UI** - Sleek black & white design with smooth animations

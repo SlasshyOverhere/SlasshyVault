@@ -1,16 +1,18 @@
+use rayon::prelude::*;
 use regex::Regex;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use walkdir::WalkDir;
-use serde::Serialize;
-use rayon::prelude::*;
 
 use crate::config::Config;
 use crate::database::Database;
 use crate::tmdb;
 
-const VIDEO_EXTENSIONS: &[&str] = &[".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".m2ts"];
+const VIDEO_EXTENSIONS: &[&str] = &[
+    ".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".m2ts",
+];
 
 /// Normalize file paths for consistent comparison (handles Windows path inconsistencies)
 fn normalize_path(path: &str) -> String {
@@ -24,7 +26,7 @@ pub struct ParsedMedia {
     pub media_type: MediaParseType,
     pub season: Option<i32>,
     pub episode: Option<i32>,
-    pub episode_end: Option<i32>,  // For multi-episode files like S01E01-E03
+    pub episode_end: Option<i32>, // For multi-episode files like S01E01-E03
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -105,17 +107,20 @@ pub fn cleanup_orphaned_media(db: &Database, image_cache_dir: &str) -> usize {
                 let path = Path::new(file_path);
                 !path.is_file()
             };
-            
+
             if should_remove {
-                println!("[CLEANUP] Removing orphaned entry: {} ({})", item.title, file_path);
-                
+                println!(
+                    "[CLEANUP] Removing orphaned entry: {} ({})",
+                    item.title, file_path
+                );
+
                 // If it's a TV show, also remove its episodes
                 if item.media_type == "tvshow" {
                     if let Err(e) = db.remove_series_episodes(item.id) {
                         println!("[CLEANUP] Error removing episodes: {}", e);
                     }
                 }
-                
+
                 // Remove the media entry and get the poster path
                 match db.remove_media(item.id) {
                     Ok(Some(poster_path)) => {
@@ -126,7 +131,7 @@ pub fn cleanup_orphaned_media(db: &Database, image_cache_dir: &str) -> usize {
                         println!("[CLEANUP] Error removing media: {}", e);
                     }
                 }
-                
+
                 removed_count += 1;
             }
         }
@@ -221,7 +226,7 @@ pub fn scan_media_folders_with_events(
     _db: &Database,
     _config: &Config,
     _image_cache_dir: &str,
-    _window: &tauri::Window
+    _window: &tauri::Window,
 ) {
     // No-op: Local scanning removed, app uses cloud storage only
     println!("[SCAN] Local scanning is disabled. Use cloud storage.");
@@ -246,10 +251,11 @@ pub fn process_movie(
     let mut year = parsed.year;
     let mut overview: Option<String> = None;
     let mut cast_names: Option<String> = None;
+    let mut director: Option<String> = None;
     let mut poster_path: Option<String> = None;
     let mut tmdb_id: Option<String> = None;
     let mut tmdb_runtime_seconds: Option<f64> = None;
-    
+
     // Fetch TMDB metadata
     if !api_key.is_empty() {
         if let Ok(Some(metadata)) = tmdb::search_metadata(
@@ -259,10 +265,11 @@ pub fn process_movie(
             parsed.year,
             image_cache_dir,
         ) {
-            title = metadata.title;
+            title = prefer_title_with_leading_article(&parsed.title, &metadata.title);
             year = metadata.year;
             overview = metadata.overview;
             cast_names = metadata.cast_names;
+            director = metadata.director;
             poster_path = metadata.poster_path;
             tmdb_id = metadata.tmdb_id;
             tmdb_runtime_seconds = metadata.runtime_seconds;
@@ -274,12 +281,13 @@ pub fn process_movie(
     } else {
         tmdb_runtime_seconds.unwrap_or(0.0)
     };
-    
+
     match db.insert_movie(
         &title,
         year,
         overview.as_deref(),
         cast_names.as_deref(),
+        director.as_deref(),
         poster_path.as_deref(),
         file_path,
         effective_duration,
@@ -298,8 +306,13 @@ pub fn process_tv_episode(
     image_cache_dir: &str,
     duration: f64,
 ) {
-    println!("[TV] Processing episode: {} S{:02}E{:02} from file: {}",
-             parsed.title, parsed.season.unwrap_or(0), parsed.episode.unwrap_or(0), file_path);
+    println!(
+        "[TV] Processing episode: {} S{:02}E{:02} from file: {}",
+        parsed.title,
+        parsed.season.unwrap_or(0),
+        parsed.episode.unwrap_or(0),
+        file_path
+    );
 
     // First, try to find an existing series with a matching title BEFORE searching TMDB
     // This ensures episodes group together even if TMDB search is inconsistent
@@ -314,58 +327,74 @@ pub fn process_tv_episode(
         series_tmdb_id,
         series_id,
         _is_new_series,
-    ) =
-        if let Ok(Some(existing_id)) = existing_series {
-            // Found existing series - use its data
-            println!("[TV] Found existing series by title match (ID: {})", existing_id);
-            if let Ok(existing) = db.get_media_by_id(existing_id) {
-                (
-                    existing.title.clone(),
-                    existing.year,
-                    existing.overview.clone(),
-                    existing.cast_names.clone(),
-                    existing.poster_path.clone(),
-                    existing.tmdb_id.clone(),
-                    Some(existing_id),
-                    false
-                )
-            } else {
-                (parsed.title.clone(), parsed.year, None, None, None, None, Some(existing_id), false)
-            }
+    ) = if let Ok(Some(existing_id)) = existing_series {
+        // Found existing series - use its data
+        println!(
+            "[TV] Found existing series by title match (ID: {})",
+            existing_id
+        );
+        if let Ok(existing) = db.get_media_by_id(existing_id) {
+            (
+                existing.title.clone(),
+                existing.year,
+                existing.overview.clone(),
+                existing.cast_names.clone(),
+                existing.poster_path.clone(),
+                existing.tmdb_id.clone(),
+                Some(existing_id),
+                false,
+            )
         } else {
-            // No existing series - search TMDB
-            let mut title = parsed.title.clone();
-            let mut year = parsed.year;
-            let mut overview: Option<String> = None;
-            let mut cast_names: Option<String> = None;
-            let mut poster_path: Option<String> = None;
-            let mut tmdb_id: Option<String> = None;
+            (
+                parsed.title.clone(),
+                parsed.year,
+                None,
+                None,
+                None,
+                None,
+                Some(existing_id),
+                false,
+            )
+        }
+    } else {
+        // No existing series - search TMDB
+        let mut title = parsed.title.clone();
+        let mut year = parsed.year;
+        let mut overview: Option<String> = None;
+        let mut cast_names: Option<String> = None;
+        let mut poster_path: Option<String> = None;
+        let mut tmdb_id: Option<String> = None;
 
-            if !api_key.is_empty() {
-                if let Ok(Some(metadata)) = tmdb::search_metadata(
-                    api_key,
-                    &parsed.title,
-                    "tv",
-                    parsed.year,
-                    image_cache_dir,
-                ) {
-                    title = metadata.title.clone();
-                    year = metadata.year;
-                    overview = metadata.overview;
-                    cast_names = metadata.cast_names;
-                    tmdb_id = metadata.tmdb_id;
+        if !api_key.is_empty() {
+            if let Ok(Some(metadata)) =
+                tmdb::search_metadata(api_key, &parsed.title, "tv", parsed.year, image_cache_dir)
+            {
+                title = prefer_title_with_leading_article(&parsed.title, &metadata.title);
+                year = metadata.year;
+                overview = metadata.overview;
+                cast_names = metadata.cast_names;
+                tmdb_id = metadata.tmdb_id;
 
-                    // Use organized image caching for series poster
-                    if let Some(ref poster) = metadata.poster_path {
-                        // Extract the TMDB path from the cached path if it exists
-                        // or cache with organized structure
-                        poster_path = Some(poster.clone());
-                    }
+                // Use organized image caching for series poster
+                if let Some(ref poster) = metadata.poster_path {
+                    // Extract the TMDB path from the cached path if it exists
+                    // or cache with organized structure
+                    poster_path = Some(poster.clone());
                 }
             }
+        }
 
-            (title, year, overview, cast_names, poster_path, tmdb_id, None, true)
-        };
+        (
+            title,
+            year,
+            overview,
+            cast_names,
+            poster_path,
+            tmdb_id,
+            None,
+            true,
+        )
+    };
 
     // Now get or create the series
     let final_series_id = if let Some(id) = series_id {
@@ -373,13 +402,13 @@ pub fn process_tv_episode(
         id
     } else {
         // Try to find by TMDB ID first (in case TMDB gave us an ID that matches an existing series)
-        match db.find_series_by_tmdb_or_title(
-            series_tmdb_id.as_deref(),
-            &series_title,
-            series_year
-        ) {
+        match db.find_series_by_tmdb_or_title(series_tmdb_id.as_deref(), &series_title, series_year)
+        {
             Ok(Some(id)) => {
-                println!("[TV] Found existing series after TMDB lookup (ID: {}): {}", id, series_title);
+                println!(
+                    "[TV] Found existing series after TMDB lookup (ID: {}): {}",
+                    id, series_title
+                );
 
                 // Update metadata if needed
                 if let Some(ref tmdb_id) = series_tmdb_id {
@@ -393,6 +422,7 @@ pub fn process_tv_episode(
                                 year: series_year,
                                 overview: series_overview.clone(),
                                 cast_names: series_cast_names.clone(),
+                                director: None,
                                 poster_path: series_poster_path.clone(),
                                 tmdb_id: Some(tmdb_id.clone()),
                                 runtime_seconds: None,
@@ -407,7 +437,8 @@ pub fn process_tv_episode(
             }
             Ok(None) => {
                 // Create new series
-                let virtual_folder = format!("tvshow://{}/{}",
+                let virtual_folder = format!(
+                    "tvshow://{}/{}",
                     series_tmdb_id.as_deref().unwrap_or("unknown"),
                     series_title.to_lowercase().replace(' ', "_")
                 );
@@ -444,9 +475,13 @@ pub fn process_tv_episode(
     let ep_title = format!("S{:02}E{:02}", season, episode);
 
     // Fetch episode metadata directly from TMDB for THIS specific episode
-    let (episode_title, episode_overview, episode_still) = if let Some(ref tmdb_id) = series_tmdb_id {
+    let (episode_title, episode_overview, episode_still) = if let Some(ref tmdb_id) = series_tmdb_id
+    {
         // First check if we have cached metadata
-        let cached_data = db.get_cached_episode_metadata(tmdb_id, season, episode).ok().flatten();
+        let cached_data = db
+            .get_cached_episode_metadata(tmdb_id, season, episode)
+            .ok()
+            .flatten();
 
         // Check if cached still_path file actually exists on disk
         let cache_valid = if let Some(ref cached) = cached_data {
@@ -456,7 +491,10 @@ pub fn process_tv_episode(
                 let full_path = Path::new(image_cache_dir).join(&clean_path);
                 let exists = full_path.exists();
                 if !exists {
-                    println!("[TV] Cached still_path doesn't exist on disk: {:?}", full_path);
+                    println!(
+                        "[TV] Cached still_path doesn't exist on disk: {:?}",
+                        full_path
+                    );
                 }
                 exists
             } else {
@@ -469,13 +507,26 @@ pub fn process_tv_episode(
 
         if cache_valid {
             let cached = cached_data.unwrap();
-            println!("[TV] Using cached metadata for {} S{:02}E{:02}", series_title, season, episode);
+            println!(
+                "[TV] Using cached metadata for {} S{:02}E{:02}",
+                series_title, season, episode
+            );
             (cached.episode_title, cached.overview, cached.still_path)
         } else {
             // No valid cache - fetch this specific episode from TMDB
             if !api_key.is_empty() {
-                println!("[TV] Fetching episode metadata from TMDB for {} S{:02}E{:02}", series_title, season, episode);
-                match fetch_single_episode_metadata(api_key, tmdb_id, season, episode, &series_title, image_cache_dir) {
+                println!(
+                    "[TV] Fetching episode metadata from TMDB for {} S{:02}E{:02}",
+                    series_title, season, episode
+                );
+                match fetch_single_episode_metadata(
+                    api_key,
+                    tmdb_id,
+                    season,
+                    episode,
+                    &series_title,
+                    image_cache_dir,
+                ) {
                     Ok(Some(ep_info)) => {
                         // Cache it for future use
                         let _ = db.save_cached_episode_metadata(
@@ -490,7 +541,10 @@ pub fn process_tv_episode(
                         (Some(ep_info.name), ep_info.overview, ep_info.still_path)
                     }
                     Ok(None) => {
-                        println!("[TV] No TMDB metadata found for {} S{:02}E{:02}", series_title, season, episode);
+                        println!(
+                            "[TV] No TMDB metadata found for {} S{:02}E{:02}",
+                            series_title, season, episode
+                        );
                         (None, None, None)
                     }
                     Err(e) => {
@@ -517,7 +571,10 @@ pub fn process_tv_episode(
         episode_overview.as_deref(),
         episode_still.as_deref(),
     ) {
-        Ok(_) => println!("[TV] Indexed Episode: {} - {} (series_id: {})", series_title, ep_title, final_series_id),
+        Ok(_) => println!(
+            "[TV] Indexed Episode: {} - {} (series_id: {})",
+            series_title, ep_title, final_series_id
+        ),
         Err(e) => println!("[TV] Error indexing episode {}: {}", ep_title, e),
     }
 }
@@ -535,7 +592,8 @@ fn fetch_single_episode_metadata(
     // For efficiency, we fetch the whole season and pick the episode we need
     // This is cached anyway so subsequent episodes in the same season will be fast
 
-    let season_info = tmdb::fetch_season_episodes(api_key, tmdb_id, season, series_title, image_cache_dir)?;
+    let season_info =
+        tmdb::fetch_season_episodes(api_key, tmdb_id, season, series_title, image_cache_dir)?;
 
     // Find our specific episode
     for ep in season_info.episodes {
@@ -555,11 +613,17 @@ fn prefetch_series_episodes(
     series_title: &str,
     image_cache_dir: &str,
 ) {
-    println!("[TV] Pre-fetching episode metadata for series: {} (TMDB ID: {})", series_title, tmdb_id);
+    println!(
+        "[TV] Pre-fetching episode metadata for series: {} (TMDB ID: {})",
+        series_title, tmdb_id
+    );
 
     // Check if we already have cached metadata for this series
     if let Ok(true) = db.has_cached_metadata_for_series(tmdb_id) {
-        println!("[TV] Episode metadata already cached for series {}", tmdb_id);
+        println!(
+            "[TV] Episode metadata already cached for series {}",
+            tmdb_id
+        );
         return;
     }
 
@@ -578,13 +642,19 @@ fn prefetch_series_episodes(
                         ep.still_path.as_deref(),
                         ep.air_date.as_deref(),
                     ) {
-                        println!("[TV] Warning: Failed to cache episode S{:02}E{:02}: {}", ep.season_number, ep.episode_number, e);
+                        println!(
+                            "[TV] Warning: Failed to cache episode S{:02}E{:02}: {}",
+                            ep.season_number, ep.episode_number, e
+                        );
                     } else {
                         total_cached += 1;
                     }
                 }
             }
-            println!("[TV] Cached metadata for {} episodes of {}", total_cached, series_title);
+            println!(
+                "[TV] Cached metadata for {} episodes of {}",
+                total_cached, series_title
+            );
         }
         Err(e) => {
             println!("[TV] Warning: Failed to pre-fetch episode metadata: {}", e);
@@ -593,21 +663,25 @@ fn prefetch_series_episodes(
 }
 
 pub fn parse_filename(path: &Path) -> ParsedMedia {
-    let filename = path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     println!("[PARSE] Parsing filename: '{}'", filename);
 
     // Get folder context for smarter detection
     let folder_ctx = analyze_folder_structure(path);
-    println!("[PARSE] Folder context: series_name={:?}, folder_season={:?}, is_tv={}",
-             folder_ctx.series_name, folder_ctx.folder_season, folder_ctx.is_tv_structure);
+    println!(
+        "[PARSE] Folder context: series_name={:?}, folder_season={:?}, is_tv={}",
+        folder_ctx.series_name, folder_ctx.folder_season, folder_ctx.is_tv_structure
+    );
 
     // Try to parse as TV episode first (more specific patterns)
     if let Some(parsed) = try_parse_tv_episode(filename, &folder_ctx) {
-        println!("[PARSE] Detected as TV: title='{}', S{:02}E{:02}",
-                 parsed.title, parsed.season.unwrap_or(0), parsed.episode.unwrap_or(0));
+        println!(
+            "[PARSE] Detected as TV: title='{}', S{:02}E{:02}",
+            parsed.title,
+            parsed.season.unwrap_or(0),
+            parsed.episode.unwrap_or(0)
+        );
         return parsed;
     }
 
@@ -615,15 +689,22 @@ pub fn parse_filename(path: &Path) -> ParsedMedia {
     // still treat it as a potential episode using folder context
     if folder_ctx.is_tv_structure {
         if let Some(parsed) = try_parse_from_folder_context(filename, &folder_ctx) {
-            println!("[PARSE] Detected as TV (from folder): title='{}', S{:02}E{:02}",
-                     parsed.title, parsed.season.unwrap_or(0), parsed.episode.unwrap_or(0));
+            println!(
+                "[PARSE] Detected as TV (from folder): title='{}', S{:02}E{:02}",
+                parsed.title,
+                parsed.season.unwrap_or(0),
+                parsed.episode.unwrap_or(0)
+            );
             return parsed;
         }
     }
 
     // Parse as movie
     let movie = parse_as_movie(filename);
-    println!("[PARSE] Detected as Movie: title='{}', year={:?}", movie.title, movie.year);
+    println!(
+        "[PARSE] Detected as Movie: title='{}', year={:?}",
+        movie.title, movie.year
+    );
     movie
 }
 
@@ -636,23 +717,36 @@ pub fn parse_cloud_filename(filename: &str) -> ParsedMedia {
         .map(|(name, _)| name)
         .unwrap_or(filename);
 
-    println!("[CLOUD_PARSE] Parsing cloud filename: '{}'", filename_without_ext);
+    println!(
+        "[CLOUD_PARSE] Parsing cloud filename: '{}'",
+        filename_without_ext
+    );
 
     // Try to parse as TV episode first
-    if let Some(parsed) = try_parse_tv_episode(filename_without_ext, &FolderContext {
-        series_name: None,
-        series_year: None,
-        folder_season: None,
-        is_tv_structure: false,
-    }) {
-        println!("[CLOUD_PARSE] Detected as TV: title='{}', S{:02}E{:02}",
-                 parsed.title, parsed.season.unwrap_or(0), parsed.episode.unwrap_or(0));
+    if let Some(parsed) = try_parse_tv_episode(
+        filename_without_ext,
+        &FolderContext {
+            series_name: None,
+            series_year: None,
+            folder_season: None,
+            is_tv_structure: false,
+        },
+    ) {
+        println!(
+            "[CLOUD_PARSE] Detected as TV: title='{}', S{:02}E{:02}",
+            parsed.title,
+            parsed.season.unwrap_or(0),
+            parsed.episode.unwrap_or(0)
+        );
         return parsed;
     }
 
     // Parse as movie
     let movie = parse_as_movie(filename_without_ext);
-    println!("[CLOUD_PARSE] Detected as Movie: title='{}', year={:?}", movie.title, movie.year);
+    println!(
+        "[CLOUD_PARSE] Detected as Movie: title='{}', year={:?}",
+        movie.title, movie.year
+    );
     movie
 }
 
@@ -670,17 +764,15 @@ fn analyze_folder_structure(path: &Path) -> FolderContext {
         None => return ctx,
     };
 
-    let parent_name = parent.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let parent_name = parent.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
     // Check if parent is a "Season X" folder
     let season_patterns = [
         Regex::new(r"(?i)^Season\s*(\d{1,2})$").ok(),
         Regex::new(r"(?i)^S(\d{1,2})$").ok(),
         Regex::new(r"(?i)^Series\s*(\d{1,2})$").ok(),
-        Regex::new(r"(?i)^Staffel\s*(\d{1,2})$").ok(),  // German
-        Regex::new(r"(?i)^Saison\s*(\d{1,2})$").ok(),   // French
+        Regex::new(r"(?i)^Staffel\s*(\d{1,2})$").ok(), // German
+        Regex::new(r"(?i)^Saison\s*(\d{1,2})$").ok(),  // French
     ];
 
     for pattern in season_patterns.iter().flatten() {
@@ -730,8 +822,11 @@ fn analyze_folder_structure(path: &Path) -> FolderContext {
 
         // Also check if the path contains typical TV folder patterns
         let path_str = path.to_string_lossy().to_lowercase();
-        if path_str.contains("tv shows") || path_str.contains("tv series") ||
-           path_str.contains("series") || path_str.contains("shows") {
+        if path_str.contains("tv shows")
+            || path_str.contains("tv series")
+            || path_str.contains("series")
+            || path_str.contains("shows")
+        {
             ctx.is_tv_structure = true;
             if ctx.series_name.is_none() {
                 ctx.series_name = Some(name);
@@ -748,7 +843,10 @@ fn extract_series_name_from_folder(folder_name: &str) -> (String, Option<i32>) {
     // Pattern: "Name (Year)" or "Name [Year]"
     if let Ok(re) = Regex::new(r"^(.+?)\s*[\(\[]?\s*((?:19|20)\d{2})\s*[\)\]]?\s*$") {
         if let Some(caps) = re.captures(folder_name) {
-            let name = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+            let name = caps
+                .get(1)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
             let year = caps.get(2).and_then(|m| m.as_str().parse().ok());
             if !name.is_empty() {
                 return (clean_folder_name(&name), year);
@@ -766,7 +864,7 @@ fn clean_folder_name(name: &str) -> String {
     // Remove common tags in brackets
     let patterns = [
         r"\s*\[.*?\]\s*",
-        r"\s*\((?!(?:19|20)\d{2}\)).*?\)\s*",  // Remove parentheses unless they contain a year
+        r"\s*\((?!(?:19|20)\d{2}\)).*?\)\s*", // Remove parentheses unless they contain a year
     ];
 
     for pattern in patterns.iter() {
@@ -813,7 +911,9 @@ fn try_parse_tv_episode(filename: &str, folder_ctx: &FolderContext) -> Option<Pa
 
             let season = caps.name("season").and_then(|m| m.as_str().parse().ok());
             let episode = caps.name("episode").and_then(|m| m.as_str().parse().ok());
-            let episode_end = caps.name("episode_end").and_then(|m| m.as_str().parse().ok());
+            let episode_end = caps
+                .name("episode_end")
+                .and_then(|m| m.as_str().parse().ok());
 
             if let Some(ep) = episode {
                 // Sanity check: episode numbers above 100 are rare
@@ -856,7 +956,8 @@ fn try_parse_tv_episode(filename: &str, folder_ctx: &FolderContext) -> Option<Pa
                     continue;
                 }
 
-                let episode: Option<i32> = caps.name("episode").and_then(|m| m.as_str().parse().ok());
+                let episode: Option<i32> =
+                    caps.name("episode").and_then(|m| m.as_str().parse().ok());
 
                 if let Some(ep) = episode {
                     // Stricter sanity check for loose patterns
@@ -902,11 +1003,16 @@ fn get_best_title(title: &str, folder_ctx: &FolderContext) -> String {
 fn is_generic_title(title: &str) -> bool {
     let generic = ["episode", "ep", "part", "chapter", "vol", "volume"];
     let lower = title.to_lowercase();
-    generic.iter().any(|g| lower == *g || lower.starts_with(&format!("{} ", g)))
+    generic
+        .iter()
+        .any(|g| lower == *g || lower.starts_with(&format!("{} ", g)))
 }
 
 /// Try to parse using folder context when filename doesn't have clear episode pattern
-fn try_parse_from_folder_context(filename: &str, folder_ctx: &FolderContext) -> Option<ParsedMedia> {
+fn try_parse_from_folder_context(
+    filename: &str,
+    folder_ctx: &FolderContext,
+) -> Option<ParsedMedia> {
     if folder_ctx.series_name.is_none() {
         return None;
     }
@@ -959,6 +1065,39 @@ fn clean_title(title: &str) -> String {
     title.replace('.', " ").replace('_', " ").trim().to_string()
 }
 
+fn normalize_for_article_compare(title: &str) -> String {
+    let mut normalized = String::with_capacity(title.len());
+    let mut last_was_space = false;
+
+    for ch in title.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch);
+            last_was_space = false;
+        } else if !last_was_space {
+            normalized.push(' ');
+            last_was_space = true;
+        }
+    }
+
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn prefer_title_with_leading_article(original: &str, tmdb_title: &str) -> String {
+    let original_trim = original.trim();
+    let tmdb_trim = tmdb_title.trim();
+
+    if original_trim.len() >= 4 && original_trim.to_lowercase().starts_with("the ") {
+        if !tmdb_trim.to_lowercase().starts_with("the ") {
+            let stripped = original_trim[4..].trim();
+            if normalize_for_article_compare(stripped) == normalize_for_article_compare(tmdb_trim) {
+                return original_trim.to_string();
+            }
+        }
+    }
+
+    tmdb_trim.to_string()
+}
+
 fn extract_year_from_title(title: &str) -> (String, Option<i32>) {
     // Special case: if the entire title is just a year (like "1899"), keep it
     let trimmed = title.trim();
@@ -968,9 +1107,9 @@ fn extract_year_from_title(title: &str) -> (String, Option<i32>) {
             return (trimmed.to_string(), None);
         }
     }
-    
+
     let year_regex = Regex::new(r"\b(19[3-9]\d|20\d{2})\b").unwrap();
-    
+
     if let Some(caps) = year_regex.captures(title) {
         if let Some(year_match) = caps.get(1) {
             let year_str = year_match.as_str();
@@ -984,7 +1123,7 @@ fn extract_year_from_title(title: &str) -> (String, Option<i32>) {
                     })
                     .trim()
                     .to_string();
-                
+
                 // Only use the year-less title if it's substantial
                 if !cleaned_title.is_empty() && cleaned_title.len() >= 2 {
                     return (cleaned_title, Some(year));
@@ -992,7 +1131,7 @@ fn extract_year_from_title(title: &str) -> (String, Option<i32>) {
             }
         }
     }
-    
+
     (title.to_string(), None)
 }
 
@@ -1000,98 +1139,189 @@ fn clean_junk_from_title(title: &str) -> String {
     // Comprehensive list of patterns to remove from filenames
     let junk_patterns = [
         // Resolution/quality
-        r"(?i)\b1080p\b", r"(?i)\b720p\b", r"(?i)\b2160p\b", r"(?i)\b4k\b", r"(?i)\buhd\b",
-        r"(?i)\b480p\b", r"(?i)\b576p\b", r"(?i)\bhd\b", r"(?i)\bsd\b", r"(?i)\bfhd\b",
-        
+        r"(?i)\b1080p\b",
+        r"(?i)\b720p\b",
+        r"(?i)\b2160p\b",
+        r"(?i)\b4k\b",
+        r"(?i)\buhd\b",
+        r"(?i)\b480p\b",
+        r"(?i)\b576p\b",
+        r"(?i)\bhd\b",
+        r"(?i)\bsd\b",
+        r"(?i)\bfhd\b",
         // Source
-        r"(?i)\bbluray\b", r"(?i)\bblu-ray\b", r"(?i)\bbdrip\b", r"(?i)\bbrip\b",
-        r"(?i)\bremux\b", r"(?i)\bweb-?dl\b", r"(?i)\bweb-?rip\b", r"(?i)\bwebrip\b",
-        r"(?i)\bhdrip\b", r"(?i)\bdvdrip\b", r"(?i)\bdvdscr\b", r"(?i)\bhdtv\b",
-        r"(?i)\bpdtv\b", r"(?i)\bdsr\b", r"(?i)\bhdcam\b", r"(?i)\bcam\b",
-        r"(?i)\bts\b", r"(?i)\btelesync\b", r"(?i)\bscreener\b", r"(?i)\br5\b",
-        r"(?i)\bbdrip\b", r"(?i)\bamzn\b", r"(?i)\bnf\b", r"(?i)\bnetflix\b",
-        r"(?i)\batvp\b", r"(?i)\bdsnp\b", r"(?i)\bhmax\b", r"(?i)\bhulu\b",
-        
+        r"(?i)\bbluray\b",
+        r"(?i)\bblu-ray\b",
+        r"(?i)\bbdrip\b",
+        r"(?i)\bbrip\b",
+        r"(?i)\bremux\b",
+        r"(?i)\bweb-?dl\b",
+        r"(?i)\bweb-?rip\b",
+        r"(?i)\bwebrip\b",
+        r"(?i)\bhdrip\b",
+        r"(?i)\bdvdrip\b",
+        r"(?i)\bdvdscr\b",
+        r"(?i)\bhdtv\b",
+        r"(?i)\bpdtv\b",
+        r"(?i)\bdsr\b",
+        r"(?i)\bhdcam\b",
+        r"(?i)\bcam\b",
+        r"(?i)\bts\b",
+        r"(?i)\btelesync\b",
+        r"(?i)\bscreener\b",
+        r"(?i)\br5\b",
+        r"(?i)\bbdrip\b",
+        r"(?i)\bamzn\b",
+        r"(?i)\bnf\b",
+        r"(?i)\bnetflix\b",
+        r"(?i)\batvp\b",
+        r"(?i)\bdsnp\b",
+        r"(?i)\bhmax\b",
+        r"(?i)\bhulu\b",
         // HDR/Video
-        r"(?i)\bimax\b", r"(?i)\bsdr\b", r"(?i)\bhdr\b", r"(?i)\bhdr10\b", 
-        r"(?i)\bhdr10\+\b", r"(?i)\bdolby\s?vision\b", r"(?i)\bdv\b",
-        r"(?i)\b10bit\b", r"(?i)\b8bit\b", r"(?i)\bhi10p\b",
-        
+        r"(?i)\bimax\b",
+        r"(?i)\bsdr\b",
+        r"(?i)\bhdr\b",
+        r"(?i)\bhdr10\b",
+        r"(?i)\bhdr10\+\b",
+        r"(?i)\bdolby\s?vision\b",
+        r"(?i)\bdv\b",
+        r"(?i)\b10bit\b",
+        r"(?i)\b8bit\b",
+        r"(?i)\bhi10p\b",
         // Codec
-        r"(?i)\bavc\b", r"(?i)\bhevc\b", r"(?i)\bx264\b", r"(?i)\bx265\b",
-        r"(?i)\bh\.?264\b", r"(?i)\bh\.?265\b", r"(?i)\bxvid\b", r"(?i)\bdivx\b",
-        r"(?i)\bvc-?1\b", r"(?i)\bav1\b", r"(?i)\bmpeg\d?\b",
-        
+        r"(?i)\bavc\b",
+        r"(?i)\bhevc\b",
+        r"(?i)\bx264\b",
+        r"(?i)\bx265\b",
+        r"(?i)\bh\.?264\b",
+        r"(?i)\bh\.?265\b",
+        r"(?i)\bxvid\b",
+        r"(?i)\bdivx\b",
+        r"(?i)\bvc-?1\b",
+        r"(?i)\bav1\b",
+        r"(?i)\bmpeg\d?\b",
         // Audio
-        r"(?i)\bdts-?hd(\.?ma)?\b", r"(?i)\bdts\b", r"(?i)\btruehd\b", r"(?i)\batmos\b",
-        r"(?i)\bddp?\d*\.?\d*\b", r"(?i)\bdd\d*\.?\d*\b", r"(?i)\bflac\b", r"(?i)\baac\b",
-        r"(?i)\bac3\b", r"(?i)\beac3\b", r"(?i)\bmp3\b", r"(?i)\blpcm\b",
-        r"(?i)\b5[\s.]1\b", r"(?i)\b7[\s.]1\b", r"(?i)\b2[\s.]0\b", r"(?i)\bstereo\b",
-        r"(?i)\bmono\b", r"(?i)\bsurround\b",
-        
+        r"(?i)\bdts-?hd(\.?ma)?\b",
+        r"(?i)\bdts\b",
+        r"(?i)\btruehd\b",
+        r"(?i)\batmos\b",
+        r"(?i)\bddp?\d*\.?\d*\b",
+        r"(?i)\bdd\d*\.?\d*\b",
+        r"(?i)\bflac\b",
+        r"(?i)\baac\b",
+        r"(?i)\bac3\b",
+        r"(?i)\beac3\b",
+        r"(?i)\bmp3\b",
+        r"(?i)\blpcm\b",
+        r"(?i)\b5[\s.]1\b",
+        r"(?i)\b7[\s.]1\b",
+        r"(?i)\b2[\s.]0\b",
+        r"(?i)\bstereo\b",
+        r"(?i)\bmono\b",
+        r"(?i)\bsurround\b",
         // Subtitles
-        r"(?i)\besub\b", r"(?i)\bsub(bed|s)?\b", r"(?i)\bsrt\b",
-        r"(?i)\bforced\b", r"(?i)\bcc\b", r"(?i)\bsdh\b",
-        
+        r"(?i)\besub\b",
+        r"(?i)\bsub(bed|s)?\b",
+        r"(?i)\bsrt\b",
+        r"(?i)\bforced\b",
+        r"(?i)\bcc\b",
+        r"(?i)\bsdh\b",
         // Language
-        r"(?i)\bmulti\b", r"(?i)\bhindi\b", r"(?i)\benglish\b", r"(?i)\bdual\s?audio\b",
-        r"(?i)\btamil\b", r"(?i)\btelugu\b", r"(?i)\bspanish\b", r"(?i)\bfrench\b",
-        r"(?i)\bgerman\b", r"(?i)\bitalian\b", r"(?i)\bjapanese\b", r"(?i)\bkorean\b",
-        r"(?i)\bchinese\b", r"(?i)\brussian\b", r"(?i)\barabic\b", r"(?i)\bportuguese\b",
-        r"(?i)\beng\b", r"(?i)\bhin\b", r"(?i)\bjpn\b", r"(?i)\bkor\b",
-        
+        r"(?i)\bmulti\b",
+        r"(?i)\bhindi\b",
+        r"(?i)\benglish\b",
+        r"(?i)\bdual\s?audio\b",
+        r"(?i)\btamil\b",
+        r"(?i)\btelugu\b",
+        r"(?i)\bspanish\b",
+        r"(?i)\bfrench\b",
+        r"(?i)\bgerman\b",
+        r"(?i)\bitalian\b",
+        r"(?i)\bjapanese\b",
+        r"(?i)\bkorean\b",
+        r"(?i)\bchinese\b",
+        r"(?i)\brussian\b",
+        r"(?i)\barabic\b",
+        r"(?i)\bportuguese\b",
+        r"(?i)\beng\b",
+        r"(?i)\bhin\b",
+        r"(?i)\bjpn\b",
+        r"(?i)\bkor\b",
         // Release info
-        r"(?i)\brepack\b", r"(?i)\bproper\b", r"(?i)\breal\b", r"(?i)\brip\b",
-        r"(?i)\bopen\s?matte\b", r"(?i)\bextended\b", r"(?i)\bunrated\b",
-        r"(?i)\bdc\b", r"(?i)\bdirector'?s?\s?cut\b", r"(?i)\btheatrical\b",
-        r"(?i)\buncut\b", r"(?i)\bspecial\s?edition\b", r"(?i)\bcomplete\b",
-        r"(?i)\bfinal\s?cut\b", r"(?i)\bcriterion\b", r"(?i)\bremastered\b",
-        r"(?i)\brestored\b", r"(?i)\banniversary\b", r"(?i)\bultimate\b",
-        
+        r"(?i)\brepack\b",
+        r"(?i)\bproper\b",
+        r"(?i)\breal\b",
+        r"(?i)\brip\b",
+        r"(?i)\bopen\s?matte\b",
+        r"(?i)\bextended\b",
+        r"(?i)\bunrated\b",
+        r"(?i)\bdc\b",
+        r"(?i)\bdirector'?s?\s?cut\b",
+        r"(?i)\btheatrical\b",
+        r"(?i)\buncut\b",
+        r"(?i)\bspecial\s?edition\b",
+        r"(?i)\bcomplete\b",
+        r"(?i)\bfinal\s?cut\b",
+        r"(?i)\bcriterion\b",
+        r"(?i)\bremastered\b",
+        r"(?i)\brestored\b",
+        r"(?i)\banniversary\b",
+        r"(?i)\bultimate\b",
         // Scene/group tags
-        r"\[.*?\]",           // [Anything]
-        r"\(.*?\)",           // (Anything) - but be careful with years
-        r"(?i)\b-\s*\w+$",    // Trailing -GROUP 
-        r"(?i)^\w+\s*-\s*",   // Leading GROUP -
-        
+        r"\[.*?\]",         // [Anything]
+        r"\(.*?\)",         // (Anything) - but be careful with years
+        r"(?i)\b-\s*\w+$",  // Trailing -GROUP
+        r"(?i)^\w+\s*-\s*", // Leading GROUP -
         // Common release groups (partial list)
-        r"(?i)\byify\b", r"(?i)\byts\b", r"(?i)\brarbg\b", r"(?i)\bettv\b",
-        r"(?i)\beztv\b", r"(?i)\btigole\b", r"(?i)\bqxr\b", r"(?i)\bsparks\b",
-        r"(?i)\bgalaxy\s?rg\b", r"(?i)\bpahe\b", r"(?i)\bpsa\b",
-        r"(?i)\bMeGusta\b", r"(?i)\bfgt\b", r"(?i)\blol\b", r"(?i)\baxxo\b",
-        
+        r"(?i)\byify\b",
+        r"(?i)\byts\b",
+        r"(?i)\brarbg\b",
+        r"(?i)\bettv\b",
+        r"(?i)\beztv\b",
+        r"(?i)\btigole\b",
+        r"(?i)\bqxr\b",
+        r"(?i)\bsparks\b",
+        r"(?i)\bgalaxy\s?rg\b",
+        r"(?i)\bpahe\b",
+        r"(?i)\bpsa\b",
+        r"(?i)\bMeGusta\b",
+        r"(?i)\bfgt\b",
+        r"(?i)\blol\b",
+        r"(?i)\baxxo\b",
         // Misc
-        r"(?i)\bwww\.\w+\.\w+\b",  // Website URLs
-        r"(?i)\b@\w+\b",           // @handles
+        r"(?i)\bwww\.\w+\.\w+\b", // Website URLs
+        r"(?i)\b@\w+\b",          // @handles
         r"\bBT4G\b",
         r"\bMkvCinemas\b",
     ];
-    
+
     let mut result = title.to_string();
-    
+
     for pattern in &junk_patterns {
         if let Ok(re) = Regex::new(pattern) {
             result = re.replace_all(&result, " ").to_string();
         }
     }
-    
+
     // Remove years in parentheses but keep the year for extraction later
     // Actually, we want to keep years, so skip this
-    
+
     // Clean up multiple dashes, underscores
     if let Ok(re) = Regex::new(r"[-_]{2,}") {
         result = re.replace_all(&result, " ").to_string();
     }
-    
+
     // Clean up extra whitespace
     if let Ok(re) = Regex::new(r"\s{2,}") {
         result = re.replace_all(&result, " ").to_string();
     }
-    
+
     // Remove leading/trailing dashes and dots
-    result = result.trim_matches(|c| c == '-' || c == '.' || c == '_' || c == ' ')
+    result = result
+        .trim_matches(|c| c == '-' || c == '.' || c == '_' || c == ' ')
         .to_string();
-    
+
     result.trim().to_string()
 }
 
@@ -1127,7 +1357,10 @@ pub fn cleanup_empty_parent_dirs(file_paths: &[String]) {
                                     continue;
                                 }
                                 Err(e) => {
-                                    println!("[DELETE] Failed to remove directory {:?}: {}", dir_path, e);
+                                    println!(
+                                        "[DELETE] Failed to remove directory {:?}: {}",
+                                        dir_path, e
+                                    );
                                 }
                             }
                         }
@@ -1150,8 +1383,8 @@ mod tests {
 
     #[test]
     fn test_cleanup_empty_parent_dirs() {
-        use std::fs;
         use std::env;
+        use std::fs;
 
         // Case 1: Recursive cleanup
         let mut temp_dir = env::temp_dir();
@@ -1201,7 +1434,7 @@ mod tests {
         // Clean up
         let _ = fs::remove_dir_all(temp_dir2);
     }
-    
+
     #[test]
     fn test_parse_movie() {
         let path = PathBuf::from("Inception.2010.1080p.BluRay.x264.mkv");
@@ -1218,7 +1451,7 @@ mod tests {
         assert_eq!(parsed.year, Some(2001));
         assert_eq!(parsed.media_type, MediaParseType::Movie);
     }
-    
+
     #[test]
     fn test_parse_tv_episode() {
         let path = PathBuf::from("Breaking.Bad.S01E01.Pilot.720p.mkv");

@@ -9,6 +9,7 @@ export interface MediaItem {
     year?: number;
     overview?: string;
     cast_names?: string;
+    director?: string;
     poster_path?: string;
     file_path?: string;
     media_type: 'movie' | 'tvshow' | 'tvepisode';
@@ -168,103 +169,6 @@ export const markAsComplete = async (mediaId: number): Promise<{ message: string
         return await invoke('mark_as_complete', { mediaId });
     } catch (error) {
         console.error('Failed to mark as complete:', error);
-        throw error;
-    }
-};
-
-// ==================== STREAMING HISTORY ====================
-
-// Streaming history item for online content (Videasy, etc.)
-export interface StreamingHistoryItem {
-    id: number;
-    tmdb_id: string;
-    media_type: 'movie' | 'tv';
-    title: string;
-    poster_path?: string;
-    season?: number;
-    episode?: number;
-    resume_position_seconds: number;
-    duration_seconds: number;
-    progress_percent: number;
-    last_watched: string;
-}
-
-// Save streaming progress
-export const saveStreamingProgress = async (
-    tmdbId: string,
-    mediaType: 'movie' | 'tv',
-    title: string,
-    posterPath?: string,
-    season?: number,
-    episode?: number,
-    position: number = 0,
-    duration: number = 0
-): Promise<void> => {
-    try {
-        await invoke('save_streaming_progress', {
-            tmdbId,
-            mediaType,
-            title,
-            posterPath: posterPath || null,
-            season: season || null,
-            episode: episode || null,
-            position,
-            duration
-        });
-    } catch (error) {
-        console.error('Failed to save streaming progress:', error);
-        throw error;
-    }
-};
-
-// Get streaming history
-export const getStreamingHistory = async (limit: number = 50): Promise<StreamingHistoryItem[]> => {
-    try {
-        const items = await invoke<StreamingHistoryItem[]>('get_streaming_history', { limit });
-        return items;
-    } catch (error) {
-        console.error('Failed to get streaming history:', error);
-        return [];
-    }
-};
-
-// Get streaming resume info for a specific content
-export const getStreamingResumeInfo = async (
-    tmdbId: string,
-    mediaType: 'movie' | 'tv',
-    season?: number,
-    episode?: number
-): Promise<StreamingHistoryItem | null> => {
-    try {
-        const info = await invoke<StreamingHistoryItem | null>('get_streaming_resume_info', {
-            tmdbId,
-            mediaType,
-            season: season || null,
-            episode: episode || null
-        });
-        return info;
-    } catch (error) {
-        console.error('Failed to get streaming resume info:', error);
-        return null;
-    }
-};
-
-// Remove a single item from streaming history
-export const removeFromStreamingHistory = async (id: number): Promise<void> => {
-    try {
-        await invoke('remove_from_streaming_history', { id });
-    } catch (error) {
-        console.error('Failed to remove from streaming history:', error);
-        throw error;
-    }
-};
-
-// Clear all streaming history
-export const clearAllStreamingHistory = async (): Promise<void> => {
-    try {
-        await invoke('clear_all_streaming_history');
-    } catch (error) {
-        console.error('Failed to clear streaming history:', error);
         throw error;
     }
 };
@@ -620,43 +524,6 @@ export const setPlayerPreference = (preference: PlayerPreference): void => {
     localStorage.setItem('playerPreference', preference);
 };
 
-const BROWSER_OPEN_KEY = 'streamvault_allow_browser_open';
-const STREAM_TAB_KEY = 'streamvault_stream_tab_enabled';
-
-export const isBrowserOpenEnabled = (): boolean => {
-    try {
-        return localStorage.getItem(BROWSER_OPEN_KEY) === '1';
-    } catch (error) {
-        console.error('Failed to read browser open setting:', error);
-        return false;
-    }
-};
-
-export const setBrowserOpenEnabled = (enabled: boolean): void => {
-    try {
-        localStorage.setItem(BROWSER_OPEN_KEY, enabled ? '1' : '0');
-    } catch (error) {
-        console.error('Failed to save browser open setting:', error);
-    }
-};
-
-export const isStreamTabEnabled = (): boolean => {
-    try {
-        return localStorage.getItem(STREAM_TAB_KEY) === '1';
-    } catch (error) {
-        console.error('Failed to read stream tab setting:', error);
-        return false;
-    }
-};
-
-export const setStreamTabEnabled = (enabled: boolean): void => {
-    try {
-        localStorage.setItem(STREAM_TAB_KEY, enabled ? '1' : '0');
-    } catch (error) {
-        console.error('Failed to save stream tab setting:', error);
-    }
-};
-
 // MPV Status types
 export interface MpvStatus {
     is_playing: boolean;
@@ -798,109 +665,6 @@ const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 export const getTmdbImageUrl = (path: string | undefined, size: 'w92' | 'w185' | 'w300' | 'w500' | 'original' = 'w300'): string | null => {
     if (!path) return null;
     return `${TMDB_IMAGE_BASE}/${size}${path}`;
-};
-
-// Videasy streaming URL helpers
-const VIDEASY_BASE_URL = 'https://player.videasy.net';
-const STREAMVAULT_COLOR = '8B5CF6'; // StreamVault brand purple
-
-/**
- * Get the Videasy player URL for a media item with all enhanced features
- * IMPORTANT: Videasy requires parameters in a specific order to work correctly
- * - TV shows: nextEpisode, autoplayNextEpisode, episodeSelector, overlay, color
- * - Movies: overlay, color
- * @param tmdbId TMDB ID of the media
- * @param mediaType Type of media (movie or tv)
- * @param season Season number (for TV episodes)
- * @param episode Episode number (for TV episodes)
- * @param options Optional customization options
- * @returns Full Videasy player URL or null if tmdbId is not provided
- */
-export function getVideasyUrl(
-    tmdbId: string | undefined,
-    mediaType: 'movie' | 'tv',
-    season?: number,
-    episode?: number,
-    options?: {
-        color?: string;
-        progress?: number;
-        overlay?: boolean;
-        nextEpisode?: boolean;
-        autoplayNextEpisode?: boolean;
-        episodeSelector?: boolean;
-    }
-): string | null {
-    if (!tmdbId) return null;
-
-    const color = options?.color || STREAMVAULT_COLOR;
-    let baseUrl: string;
-    let queryString: string;
-
-    const safeTmdbId = encodeURIComponent(tmdbId);
-    const safeColor = encodeURIComponent(color);
-
-    if (mediaType === 'movie') {
-        baseUrl = `${VIDEASY_BASE_URL}/movie/${safeTmdbId}`;
-        // Movie params in order: overlay, color
-        queryString = `overlay=true&color=${safeColor}`;
-    } else if (mediaType === 'tv' && season !== undefined && episode !== undefined) {
-        baseUrl = `${VIDEASY_BASE_URL}/tv/${safeTmdbId}/${season}/${episode}`;
-        // TV params in required order: nextEpisode, autoplayNextEpisode, episodeSelector, overlay, color
-        queryString = `nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true&color=${safeColor}`;
-    } else {
-        return null;
-    }
-
-    // Add optional progress (resume position in seconds)
-    if (options?.progress !== undefined && options.progress > 0) {
-        queryString += `&progress=${options.progress}`;
-    }
-
-    return `${baseUrl}?${queryString}`;
-}
-
-/**
- * Helper to get Videasy URL from a MediaItem object
- */
-export function getVideasyUrlForItem(item: MediaItem, parentTmdbId?: string): string | null {
-    const tmdbId = item.tmdb_id || parentTmdbId;
-    if (!tmdbId) return null;
-
-    if (item.media_type === 'movie') {
-        return getVideasyUrl(tmdbId, 'movie');
-    } else if (item.media_type === 'tvepisode' && item.season_number !== undefined && item.episode_number !== undefined) {
-        return getVideasyUrl(tmdbId, 'tv', item.season_number, item.episode_number);
-    }
-
-    return null;
-}
-
-// ==================== VIDEASY WEBVIEW PLAYER ====================
-
-// Open Videasy in an in-app webview window with progress sync
-export const openVideasyPlayer = async (
-    url: string,
-    tmdbId: string,
-    mediaType: 'movie' | 'tv',
-    title: string,
-    posterPath?: string,
-    season?: number,
-    episode?: number
-): Promise<void> => {
-    try {
-        await invoke('open_videasy_player', {
-            url,
-            tmdbId,
-            mediaType,
-            title,
-            posterPath: posterPath || null,
-            season: season || null,
-            episode: episode || null,
-        });
-    } catch (error) {
-        console.error('Failed to open Videasy player:', error);
-        throw error;
-    }
 };
 
 // ==================== ONBOARDING ====================

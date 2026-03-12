@@ -5,13 +5,12 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import {
   Trash2, MonitorPlay, FolderOpen,
-  AlertTriangle, Settings, Key, Zap, Power, X, Save, Sparkles, Eye, Cloud, Download, RefreshCw, FileText, Code, FlaskConical, Users, Radio, Activity, Shield, Globe
+  AlertTriangle, Settings, Key, Zap, Power, X, Save, Sparkles, Cloud, Download, RefreshCw, Code, FlaskConical, Users, Radio, Activity, Shield
 } from "lucide-react"
 import {
   Config, getConfig, saveConfig, clearAllAppData, cleanupMissingMetadata,
   TabVisibility,
-  checkForUpdates, downloadUpdate, installUpdate, getAppVersion, UpdateInfo, autoDetectMpv,
-  isBrowserOpenEnabled, setBrowserOpenEnabled, isStreamTabEnabled, setStreamTabEnabled
+  checkForUpdates, downloadUpdate, installUpdate, getAppVersion, UpdateInfo, autoDetectMpv
 } from "@/services/api"
 import {
   getDevSettings,
@@ -26,28 +25,24 @@ import { Switch } from "@/components/ui/switch"
 import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings"
-import { CURRENT_APP_VERSION } from "@/components/UpdateNotesModal"
 
 interface SettingsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onRestartOnboarding?: () => void
-  onViewUpdateNotes?: () => void
   initialTab?: SettingsSection
   tabVisibility?: TabVisibility
   onTabVisibilityChange?: (visibility: TabVisibility) => void
   onLogout?: () => void
   betaEnabled?: boolean
   onBetaToggle?: (enabled: boolean) => void
-  streamTabEnabled?: boolean
-  onStreamTabToggle?: (enabled: boolean) => void
   autoCheckUpdate?: boolean
   onSimulateUpdate?: () => void
 }
 
 type SettingsSection = 'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'
 
-export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewUpdateNotes, initialTab, tabVisibility: _tabVisibility, onTabVisibilityChange: _onTabVisibilityChange, onLogout, betaEnabled = false, onBetaToggle, streamTabEnabled = false, onStreamTabToggle, autoCheckUpdate = false, onSimulateUpdate }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onRestartOnboarding, initialTab, tabVisibility: _tabVisibility, onTabVisibilityChange: _onTabVisibilityChange, onLogout, betaEnabled = false, onBetaToggle, autoCheckUpdate = false, onSimulateUpdate }: SettingsModalProps) {
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
     vlc_path: "",
@@ -73,16 +68,12 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
   const [devAuthServerUrl, setDevAuthServerUrl] = useState("")
   const [detectingMpv, setDetectingMpv] = useState(false)
   const [useOwnApiKey, setUseOwnApiKey] = useState(false)
-  const [browserOpenEnabled, setBrowserOpenEnabledState] = useState(false)
-  const [discoverTabEnabled, setDiscoverTabEnabled] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
     if (open) {
       loadConfig()
       checkAutoStart()
-      setBrowserOpenEnabledState(isBrowserOpenEnabled())
-      setDiscoverTabEnabled(isStreamTabEnabled())
       loadAppVersion()
       setActiveSection(initialTab || 'general')
       setShowResetConfirm(false)
@@ -93,33 +84,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
       }
     }
   }, [open, initialTab])
-
-  const toggleBrowserOpen = (checked: boolean) => {
-    setBrowserOpenEnabledState(checked)
-    setBrowserOpenEnabled(checked)
-    toast({
-      title: checked ? "Browser Streaming Enabled" : "Browser Streaming Disabled",
-      description: checked
-        ? "Streaming links can now open in your default browser."
-        : "Browser streaming is blocked until re-enabled in Settings."
-    })
-  }
-
-  const toggleDiscoverTab = (checked: boolean) => {
-    setDiscoverTabEnabled(checked)
-    setStreamTabEnabled(checked)
-    onStreamTabToggle?.(checked)
-    toast({
-      title: checked ? "Discover Tab Enabled" : "Discover Tab Disabled",
-      description: checked
-        ? "Discover / Stream Online is now visible in the sidebar."
-        : "Discover / Stream Online is now hidden."
-    })
-  }
-
-  useEffect(() => {
-    setDiscoverTabEnabled(streamTabEnabled)
-  }, [streamTabEnabled])
 
   // Auto-trigger update check when navigated from update notification
   useEffect(() => {
@@ -436,24 +400,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       </div>
                     </div>
 
-                    {/* Browser Streaming */}
-                    <div className="p-4 rounded-xl bg-card border border-border">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-white/10">
-                            <Globe className="w-5 h-5 text-white" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">Allow Browser Streaming</Label>
-                            <p className="text-sm text-muted-foreground">
-                              Open Cloud and Stream tab content in your default browser
-                            </p>
-                          </div>
-                        </div>
-                        <Switch checked={browserOpenEnabled} onCheckedChange={toggleBrowserOpen} />
-                      </div>
-                    </div>
-
                     {/* MPV Path */}
                     <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                       <div className="flex items-center gap-3">
@@ -603,36 +549,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                     {/* Feature List */}
                     <div className="space-y-3">
                       <Label className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Beta Features</Label>
-
-                      {/* Discover / Stream Online */}
-                      <div className={cn(
-                        "p-4 rounded-xl border transition-colors",
-                        discoverTabEnabled
-                          ? "bg-card border-purple-500/20"
-                          : "bg-card/50 border-border"
-                      )}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <div className={cn(
-                              "p-2 rounded-lg flex-shrink-0",
-                              discoverTabEnabled ? "bg-purple-500/20" : "bg-muted"
-                            )}>
-                              <Globe className={cn("w-5 h-5", discoverTabEnabled ? "text-purple-400" : "text-muted-foreground")} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">Discover / Stream Online</span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">EXPERIMENTAL</span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                Show the Discover tab to search and stream online movies and TV shows.
-                              </p>
-                            </div>
-                          </div>
-                          <Switch checked={discoverTabEnabled} onCheckedChange={toggleDiscoverTab} />
-                        </div>
-                      </div>
-
                       {/* Watch Together */}
                       <div className={cn(
                         "p-4 rounded-xl border transition-colors",
@@ -801,34 +717,6 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                       )}
                     </div>
 
-                    {/* What's New */}
-                    <div className="p-4 rounded-xl bg-card border border-border">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-white/10">
-                            <FileText className="w-5 h-5 text-white" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">What's New</Label>
-                            <p className="text-sm text-muted-foreground">
-                              Version {CURRENT_APP_VERSION}
-                            </p>
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            onOpenChange(false)
-                            onViewUpdateNotes?.()
-                          }}
-                          className="gap-2"
-                        >
-                          <Eye className="w-4 h-4" />
-                          View What's New
-                        </Button>
-                      </div>
-                    </div>
                   </motion.div>
                 )}
 
@@ -867,7 +755,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                         </div>
                         <div>
                           <Label className="text-base font-medium">TMDB API Key</Label>
-                          <p className="text-sm text-muted-foreground">Used for metadata, posters, and streaming search</p>
+                          <p className="text-sm text-muted-foreground">Used for metadata, posters, and search</p>
                         </div>
                       </div>
 
@@ -1026,7 +914,7 @@ export function SettingsModal({ open, onOpenChange, onRestartOnboarding, onViewU
                         </div>
                       </div>
                       <p className="text-sm text-muted-foreground">
-                        This will permanently delete your library data, watch history, streaming history,
+                        This will permanently delete your library data and watch history,
                         cached posters, and all settings. This action cannot be undone.
                       </p>
 

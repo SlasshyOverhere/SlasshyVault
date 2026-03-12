@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "StreamVault",
-    "version": "3.0.22"
+    "version": "3.0.23"
   },
   "tauri": {
     "allowlist": {
@@ -122,10 +122,12 @@
         "label": "main",
         "fullscreen": false,
         "height": 900,
-        "resizable": false,
+        "resizable": true,
         "title": "StreamVault",
         "width": 1400,
-        "maximizable": false,
+        "maximizable": true,
+        "minWidth": 900,
+        "minHeight": 600,
         "decorations": false
       }
     ]

@@ -5,7 +5,7 @@ import { ExternalLink } from 'lucide-react'
 interface PlayerModalProps {
     open: boolean
     onOpenChange: (open: boolean) => void
-    onSelectPlayer: (player: 'mpv' | 'vlc' | 'builtin' | 'stream') => void
+    onSelectPlayer: (player: 'mpv' | 'vlc' | 'builtin') => void
     title: string
     hasTmdbId?: boolean
 }

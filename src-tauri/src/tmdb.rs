@@ -10,7 +10,8 @@ const MAX_DELAY_MS: u64 = 10000;
 
 // Special marker used when we should call the backend TMDB proxy
 const BACKEND_PROXY_CREDENTIAL: &str = "__TMDB_BACKEND_PROXY__";
-const DEFAULT_TMDB_PROXY_BASE_URL: &str = "https://streamvault-backend-server.onrender.com/api/tmdb";
+const DEFAULT_TMDB_PROXY_BASE_URL: &str =
+    "https://streamvault-backend-server.onrender.com/api/tmdb";
 
 pub fn get_tmdb_proxy_base_url() -> String {
     if let Ok(proxy_url) = std::env::var("STREAMVAULT_TMDB_PROXY_URL") {
@@ -61,6 +62,7 @@ pub struct TmdbMetadata {
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub cast_names: Option<String>,
+    pub director: Option<String>,
     pub poster_path: Option<String>,
     pub tmdb_id: Option<String>,
     pub runtime_seconds: Option<f64>,
@@ -128,10 +130,17 @@ struct TmdbItem {
 #[derive(Debug, Deserialize, Clone)]
 struct TmdbCredits {
     cast: Option<Vec<TmdbCastMember>>,
+    crew: Option<Vec<TmdbCrewMember>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct TmdbCastMember {
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TmdbCrewMember {
+    job: Option<String>,
     name: Option<String>,
 }
 
@@ -197,11 +206,7 @@ fn build_tmdb_url(base_path: &str, credential: &str, extra_params: &str) -> Stri
     }
 
     if is_access_token(credential) {
-        format!(
-            "https://api.themoviedb.org/3{}?{}",
-            base_path,
-            extra_params
-        )
+        format!("https://api.themoviedb.org/3{}?{}", base_path, extra_params)
     } else {
         format!(
             "https://api.themoviedb.org/3{}?api_key={}&{}",
@@ -211,7 +216,11 @@ fn build_tmdb_url(base_path: &str, credential: &str, extra_params: &str) -> Stri
 }
 
 /// Execute a TMDB request with proper authentication and robust retry logic
-fn tmdb_request(client: &reqwest::blocking::Client, url: &str, credential: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
+fn tmdb_request(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    credential: &str,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
     tmdb_request_with_retry(client, url, credential, MAX_RETRIES)
 }
 
@@ -230,12 +239,17 @@ fn tmdb_request_with_retry(
             let delay = std::cmp::min(BASE_DELAY_MS * (1 << attempt), MAX_DELAY_MS);
             let jitter = (rand_simple() * delay as f64 * 0.3) as u64;
             let total_delay = delay + jitter;
-            println!("[TMDB] Retry attempt {} after {}ms delay", attempt + 1, total_delay);
+            println!(
+                "[TMDB] Retry attempt {} after {}ms delay",
+                attempt + 1,
+                total_delay
+            );
             std::thread::sleep(std::time::Duration::from_millis(total_delay));
         }
 
         let result = if is_access_token(credential) && !is_backend_proxy_credential(credential) {
-            client.get(url)
+            client
+                .get(url)
                 .header("Authorization", format!("Bearer {}", credential))
                 .send()
         } else {
@@ -265,7 +279,11 @@ fn tmdb_request_with_retry(
             }
             Err(e) => {
                 let error_str = e.to_string();
-                println!("[TMDB] Request failed (attempt {}): {}", attempt + 1, error_str);
+                println!(
+                    "[TMDB] Request failed (attempt {}): {}",
+                    attempt + 1,
+                    error_str
+                );
 
                 // Check for retryable errors
                 let is_retryable = error_str.contains("10054")  // Connection reset (Windows)
@@ -320,7 +338,8 @@ fn normalize_title(title: &str) -> String {
     }
 
     // Remove all non-alphanumeric except spaces
-    normalized = normalized.chars()
+    normalized = normalized
+        .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
 
@@ -343,7 +362,8 @@ fn title_similarity(a: &str, b: &str) -> f64 {
 
     // Check if one contains the other
     if norm_a.contains(&norm_b) || norm_b.contains(&norm_a) {
-        let len_ratio = (norm_a.len().min(norm_b.len()) as f64) / (norm_a.len().max(norm_b.len()) as f64);
+        let len_ratio =
+            (norm_a.len().min(norm_b.len()) as f64) / (norm_a.len().max(norm_b.len()) as f64);
         return 0.7 + (len_ratio * 0.3);
     }
 
@@ -364,61 +384,64 @@ fn title_similarity(a: &str, b: &str) -> f64 {
 /// Clean title minimally - only remove obvious noise but keep the core title intact
 fn minimal_clean_title(title: &str) -> String {
     let mut cleaned = title.to_string();
-    
+
     // Only remove brackets and their contents at the END of the title
     if let Ok(re) = regex::Regex::new(r"\s*[\[\(][^\]\)]*[\]\)]\s*$") {
         cleaned = re.replace_all(&cleaned, "").to_string();
     }
-    
+
     // Remove trailing dashes and what follows (often release group)
     if let Ok(re) = regex::Regex::new(r"\s+-\s*[A-Za-z0-9]+\s*$") {
         cleaned = re.replace_all(&cleaned, "").to_string();
     }
-    
+
     cleaned.trim().to_string()
 }
 
 /// Extract potential alternative titles from a string
 fn extract_title_variations(title: &str) -> Vec<String> {
     let mut variations = Vec::new();
-    
+
     // 1. Original title as-is
     variations.push(title.to_string());
-    
+
     // 2. Minimally cleaned
     let minimal = minimal_clean_title(title);
     if !minimal.is_empty() && minimal != title {
         variations.push(minimal.clone());
     }
-    
+
     // 3. With spaces instead of dots/underscores
     let spaced = title.replace('.', " ").replace('_', " ");
     let spaced = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
     if !spaced.is_empty() && !variations.contains(&spaced) {
         variations.push(spaced.clone());
     }
-    
+
     // 4. Extract title from common patterns like "Title S01E01" or "Title.2019"
     // This helps with TV show episodes
     let patterns = [
-        r"^(.+?)\s*[Ss]\d+[Ee]\d+",  // Title S01E01
-        r"^(.+?)\s*\d{1,2}x\d{1,2}", // Title 1x01
+        r"^(.+?)\s*[Ss]\d+[Ee]\d+",       // Title S01E01
+        r"^(.+?)\s*\d{1,2}x\d{1,2}",      // Title 1x01
         r"^(.+?)\s*[\.\s](?:19|20)\d{2}", // Title.2019 or Title 2019
     ];
-    
+
     for pattern in &patterns {
         if let Ok(re) = regex::Regex::new(pattern) {
             if let Some(caps) = re.captures(&spaced) {
                 if let Some(m) = caps.get(1) {
                     let extracted = m.as_str().trim().to_string();
-                    if !extracted.is_empty() && extracted.len() >= 2 && !variations.contains(&extracted) {
+                    if !extracted.is_empty()
+                        && extracted.len() >= 2
+                        && !variations.contains(&extracted)
+                    {
                         variations.push(extracted);
                     }
                 }
             }
         }
     }
-    
+
     // 5. Remove "The" prefix for alternative search
     for v in variations.clone() {
         if let Ok(re) = regex::Regex::new(r"(?i)^the\s+(.+)") {
@@ -432,7 +455,7 @@ fn extract_title_variations(title: &str) -> Vec<String> {
             }
         }
     }
-    
+
     // 6. Handle & vs and
     for v in variations.clone() {
         if v.contains('&') {
@@ -442,13 +465,16 @@ fn extract_title_variations(title: &str) -> Vec<String> {
             }
         }
         if v.to_lowercase().contains(" and ") {
-            let alt = v.replace(" and ", " & ").replace(" And ", " & ").replace(" AND ", " & ");
+            let alt = v
+                .replace(" and ", " & ")
+                .replace(" And ", " & ")
+                .replace(" AND ", " & ");
             if !variations.contains(&alt) {
                 variations.push(alt);
             }
         }
     }
-    
+
     // Deduplicate while preserving order
     let mut seen = std::collections::HashSet::new();
     variations.retain(|v| {
@@ -460,7 +486,7 @@ fn extract_title_variations(title: &str) -> Vec<String> {
             true
         }
     });
-    
+
     variations
 }
 
@@ -473,46 +499,62 @@ pub fn search_metadata(
     image_cache_dir: &str,
 ) -> Result<Option<TmdbMetadata>, Box<dyn std::error::Error + Send + Sync>> {
     println!("\n[TMDB] ========================================");
-    println!("[TMDB] Searching for: '{}' (type: {}, year: {:?})", title, media_type, year);
-    
+    println!(
+        "[TMDB] Searching for: '{}' (type: {}, year: {:?})",
+        title, media_type, year
+    );
+
     let variations = extract_title_variations(title);
     println!("[TMDB] Title variations: {:?}", variations);
-    
+
     // Strategy 1: Search with specified media type and year
     if let Some(y) = year {
         println!("[TMDB] Strategy 1: {} search with year {}", media_type, y);
         for variation in &variations {
-            if let Ok(Some(result)) = do_search(api_key, variation, media_type, Some(y), image_cache_dir, true) {
+            if let Ok(Some(result)) = do_search(
+                api_key,
+                variation,
+                media_type,
+                Some(y),
+                image_cache_dir,
+                true,
+            ) {
                 return Ok(Some(result));
             }
         }
     }
-    
+
     // Strategy 2: Search with specified media type, no year constraint
     println!("[TMDB] Strategy 2: {} search without year", media_type);
     for variation in &variations {
-        if let Ok(Some(result)) = do_search(api_key, variation, media_type, None, image_cache_dir, true) {
+        if let Ok(Some(result)) =
+            do_search(api_key, variation, media_type, None, image_cache_dir, true)
+        {
             return Ok(Some(result));
         }
     }
-    
+
     // Strategy 3: Try the OTHER media type (if searching for TV, try movie and vice versa)
     let alt_type = if media_type == "movie" { "tv" } else { "movie" };
     println!("[TMDB] Strategy 3: {} search (alternative type)", alt_type);
     for variation in &variations {
-        if let Ok(Some(result)) = do_search(api_key, variation, alt_type, year, image_cache_dir, true) {
+        if let Ok(Some(result)) =
+            do_search(api_key, variation, alt_type, year, image_cache_dir, true)
+        {
             return Ok(Some(result));
         }
     }
-    
+
     // Strategy 4: Multi-search (searches across all media types)
     println!("[TMDB] Strategy 4: Multi-search");
     for variation in &variations {
-        if let Ok(Some(result)) = do_multi_search(api_key, variation, media_type, image_cache_dir) {
+        if let Ok(Some(result)) =
+            do_multi_search(api_key, variation, media_type, year, image_cache_dir)
+        {
             return Ok(Some(result));
         }
     }
-    
+
     // Strategy 5: Try with just the first word (for short/numeric titles like "1899")
     if variations.iter().any(|v| v.split_whitespace().count() > 1) {
         println!("[TMDB] Strategy 5: First significant word search");
@@ -523,13 +565,17 @@ pub fn search_metadata(
                 let first = words[0];
                 if first.len() >= 3 || first.chars().all(|c| c.is_ascii_digit()) {
                     // For numeric titles like "1899"
-                    if let Ok(Some(result)) = do_search(api_key, first, media_type, None, image_cache_dir, false) {
+                    if let Ok(Some(result)) =
+                        do_search(api_key, first, media_type, year, image_cache_dir, false)
+                    {
                         // Verify it's a reasonable match
                         if is_reasonable_match(first, &result.title) {
                             return Ok(Some(result));
                         }
                     }
-                    if let Ok(Some(result)) = do_search(api_key, first, alt_type, None, image_cache_dir, false) {
+                    if let Ok(Some(result)) =
+                        do_search(api_key, first, alt_type, year, image_cache_dir, false)
+                    {
                         if is_reasonable_match(first, &result.title) {
                             return Ok(Some(result));
                         }
@@ -538,16 +584,21 @@ pub fn search_metadata(
             }
         }
     }
-    
+
     // Strategy 6: Relaxed search - accept results with lower score
     println!("[TMDB] Strategy 6: Relaxed search (lower threshold)");
     for variation in &variations {
-        if let Ok(Some(result)) = do_search(api_key, variation, media_type, None, image_cache_dir, false) {
+        if let Ok(Some(result)) =
+            do_search(api_key, variation, media_type, None, image_cache_dir, false)
+        {
             return Ok(Some(result));
         }
     }
-    
-    println!("[TMDB] All strategies exhausted, no results found for '{}'", title);
+
+    println!(
+        "[TMDB] All strategies exhausted, no results found for '{}'",
+        title
+    );
     println!("[TMDB] ========================================\n");
     Ok(None)
 }
@@ -557,15 +608,11 @@ pub fn search_multi_raw(
     api_key: &str,
     query: &str,
 ) -> Result<Vec<TmdbSearchListItem>, Box<dyn std::error::Error + Send + Sync>> {
-    let encoded_query = percent_encoding::utf8_percent_encode(
-        query,
-        percent_encoding::NON_ALPHANUMERIC,
-    ).to_string();
+    let encoded_query =
+        percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC)
+            .to_string();
 
-    let params = format!(
-        "query={}&include_adult=false&language=en-US",
-        encoded_query
-    );
+    let params = format!("query={}&include_adult=false&language=en-US", encoded_query);
     let url = build_tmdb_url("/search/multi", api_key, &params);
 
     let client = build_client()?;
@@ -661,29 +708,29 @@ pub fn search_multi_raw(
 fn is_reasonable_match(query: &str, result_title: &str) -> bool {
     let q = query.to_lowercase();
     let r = result_title.to_lowercase();
-    
+
     // Exact match
     if q == r {
         return true;
     }
-    
+
     // Result contains query or query contains result
     if r.contains(&q) || q.contains(&r) {
         return true;
     }
-    
+
     // For numeric titles, the result should start with or contain the number
     if query.chars().all(|c| c.is_ascii_digit()) {
         return r.contains(&q);
     }
-    
+
     // First word matches
     let q_first = q.split_whitespace().next().unwrap_or("");
     let r_first = r.split_whitespace().next().unwrap_or("");
     if !q_first.is_empty() && q_first == r_first {
         return true;
     }
-    
+
     false
 }
 
@@ -696,10 +743,9 @@ fn do_search(
     image_cache_dir: &str,
     strict: bool,
 ) -> Result<Option<TmdbMetadata>, Box<dyn std::error::Error + Send + Sync>> {
-    let encoded_title = percent_encoding::utf8_percent_encode(
-        title,
-        percent_encoding::NON_ALPHANUMERIC,
-    ).to_string();
+    let encoded_title =
+        percent_encoding::utf8_percent_encode(title, percent_encoding::NON_ALPHANUMERIC)
+            .to_string();
 
     let mut params = format!("query={}&include_adult=false&language=en-US", encoded_title);
 
@@ -713,7 +759,10 @@ fn do_search(
 
     let url = build_tmdb_url(&format!("/search/{}", media_type), api_key, &params);
 
-    println!("[TMDB]   -> Trying '{}' as {} (year: {:?})", title, media_type, year);
+    println!(
+        "[TMDB]   -> Trying '{}' as {} (year: {:?})",
+        title, media_type, year
+    );
 
     let client = build_client()?;
     let response = tmdb_request(&client, &url, api_key)?;
@@ -759,12 +808,12 @@ fn do_multi_search(
     api_key: &str,
     title: &str,
     preferred_type: &str,
+    search_year: Option<i32>,
     image_cache_dir: &str,
 ) -> Result<Option<TmdbMetadata>, Box<dyn std::error::Error + Send + Sync>> {
-    let encoded_title = percent_encoding::utf8_percent_encode(
-        title,
-        percent_encoding::NON_ALPHANUMERIC,
-    ).to_string();
+    let encoded_title =
+        percent_encoding::utf8_percent_encode(title, percent_encoding::NON_ALPHANUMERIC)
+            .to_string();
 
     let params = format!("query={}&include_adult=false&language=en-US", encoded_title);
     let url = build_tmdb_url("/search/multi", api_key, &params);
@@ -773,16 +822,16 @@ fn do_multi_search(
 
     let client = build_client()?;
     let response = tmdb_request(&client, &url, api_key)?;
-    
+
     if !response.status().is_success() {
         return Ok(None);
     }
-    
+
     #[derive(Debug, Deserialize)]
     struct MultiSearchResult {
         results: Vec<MultiSearchItem>,
     }
-    
+
     #[derive(Debug, Deserialize)]
     struct MultiSearchItem {
         id: i64,
@@ -800,14 +849,23 @@ fn do_multi_search(
         popularity: Option<f64>,
         vote_count: Option<i64>,
     }
-    
+
     let result: MultiSearchResult = response.json()?;
-    println!("[TMDB]   -> Found {} multi-search results", result.results.len());
-    
-    let preferred = if preferred_type == "movie" { "movie" } else { "tv" };
-    
+    println!(
+        "[TMDB]   -> Found {} multi-search results",
+        result.results.len()
+    );
+
+    let preferred = if preferred_type == "movie" {
+        "movie"
+    } else {
+        "tv"
+    };
+
     // Score and sort results
-    let mut scored: Vec<(&MultiSearchItem, f64)> = result.results.iter()
+    let mut scored: Vec<(&MultiSearchItem, f64)> = result
+        .results
+        .iter()
         .filter(|item| {
             let mt = item.media_type.as_deref().unwrap_or("");
             mt == "movie" || mt == "tv"
@@ -817,11 +875,20 @@ fn do_multi_search(
             let has_poster = item.poster_path.is_some() || item.backdrop_path.is_some();
             let popularity = item.popularity.unwrap_or(0.0);
             let vote_count = item.vote_count.unwrap_or(0) as f64;
-            
+            let item_year = item
+                .release_date
+                .as_ref()
+                .and_then(|d| d.split('-').next())
+                .and_then(|y| y.parse::<i32>().ok());
+
             let mut score = popularity * 0.3 + vote_count * 0.1;
-            if item_type == preferred { score += 500.0; }
-            if has_poster { score += 1000.0; }
-            
+            if item_type == preferred {
+                score += 500.0;
+            }
+            if has_poster {
+                score += 1000.0;
+            }
+
             // Title match bonus
             let item_title = item.title.as_deref().unwrap_or("").to_lowercase();
             let search_lower = title.to_lowercase();
@@ -830,16 +897,47 @@ fn do_multi_search(
             } else if item_title.contains(&search_lower) || search_lower.contains(&item_title) {
                 score += 500.0;
             }
-            
+
+            if let (Some(search_y), Some(item_y)) = (search_year, item_year) {
+                let year_diff = (search_y - item_y).abs();
+                if year_diff == 0 {
+                    score += 800.0;
+                } else if year_diff == 1 {
+                    score += 300.0;
+                } else if year_diff > 2 {
+                    score -= 5000.0;
+                }
+            }
+
             (item, score)
         })
         .collect();
-    
+
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    
+
     if let Some((item, score)) = scored.first() {
-        println!("[TMDB]   -> Best multi-search result: '{}' (score: {:.1})", 
-                 item.title.as_deref().unwrap_or("?"), score);
+        if let Some(search_y) = search_year {
+            let item_year = item
+                .release_date
+                .as_ref()
+                .and_then(|d| d.split('-').next())
+                .and_then(|y| y.parse::<i32>().ok());
+            if let Some(item_y) = item_year {
+                let year_diff = (search_y - item_y).abs();
+                if year_diff > 2 {
+                    println!(
+                        "[TMDB]   -> Best multi-search result rejected due to year mismatch (search={}, result={})",
+                        search_y, item_y
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+        println!(
+            "[TMDB]   -> Best multi-search result: '{}' (score: {:.1})",
+            item.title.as_deref().unwrap_or("?"),
+            score
+        );
 
         let actual_type = item.media_type.as_deref().unwrap_or(preferred_type);
         let best_id = item.id.to_string();
@@ -852,7 +950,7 @@ fn do_multi_search(
                 );
             }
         }
-        
+
         let tmdb_item = TmdbItem {
             id: item.id,
             title: item.title.clone(),
@@ -869,18 +967,24 @@ fn do_multi_search(
         };
         return create_metadata_from_item(&tmdb_item, image_cache_dir, actual_type);
     }
-    
+
     Ok(None)
 }
 
 /// Find the best match from search results using improved scoring
-fn find_best_match<'a>(results: &'a [TmdbItem], search_title: &str, search_year: Option<i32>, strict: bool) -> Option<&'a TmdbItem> {
+fn find_best_match<'a>(
+    results: &'a [TmdbItem],
+    search_title: &str,
+    search_year: Option<i32>,
+    strict: bool,
+) -> Option<&'a TmdbItem> {
     if results.is_empty() {
         return None;
     }
 
     // Score each result
-    let mut scored: Vec<(&TmdbItem, f64)> = results.iter()
+    let mut scored: Vec<(&TmdbItem, f64)> = results
+        .iter()
         .map(|item| {
             let item_title = item.title.as_deref().unwrap_or("");
             let original_title = item.original_title.as_deref().unwrap_or("");
@@ -889,6 +993,11 @@ fn find_best_match<'a>(results: &'a [TmdbItem], search_title: &str, search_year:
             let popularity = item.popularity.unwrap_or(0.0);
             let vote_avg = item.vote_average.unwrap_or(0.0);
             let vote_count = item.vote_count.unwrap_or(0) as f64;
+            let item_year = item
+                .release_date
+                .as_ref()
+                .and_then(|d| d.split('-').next())
+                .and_then(|y| y.parse::<i32>().ok());
 
             let mut score = 0.0;
 
@@ -912,33 +1021,29 @@ fn find_best_match<'a>(results: &'a [TmdbItem], search_title: &str, search_year:
 
             // Heavy weight on title matching
             if best_sim >= 0.95 {
-                score += 3000.0;  // Near-exact match
+                score += 3000.0; // Near-exact match
             } else if best_sim >= 0.8 {
-                score += 2000.0 + (best_sim * 500.0);  // Very good match
+                score += 2000.0 + (best_sim * 500.0); // Very good match
             } else if best_sim >= 0.5 {
-                score += 1000.0 + (best_sim * 500.0);  // Decent match
+                score += 1000.0 + (best_sim * 500.0); // Decent match
             } else if best_sim >= 0.3 {
-                score += best_sim * 500.0;  // Partial match
+                score += best_sim * 500.0; // Partial match
             } else {
-                score -= 500.0;  // Poor match penalty
+                score -= 500.0; // Poor match penalty
             }
 
             // Year matching (with tolerance)
             if let Some(search_y) = search_year {
-                let item_year = item.release_date.as_ref()
-                    .and_then(|d| d.split('-').next())
-                    .and_then(|y| y.parse::<i32>().ok());
-
                 if let Some(item_y) = item_year {
                     let year_diff = (search_y - item_y).abs();
                     if year_diff == 0 {
-                        score += 1000.0;  // Exact year match
+                        score += 1000.0; // Exact year match
                     } else if year_diff == 1 {
-                        score += 500.0;   // Off by one year (common for releases)
+                        score += 500.0; // Off by one year (common for releases)
                     } else if year_diff <= 2 {
-                        score += 200.0;   // Close enough
-                    } else if year_diff > 5 {
-                        score -= 300.0;   // Likely wrong
+                        score += 200.0; // Close enough
+                    } else if year_diff > 2 {
+                        score -= 5000.0; // Strong penalty for wrong year
                     }
                 }
             }
@@ -954,14 +1059,36 @@ fn find_best_match<'a>(results: &'a [TmdbItem], search_title: &str, search_year:
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // In strict mode, require a minimum similarity score
-    if strict {
-        if let Some((item, score)) = scored.first() {
+    if let Some((item, score)) = scored.first() {
+        if let Some(search_y) = search_year {
+            let item_year = item
+                .release_date
+                .as_ref()
+                .and_then(|d| d.split('-').next())
+                .and_then(|y| y.parse::<i32>().ok());
+            if let Some(item_y) = item_year {
+                let year_diff = (search_y - item_y).abs();
+                if year_diff > 2 {
+                    println!(
+                        "[TMDB]   -> Best match '{}' rejected due to year mismatch (search={}, result={})",
+                        item.title.as_deref().unwrap_or(""),
+                        search_y,
+                        item_y
+                    );
+                    return None;
+                }
+            }
+        }
+
+        // In strict mode, require a minimum similarity score
+        if strict {
             let item_title = item.title.as_deref().unwrap_or("");
             let best_sim = title_similarity(search_title, item_title);
             if best_sim < 0.3 && *score < 1000.0 {
-                println!("[TMDB]   -> Best match '{}' rejected (similarity: {:.2}, score: {:.1})",
-                         item_title, best_sim, score);
+                println!(
+                    "[TMDB]   -> Best match '{}' rejected (similarity: {:.2}, score: {:.1})",
+                    item_title, best_sim, score
+                );
                 return None;
             }
         }
@@ -976,11 +1103,15 @@ fn create_metadata_from_item(
     image_cache_dir: &str,
     media_type: &str,
 ) -> Result<Option<TmdbMetadata>, Box<dyn std::error::Error + Send + Sync>> {
-    let found_title = item.title.clone()
+    let found_title = item
+        .title
+        .clone()
         .or_else(|| item.original_title.clone())
         .unwrap_or_default();
 
-    let found_year = item.release_date.as_ref()
+    let found_year = item
+        .release_date
+        .as_ref()
         .and_then(|d| d.split('-').next())
         .and_then(|y| y.parse().ok());
 
@@ -1023,11 +1154,29 @@ fn create_metadata_from_item(
         .filter(|names| !names.is_empty())
         .map(|names| names.join(", "));
 
+    let director = item
+        .credits
+        .as_ref()
+        .and_then(|credits| credits.crew.as_ref())
+        .and_then(|crew| {
+            crew.iter().find(|member| {
+                member
+                    .job
+                    .as_deref()
+                    .map(|job| job.eq_ignore_ascii_case("Director"))
+                    .unwrap_or(false)
+            })
+        })
+        .and_then(|member| member.name.as_ref())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+
     Ok(Some(TmdbMetadata {
         title: found_title,
         year: found_year,
         overview: item.overview.clone(),
         cast_names,
+        director,
         poster_path,
         tmdb_id: Some(item.id.to_string()),
         runtime_seconds: item
@@ -1041,7 +1190,7 @@ fn create_metadata_from_item(
 fn cache_image_with_fallback(image_path: &str, cache_dir: &str) -> Option<String> {
     // Try different sizes in order of preference
     let sizes = ["w500", "w342", "w185", "original"];
-    
+
     for size in &sizes {
         match cache_image(image_path, cache_dir, size) {
             Ok(path) => {
@@ -1053,7 +1202,7 @@ fn cache_image_with_fallback(image_path: &str, cache_dir: &str) -> Option<String
             }
         }
     }
-    
+
     None
 }
 
@@ -1076,14 +1225,16 @@ pub fn fetch_metadata_by_id(
         let find_url = build_tmdb_url(
             &format!("/find/{}", tmdb_id),
             api_key,
-            "external_source=imdb_id"
+            "external_source=imdb_id",
         );
 
         let response = tmdb_request_with_retry(&client, &find_url, api_key, request_retries)?;
         let result: TmdbFindResult = response.json()?;
 
         // Try movie results first, then TV
-        let id = result.movie_results.first()
+        let id = result
+            .movie_results
+            .first()
             .or_else(|| result.tv_results.first())
             .map(|r| r.id.to_string())
             .ok_or_else(|| format!("No match found for IMDB ID {}", tmdb_id))?;
@@ -1097,7 +1248,7 @@ pub fn fetch_metadata_by_id(
     let url = build_tmdb_url(
         &format!("/{}/{}", media_type, final_id),
         api_key,
-        "language=en-US&append_to_response=credits"
+        "language=en-US&append_to_response=credits",
     );
 
     let response = tmdb_request_with_retry(&client, &url, api_key, request_retries)?;
@@ -1108,7 +1259,7 @@ pub fn fetch_metadata_by_id(
         let alt_url = build_tmdb_url(
             &format!("/{}/{}", alt_type, final_id),
             api_key,
-            "language=en-US&append_to_response=credits"
+            "language=en-US&append_to_response=credits",
         );
         let alt_response = tmdb_request_with_retry(&client, &alt_url, api_key, request_retries)?;
         if !alt_response.status().is_success() {
@@ -1133,12 +1284,12 @@ fn create_metadata_from_item_required(
 
 fn extract_id_from_input(input: &str) -> (String, &str) {
     let input = input.trim();
-    
+
     // Pure numeric ID
     if input.chars().all(|c| c.is_ascii_digit()) {
         return (input.to_string(), "tmdb");
     }
-    
+
     // IMDB ID (tt followed by digits)
     if let Some(caps) = regex::Regex::new(r"(tt\d+)")
         .ok()
@@ -1148,7 +1299,7 @@ fn extract_id_from_input(input: &str) -> (String, &str) {
             return (m.as_str().to_string(), "imdb");
         }
     }
-    
+
     // TMDB movie URL
     if let Some(caps) = regex::Regex::new(r"themoviedb\.org/movie/(\d+)")
         .ok()
@@ -1158,7 +1309,7 @@ fn extract_id_from_input(input: &str) -> (String, &str) {
             return (m.as_str().to_string(), "tmdb");
         }
     }
-    
+
     // TMDB TV URL
     if let Some(caps) = regex::Regex::new(r"themoviedb\.org/tv/(\d+)")
         .ok()
@@ -1168,7 +1319,7 @@ fn extract_id_from_input(input: &str) -> (String, &str) {
             return (m.as_str().to_string(), "tmdb");
         }
     }
-    
+
     (input.to_string(), "tmdb")
 }
 
@@ -1176,7 +1327,7 @@ fn extract_id_from_input(input: &str) -> (String, &str) {
 fn cache_image(
     image_path: &str,
     cache_dir: &str,
-    size: &str
+    size: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let filename = Path::new(image_path)
         .file_name()
@@ -1320,7 +1471,10 @@ pub fn cache_image_organized(
                                 if bytes.len() > 100 {
                                     if let Ok(mut file) = fs::File::create(&local_path) {
                                         if file.write_all(&bytes).is_ok() {
-                                            println!("[TMDB] Cached image: {:?} (size: {})", local_path, size);
+                                            println!(
+                                                "[TMDB] Cached image: {:?} (size: {})",
+                                                local_path, size
+                                            );
                                             return Some(format_image_path(&subfolder, &filename));
                                         }
                                     }
@@ -1341,7 +1495,12 @@ pub fn cache_image_organized(
                         if !is_retryable {
                             break;
                         }
-                        println!("[TMDB] Image download retry {} for {}: {}", attempt + 1, size, error_str);
+                        println!(
+                            "[TMDB] Image download retry {} for {}: {}",
+                            attempt + 1,
+                            size,
+                            error_str
+                        );
                     }
                 }
             }
@@ -1374,17 +1533,17 @@ pub fn fetch_tv_show_details(
 ) -> Result<TvShowDetails, Box<dyn std::error::Error + Send + Sync>> {
     println!("[TMDB] Fetching TV show details for ID: {}", tmdb_id);
 
-    let url = build_tmdb_url(
-        &format!("/tv/{}", tmdb_id),
-        api_key,
-        "language=en-US"
-    );
+    let url = build_tmdb_url(&format!("/tv/{}", tmdb_id), api_key, "language=en-US");
 
     let client = build_client()?;
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to fetch TV show details: HTTP {}", response.status()).into());
+        return Err(format!(
+            "Failed to fetch TV show details: HTTP {}",
+            response.status()
+        )
+        .into());
     }
 
     let details: TvShowDetails = response.json()?;
@@ -1423,19 +1582,27 @@ pub fn fetch_season_episodes(
     series_title: &str,
     image_cache_dir: &str,
 ) -> Result<TmdbSeasonInfo, Box<dyn std::error::Error + Send + Sync>> {
-    println!("[TMDB] Fetching season {} episodes for series ID: {}", season_number, tmdb_id);
+    println!(
+        "[TMDB] Fetching season {} episodes for series ID: {}",
+        season_number, tmdb_id
+    );
 
     let url = build_tmdb_url(
         &format!("/tv/{}/season/{}", tmdb_id, season_number),
         api_key,
-        "language=en-US"
+        "language=en-US",
     );
 
     let client = build_client()?;
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to fetch season {}: HTTP {}", season_number, response.status()).into());
+        return Err(format!(
+            "Failed to fetch season {}: HTTP {}",
+            season_number,
+            response.status()
+        )
+        .into());
     }
 
     #[derive(Debug, Deserialize)]
@@ -1460,25 +1627,28 @@ pub fn fetch_season_episodes(
     }
 
     let season_data: SeasonResponse = response.json()?;
-    println!("[TMDB] Found {} episodes in season {}", season_data.episodes.len(), season_number);
+    println!(
+        "[TMDB] Found {} episodes in season {}",
+        season_data.episodes.len(),
+        season_number
+    );
 
     // Cache season poster if available
     let season_poster = season_data.poster_path.as_ref().and_then(|path| {
-        cache_image_organized(
-            path,
-            image_cache_dir,
-            series_title,
-            ImageType::SeriesBanner,
-        )
+        cache_image_organized(path, image_cache_dir, series_title, ImageType::SeriesBanner)
     });
 
     // Process episodes and cache their images
-    let episodes: Vec<TmdbEpisodeInfo> = season_data.episodes
+    let episodes: Vec<TmdbEpisodeInfo> = season_data
+        .episodes
         .into_iter()
         .map(|ep| {
             // Cache episode still image
             let still_path = if let Some(ref path) = ep.still_path {
-                println!("[TMDB] Downloading episode image for S{:02}E{:02}: {}", ep.season_number, ep.episode_number, path);
+                println!(
+                    "[TMDB] Downloading episode image for S{:02}E{:02}: {}",
+                    ep.season_number, ep.episode_number, path
+                );
                 let cached = cache_image_organized(
                     path,
                     image_cache_dir,
@@ -1489,13 +1659,22 @@ pub fn fetch_season_episodes(
                     },
                 );
                 if cached.is_some() {
-                    println!("[TMDB] Successfully cached episode image for S{:02}E{:02}", ep.season_number, ep.episode_number);
+                    println!(
+                        "[TMDB] Successfully cached episode image for S{:02}E{:02}",
+                        ep.season_number, ep.episode_number
+                    );
                 } else {
-                    println!("[TMDB] Failed to cache episode image for S{:02}E{:02}", ep.season_number, ep.episode_number);
+                    println!(
+                        "[TMDB] Failed to cache episode image for S{:02}E{:02}",
+                        ep.season_number, ep.episode_number
+                    );
                 }
                 cached
             } else {
-                println!("[TMDB] No still_path for S{:02}E{:02} (TMDB has no image)", ep.season_number, ep.episode_number);
+                println!(
+                    "[TMDB] No still_path for S{:02}E{:02} (TMDB has no image)",
+                    ep.season_number, ep.episode_number
+                );
                 None
             };
 
@@ -1527,7 +1706,10 @@ pub fn fetch_all_series_episodes(
     series_title: &str,
     image_cache_dir: &str,
 ) -> Result<Vec<TmdbSeasonInfo>, Box<dyn std::error::Error + Send + Sync>> {
-    println!("[TMDB] Fetching all episode metadata for series: {} (ID: {})", series_title, tmdb_id);
+    println!(
+        "[TMDB] Fetching all episode metadata for series: {} (ID: {})",
+        series_title, tmdb_id
+    );
 
     // First get the show details to know how many seasons
     let show_details = fetch_tv_show_details(api_key, tmdb_id)?;
@@ -1541,13 +1723,26 @@ pub fn fetch_all_series_episodes(
             continue;
         }
 
-        match fetch_season_episodes(api_key, tmdb_id, season_info.season_number, series_title, image_cache_dir) {
+        match fetch_season_episodes(
+            api_key,
+            tmdb_id,
+            season_info.season_number,
+            series_title,
+            image_cache_dir,
+        ) {
             Ok(season) => {
-                println!("[TMDB] Fetched {} episodes for season {}", season.episodes.len(), season.season_number);
+                println!(
+                    "[TMDB] Fetched {} episodes for season {}",
+                    season.episodes.len(),
+                    season.season_number
+                );
                 all_seasons.push(season);
             }
             Err(e) => {
-                println!("[TMDB] Warning: Failed to fetch season {}: {}", season_info.season_number, e);
+                println!(
+                    "[TMDB] Warning: Failed to fetch season {}: {}",
+                    season_info.season_number, e
+                );
             }
         }
 
@@ -1555,7 +1750,10 @@ pub fn fetch_all_series_episodes(
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    println!("[TMDB] Fetched {} total seasons with episode data", all_seasons.len());
+    println!(
+        "[TMDB] Fetched {} total seasons with episode data",
+        all_seasons.len()
+    );
     Ok(all_seasons)
 }
 
@@ -1573,7 +1771,11 @@ pub fn fetch_owned_episodes_only(
         return Ok(Vec::new());
     }
 
-    println!("[TMDB] Fetching metadata for {} owned episodes of: {}", owned_episodes.len(), series_title);
+    println!(
+        "[TMDB] Fetching metadata for {} owned episodes of: {}",
+        owned_episodes.len(),
+        series_title
+    );
 
     // Group episodes by season for efficient fetching
     let mut seasons_needed: std::collections::HashSet<i32> = std::collections::HashSet::new();
@@ -1592,7 +1794,7 @@ pub fn fetch_owned_episodes_only(
         let url = build_tmdb_url(
             &format!("/tv/{}/season/{}", tmdb_id, season_num),
             api_key,
-            "language=en-US"
+            "language=en-US",
         );
 
         let response = match tmdb_request(&client, &url, api_key) {
@@ -1604,7 +1806,11 @@ pub fn fetch_owned_episodes_only(
         };
 
         if !response.status().is_success() {
-            println!("[TMDB] Season {} fetch returned {}", season_num, response.status());
+            println!(
+                "[TMDB] Season {} fetch returned {}",
+                season_num,
+                response.status()
+            );
             continue;
         }
 
@@ -1632,24 +1838,33 @@ pub fn fetch_owned_episodes_only(
         };
 
         // Filter to only the episodes user owns in this season
-        let owned_in_season: Vec<i32> = owned_episodes.iter()
+        let owned_in_season: Vec<i32> = owned_episodes
+            .iter()
             .filter(|(s, _)| *s == season_num)
             .map(|(_, e)| *e)
             .collect();
 
-        println!("[TMDB] User owns episodes {:?} in season {}", owned_in_season, season_num);
+        println!(
+            "[TMDB] User owns episodes {:?} in season {}",
+            owned_in_season, season_num
+        );
 
         for ep in season_data.episodes {
             if !owned_in_season.contains(&ep.episode_number) {
                 continue; // Skip episodes user doesn't own
             }
 
-            println!("[TMDB] Processing owned episode S{:02}E{:02}: {}",
-                ep.season_number, ep.episode_number, ep.name);
+            println!(
+                "[TMDB] Processing owned episode S{:02}E{:02}: {}",
+                ep.season_number, ep.episode_number, ep.name
+            );
 
             // Download still image only for this episode
             let still_path = if let Some(ref path) = ep.still_path {
-                println!("[TMDB] Downloading image for S{:02}E{:02}", ep.season_number, ep.episode_number);
+                println!(
+                    "[TMDB] Downloading image for S{:02}E{:02}",
+                    ep.season_number, ep.episode_number
+                );
                 let cached = cache_image_organized(
                     path,
                     image_cache_dir,
@@ -1660,13 +1875,22 @@ pub fn fetch_owned_episodes_only(
                     },
                 );
                 if cached.is_some() {
-                    println!("[TMDB] Successfully cached S{:02}E{:02} image", ep.season_number, ep.episode_number);
+                    println!(
+                        "[TMDB] Successfully cached S{:02}E{:02} image",
+                        ep.season_number, ep.episode_number
+                    );
                 } else {
-                    println!("[TMDB] Failed to cache S{:02}E{:02} image", ep.season_number, ep.episode_number);
+                    println!(
+                        "[TMDB] Failed to cache S{:02}E{:02} image",
+                        ep.season_number, ep.episode_number
+                    );
                 }
                 cached
             } else {
-                println!("[TMDB] No still_path for S{:02}E{:02} on TMDB", ep.season_number, ep.episode_number);
+                println!(
+                    "[TMDB] No still_path for S{:02}E{:02} on TMDB",
+                    ep.season_number, ep.episode_number
+                );
                 None
             };
 
@@ -1684,6 +1908,9 @@ pub fn fetch_owned_episodes_only(
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    println!("[TMDB] Successfully processed {} owned episodes", result_episodes.len());
+    println!(
+        "[TMDB] Successfully processed {} owned episodes",
+        result_episodes.len()
+    );
     Ok(result_episodes)
 }

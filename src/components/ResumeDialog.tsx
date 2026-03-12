@@ -130,7 +130,7 @@ export function ResumeDialog({
                     </div>
 
                     <DialogDescription className="text-base space-y-5">
-                        {/* Progress visualization - only show if we have real progress data AND not streaming */}
+                        {/* Progress visualization - only show with real progress data */}
                         {hasProgressData && !isStreaming ? (
                             <motion.div
                                 initial={{ opacity: 0, y: 10 }}

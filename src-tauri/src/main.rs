@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use tauri::{State, Window, Manager, SystemTray, SystemTrayMenu, SystemTrayMenuItem, CustomMenuItem, SystemTrayEvent, AppHandle, WindowBuilder, WindowUrl};
 use serde::Serialize;
-use notify_rust::Notification;
+use notify_rust::Notification as SystemNotification;
+use tauri::api::notification::Notification as TauriNotification;
 use std::sync::mpsc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -523,6 +524,7 @@ async fn gdrive_scan_folder(
         let mut skipped_count = 0;
         let mut movies_count = 0;
         let mut tv_count = 0;
+        let mut entry_counter = 0usize;
 
         // Cache for TV shows: title -> (db_id, tmdb_id, show_folder_id)
         let mut tv_show_cache: HashMap<String, (i64, Option<String>, String)> = HashMap::new();
@@ -589,6 +591,8 @@ async fn gdrive_scan_folder(
                             None => (show_title.clone(), None, None, None, None, None),
                         };
 
+                        let title = media_manager::prefer_title_with_leading_article(&show_title, &title);
+
                         // Use episode's parent folder as the show's folder ID (for deletion)
                         match db.insert_cloud_tvshow(
                             &title,
@@ -647,7 +651,7 @@ async fn gdrive_scan_folder(
                     };
 
                 // Insert episode
-                if let Err(e) = db.insert_cloud_episode(
+                let ep_id = match db.insert_cloud_episode(
                     &show_title,
                     &file.name,
                     db_show_id,
@@ -659,13 +663,24 @@ async fn gdrive_scan_folder(
                     ep_overview.as_deref(),
                     ep_still.as_deref(),
                 ) {
-                    println!("[CLOUD] Failed to insert episode: {}", e);
-                    continue;
-                }
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[CLOUD] Failed to insert episode: {}", e);
+                        continue;
+                    }
+                };
 
                 indexed_count += 1;
                 tv_count += 1;
+                entry_counter += 1;
                 println!("[CLOUD] Indexed TV: {} S{:02}E{:02}", show_title, season, episode);
+                println!(
+                    "[INDEX] #{} TV episode '{}' (db_id: {}, cloud_file_id: {})",
+                    entry_counter,
+                    file.name,
+                    ep_id,
+                    file.id
+                );
 
             } else {
                 // Index as movie
@@ -678,25 +693,29 @@ async fn gdrive_scan_folder(
                     &image_cache_dir,
                 ).ok().flatten();
 
-                let (title, year, overview, cast_names, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
+                let (title, year, overview, cast_names, director, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
                     Some(meta) => (
                         meta.title,
                         meta.year,
                         meta.overview,
                         meta.cast_names,
+                        meta.director,
                         meta.poster_path,
                         meta.tmdb_id,
                         meta.runtime_seconds.unwrap_or(0.0),
                     ),
-                    None => (parsed.title.clone(), parsed.year, None, None, None, None, 0.0),
+                    None => (parsed.title.clone(), parsed.year, None, None, None, None, None, 0.0),
                 };
 
+                let title = media_manager::prefer_title_with_leading_article(&parsed.title, &title);
+
                 // Insert into database
-                if let Err(e) = db.insert_cloud_movie(
+                let movie_id = match db.insert_cloud_movie(
                     &title,
                     year,
                     overview.as_deref(),
                     cast_names.as_deref(),
+                    director.as_deref(),
                     poster_path.as_deref(),
                     &file.name,
                     &file.id,
@@ -704,13 +723,24 @@ async fn gdrive_scan_folder(
                     runtime_seconds,
                     tmdb_id.as_deref(),
                 ) {
-                    println!("[CLOUD] Failed to insert movie: {}", e);
-                    continue;
-                }
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[CLOUD] Failed to insert movie: {}", e);
+                        continue;
+                    }
+                };
 
                 indexed_count += 1;
                 movies_count += 1;
+                entry_counter += 1;
                 println!("[CLOUD] Indexed Movie: {}", title);
+                println!(
+                    "[INDEX] #{} Movie '{}' (db_id: {}, cloud_file_id: {})",
+                    entry_counter,
+                    file.name,
+                    movie_id,
+                    file.id
+                );
             }
         }
 
@@ -939,6 +969,8 @@ async fn scan_all_cloud_folders(
                                 None => (show_title.clone(), None, None, None, None, None),
                             };
 
+                            let title = media_manager::prefer_title_with_leading_article(&show_title, &title);
+
                             match db.insert_cloud_tvshow(
                                 &title,
                                 year,
@@ -993,24 +1025,28 @@ async fn scan_all_cloud_folders(
                 } else {
                     let tmdb_result = tmdb::search_metadata(&api_key, &parsed.title, "movie", parsed.year, &image_cache_dir).ok().flatten();
 
-                    let (title, year, overview, cast_names, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
+                    let (title, year, overview, cast_names, director, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
                         Some(meta) => (
                             meta.title,
                             meta.year,
                             meta.overview,
                             meta.cast_names,
+                            meta.director,
                             meta.poster_path,
                             meta.tmdb_id,
                             meta.runtime_seconds.unwrap_or(0.0),
                         ),
-                        None => (parsed.title.clone(), parsed.year, None, None, None, None, 0.0),
+                        None => (parsed.title.clone(), parsed.year, None, None, None, None, None, 0.0),
                     };
+
+                    let title = media_manager::prefer_title_with_leading_article(&parsed.title, &title);
 
                     if db.insert_cloud_movie(
                         &title,
                         year,
                         overview.as_deref(),
                         cast_names.as_deref(),
+                        director.as_deref(),
                         poster_path.as_deref(),
                         &file.name,
                         &file.id,
@@ -1157,7 +1193,8 @@ async fn check_cloud_changes(
 
     // Get changes since last check
     let api_start = std::time::Instant::now();
-    let (changed_files, new_token) = state.gdrive_client.get_video_changes(&page_token).await?;
+    let (changed_files, removed_file_ids, new_token) =
+        state.gdrive_client.get_video_changes(&page_token).await?;
     let api_duration = api_start.elapsed();
     println!("[CLOUD CHANGES] Changes API call took {:?}", api_duration);
 
@@ -1165,6 +1202,40 @@ async fn check_cloud_changes(
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         db.set_gdrive_changes_token(&new_token).map_err(|e| e.to_string())?;
+    }
+
+    let mut removed_titles: Vec<String> = Vec::new();
+    if !removed_file_ids.is_empty() {
+        if let Ok(db) = state.db.lock() {
+            for file_id in removed_file_ids {
+                if let Ok(Some((_id, title, _media_type, _parent_id))) =
+                    db.remove_media_by_cloud_file_id(&file_id)
+                {
+                    removed_titles.push(title);
+                }
+            }
+
+            if !removed_titles.is_empty() {
+                let _ = db.cleanup_empty_series();
+            }
+        }
+
+        if !removed_titles.is_empty() {
+            window.emit("library-updated", ()).ok();
+            for title in &removed_titles {
+                emit_ui_notification(
+                    &window,
+                    "StreamVault",
+                    &format!("{} removed (deleted from Drive)", title),
+                    "info",
+                );
+                send_system_notification(
+                    &window.app_handle(),
+                    "StreamVault",
+                    &format!("{} removed (deleted from Drive)", title),
+                );
+            }
+        }
     }
 
     if changed_files.is_empty() {
@@ -1177,7 +1248,11 @@ async fn check_cloud_changes(
             skipped_count: 0,
             movies_count: 0,
             tv_count: 0,
-            message: "No new files detected".to_string(),
+            message: if removed_titles.is_empty() {
+                "No new files detected".to_string()
+            } else {
+                format!("Removed {} item(s) deleted from Drive", removed_titles.len())
+            },
         });
     }
 
@@ -1250,7 +1325,7 @@ async fn check_cloud_changes(
                 Err(e) => return Err(format!("Failed to open database: {}", e)),
             };
 
-            let mut indexed_items: Vec<(i64, String, String, bool, Option<i32>, Option<i32>, String)> = Vec::new(); // (id, title, file_id, is_tv, season, episode, folder_id)
+            let mut indexed_items: Vec<(i64, String, String, bool, Option<i32>, Option<i32>, String, Option<i32>)> = Vec::new(); // (id, title, file_id, is_tv, season, episode, folder_id, year)
             let mut skipped_count = 0;
             let mut movies_count = 0;
             let mut tv_count = 0;
@@ -1333,7 +1408,7 @@ async fn check_cloud_changes(
                         Ok(ep_id) => {
                             let display_title = format!("{} S{:02}E{:02}", show_title, season, episode);
                             println!("[CLOUD CHANGES]   ✓ Added (no metadata): {}", display_title);
-                            indexed_items.push((ep_id, show_title, file_id, true, Some(season), Some(episode), folder_id));
+                            indexed_items.push((ep_id, show_title, file_id, true, Some(season), Some(episode), folder_id, parsed.year));
                             tv_count += 1;
                         }
                         Err(e) => {
@@ -1349,6 +1424,7 @@ async fn check_cloud_changes(
                         None,
                         None,
                         None,
+                        None,
                         &file_name,
                         &file_id,
                         &folder_id,
@@ -1357,7 +1433,7 @@ async fn check_cloud_changes(
                     ) {
                         Ok(movie_id) => {
                             println!("[CLOUD CHANGES]   ✓ Added (no metadata): {}", parsed.title);
-                            indexed_items.push((movie_id, parsed.title, file_id, false, None, None, folder_id));
+                            indexed_items.push((movie_id, parsed.title, file_id, false, None, None, folder_id, parsed.year));
                             movies_count += 1;
                         }
                         Err(_) => continue,
@@ -1378,7 +1454,7 @@ async fn check_cloud_changes(
     // Send notifications and emit events immediately after Phase 1
     if indexed_count > 0 {
         // Collect titles for notifications
-        let titles: Vec<String> = indexed_items.iter().map(|(_, title, _, is_tv, season, episode, _)| {
+        let titles: Vec<String> = indexed_items.iter().map(|(_, title, _, is_tv, season, episode, _, _)| {
             if *is_tv {
                 format!("{} S{:02}E{:02}", title, season.unwrap_or(1), episode.unwrap_or(1))
             } else {
@@ -1398,24 +1474,18 @@ async fn check_cloud_changes(
 
         // Send Windows notification for each item (simple format)
         for title in &titles {
-            let mut notification = Notification::new();
-            notification
-                .summary("StreamVault")
-                .body(&format!("{} added to your library", title))
-                .appname("StreamVault")
-                .timeout(notify_rust::Timeout::Milliseconds(3000));
+            emit_ui_notification(
+                &window,
+                "StreamVault",
+                &format!("{} added to your library", title),
+                "success",
+            );
 
-            // Set Windows App User Model ID so notification shows from StreamVault
-            #[cfg(target_os = "windows")]
-            {
-                notification.app_id("com.streamvault.app");
-            }
-
-            if let Err(e) = notification.show() {
-                println!("[CLOUD CHANGES] Failed to send notification: {}", e);
-            } else {
-                println!("[CLOUD CHANGES] 🔔 Notification: {} added to your library", title);
-            }
+            send_system_notification(
+                &window.app_handle(),
+                "StreamVault",
+                &format!("{} added to your library", title),
+            );
         }
     }
 
@@ -1454,7 +1524,7 @@ async fn check_cloud_changes(
                     let mut tv_show_updated: std::collections::HashSet<String> = std::collections::HashSet::new();
                     let mut season_cache: std::collections::HashMap<(String, i32), Vec<tmdb::TmdbEpisodeInfo>> = std::collections::HashMap::new();
 
-                    for (media_id, title, _file_id, is_tv, season_opt, episode_opt, _folder_id) in indexed_items_bg {
+                    for (media_id, title, _file_id, is_tv, season_opt, episode_opt, _folder_id, year) in indexed_items_bg {
                         if is_tv {
                             let season = season_opt.unwrap_or(1);
                             let episode = episode_opt.unwrap_or(1);
@@ -1467,7 +1537,7 @@ async fn check_cloud_changes(
                                 cached.clone()
                             } else {
                                 println!("[CLOUD CHANGES BG]   Searching TMDB for show '{}'...", title);
-                                let meta = tmdb::search_metadata(&api_key, &title, "tv", None, &image_cache_dir_bg).ok().flatten();
+                                let meta = tmdb::search_metadata(&api_key, &title, "tv", year, &image_cache_dir_bg).ok().flatten();
                                 if meta.is_some() {
                                     println!("[CLOUD CHANGES BG]   ✓ Found show metadata");
                                 } else {
@@ -1481,7 +1551,9 @@ async fn check_cloud_changes(
                                 // Update the parent TV show with poster (only once per show)
                                 if !tv_show_updated.contains(&title_lower) {
                                     if let Some(show) = find_existing_cloud_tvshow(&db, &title, None) {
-                                        if db.update_metadata(show.id, meta).is_ok() {
+                                        let mut show_meta_to_apply = meta.clone();
+                                        show_meta_to_apply.title = media_manager::prefer_title_with_leading_article(&title, &show_meta_to_apply.title);
+                                        if db.update_metadata(show.id, &show_meta_to_apply).is_ok() {
                                             println!("[CLOUD CHANGES BG]   ✓ Updated TV show poster for '{}'", title);
                                         }
                                     }
@@ -1533,10 +1605,12 @@ async fn check_cloud_changes(
                         } else {
                             // Movie metadata
                             println!("[CLOUD CHANGES BG] Processing movie '{}'...", title);
-                            match tmdb::search_metadata(&api_key, &title, "movie", None, &image_cache_dir_bg) {
+                            match tmdb::search_metadata(&api_key, &title, "movie", year, &image_cache_dir_bg) {
                                 Ok(Some(meta)) => {
-                                    if db.update_metadata(media_id, &meta).is_ok() {
-                                        println!("[CLOUD CHANGES BG]   ✓ Updated movie metadata: {}", meta.title);
+                                    let mut movie_meta = meta;
+                                    movie_meta.title = media_manager::prefer_title_with_leading_article(&title, &movie_meta.title);
+                                    if db.update_metadata(media_id, &movie_meta).is_ok() {
+                                        println!("[CLOUD CHANGES BG]   ✓ Updated movie metadata: {}", movie_meta.title);
                                     } else {
                                         println!("[CLOUD CHANGES BG]   ✗ Failed to update movie in DB");
                                     }
@@ -1693,6 +1767,7 @@ struct DeleteResponse {
 #[tauri::command]
 async fn delete_media_files(
     state: State<'_, AppState>,
+    window: Window,
     media_ids: Vec<i64>,
 ) -> Result<DeleteResponse, String> {
     if media_ids.is_empty() {
@@ -1702,9 +1777,11 @@ async fn delete_media_files(
     println!("[DELETE] Starting permanent deletion for {} items", media_ids.len());
 
     // Get media info including cloud details
-    let media_info = {
+    let (media_info, parent_series_ids) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.get_media_delete_info(&media_ids).map_err(|e| e.to_string())?
+        let info = db.get_media_delete_info(&media_ids).map_err(|e| e.to_string())?;
+        let parents = db.get_parent_series_ids(&media_ids).map_err(|e| e.to_string())?;
+        (info, parents)
     };
 
     let mut deleted_count = 0;
@@ -1767,6 +1844,54 @@ async fn delete_media_files(
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         db.delete_media_entries(&media_ids).map_err(|e| e.to_string())?;
+    }
+
+    // Cleanup empty series if we deleted the last episode(s)
+    let mut cleaned_empty_series = false;
+    if !parent_series_ids.is_empty() {
+        let series_cleanup: Vec<(i64, String, bool, Option<String>, bool)> = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            let mut list = Vec::new();
+            for series_id in parent_series_ids {
+                let has_episodes = db.series_has_episodes(series_id).map_err(|e| e.to_string())?;
+                if has_episodes {
+                    continue;
+                }
+
+                let media = db.get_media_by_id(series_id).map_err(|e| e.to_string())?;
+                let (is_cloud, folder_id) = db.get_series_cloud_info(series_id).map_err(|e| e.to_string())?;
+                let is_tracked_folder = if let Some(ref folder) = folder_id {
+                    db.get_cloud_folders()
+                        .map(|folders| folders.iter().any(|(id, _, _)| id == folder))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                list.push((series_id, media.title, is_cloud, folder_id, is_tracked_folder));
+            }
+            list
+        };
+
+        for (series_id, title, is_cloud, folder_id, is_tracked_folder) in series_cleanup {
+            if is_cloud {
+                if let Some(folder_id) = folder_id {
+                    if is_tracked_folder {
+                        println!("[DELETE] SAFETY: Refusing to delete tracked root folder: {}", folder_id);
+                    } else {
+                        println!("[DELETE] Skipping cloud folder delete for empty series '{}': {}", title, folder_id);
+                    }
+                }
+            }
+
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            db.remove_media(series_id).map_err(|e| e.to_string())?;
+            cleaned_empty_series = true;
+        }
+    }
+
+    if cleaned_empty_series {
+        window.emit("library-updated", ()).ok();
     }
 
     // Clean up empty parent directories (only for local files)
@@ -1941,7 +2066,7 @@ async fn delete_series(
     })
 }
 
-// Remove a TV series from the database and optionally delete the cloud folder from Drive
+// Remove a TV series from the database and delete only matching cloud files
 #[tauri::command]
 async fn delete_series_cloud_folder(
     state: State<'_, AppState>,
@@ -1958,29 +2083,25 @@ async fn delete_series_cloud_folder(
     println!("[DELETE] Removing series '{}' (ID: {}) - is_cloud: {}, folder_id: {:?}",
         series_title, series_id, is_cloud, cloud_folder_id);
 
-    // If it's a cloud series and has a folder ID, delete the folder from Google Drive
+    // Never delete parent folders from Drive; only delete matching files
     if is_cloud {
-        if let Some(folder_id) = cloud_folder_id {
-            // SAFETY CHECK: Never delete a tracked root folder - this would delete ALL content!
-            let is_tracked_folder = {
+        let episode_ids: Vec<i64> = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            let episodes = db.get_episodes(series_id).map_err(|e| e.to_string())?;
+            episodes.into_iter().map(|ep| ep.id).collect()
+        };
+
+        if !episode_ids.is_empty() {
+            let episode_info = {
                 let db = state.db.lock().map_err(|e| e.to_string())?;
-                db.get_cloud_folders()
-                    .map(|folders| folders.iter().any(|(id, _, _)| id == &folder_id))
-                    .unwrap_or(false)
+                db.get_media_delete_info(&episode_ids).map_err(|e| e.to_string())?
             };
 
-            if is_tracked_folder {
-                println!("[DELETE] SAFETY: Refusing to delete tracked root folder: {} - this would delete all content!", folder_id);
-                // Don't delete the folder, but continue to remove from DB
-            } else {
-                println!("[DELETE] Deleting cloud folder from Google Drive: {}", folder_id);
-                match state.gdrive_client.delete_file(&folder_id).await {
-                    Ok(_) => {
-                        println!("[DELETE] Successfully deleted cloud folder: {}", folder_id);
-                    }
-                    Err(e) => {
-                        println!("[DELETE] Warning: Failed to delete cloud folder {}: {}", folder_id, e);
-                        // Continue anyway - we still want to remove from DB
+            for (_id, _file_path, _is_cloud, cloud_file_id) in episode_info {
+                if let Some(cloud_id) = cloud_file_id {
+                    println!("[DELETE] Deleting cloud file for series '{}': {}", series_title, cloud_id);
+                    if let Err(e) = state.gdrive_client.delete_file(&cloud_id).await {
+                        println!("[DELETE] Warning: Failed to delete cloud file {}: {}", cloud_id, e);
                     }
                 }
             }
@@ -3771,6 +3892,47 @@ fn create_main_window(app: &AppHandle) -> Result<tauri::Window, tauri::Error> {
     .build()
 }
 
+fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
+    let mut notification = SystemNotification::new();
+    notification
+        .summary(summary)
+        .body(body)
+        .appname("StreamVault")
+        .timeout(notify_rust::Timeout::Milliseconds(3000));
+
+    #[cfg(target_os = "windows")]
+    {
+        notification.app_id("com.streamvault.app");
+    }
+
+    if let Err(e) = notification.show() {
+        println!("[NOTIFY] notify-rust failed: {}", e);
+
+        let tauri_notification = TauriNotification::new(&app_handle.config().tauri.bundle.identifier)
+            .title(summary)
+            .body(body);
+
+        if let Err(err) = tauri_notification.show() {
+            println!("[NOTIFY] tauri notification failed: {}", err);
+        }
+    }
+}
+
+fn emit_ui_notification(window: &tauri::Window, title: &str, message: &str, kind: &str) {
+    window
+        .emit(
+            "notification",
+            serde_json::json!({ "type": kind, "title": title, "message": message }),
+        )
+        .ok();
+}
+
+fn emit_ui_notification_from_handle(app_handle: &AppHandle, title: &str, message: &str, kind: &str) {
+    if let Some(window) = app_handle.get_window("main") {
+        emit_ui_notification(&window, title, message, kind);
+    }
+}
+
 /// Background cloud change detection polling
 /// Runs independently of the window to detect new files even when minimized to tray
 async fn background_cloud_poll(app_handle: AppHandle) {
@@ -3878,7 +4040,8 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
 
     // Get changes since last check
     let api_start = std::time::Instant::now();
-    let (changed_files, new_token) = state.gdrive_client.get_video_changes(&page_token).await?;
+    let (changed_files, removed_file_ids, new_token) =
+        state.gdrive_client.get_video_changes(&page_token).await?;
     let api_duration = api_start.elapsed();
     println!("[CLOUD BG] Changes API call took {:?}", api_duration);
 
@@ -3886,6 +4049,42 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         db.set_gdrive_changes_token(&new_token).map_err(|e| e.to_string())?;
+    }
+
+    let mut removed_titles: Vec<String> = Vec::new();
+    if !removed_file_ids.is_empty() {
+        if let Ok(db) = state.db.lock() {
+            for file_id in removed_file_ids {
+                if let Ok(Some((_id, title, _media_type, _parent_id))) =
+                    db.remove_media_by_cloud_file_id(&file_id)
+                {
+                    removed_titles.push(title);
+                }
+            }
+
+            if !removed_titles.is_empty() {
+                let _ = db.cleanup_empty_series();
+            }
+        }
+
+        if !removed_titles.is_empty() {
+            if let Some(window) = app_handle.get_window("main") {
+                window.emit("library-updated", ()).ok();
+            }
+            for title in &removed_titles {
+                emit_ui_notification_from_handle(
+                    app_handle,
+                    "StreamVault",
+                    &format!("{} removed (deleted from Drive)", title),
+                    "info",
+                );
+                send_system_notification(
+                    app_handle,
+                    "StreamVault",
+                    &format!("{} removed (deleted from Drive)", title),
+                );
+            }
+        }
     }
 
     if changed_files.is_empty() {
@@ -3898,7 +4097,11 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
             skipped_count: 0,
             movies_count: 0,
             tv_count: 0,
-            message: "No new files detected".to_string(),
+            message: if removed_titles.is_empty() {
+                "No new files detected".to_string()
+            } else {
+                format!("Removed {} item(s) deleted from Drive", removed_titles.len())
+            },
         });
     }
 
@@ -3941,10 +4144,11 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                 Err(e) => return Err(format!("Failed to open database: {}", e)),
             };
 
-            let mut indexed_items: Vec<(i64, String, String, bool, Option<i32>, Option<i32>, String)> = Vec::new();
+            let mut indexed_items: Vec<(i64, String, String, bool, Option<i32>, Option<i32>, String, Option<i32>)> = Vec::new();
             let mut skipped_count = 0;
             let mut movies_count = 0;
             let mut tv_count = 0;
+            let mut entry_counter = 0usize;
             let mut tv_show_cache: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
 
             for (file_id, file_name, parents) in files_to_index_clone {
@@ -4002,8 +4206,16 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                     match db.insert_cloud_episode(&show_title, &file_name, db_show_id, season, episode,
                         &file_id, &folder_id, None, None, None) {
                         Ok(ep_id) => {
-                            indexed_items.push((ep_id, show_title, file_id, true, Some(season), Some(episode), folder_id));
+                            indexed_items.push((ep_id, show_title, file_id.clone(), true, Some(season), Some(episode), folder_id, parsed.year));
                             tv_count += 1;
+                            entry_counter += 1;
+                            println!(
+                                "[INDEX] #{} TV episode '{}' (db_id: {}, cloud_file_id: {})",
+                                entry_counter,
+                                file_name,
+                                ep_id,
+                                file_id
+                            );
                         }
                         Err(_) => continue,
                     }
@@ -4014,6 +4226,7 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                         None,
                         None,
                         None,
+                        None,
                         &file_name,
                         &file_id,
                         &folder_id,
@@ -4021,8 +4234,16 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                         None,
                     ) {
                         Ok(movie_id) => {
-                            indexed_items.push((movie_id, parsed.title, file_id, false, None, None, folder_id));
+                            indexed_items.push((movie_id, parsed.title, file_id.clone(), false, None, None, folder_id, parsed.year));
                             movies_count += 1;
+                            entry_counter += 1;
+                            println!(
+                                "[INDEX] #{} Movie '{}' (db_id: {}, cloud_file_id: {})",
+                                entry_counter,
+                                file_name,
+                                movie_id,
+                                file_id
+                            );
                         }
                         Err(_) => continue,
                     }
@@ -4038,7 +4259,7 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
 
     // Send notifications for new items
     if indexed_count > 0 {
-        let titles: Vec<String> = indexed_items.iter().map(|(_, title, _, is_tv, season, episode, _)| {
+        let titles: Vec<String> = indexed_items.iter().map(|(_, title, _, is_tv, season, episode, _, _)| {
             if *is_tv {
                 format!("{} S{:02}E{:02}", title, season.unwrap_or(1), episode.unwrap_or(1))
             } else {
@@ -4047,20 +4268,18 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
         }).collect();
 
         for title in &titles {
-            let mut notification = Notification::new();
-            notification
-                .summary("StreamVault")
-                .body(&format!("{} added to your library", title))
-                .appname("StreamVault")
-                .timeout(notify_rust::Timeout::Milliseconds(3000));
+            emit_ui_notification_from_handle(
+                app_handle,
+                "StreamVault",
+                &format!("{} added to your library", title),
+                "success",
+            );
 
-            // Set Windows App User Model ID so notification shows from StreamVault
-            #[cfg(target_os = "windows")]
-            {
-                notification.app_id("com.streamvault.app");
-            }
-
-            notification.show().ok();
+            send_system_notification(
+                app_handle,
+                "StreamVault",
+                &format!("{} added to your library", title),
+            );
         }
 
         // Emit library-updated if window exists
@@ -4086,7 +4305,7 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                 let mut tv_show_updated: std::collections::HashSet<String> = std::collections::HashSet::new();
                 let mut season_cache: std::collections::HashMap<(String, i32), Vec<tmdb::TmdbEpisodeInfo>> = std::collections::HashMap::new();
 
-                for (media_id, title, _file_id, is_tv, season_opt, episode_opt, _folder_id) in indexed_items {
+                for (media_id, title, _file_id, is_tv, season_opt, episode_opt, _folder_id, year) in indexed_items {
                     if is_tv {
                         let season = season_opt.unwrap_or(1);
                         let episode = episode_opt.unwrap_or(1);
@@ -4095,7 +4314,7 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                         let show_meta = if let Some(cached) = tv_metadata_cache.get(&title_lower) {
                             cached.clone()
                         } else {
-                            let meta = tmdb::search_metadata(&api_key, &title, "tv", None, &image_cache_dir_bg).ok().flatten();
+                            let meta = tmdb::search_metadata(&api_key, &title, "tv", year, &image_cache_dir_bg).ok().flatten();
                             tv_metadata_cache.insert(title_lower.clone(), meta.clone());
                             meta
                         };
@@ -4103,7 +4322,9 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                         if let Some(ref meta) = show_meta {
                             if !tv_show_updated.contains(&title_lower) {
                                 if let Some(show) = find_existing_cloud_tvshow(&db, &title, None) {
-                                    db.update_metadata(show.id, meta).ok();
+                                    let mut show_meta_to_apply = meta.clone();
+                                    show_meta_to_apply.title = media_manager::prefer_title_with_leading_article(&title, &show_meta_to_apply.title);
+                                    db.update_metadata(show.id, &show_meta_to_apply).ok();
                                 }
                                 tv_show_updated.insert(title_lower.clone());
                             }
@@ -4137,8 +4358,10 @@ async fn background_check_cloud_changes(app_handle: &AppHandle) -> Result<CloudI
                             }
                         }
                     } else {
-                        if let Ok(Some(meta)) = tmdb::search_metadata(&api_key, &title, "movie", None, &image_cache_dir_bg) {
-                            db.update_metadata(media_id, &meta).ok();
+                        if let Ok(Some(meta)) = tmdb::search_metadata(&api_key, &title, "movie", year, &image_cache_dir_bg) {
+                            let mut movie_meta = meta;
+                            movie_meta.title = media_manager::prefer_title_with_leading_article(&title, &movie_meta.title);
+                            db.update_metadata(media_id, &movie_meta).ok();
                         }
                     }
                 }
@@ -4952,8 +5175,6 @@ async fn wt_send_mpv_command(
     }
 }
 
-const METADATA_ENRICHMENT_FLAG_KEY: &str = "metadata_hover_enrichment_done_v1";
-
 async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
     let state = app_handle.state::<AppState>();
 
@@ -4977,14 +5198,6 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
             }
         };
 
-        if matches!(
-            db.get_setting(METADATA_ENRICHMENT_FLAG_KEY),
-            Ok(Some(value)) if value == "1"
-        ) {
-            println!("[STARTUP] Metadata enrichment already completed.");
-            return;
-        }
-
         match db.get_media_needing_metadata_enrichment(5000) {
             Ok(rows) => rows,
             Err(e) => {
@@ -4995,9 +5208,6 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
     };
 
     if candidates.is_empty() {
-        if let Ok(db) = state.db.lock() {
-            let _ = db.set_setting(METADATA_ENRICHMENT_FLAG_KEY, "1");
-        }
         println!("[STARTUP] Metadata enrichment not needed.");
         return;
     }
@@ -5047,7 +5257,8 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
             };
 
             match metadata_result {
-                Ok(metadata) => {
+                Ok(mut metadata) => {
+                    metadata.title = media_manager::prefer_title_with_leading_article(&item.title, &metadata.title);
                     if db.update_metadata(item.id, &metadata).is_ok() {
                         updated += 1;
                     } else {
@@ -5097,12 +5308,6 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
             return;
         }
     };
-
-    if remaining == 0 {
-        if let Ok(db) = state.db.lock() {
-            let _ = db.set_setting(METADATA_ENRICHMENT_FLAG_KEY, "1");
-        }
-    }
 
     if updated > 0 {
         if let Some(window) = app_handle.get_window("main") {

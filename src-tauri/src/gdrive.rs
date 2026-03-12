@@ -633,9 +633,13 @@ impl GoogleDriveClient {
     }
 
     /// Check for new video files since last token
-    /// Returns (new_video_files, new_token)
-    pub async fn get_video_changes(&self, page_token: &str) -> Result<(Vec<DriveItem>, String), String> {
+    /// Returns (new_video_files, removed_file_ids, new_token)
+    pub async fn get_video_changes(
+        &self,
+        page_token: &str,
+    ) -> Result<(Vec<DriveItem>, Vec<String>, String), String> {
         let mut all_video_files = Vec::new();
+        let mut removed_file_ids = Vec::new();
         let mut current_token = page_token.to_string();
 
         let video_mimes = [
@@ -653,9 +657,12 @@ impl GoogleDriveClient {
         loop {
             let changes = self.get_changes(&current_token).await?;
 
-            // Filter for video files that weren't removed
+            // Collect removed file IDs and filter for added/changed video files
             for change in changes.changes {
                 if change.removed.unwrap_or(false) {
+                    if let Some(file_id) = change.file_id {
+                        removed_file_ids.push(file_id);
+                    }
                     continue;
                 }
 
@@ -671,10 +678,10 @@ impl GoogleDriveClient {
                 current_token = next_token;
             } else if let Some(new_token) = changes.new_start_page_token {
                 // No more pages, return the new token for next time
-                return Ok((all_video_files, new_token));
+                return Ok((all_video_files, removed_file_ids, new_token));
             } else {
                 // Shouldn't happen, but use current token as fallback
-                return Ok((all_video_files, current_token));
+                return Ok((all_video_files, removed_file_ids, current_token));
             }
         }
     }
