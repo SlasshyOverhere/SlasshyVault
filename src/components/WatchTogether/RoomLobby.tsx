@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { WatchRoom, wtSetReady, wtStartPlayback } from '@/services/api';
 import { ParticipantList } from './ParticipantList';
 import { Button } from '@/components/ui/button';
@@ -34,8 +34,8 @@ export function RoomLobby({
     const [invitingFriendId, setInvitingFriendId] = useState<string | null>(null);
     const [invitedFriendIds, setInvitedFriendIds] = useState<Record<string, boolean>>({});
 
-    const allReady = room.participants.every((p) => p.is_ready);
-    const readyCount = room.participants.filter((p) => p.is_ready).length;
+    const allReady = useMemo(() => room.participants.every((p) => p.is_ready), [room.participants]);
+    const readyCount = useMemo(() => room.participants.filter((p) => p.is_ready).length, [room.participants]);
 
     useEffect(() => {
         void loadInviteCandidates();

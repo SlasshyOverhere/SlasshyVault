@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Friend } from '@/services/social';
 import { MessageCircle, Film, Tv } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,17 @@ interface FriendsListProps {
 }
 
 export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile, loading }: FriendsListProps) {
+  // Sort: Online first, then by name
+  const sortedFriends = useMemo(() => {
+    return [...friends].sort((a, b) => {
+      const aOnline = onlineFriends.includes(a.id);
+      const bOnline = onlineFriends.includes(b.id);
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [friends, onlineFriends]);
+
   if (loading && friends.length === 0) {
     return (
       <div className="flex flex-col gap-2 p-2">
@@ -35,15 +47,6 @@ export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile,
       </div>
     );
   }
-
-  // Sort: Online first, then by name
-  const sortedFriends = [...friends].sort((a, b) => {
-    const aOnline = onlineFriends.includes(a.id);
-    const bOnline = onlineFriends.includes(b.id);
-    if (aOnline && !bOnline) return -1;
-    if (!aOnline && bOnline) return 1;
-    return a.name.localeCompare(b.name);
-  });
 
   return (
     <div className="flex flex-col gap-1 p-2">
