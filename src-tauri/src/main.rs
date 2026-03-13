@@ -2517,6 +2517,9 @@ async fn play_with_vlc(
         return Err("VLC path not set or invalid. Please configure it in Settings > Player.".to_string());
     }
 
+    // Security check: Validate VLC executable
+    config::validate_executable_path(vlc_path, "vlc")?;
+
     let (media, resume_info) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
