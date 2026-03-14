@@ -2538,6 +2538,9 @@ async fn play_with_vlc(
     let is_cloud = media.is_cloud.unwrap_or(false);
     let title = media.title.clone();
 
+    // Validate the VLC executable path to prevent arbitrary command execution
+    config::validate_executable_path(&vlc_path, "vlc")?;
+
     // Build VLC command
     let mut command = std::process::Command::new(vlc_path);
 
