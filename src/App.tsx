@@ -381,7 +381,7 @@ function App() {
 
   // Update notification state
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [updateGateStatus, setUpdateGateStatus] = useState<'checking' | 'downloading' | 'installing' | 'error' | 'idle'>('checking')
+  const [updateGateStatus, setUpdateGateStatus] = useState<'checking' | 'downloading' | 'installing' | 'error' | 'idle'>('idle')
   const [updateGateMessage, setUpdateGateMessage] = useState('Checking for updates...')
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
@@ -400,8 +400,10 @@ function App() {
     setBetaEnabledState(isBetaEnabled())
   }, [])
 
-  const runMandatoryUpdate = useCallback(async () => {
-    setUpdateGateStatus('checking')
+  const runMandatoryUpdate = useCallback(async (showCheckErrors = false) => {
+    let updateDetected = false
+
+    setUpdateGateStatus('idle')
     setUpdateGateMessage('Checking for updates...')
     setUpdateGateError(null)
     setUpdateProgress(0)
@@ -416,11 +418,13 @@ function App() {
         return
       }
 
+      updateDetected = true
+      setUpdateInfo(info)
+
       if (!info.download_url) {
         throw new Error('Missing update download URL.')
       }
 
-      setUpdateInfo(info)
       setUpdateGateStatus('downloading')
       setUpdateGateMessage(`Downloading update v${info.latest_version}...`)
 
@@ -438,8 +442,14 @@ function App() {
       await installUpdate(installerPath)
     } catch (error) {
       console.error('[Update] Mandatory update failed:', error)
+      if (!updateDetected && !showCheckErrors) {
+        setUpdateInfo(null)
+        setUpdateGateStatus('idle')
+        return
+      }
+
       setUpdateGateStatus('error')
-      setUpdateGateMessage('Update required to continue.')
+      setUpdateGateMessage(updateDetected ? 'Update required to continue.' : 'Unable to check for updates.')
       setUpdateGateError(error instanceof Error ? error.message : 'Unknown update error.')
     } finally {
       if (unlistenProgress) {
@@ -1192,7 +1202,7 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
-  const isUpdateGateActive = updateGateStatus !== 'idle'
+  const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing' || updateGateStatus === 'error'
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
