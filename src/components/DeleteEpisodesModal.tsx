@@ -19,7 +19,7 @@ interface DeleteEpisodesModalProps {
     onClose: () => void;
     seriesId: number;
     seriesTitle: string;
-    onDeleteComplete: () => void;
+    onDeleteComplete: (message?: string) => void;
 }
 
 export function DeleteEpisodesModal({
@@ -35,6 +35,23 @@ export function DeleteEpisodesModal({
     const [isDeleting, setIsDeleting] = useState(false);
     const [isDeletingFolder, setIsDeletingFolder] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const allZipArchiveTargets = useMemo(
+        () => episodes.length > 0 && episodes.every((ep) => ep.delete_kind === "zip_archive"),
+        [episodes]
+    );
+
+    const hasZipArchiveTargets = useMemo(
+        () => episodes.some((ep) => ep.delete_kind === "zip_archive"),
+        [episodes]
+    );
+
+    const selectedZipArchiveCount = useMemo(
+        () => episodes.filter((ep) => selectedIds.has(ep.id) && ep.delete_kind === "zip_archive").length,
+        [episodes, selectedIds]
+    );
+
+    const selectedEpisodeCount = selectedIds.size - selectedZipArchiveCount;
 
     // Load episodes when modal opens
     useEffect(() => {
@@ -89,7 +106,7 @@ export function DeleteEpisodesModal({
             const result = await deleteMediaFiles(idsToDelete);
 
             if (result.success) {
-                onDeleteComplete();
+                onDeleteComplete(result.message);
                 onClose();
             } else {
                 setError(result.message);
@@ -108,7 +125,7 @@ export function DeleteEpisodesModal({
 
         try {
             await deleteSeriesCloudFolder(seriesId);
-            onDeleteComplete();
+            onDeleteComplete(`Series folder for "${seriesTitle}" was removed.`);
             onClose();
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to delete cloud folder");
@@ -152,13 +169,20 @@ export function DeleteEpisodesModal({
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2 text-xl">
                         <Trash2 className="w-5 h-5 text-red-500" />
-                        Delete Episodes - {seriesTitle}
+                        {allZipArchiveTargets ? "Delete ZIP Archives" : hasZipArchiveTargets ? "Delete Items" : "Delete Episodes"} - {seriesTitle}
                     </DialogTitle>
                     <DialogDescription className="text-muted-foreground">
-                        <span className="flex items-center gap-2 text-amber-500">
-                            <AlertTriangle className="w-4 h-4" />
-                            Warning: Files will be permanently deleted from your drive and cannot be recovered!
-                        </span>
+                        {hasZipArchiveTargets ? (
+                            <span className="flex items-center gap-2 text-amber-500">
+                                <AlertTriangle className="w-4 h-4" />
+                                ZIP-backed episodes are indexed from archive files. Deleting a ZIP item removes the archive from Google Drive and all indexed episodes from it.
+                            </span>
+                        ) : (
+                            <span className="flex items-center gap-2 text-amber-500">
+                                <AlertTriangle className="w-4 h-4" />
+                                Warning: Files will be permanently deleted from your drive and cannot be recovered!
+                            </span>
+                        )}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -222,6 +246,63 @@ export function DeleteEpisodesModal({
                     ) : episodes.length === 0 ? (
                         <div className="flex items-center justify-center h-full text-muted-foreground">
                             No episodes found for this series.
+                        </div>
+                    ) : hasZipArchiveTargets ? (
+                        <div className="space-y-3">
+                            <AnimatePresence>
+                                {episodes.map((ep) => (
+                                    <motion.div
+                                        key={ep.id}
+                                        initial={{ opacity: 0, x: -10 }}
+                                        animate={{ opacity: 1, x: 0 }}
+                                        exit={{ opacity: 0, x: 10 }}
+                                        className={`flex items-center gap-3 p-4 rounded-lg border transition-all cursor-pointer ${
+                                            selectedIds.has(ep.id)
+                                                ? "border-red-500/50 bg-red-500/10"
+                                                : "border-white/10 hover:border-white/20 hover:bg-white/5"
+                                        }`}
+                                        onClick={() => toggleEpisode(ep.id)}
+                                    >
+                                        <Checkbox
+                                            checked={selectedIds.has(ep.id)}
+                                            onCheckedChange={() => toggleEpisode(ep.id)}
+                                            className={selectedIds.has(ep.id) ? "border-red-500 data-[state=checked]:bg-red-500" : ""}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-medium truncate">{ep.title}</div>
+                                            {ep.delete_kind === "zip_archive" ? (
+                                                <>
+                                                    <div className="text-xs text-amber-400/90 uppercase tracking-[0.14em] mt-1">
+                                                        ZIP Archive
+                                                        {ep.archive_episode_count ? ` · ${ep.archive_episode_count} indexed episode${ep.archive_episode_count !== 1 ? "s" : ""}` : ""}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-1">
+                                                        {ep.file_path || "Deletes the archive file from Google Drive."}
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <div className="text-xs text-white/60 uppercase tracking-[0.14em] mt-1">
+                                                        Season {ep.season_number ?? 0} · Episode {ep.episode_number ?? 0}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-1 truncate">
+                                                        {ep.file_path || "No file path"}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                        {selectedIds.has(ep.id) && (
+                                            <motion.div
+                                                initial={{ scale: 0 }}
+                                                animate={{ scale: 1 }}
+                                                className="text-red-500"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </motion.div>
+                                        )}
+                                    </motion.div>
+                                ))}
+                            </AnimatePresence>
                         </div>
                     ) : (
                         <div className="space-y-4">
@@ -305,7 +386,13 @@ export function DeleteEpisodesModal({
                         ) : (
                             <>
                                 <Trash2 className="w-4 h-4 mr-2" />
-                                Delete {selectedIds.size} Episode{selectedIds.size !== 1 ? "s" : ""}
+                                {allZipArchiveTargets
+                                    ? `Delete ${selectedIds.size} ZIP Archive${selectedIds.size !== 1 ? "s" : ""}`
+                                    : selectedZipArchiveCount > 0 && selectedEpisodeCount > 0
+                                        ? `Delete ${selectedIds.size} Selected Item${selectedIds.size !== 1 ? "s" : ""}`
+                                        : selectedZipArchiveCount > 0
+                                            ? `Delete ${selectedZipArchiveCount} ZIP Archive${selectedZipArchiveCount !== 1 ? "s" : ""}`
+                                            : `Delete ${selectedEpisodeCount} Episode${selectedEpisodeCount !== 1 ? "s" : ""}`}
                             </>
                         )}
                     </Button>

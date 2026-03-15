@@ -75,7 +75,9 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     pItem.is_cloud === nItem.is_cloud &&
     pItem.season_number === nItem.season_number &&
     pItem.episode_number === nItem.episode_number &&
-    pItem.year === nItem.year
+    pItem.year === nItem.year &&
+    pItem.history_group_count === nItem.history_group_count &&
+    pItem.history_group_latest_label === nItem.history_group_latest_label
   )
 }
 
@@ -104,6 +106,8 @@ function MovieCardBase({
   const progress = item.progress_percent || (item.resume_position_seconds && item.duration_seconds ? (item.resume_position_seconds / item.duration_seconds) * 100 : 0)
   const isFinished = progress >= 95
   const hasProgress = progress > 0 && !isFinished
+  const isGroupedHistorySeries = (item.history_group_count || 0) > 1
+  const historyLatestLabel = item.history_group_latest_label?.trim()
   const leadActor = item.cast_names?.split(',')[0]?.trim()
   const directorName = item.director?.trim()
 
@@ -208,8 +212,11 @@ function MovieCardBase({
                 <div className="media-list-info">
                   <h3 className="media-list-title">{item.title}</h3>
                   <div className="media-list-meta">
-                    {displayInfo && (
+                    {!isGroupedHistorySeries && displayInfo && (
                       <span className="media-list-meta-item">{displayInfo}</span>
+                    )}
+                    {isGroupedHistorySeries && historyLatestLabel && (
+                      <span className="media-list-meta-item">{historyLatestLabel}</span>
                     )}
                     {leadActor && (
                       <span className="media-list-meta-item">{leadActor}</span>
@@ -224,6 +231,9 @@ function MovieCardBase({
                       <span className="media-list-meta-item">
                         Season {item.season_number} · Episode {item.episode_number}
                       </span>
+                    )}
+                    {isGroupedHistorySeries && (
+                      <span className="media-list-meta-item">{item.history_group_count} recent episodes</span>
                     )}
                   </div>
                   {item.overview && (
@@ -306,7 +316,7 @@ function MovieCardBase({
                   <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
                     <X className="w-4 h-4 text-muted-foreground" />
                   </div>
-                  <span>Remove from History</span>
+                  <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
                 </ContextMenuItem>
               </>
             )}
@@ -429,29 +439,41 @@ function MovieCardBase({
 
               {/* Top Badges */}
               <div className="absolute top-3 left-3 right-3 flex items-start justify-between z-20">
-                {/* Progress or Finished Badge */}
-                {hasProgress && (
-                  <motion.div
-                    initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
-                    animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
-                    exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur-xl border border-white/10 text-xs font-bold text-white shadow-xl"
-                  >
-                    <Clock className="w-3 h-3 text-white" />
-                    <span>{Math.round(progress)}%</span>
-                  </motion.div>
-                )}
-                {isFinished && (
-                  <motion.div
-                    initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
-                    animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
-                    exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-500/20 backdrop-blur-xl border border-gray-500/30 text-gray-400 text-xs font-bold shadow-xl"
-                  >
-                    <Check className="w-3 h-3" />
-                    <span>Watched</span>
-                  </motion.div>
-                )}
+                <div className="flex max-w-[calc(100%-3rem)] flex-wrap items-center gap-2">
+                  {/* Progress or Finished Badge */}
+                  {hasProgress && (
+                    <motion.div
+                      initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                      animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                      exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur-xl border border-white/10 text-xs font-bold text-white shadow-xl"
+                    >
+                      <Clock className="w-3 h-3 text-white" />
+                      <span>{Math.round(progress)}%</span>
+                    </motion.div>
+                  )}
+                  {isFinished && (
+                    <motion.div
+                      initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                      animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                      exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-500/20 backdrop-blur-xl border border-gray-500/30 text-gray-400 text-xs font-bold shadow-xl"
+                    >
+                      <Check className="w-3 h-3" />
+                      <span>Watched</span>
+                    </motion.div>
+                  )}
+                  {isGroupedHistorySeries && (
+                    <motion.div
+                      initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                      animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                      exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/10 backdrop-blur-xl border border-white/15 text-xs font-bold text-white shadow-xl"
+                    >
+                      <span>{item.history_group_count} recent eps</span>
+                    </motion.div>
+                  )}
+                </div>
 
                 {/* Options button on hover */}
                 <motion.div
@@ -546,13 +568,25 @@ function MovieCardBase({
               {item.title}
             </h3>
             <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground/70">
-              {displayInfo && (
+              {!isGroupedHistorySeries && displayInfo && (
                 <span className="text-muted-foreground">{displayInfo}</span>
+              )}
+              {isGroupedHistorySeries && historyLatestLabel && (
+                <span className="text-muted-foreground">{historyLatestLabel}</span>
+              )}
+              {isGroupedHistorySeries && !historyLatestLabel && (
+                <span className="text-muted-foreground">{item.history_group_count} recent episodes</span>
               )}
               {item.media_type === 'tvshow' && (
                 <>
                   <span className="w-1 h-1 rounded-full bg-white/50" />
                   <span className="text-white/70 font-semibold">Series</span>
+                </>
+              )}
+              {isGroupedHistorySeries && (
+                <>
+                  <span className="w-1 h-1 rounded-full bg-white/50" />
+                  <span className="text-white/70 font-semibold">{item.history_group_count} episodes</span>
                 </>
               )}
             </div>
@@ -622,7 +656,7 @@ function MovieCardBase({
               <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
                 <X className="w-4 h-4 text-muted-foreground" />
               </div>
-              <span>Remove from History</span>
+              <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
             </ContextMenuItem>
           </>
         )}

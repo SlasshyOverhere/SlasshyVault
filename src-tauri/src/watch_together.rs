@@ -1,23 +1,25 @@
 // Watch Together Module
 // Synchronized MPV playback across remote users via WebSocket relay
 
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, protocol::Message}};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, protocol::Message},
+};
 use uuid::Uuid;
 
 // Backend server URL - reads from env var, falls back to production
 fn get_relay_server_url() -> String {
-    std::env::var("STREAMVAULT_WS_URL")
-        .unwrap_or_else(|_| {
-            if cfg!(debug_assertions) {
-                "ws://localhost:3001/ws/watchtogether".to_string()
-            } else {
-                "wss://streamvault-backend-server.onrender.com/ws/watchtogether".to_string()
-            }
-        })
+    std::env::var("STREAMVAULT_WS_URL").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "ws://localhost:3001/ws/watchtogether".to_string()
+        } else {
+            "wss://streamvault-backend-server.onrender.com/ws/watchtogether".to_string()
+        }
+    })
 }
 
 // Room code characters (no ambiguous chars like I/1/O/0)
@@ -114,16 +116,10 @@ pub enum ClientMessage {
     Heartbeat,
     /// Periodic state report (Syncplay-style) - sent every ~1s
     #[serde(rename = "state_report")]
-    StateReport {
-        position: f64,
-        paused: bool,
-    },
+    StateReport { position: f64, paused: bool },
     /// Pong response for RTT measurement
     #[serde(rename = "pong_report")]
-    PongReport {
-        ping_id: String,
-        rtt: f64,
-    },
+    PongReport { ping_id: String, rtt: f64 },
 }
 
 /// Participant sync info from server state_update
@@ -183,10 +179,7 @@ pub enum ServerMessage {
     },
     /// Ping from server for RTT measurement
     #[serde(rename = "ping")]
-    Ping {
-        ping_id: String,
-        server_time: i64,
-    },
+    Ping { ping_id: String, server_time: i64 },
     #[serde(rename = "pong")]
     Pong {
         ping_id: String,
@@ -334,7 +327,7 @@ impl WatchTogetherManager {
         let mut request = relay_url
             .into_client_request()
             .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
-        
+
         request.headers_mut().remove("Sec-WebSocket-Extensions");
 
         let (ws_stream, _) = connect_async(request)
@@ -371,31 +364,28 @@ impl WatchTogetherManager {
             .map_err(|e| format!("Failed to send create message: {}", e))?;
 
         // Wait for room_created response
-        let room_result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            async {
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                                match server_msg {
-                                    ServerMessage::RoomCreated { room } => {
-                                        return Ok(Self::normalize_room(room));
-                                    }
-                                    ServerMessage::Error { message } => {
-                                        return Err(message);
-                                    }
-                                    _ => continue,
+        let room_result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+                            match server_msg {
+                                ServerMessage::RoomCreated { room } => {
+                                    return Ok(Self::normalize_room(room));
                                 }
+                                ServerMessage::Error { message } => {
+                                    return Err(message);
+                                }
+                                _ => continue,
                             }
                         }
-                        Err(e) => return Err(format!("WebSocket error: {}", e)),
-                        _ => continue,
                     }
+                    Err(e) => return Err(format!("WebSocket error: {}", e)),
+                    _ => continue,
                 }
-                Err("Connection closed".to_string())
             }
-        )
+            Err("Connection closed".to_string())
+        })
         .await
         .map_err(|_| "Timeout waiting for room creation".to_string())??;
 
@@ -537,31 +527,28 @@ impl WatchTogetherManager {
             .map_err(|e| format!("Failed to send join message: {}", e))?;
 
         // Wait for room_joined response
-        let room_result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            async {
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                                match server_msg {
-                                    ServerMessage::RoomJoined { room } => {
-                                        return Ok(Self::normalize_room(room));
-                                    }
-                                    ServerMessage::Error { message } => {
-                                        return Err(message);
-                                    }
-                                    _ => continue,
+        let room_result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+                            match server_msg {
+                                ServerMessage::RoomJoined { room } => {
+                                    return Ok(Self::normalize_room(room));
                                 }
+                                ServerMessage::Error { message } => {
+                                    return Err(message);
+                                }
+                                _ => continue,
                             }
                         }
-                        Err(e) => return Err(format!("WebSocket error: {}", e)),
-                        _ => continue,
                     }
+                    Err(e) => return Err(format!("WebSocket error: {}", e)),
+                    _ => continue,
                 }
-                Err("Connection closed".to_string())
             }
-        )
+            Err("Connection closed".to_string())
+        })
         .await
         .map_err(|_| "Timeout waiting for room join".to_string())??;
 
@@ -661,7 +648,12 @@ impl WatchTogetherManager {
                 }
                 emit(WatchEvent::RoomUpdated { room }).await;
             }
-            ServerMessage::Sync { command, from, timestamp, is_echo } => {
+            ServerMessage::Sync {
+                command,
+                from,
+                timestamp,
+                is_echo,
+            } => {
                 // Skip echo messages (our own sync commands reflected back)
                 if is_echo {
                     return;
@@ -674,14 +666,21 @@ impl WatchTogetherManager {
                 };
                 emit(WatchEvent::SyncCommand { command: cmd }).await;
             }
-            ServerMessage::StateUpdate { position, paused, your_rtt, participants, .. } => {
+            ServerMessage::StateUpdate {
+                position,
+                paused,
+                your_rtt,
+                participants,
+                ..
+            } => {
                 // Emit state_update for the sync engine in main.rs to apply
                 emit(WatchEvent::StateUpdate {
                     position,
                     paused,
                     your_rtt,
                     participants,
-                }).await;
+                })
+                .await;
             }
             ServerMessage::Ping { .. } => {
                 // Ignore server-side pings here. RTT is measured via our own client ping -> server pong cycle.
@@ -692,16 +691,22 @@ impl WatchTogetherManager {
                 if let Some(sent_at) = times.remove(&ping_id) {
                     let rtt_ms = sent_at.elapsed().as_secs_f64() * 1000.0;
                     // Report our measured RTT to the server
-                    let _ = command_tx.send(ClientMessage::PongReport {
-                        ping_id,
-                        rtt: rtt_ms,
-                    }).await;
+                    let _ = command_tx
+                        .send(ClientMessage::PongReport {
+                            ping_id,
+                            rtt: rtt_ms,
+                        })
+                        .await;
                 }
             }
             ServerMessage::ParticipantJoined { participant } => {
                 let mut info = room_info.write().await;
                 if let Some(ref mut room) = *info {
-                    if let Some(existing) = room.participants.iter_mut().find(|p| p.id == participant.id) {
+                    if let Some(existing) = room
+                        .participants
+                        .iter_mut()
+                        .find(|p| p.id == participant.id)
+                    {
                         *existing = participant;
                     } else {
                         room.participants.push(participant);
@@ -709,7 +714,10 @@ impl WatchTogetherManager {
                     emit(WatchEvent::ParticipantChanged { room: room.clone() }).await;
                 }
             }
-            ServerMessage::ParticipantLeft { participant_id, room } => {
+            ServerMessage::ParticipantLeft {
+                participant_id,
+                room,
+            } => {
                 let mut info = room_info.write().await;
                 if let Some(snapshot) = room {
                     let normalized = Self::normalize_room(snapshot);
@@ -720,10 +728,17 @@ impl WatchTogetherManager {
                     emit(WatchEvent::ParticipantChanged { room: room.clone() }).await;
                 }
             }
-            ServerMessage::ParticipantReady { participant_id, duration } => {
+            ServerMessage::ParticipantReady {
+                participant_id,
+                duration,
+            } => {
                 let mut info = room_info.write().await;
                 if let Some(ref mut room) = *info {
-                    if let Some(p) = room.participants.iter_mut().find(|p| p.id == participant_id) {
+                    if let Some(p) = room
+                        .participants
+                        .iter_mut()
+                        .find(|p| p.id == participant_id)
+                    {
                         p.is_ready = true;
                         p.duration = Some(duration);
                     }
@@ -772,7 +787,9 @@ impl WatchTogetherManager {
         let session_guard = self.session.lock().await;
 
         if let Some(session) = session_guard.as_ref() {
-            session.send_message(ClientMessage::Ready { duration }).await?;
+            session
+                .send_message(ClientMessage::Ready { duration })
+                .await?;
             Ok(())
         } else {
             Err("No active session".to_string())
@@ -811,7 +828,9 @@ impl WatchTogetherManager {
                 from: None,
                 timestamp: None,
             };
-            session.send_message(ClientMessage::Sync { command }).await?;
+            session
+                .send_message(ClientMessage::Sync { command })
+                .await?;
             Ok(())
         } else {
             Err("No active session".to_string())

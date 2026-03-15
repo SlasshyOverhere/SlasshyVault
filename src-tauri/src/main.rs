@@ -19,7 +19,7 @@ use tauri_plugin_autostart::MacosLauncher;
 
 use notify_rust::Notification as SystemNotification;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -605,11 +605,40 @@ async fn gdrive_scan_folder(
 
     // Clone data for the blocking task
     let folder_id_clone = folder_id.clone();
+    let zip_files_detected: Vec<String> = if zip_indexing_enabled {
+        files
+            .iter()
+            .filter(|file| is_zip_drive_item(file))
+            .map(|file| file.name.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let zip_access_token = if zip_indexing_enabled && files.iter().any(is_zip_drive_item) {
         Some(state.gdrive_client.get_access_token().await?)
     } else {
         None
     };
+
+    if !zip_files_detected.is_empty() {
+        let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        emit_zip_processing_event(
+            &window,
+            "detected",
+            zip_files_detected.len(),
+            archive_name,
+            None,
+            &format!(
+                "ZIP archive{} detected in {}. Processing episode entries...",
+                if zip_files_detected.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                folder_name
+            ),
+        );
+    }
 
     // Get database path for creating new connection in blocking task
     let db_path = database::get_database_path();
@@ -903,6 +932,21 @@ async fn gdrive_scan_folder(
     }).await.map_err(|e| format!("Task failed: {}", e))??;
 
     let (indexed_count, skipped_count, movies_count, tv_count) = result;
+
+    if !zip_files_detected.is_empty() {
+        let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        emit_zip_processing_event(
+            &window,
+            "complete",
+            zip_files_detected.len(),
+            archive_name,
+            None,
+            &format!(
+                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
+                zip_files_detected.len()
+            ),
+        );
+    }
 
     if indexed_count > 0 {
         if let Ok(db) = state.db.lock() {
@@ -1359,7 +1403,9 @@ async fn scan_all_cloud_folders(
             Ok((indexed_count, skipped_count, movies_count, tv_count))
         })
         .await
-        .map_err(|e| format!("Task failed: {}", e))??;
+        .map_err(|e| format!("Task failed: {}", e))?;
+
+        let result = result?;
 
         let (indexed, skipped, movies, tv) = result;
         total_indexed += indexed;
@@ -1899,7 +1945,9 @@ async fn check_cloud_changes(
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))?
-    }?;
+    };
+
+    let phase1_result = phase1_result?;
 
     let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
     let indexed_count = indexed_items.len();
@@ -2266,13 +2314,25 @@ async fn delete_media_files(
     };
 
     let mut deleted_count = 0;
+    let mut deleted_zip_archives = 0;
     let mut failed_count = 0;
     let mut deleted_file_paths: Vec<String> = Vec::new();
-    let mut cloud_file_ids_to_delete: Vec<String> = Vec::new();
+    let mut cloud_file_ids_to_delete: HashSet<String> = HashSet::new();
+    let mut zip_archive_ids_to_delete: HashSet<String> = HashSet::new();
+    let mut db_media_ids_to_delete: Vec<i64> = Vec::new();
 
     // Separate cloud and local files
-    for (id, file_path, is_cloud, cloud_file_id) in &media_info {
+    for (id, file_path, is_cloud, cloud_file_id, parent_zip_id) in &media_info {
         if *is_cloud {
+            if let Some(zip_file_id) = parent_zip_id {
+                println!(
+                    "[DELETE] Queuing ZIP archive for deletion via representative item {}: {}",
+                    id, zip_file_id
+                );
+                zip_archive_ids_to_delete.insert(zip_file_id.clone());
+                continue;
+            }
+
             // Cloud file - queue for Google Drive deletion
             if let Some(cloud_id) = cloud_file_id {
                 println!(
@@ -2280,7 +2340,8 @@ async fn delete_media_files(
                     file_path.as_deref().unwrap_or("unknown"),
                     cloud_id
                 );
-                cloud_file_ids_to_delete.push(cloud_id.clone());
+                cloud_file_ids_to_delete.insert(cloud_id.clone());
+                db_media_ids_to_delete.push(*id);
             }
         } else {
             // Local file - delete from disk
@@ -2305,6 +2366,41 @@ async fn delete_media_files(
                     );
                     deleted_file_paths.push(path_str.clone());
                     deleted_count += 1;
+                }
+            }
+            db_media_ids_to_delete.push(*id);
+        }
+    }
+
+    if !zip_archive_ids_to_delete.is_empty() {
+        println!(
+            "[DELETE] Deleting {} ZIP archive(s) from Google Drive",
+            zip_archive_ids_to_delete.len()
+        );
+        for zip_file_id in zip_archive_ids_to_delete {
+            match state.gdrive_client.delete_file(&zip_file_id).await {
+                Ok(_) => {
+                    let archive_summary = {
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        db.remove_media_by_cloud_file_id(&zip_file_id)
+                            .map_err(|e| e.to_string())?
+                    };
+
+                    if let Some((_, title, media_type, _)) = archive_summary {
+                        println!("[DELETE] Successfully deleted {}: {}", media_type, title);
+                    } else {
+                        println!("[DELETE] Successfully deleted ZIP archive: {}", zip_file_id);
+                    }
+
+                    deleted_count += 1;
+                    deleted_zip_archives += 1;
+                }
+                Err(e) => {
+                    println!(
+                        "[DELETE] Failed to delete ZIP archive {}: {}",
+                        zip_file_id, e
+                    );
+                    failed_count += 1;
                 }
             }
         }
@@ -2337,9 +2433,9 @@ async fn delete_media_files(
     }
 
     // Delete from database
-    {
+    if !db_media_ids_to_delete.is_empty() {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.delete_media_entries(&media_ids)
+        db.delete_media_entries(&db_media_ids_to_delete)
             .map_err(|e| e.to_string())?;
     }
 
@@ -2410,11 +2506,22 @@ async fn delete_media_files(
     // Clean up empty parent directories (only for local files)
     media_manager::cleanup_empty_parent_dirs(&deleted_file_paths);
 
-    let message = if failed_count == 0 {
-        format!("Successfully deleted {} file(s)", deleted_count)
-    } else {
-        format!("Deleted {} file(s), {} failed", deleted_count, failed_count)
-    };
+    let message =
+        if failed_count == 0 && deleted_zip_archives > 0 && deleted_count == deleted_zip_archives {
+            format!(
+                "Successfully deleted {} ZIP archive(s)",
+                deleted_zip_archives
+            )
+        } else if failed_count == 0 && deleted_zip_archives > 0 {
+            format!(
+                "Successfully deleted {} item(s), including {} ZIP archive(s)",
+                deleted_count, deleted_zip_archives
+            )
+        } else if failed_count == 0 {
+            format!("Successfully deleted {} file(s)", deleted_count)
+        } else {
+            format!("Deleted {} file(s), {} failed", deleted_count, failed_count)
+        };
 
     println!("[DELETE] Complete: {}", message);
 
@@ -2434,6 +2541,9 @@ struct EpisodeDeleteInfo {
     season_number: Option<i32>,
     episode_number: Option<i32>,
     file_path: Option<String>,
+    parent_zip_id: Option<String>,
+    delete_kind: String,
+    archive_episode_count: Option<i32>,
 }
 
 // Get episodes for a TV show for delete selection
@@ -2445,16 +2555,67 @@ async fn get_episodes_for_delete(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let episodes = db.get_episodes(series_id).map_err(|e| e.to_string())?;
 
-    let result: Vec<EpisodeDeleteInfo> = episodes
-        .into_iter()
-        .map(|ep| EpisodeDeleteInfo {
-            id: ep.id,
-            title: ep.title,
-            season_number: ep.season_number,
-            episode_number: ep.episode_number,
-            file_path: ep.file_path,
-        })
-        .collect();
+    let mut zip_archive_details: HashMap<String, (String, i32)> = HashMap::new();
+    for episode in &episodes {
+        if let Some(zip_file_id) = episode.parent_zip_id.as_deref() {
+            let archive_name = zip_archive_details
+                .entry(zip_file_id.to_string())
+                .or_insert_with(|| {
+                    let archive_name = db
+                        .get_zip_archive(zip_file_id)
+                        .map(|archive| archive.filename)
+                        .unwrap_or_else(|_| "ZIP archive".to_string());
+                    (archive_name, 0)
+                });
+            archive_name.1 += 1;
+        }
+    }
+
+    let mut seen_zip_archives = HashSet::new();
+    let mut result = Vec::new();
+
+    for episode in episodes {
+        if let Some(zip_file_id) = episode.parent_zip_id.clone() {
+            if seen_zip_archives.insert(zip_file_id.clone()) {
+                let (archive_name, archive_episode_count) = zip_archive_details
+                    .get(&zip_file_id)
+                    .cloned()
+                    .unwrap_or_else(|| ("ZIP archive".to_string(), 1));
+                let archive_suffix = if archive_episode_count == 1 {
+                    "episode"
+                } else {
+                    "episodes"
+                };
+
+                result.push(EpisodeDeleteInfo {
+                    id: episode.id,
+                    title: archive_name,
+                    season_number: None,
+                    episode_number: None,
+                    file_path: Some(format!(
+                        "Deletes the ZIP archive from Google Drive and removes {} indexed {}.",
+                        archive_episode_count, archive_suffix
+                    )),
+                    parent_zip_id: Some(zip_file_id),
+                    delete_kind: "zip_archive".to_string(),
+                    archive_episode_count: Some(archive_episode_count),
+                });
+            }
+
+            continue;
+        }
+
+        result.push(EpisodeDeleteInfo {
+            id: episode.id,
+            title: episode.title,
+            season_number: episode.season_number,
+            episode_number: episode.episode_number,
+            file_path: episode.file_path,
+            parent_zip_id: None,
+            delete_kind: "episode".to_string(),
+            archive_episode_count: None,
+        });
+    }
 
     Ok(result)
 }
@@ -2508,7 +2669,7 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (_id, file_path, is_cloud, cloud_file_id) in &episode_info {
+            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id) in &episode_info {
                 if *is_cloud {
                     if let Some(cloud_id) = cloud_file_id {
                         cloud_file_ids.push(cloud_id.clone());
@@ -2631,7 +2792,7 @@ async fn delete_series_cloud_folder(
                     .map_err(|e| e.to_string())?
             };
 
-            for (_id, _file_path, _is_cloud, cloud_file_id) in episode_info {
+            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id) in episode_info {
                 if let Some(cloud_id) = cloud_file_id {
                     println!(
                         "[DELETE] Deleting cloud file for series '{}': {}",
@@ -2854,6 +3015,7 @@ async fn zip_analyze(
 #[tauri::command]
 async fn zip_index_episodes(
     state: State<'_, AppState>,
+    window: Window,
     zip_file_id: String,
     folder_id: String,
 ) -> Result<zip_manager::ZipIndexResult, String> {
@@ -2871,9 +3033,21 @@ async fn zip_index_episodes(
 
     let access_token = state.gdrive_client.get_access_token().await?;
     let drive_item = state.gdrive_client.get_file_metadata(&zip_file_id).await?;
+    emit_zip_processing_event(
+        &window,
+        "detected",
+        1,
+        Some(&drive_item.name),
+        None,
+        &format!(
+            "ZIP detected: {}. Processing episode entries...",
+            drive_item.name
+        ),
+    );
     let image_cache_dir = database::get_image_cache_dir();
     std::fs::create_dir_all(&image_cache_dir).ok();
     let db_path = database::get_database_path();
+    let drive_item_for_index = drive_item.clone();
 
     let indexed_items = tokio::task::spawn_blocking(move || {
         let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
@@ -2883,7 +3057,7 @@ async fn zip_index_episodes(
         index_zip_archive_with_metadata(
             &db,
             &access_token,
-            &drive_item,
+            &drive_item_for_index,
             &folder_id,
             &api_key,
             &image_cache_dir,
@@ -2892,7 +3066,33 @@ async fn zip_index_episodes(
         )
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
+
+    if let Err(error) = &indexed_items {
+        emit_zip_processing_event(
+            &window,
+            "error",
+            1,
+            Some(&drive_item.name),
+            None,
+            &format!("ZIP processing failed: {}", error),
+        );
+    }
+
+    let indexed_items = indexed_items?;
+
+    emit_zip_processing_event(
+        &window,
+        "complete",
+        1,
+        Some(&drive_item.name),
+        Some(indexed_items.len()),
+        &format!(
+            "Finished processing {}. Indexed {} episode(s).",
+            drive_item.name,
+            indexed_items.len()
+        ),
+    );
 
     Ok(zip_manager::ZipIndexResult {
         indexed_count: indexed_items.len(),
@@ -3049,8 +3249,21 @@ async fn play_with_mpv(
     let episode_number = media.episode_number;
     let media_type = media.media_type.clone();
 
+    // Determine start position before picking the playback source so ZIP playback can
+    // choose between proxy streaming and cache-backed local playback.
+    let start_position = if resume && resume_info.has_progress {
+        resume_info.position
+    } else {
+        0.0
+    };
+
     // Get the playback URL and optional auth header
     let is_zip_media = media.parent_zip_id.is_some();
+    let zip_compression_method = if is_zip_media {
+        Some(zip_manager::zip_entry_compression_method(&media).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
 
     let (playback_url, auth_header, zip_proxy, playback_is_cloud): (
         String,
@@ -3059,35 +3272,132 @@ async fn play_with_mpv(
         bool,
     ) = if is_cloud {
         if is_zip_media {
-            match zip_manager::zip_entry_compression_method(&media).map_err(|e| e.to_string())? {
-                0 => {
-                    let stream_info =
-                        zip_manager::build_zip_stream_info(&media).map_err(|e| e.to_string())?;
-                    let (drive_url, access_token) = state
-                        .gdrive_client
-                        .get_stream_url(&stream_info.zip_file_id)
-                        .await?;
-                    let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
-                        drive_url,
-                        access_token,
-                        &stream_info,
-                    ))?;
-                    (
-                        zip_stream_proxy::localhost_stream_url(proxy.port),
-                        None,
-                        Some(proxy),
-                        true,
-                    )
-                }
-                8 => {
-                    let extracted_path = build_zip_extracted_path(&state, &media).await?;
-                    (extracted_path, None, None, false)
-                }
-                method => {
-                    return Err(format!(
-                        "ZIP entry compression method {} is not supported for playback",
-                        method
-                    ));
+            if should_extract_zip_for_mpv(&media, start_position)? {
+                let extracted_path = build_zip_extracted_path(&state, &media).await?;
+                let is_store_mkv = zip_compression_method.unwrap_or_default() == 0
+                    && media
+                        .zip_entry_path
+                        .as_deref()
+                        .or(media.file_path.as_deref())
+                        .map(|path| path.to_ascii_lowercase().ends_with(".mkv"))
+                        .unwrap_or(false);
+                println!(
+                    "[ZIP] Using {}cache for MPV: '{}' -> {}",
+                    if is_store_mkv {
+                        "fully prepared local "
+                    } else {
+                        "extracted "
+                    },
+                    media.title,
+                    extracted_path
+                );
+                (extracted_path, None, None, false)
+            } else {
+                match zip_compression_method.unwrap_or_default() {
+                    0 => {
+                        let stream_info = zip_manager::build_zip_stream_info(&media)
+                            .map_err(|e| e.to_string())?;
+                        let (drive_url, access_token) = state
+                            .gdrive_client
+                            .get_stream_url(&stream_info.zip_file_id)
+                            .await?;
+                        let (
+                            cache_spec,
+                            local_cache_path,
+                            cache_is_complete,
+                            use_partial_cache_via_proxy,
+                        ) = {
+                            let cache_config = build_zip_cache_config(&config);
+                            match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
+                                Ok(snapshot) => {
+                                    let local_cache_path = choose_store_zip_local_cache_for_mpv(
+                                        &media,
+                                        &snapshot,
+                                        start_position,
+                                    );
+                                    let use_partial_cache_via_proxy =
+                                        !snapshot.is_complete && local_cache_path.is_some();
+                                    (
+                                        Some(zip_stream_proxy::ProxyCacheSpec {
+                                            cache_paths: snapshot.paths,
+                                            cache_config,
+                                            // Keep filling the partial ZIP cache as aggressively
+                                            // as possible while playback is active.
+                                            start_delay_ms: 0,
+                                            throttle_delay_ms: 0,
+                                        }),
+                                        local_cache_path,
+                                        snapshot.is_complete,
+                                        use_partial_cache_via_proxy,
+                                    )
+                                }
+                                Err(error) => {
+                                    println!(
+                                        "[ZIP CACHE] Falling back to stream-only proxy for '{}': {:?}",
+                                        media.title, error
+                                    );
+                                    (None, None, false, false)
+                                }
+                            }
+                        };
+                        let proxy =
+                            zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
+                                drive_url,
+                                access_token,
+                                &stream_info,
+                                cache_spec,
+                            ))?;
+                        if let Some(local_path) = local_cache_path {
+                            if use_partial_cache_via_proxy {
+                                println!(
+                                    "[ZIP] Using streaming proxy for MPV with local partial cache assist: '{}' (partial cache: {}) -> {}",
+                                    media.title,
+                                    local_path,
+                                    zip_stream_proxy::localhost_stream_url(proxy.port)
+                                );
+                                (
+                                    zip_stream_proxy::localhost_stream_url(proxy.port),
+                                    None,
+                                    Some(proxy),
+                                    true,
+                                )
+                            } else {
+                                println!(
+                                    "[ZIP] Using local {}cache for MPV: '{}' -> {}",
+                                    if cache_is_complete {
+                                        "complete "
+                                    } else {
+                                        "partial "
+                                    },
+                                    media.title,
+                                    local_path
+                                );
+                                (local_path, None, Some(proxy), false)
+                            }
+                        } else {
+                            println!(
+                                "[ZIP] Using streaming proxy for MPV: '{}' -> {}",
+                                media.title,
+                                zip_stream_proxy::localhost_stream_url(proxy.port)
+                            );
+                            (
+                                zip_stream_proxy::localhost_stream_url(proxy.port),
+                                None,
+                                Some(proxy),
+                                true,
+                            )
+                        }
+                    }
+                    8 => {
+                        let extracted_path = build_zip_extracted_path(&state, &media).await?;
+                        (extracted_path, None, None, false)
+                    }
+                    method => {
+                        return Err(format!(
+                            "ZIP entry compression method {} is not supported for playback",
+                            method
+                        ));
+                    }
                 }
             }
         } else {
@@ -3128,13 +3438,6 @@ async fn play_with_mpv(
         }
 
         (file_path, None, None, false)
-    };
-
-    // Determine start position
-    let start_position = if resume && resume_info.has_progress {
-        resume_info.position
-    } else {
-        0.0
     };
 
     config::validate_executable_path(&mpv_path, "mpv")?;
@@ -4984,19 +5287,127 @@ fn stop_zip_stream_proxy(state: &AppState, media_id: i64) {
     }
 }
 
+fn build_zip_cache_config(config: &config::Config) -> zip_manager::ZipCacheConfig {
+    let cache_dir = config
+        .zip_cache_dir
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(database::get_zip_cache_dir);
+
+    zip_manager::ZipCacheConfig {
+        cache_dir,
+        max_size_bytes: u64::from(config.zip_cache_max_gb.max(1))
+            .saturating_mul(1024 * 1024 * 1024),
+        expiry_days: config.zip_cache_expiry_days.max(1),
+    }
+}
+
+fn should_extract_zip_for_mpv(
+    media: &database::MediaItem,
+    _start_position: f64,
+) -> Result<bool, String> {
+    match zip_manager::zip_entry_compression_method(media).map_err(|e| e.to_string())? {
+        8 => Ok(true),
+        0 => Ok(false),
+        method => Err(format!(
+            "ZIP entry compression method {} is not supported for playback",
+            method
+        )),
+    }
+}
+
+fn choose_store_zip_local_cache_for_mpv(
+    media: &database::MediaItem,
+    cache_snapshot: &zip_manager::ZipCacheSnapshot,
+    start_position: f64,
+) -> Option<String> {
+    if cache_snapshot.is_complete {
+        return Some(
+            cache_snapshot
+                .paths
+                .cache_path
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+
+    if cache_snapshot.available_bytes == 0 {
+        return None;
+    }
+    let is_mkv = media
+        .zip_entry_path
+        .as_deref()
+        .or(media.file_path.as_deref())
+        .map(|path| path.to_ascii_lowercase().ends_with(".mkv"))
+        .unwrap_or(false);
+
+    let duration_seconds = media.duration_seconds?;
+    let total_size = media.zip_uncompressed_size? as f64;
+    if duration_seconds <= 0.0 || total_size <= 0.0 {
+        return None;
+    }
+
+    let bytes_per_second = total_size / duration_seconds;
+    let startup_floor_bytes = if start_position > 0.0 {
+        if is_mkv {
+            24 * 1024 * 1024
+        } else {
+            18 * 1024 * 1024
+        }
+    } else if is_mkv {
+        10 * 1024 * 1024
+    } else {
+        6 * 1024 * 1024
+    } as f64;
+
+    let required_window_seconds = if start_position > 0.0 {
+        if is_mkv {
+            8.0
+        } else {
+            5.0
+        }
+    } else if is_mkv {
+        2.5
+    } else {
+        1.5
+    };
+
+    let required_bytes =
+        ((start_position + required_window_seconds) * bytes_per_second).max(startup_floor_bytes);
+
+    if cache_snapshot.available_bytes as f64 >= required_bytes {
+        return Some(cache_snapshot.paths.temp_path.to_string_lossy().to_string());
+    }
+
+    if start_position <= 1.0 && cache_snapshot.available_bytes as f64 >= startup_floor_bytes {
+        return Some(cache_snapshot.paths.temp_path.to_string_lossy().to_string());
+    }
+
+    None
+}
+
 async fn build_zip_extracted_path(
     state: &AppState,
     media: &database::MediaItem,
 ) -> Result<String, String> {
-    if let Err(error) = zip_manager::cleanup_stale_zip_cache() {
+    let cache_config = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        build_zip_cache_config(&config)
+    };
+
+    if let Err(error) = zip_manager::cleanup_stale_zip_cache(&cache_config) {
         println!("[ZIP] Cache cleanup warning: {}", error);
     }
 
     let access_token = state.gdrive_client.get_access_token().await?;
     let media = media.clone();
+    let cache_config = cache_config.clone();
 
     tokio::task::spawn_blocking(move || {
-        zip_manager::extract_zip_entry_to_cache(&access_token, &media).map_err(|e| e.to_string())
+        zip_manager::extract_zip_entry_to_cache(&access_token, &media, &cache_config)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5007,7 +5418,12 @@ async fn build_zip_stream_url(
     media: &database::MediaItem,
     media_id: i64,
 ) -> Result<String, String> {
-    if let Err(error) = zip_manager::cleanup_stale_zip_cache() {
+    let cache_config = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        build_zip_cache_config(&config)
+    };
+
+    if let Err(error) = zip_manager::cleanup_stale_zip_cache(&cache_config) {
         println!("[ZIP] Cache cleanup warning: {}", error);
     }
     cleanup_expired_zip_streams(state);
@@ -5018,10 +5434,29 @@ async fn build_zip_stream_url(
         .gdrive_client
         .get_stream_url(&stream_info.zip_file_id)
         .await?;
+    let proxy_cache_spec = match zip_manager::zip_entry_compression_method(media) {
+        Ok(0) => match zip_manager::prepare_stream_cache_target(media, &cache_config) {
+            Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
+                cache_paths,
+                cache_config: cache_config.clone(),
+                start_delay_ms: 4_000,
+                throttle_delay_ms: 250,
+            }),
+            Err(error) => {
+                println!(
+                    "[ZIP CACHE] Falling back to stream-only built-in proxy for '{}': {:?}",
+                    media.title, error
+                );
+                None
+            }
+        },
+        _ => None,
+    };
     let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
         drive_url,
         access_token,
         &stream_info,
+        proxy_cache_spec,
     ))?;
     let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
 
@@ -5365,6 +5800,45 @@ fn emit_ui_notification_from_handle(
     }
 }
 
+fn emit_zip_processing_event(
+    window: &tauri::Window,
+    phase: &str,
+    archive_count: usize,
+    archive_name: Option<&str>,
+    episodes_indexed: Option<usize>,
+    message: &str,
+) {
+    let payload = ZipProcessingEventPayload {
+        phase: phase.to_string(),
+        archive_count,
+        archive_name: archive_name.map(|value| value.to_string()),
+        episodes_indexed,
+        message: message.to_string(),
+    };
+
+    window.emit("zip-processing-status", payload).ok();
+}
+
+fn emit_zip_processing_event_from_handle(
+    app_handle: &AppHandle,
+    phase: &str,
+    archive_count: usize,
+    archive_name: Option<&str>,
+    episodes_indexed: Option<usize>,
+    message: &str,
+) {
+    if let Some(window) = app_handle.get_window("main") {
+        emit_zip_processing_event(
+            &window,
+            phase,
+            archive_count,
+            archive_name,
+            episodes_indexed,
+            message,
+        );
+    }
+}
+
 /// Background cloud change detection polling
 /// Runs independently of the window to detect new files even when minimized to tray
 async fn background_cloud_poll(app_handle: AppHandle) {
@@ -5587,11 +6061,39 @@ async fn background_check_cloud_changes(
         let config = state.config.lock().map_err(|e| e.to_string())?;
         config.zip_indexing_enabled
     };
+    let zip_files_detected: Vec<String> = if zip_indexing_enabled {
+        files_to_index
+            .iter()
+            .filter(|file| is_zip_drive_item(file))
+            .map(|file| file.name.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let zip_access_token = if zip_indexing_enabled && files_to_index.iter().any(is_zip_drive_item) {
         Some(state.gdrive_client.get_access_token().await?)
     } else {
         None
     };
+
+    if !zip_files_detected.is_empty() {
+        let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        emit_zip_processing_event_from_handle(
+            app_handle,
+            "detected",
+            zip_files_detected.len(),
+            archive_name,
+            None,
+            &format!(
+                "ZIP archive{} detected in Google Drive. Processing episode entries...",
+                if zip_files_detected.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        );
+    }
 
     // PHASE 1: Add files immediately without metadata
     let phase1_result = {
@@ -5810,6 +6312,21 @@ async fn background_check_cloud_changes(
     let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
     let indexed_count = indexed_items.len();
 
+    if !zip_files_detected.is_empty() {
+        let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        emit_zip_processing_event_from_handle(
+            app_handle,
+            "complete",
+            zip_files_detected.len(),
+            archive_name,
+            None,
+            &format!(
+                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
+                zip_files_detected.len()
+            ),
+        );
+    }
+
     // Send notifications for new items
     if indexed_count > 0 {
         let titles: Vec<String> = indexed_items
@@ -6017,6 +6534,16 @@ pub struct UpdateInfo {
     pub release_notes: String,
     pub download_url: Option<String>,
     pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ZipProcessingEventPayload {
+    phase: String,
+    archive_count: usize,
+    archive_name: Option<String>,
+    episodes_indexed: Option<usize>,
+    message: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -7167,6 +7694,11 @@ fn main() {
                             deleted, freed as f64 / (1024.0 * 1024.0));
                     }
                 }
+            }
+
+            let zip_cache_config = build_zip_cache_config(&config);
+            if let Err(error) = zip_manager::cleanup_stale_zip_cache(&zip_cache_config) {
+                println!("[STARTUP] Warning: Failed to clean ZIP cache: {}", error);
             }
 
             // Start background cloud polling (runs independently of window)

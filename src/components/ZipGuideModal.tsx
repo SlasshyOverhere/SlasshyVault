@@ -21,8 +21,9 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
                 Create Compatible ZIP Archives
               </h2>
               <p className="text-sm text-muted-foreground">
-                StreamVault can index episodes directly inside ZIP archives when
-                the archive uses Store compression.
+                StreamVault can index episodes directly inside ZIP archives.
+                Store archives open fastest, while Deflate archives are
+                extracted into a managed playback cache.
               </p>
             </div>
           </div>
@@ -34,7 +35,9 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
               <span className="text-white">7-Zip</span>, then{" "}
               <span className="text-white">Add to archive</span>. Set the
               compression method to <span className="text-white">Store</span>{" "}
-              before saving.
+              for fastest playback, or keep{" "}
+              <span className="text-white">Deflate</span> if you prefer smaller
+              archives and do not mind extraction on first play.
             </p>
           </div>
 
@@ -57,9 +60,9 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
                     Avoid these options
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Normal, Fast, Ultra, encrypted, multipart, or
-                    password-protected ZIP archives will be skipped because they
-                    cannot be streamed safely by byte range.
+                    Encrypted, multipart, split, or password-protected ZIP
+                    archives will be skipped because they cannot be played
+                    safely.
                   </p>
                 </div>
               </div>
@@ -69,9 +72,9 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
               <div className="flex items-start gap-2">
                 <Info className="mt-0.5 h-4 w-4 text-white" />
                 <p className="text-sm text-muted-foreground">
-                  Larger Store ZIPs are expected. They use more Google Drive
-                  space, but they let StreamVault open episodes instantly
-                  without extracting the full archive.
+                  Larger Store ZIPs use more Google Drive space, but they start
+                  fastest because StreamVault can stream them directly without
+                  extracting the whole episode first.
                 </p>
               </div>
             </div>

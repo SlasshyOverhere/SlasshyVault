@@ -34,6 +34,10 @@ export interface MediaItem {
   zip_uncompressed_size?: number;
   zip_crc32?: string;
   zip_compression_method?: number;
+  // Frontend-only history presentation fields
+  history_group_count?: number;
+  history_group_ids?: number[];
+  history_group_latest_label?: string;
 }
 
 export interface Config {
@@ -50,6 +54,9 @@ export interface Config {
   // Cloud auto-scan interval in minutes
   cloud_scan_interval_minutes?: number;
   zip_indexing_enabled?: boolean;
+  zip_cache_dir?: string;
+  zip_cache_max_gb?: number;
+  zip_cache_expiry_days?: number;
 }
 
 export interface ResumeInfo {
@@ -244,6 +251,9 @@ export interface EpisodeDeleteInfo {
   season_number?: number;
   episode_number?: number;
   file_path?: string;
+  parent_zip_id?: string;
+  delete_kind?: "episode" | "zip_archive";
+  archive_episode_count?: number;
 }
 
 // Delete media files permanently from disk

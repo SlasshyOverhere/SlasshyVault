@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Film, Tv, Filter, User, X, AlertCircle, RefreshCw, LogIn } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import {
+  getActivityGenres,
   getFriendsActivity,
   getFriendsWatching,
   onSocialEvent,
@@ -20,6 +21,7 @@ interface ActivityFeedProps {
 export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [watching, setWatching] = useState<(CurrentlyWatching & { userId: string; userName: string; userAvatar?: string })[]>([]);
+  const [genres, setGenres] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [contentTypeFilter, setContentTypeFilter] = useState<'all' | 'movie' | 'tv'>('all');
@@ -30,15 +32,112 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const hasInitializedFiltersRef = useRef(false);
 
-  // Collect unique genres from activities
-  const genres = [...new Set(activities.flatMap(a => a.genres || []))].sort();
+  const loadWatching = useCallback(async () => {
+    try {
+      const data = await getFriendsWatching();
+      setWatching(data);
+    } catch (error) {
+      console.error('Failed to load watching status:', error);
+    }
+  }, []);
+
+  const loadGenres = useCallback(async () => {
+    try {
+      const nextGenres = await getActivityGenres();
+      setGenres(nextGenres);
+    } catch (error) {
+      console.error('Failed to load activity genres:', error);
+    }
+  }, []);
+
+  const loadActivities = useCallback(async ({
+    reset = false,
+    targetPage = 1
+  }: {
+    reset?: boolean;
+    targetPage?: number;
+  } = {}) => {
+    try {
+      if (!reset) {
+        setIsLoadingMore(true);
+      }
+
+      const filters: {
+        contentType?: 'movie' | 'tv';
+        genre?: string;
+        page?: number;
+        pageSize?: number;
+      } = {
+        page: targetPage,
+        pageSize: 50
+      };
+      if (contentTypeFilter !== 'all') filters.contentType = contentTypeFilter;
+      if (genreFilter !== 'all') filters.genre = genreFilter;
+
+      const data = await getFriendsActivity(filters);
+
+      if (reset) {
+        setActivities(data.activities);
+      } else {
+        setActivities(prev => [...prev, ...data.activities]);
+      }
+
+      setPage(data.page);
+      setHasMore(data.hasMore);
+    } catch (error) {
+      console.error('Failed to load activities:', error);
+      if (reset) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (errMsg.includes('Auth error') || errMsg.includes('401')) {
+          setError('Your session has expired. Please disconnect and reconnect to refresh.');
+        } else {
+          setError('Failed to load activities. Please try again later.');
+        }
+      }
+    } finally {
+      if (!reset) {
+        setIsLoadingMore(false);
+      }
+    }
+  }, [contentTypeFilter, genreFilter]);
+
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      await Promise.all([loadActivities({ reset: true, targetPage: 1 }), loadWatching(), loadGenres()]);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('Auth error') || errMsg.includes('401')) {
+        setError('Your session has expired. Please disconnect and reconnect to refresh.');
+      } else {
+        setError('Failed to load activity data. Please try again later.');
+      }
+      console.error('Failed to load activity data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [loadActivities, loadGenres, loadWatching]);
+
+  const loadMore = useCallback(() => {
+    if (hasMore && !isLoadingMore) {
+      const nextPage = page + 1;
+      void loadActivities({ targetPage: nextPage });
+    }
+  }, [hasMore, isLoadingMore, loadActivities, page]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
 
     const unsubActivity = onSocialEvent('friend_activity', (data) => {
-      setActivities(prev => [data.activity as Activity, ...prev].slice(0, 50));
+      const nextActivity = data.activity as Activity;
+      setActivities(prev => [nextActivity, ...prev].slice(0, 50));
+      const nextGenres = Array.isArray(nextActivity?.genres) ? nextActivity.genres : [];
+      if (nextGenres.length > 0) {
+        setGenres((prev) => [...new Set([...prev, ...nextGenres])].sort());
+      }
     });
 
     const unsubWatching = onSocialEvent('currently_watching', () => {
@@ -49,14 +148,19 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
       unsubActivity();
       unsubWatching();
     };
-  }, []);
+  }, [loadData, loadWatching]);
 
   useEffect(() => {
-    // Reset pagination when filters change
+    if (!hasInitializedFiltersRef.current) {
+      hasInitializedFiltersRef.current = true;
+      return;
+    }
+
+    setActivities([]);
     setPage(1);
     setHasMore(true);
-    loadActivities(true);
-  }, [contentTypeFilter, genreFilter]);
+    void loadActivities({ reset: true, targetPage: 1 });
+  }, [contentTypeFilter, genreFilter, loadActivities]);
 
   // Set up intersection observer for infinite scrolling
   useEffect(() => {
@@ -84,85 +188,10 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
         observerRef.current.disconnect();
       }
     };
-  }, [hasMore, isLoadingMore]);
-
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      // loadActivities and loadWatching each have their own error handling,
-      // so failures in one won't block the other
-      await Promise.all([loadActivities(true), loadWatching()]);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('Auth error') || errMsg.includes('401')) {
-        setError('Your session has expired. Please disconnect and reconnect to refresh.');
-      } else {
-        setError('Failed to load activity data. Please try again later.');
-      }
-      console.error('Failed to load activity data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadActivities = async (reset = false) => {
-    try {
-      if (!reset) {
-        setIsLoadingMore(true);
-      }
-
-      const filters: { contentType?: 'movie' | 'tv'; genre?: string; page?: number } = {
-        page: reset ? 1 : page
-      };
-      if (contentTypeFilter !== 'all') filters.contentType = contentTypeFilter;
-      if (genreFilter !== 'all') filters.genre = genreFilter;
-
-      const data = await getFriendsActivity(filters);
-      
-      if (reset) {
-        setActivities(data);
-      } else {
-        setActivities(prev => [...prev, ...data]);
-      }
-      
-      // Check if there are more items to load (assuming API returns less than page size when no more items)
-      setHasMore(data.length > 0); // Simplified check - adjust based on actual API response
-    } catch (error) {
-      console.error('Failed to load activities:', error);
-      if (reset) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (errMsg.includes('Auth error') || errMsg.includes('401')) {
-          setError('Your session has expired. Please disconnect and reconnect to refresh.');
-        } else {
-          setError('Failed to load activities. Please try again later.');
-        }
-      }
-    } finally {
-      if (!reset) {
-        setIsLoadingMore(false);
-      }
-    }
-  };
-
-  const loadWatching = async () => {
-    try {
-      const data = await getFriendsWatching();
-      setWatching(data);
-    } catch (error) {
-      console.error('Failed to load watching status:', error);
-    }
-  };
-
-  const loadMore = () => {
-    if (hasMore && !isLoadingMore) {
-      setPage(prev => prev + 1);
-      loadActivities();
-    }
-  };
+  }, [hasMore, isLoadingMore, loadMore]);
 
   const retryLoad = () => {
-    loadData();
+    void loadData();
   };
 
   return (

@@ -4,19 +4,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 // Syncplay-inspired sync thresholds (in seconds)
-const SEEK_THRESHOLD: f64 = 2.0;           // Seek if drift exceeds this threshold
-const SLOWDOWN_KICKIN: f64 = 0.35;         // Start gentle speed correction for smaller drift
-const SLOWDOWN_RESET: f64 = 0.1;           // Reset speed when drift < 0.1s
-const SLOWDOWN_RATE: f64 = 0.95;           // Slow to 95% speed (Syncplay: 0.95)
-const SPEEDUP_RATE: f64 = 1.05;            // Speed up to 105% to catch up
-const REWIND_THRESHOLD: f64 = 4.0;         // Rewind if too far ahead (Syncplay: 4.0)
-const FASTFORWARD_THRESHOLD: f64 = 5.0;    // Fast-forward if too far behind (Syncplay: 5.0)
-const SEEK_COOLDOWN_MS: u64 = 1200;        // Prevent repeated seek spam on noisy updates
+const SEEK_THRESHOLD: f64 = 2.0; // Seek if drift exceeds this threshold
+const SLOWDOWN_KICKIN: f64 = 0.35; // Start gentle speed correction for smaller drift
+const SLOWDOWN_RESET: f64 = 0.1; // Reset speed when drift < 0.1s
+const SLOWDOWN_RATE: f64 = 0.95; // Slow to 95% speed (Syncplay: 0.95)
+const SPEEDUP_RATE: f64 = 1.05; // Speed up to 105% to catch up
+const REWIND_THRESHOLD: f64 = 4.0; // Rewind if too far ahead (Syncplay: 4.0)
+const FASTFORWARD_THRESHOLD: f64 = 5.0; // Fast-forward if too far behind (Syncplay: 5.0)
+const SEEK_COOLDOWN_MS: u64 = 1200; // Prevent repeated seek spam on noisy updates
 const COMMAND_POSITION_EPSILON: f64 = 0.05; // Skip redundant seeks that can suppress real user events
 
 /// MPV IPC command
@@ -155,7 +155,11 @@ impl WatchTogetherController {
         // Wait for MPV to create the pipe
         let mut file = None;
         for _ in 0..50 {
-            let wide_name: Vec<u16> = self.pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
+            let wide_name: Vec<u16> = self
+                .pipe_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let handle = unsafe {
                 CreateFileW(
@@ -170,7 +174,9 @@ impl WatchTogetherController {
             };
 
             if handle != INVALID_HANDLE_VALUE {
-                file = Some(unsafe { std::fs::File::from_raw_handle(handle as *mut std::ffi::c_void) });
+                file = Some(unsafe {
+                    std::fs::File::from_raw_handle(handle as *mut std::ffi::c_void)
+                });
                 println!("[WT-MPV] Connected to pipe: {}", self.pipe_name);
                 break;
             }
@@ -178,10 +184,12 @@ impl WatchTogetherController {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        let pipe_file = file.ok_or_else(|| format!("Failed to connect to MPV pipe: {}", self.pipe_name))?;
+        let pipe_file =
+            file.ok_or_else(|| format!("Failed to connect to MPV pipe: {}", self.pipe_name))?;
 
         // Clone the file handle for reading (we need separate read/write handles)
-        let read_file = pipe_file.try_clone()
+        let read_file = pipe_file
+            .try_clone()
             .map_err(|e| format!("Failed to clone pipe handle: {}", e))?;
         let write_file = pipe_file;
 
@@ -226,7 +234,9 @@ impl WatchTogetherController {
             for line in reader.lines() {
                 match line {
                     Ok(text) => {
-                        if text.is_empty() { continue; }
+                        if text.is_empty() {
+                            continue;
+                        }
 
                         // Try to parse as a JSON message from MPV
                         if let Ok(event) = serde_json::from_str::<MpvEvent>(&text) {
@@ -250,7 +260,7 @@ impl WatchTogetherController {
                                                 if pending_user_seek {
                                                     pending_user_seek = false;
                                                     let _ = event_tx.blocking_send(
-                                                        MpvSyncEvent::Seeked { position: pos }
+                                                        MpvSyncEvent::Seeked { position: pos },
                                                     );
                                                 }
                                             }
@@ -275,7 +285,10 @@ impl WatchTogetherController {
                                                 ignoring.fetch_sub(1, Ordering::SeqCst);
                                             } else if paused != last_paused {
                                                 let _ = event_tx.blocking_send(
-                                                    MpvSyncEvent::PauseChanged { paused, position: last_position }
+                                                    MpvSyncEvent::PauseChanged {
+                                                        paused,
+                                                        position: last_position,
+                                                    },
                                                 );
                                             }
                                             last_paused = paused;
@@ -349,7 +362,8 @@ impl WatchTogetherController {
     /// Send a raw JSON command string to MPV
     async fn send_raw(&self, json: String) -> Result<(), String> {
         if let Some(tx) = &self.cmd_tx {
-            tx.send(json).await
+            tx.send(json)
+                .await
                 .map_err(|e| format!("Failed to send command: {}", e))
         } else {
             Err("Not connected to MPV".to_string())
@@ -367,7 +381,10 @@ impl WatchTogetherController {
     }
 
     /// Send a command with a request_id
-    pub async fn send_command_with_id(&self, command: Vec<serde_json::Value>) -> Result<u64, String> {
+    pub async fn send_command_with_id(
+        &self,
+        command: Vec<serde_json::Value>,
+    ) -> Result<u64, String> {
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         let cmd = MpvCommand {
             command,
@@ -380,11 +397,8 @@ impl WatchTogetherController {
 
     /// Observe a property for changes
     pub async fn observe_property(&self, id: u64, property: &str) -> Result<(), String> {
-        self.send_command(vec![
-            "observe_property".into(),
-            id.into(),
-            property.into(),
-        ]).await
+        self.send_command(vec!["observe_property".into(), id.into(), property.into()])
+            .await
     }
 
     /// Set pause state (with echo prevention)
@@ -396,11 +410,8 @@ impl WatchTogetherController {
         drop(state);
 
         self.ignoring_on_the_fly.fetch_add(1, Ordering::SeqCst);
-        self.send_command(vec![
-            "set_property".into(),
-            "pause".into(),
-            paused.into(),
-        ]).await?;
+        self.send_command(vec!["set_property".into(), "pause".into(), paused.into()])
+            .await?;
 
         let mut state = self.local_state.write().await;
         state.paused = paused;
@@ -426,7 +437,8 @@ impl WatchTogetherController {
             "set_property".into(),
             "time-pos".into(),
             position.into(),
-        ]).await?;
+        ])
+        .await?;
 
         let mut state = self.local_state.write().await;
         state.position = position;
@@ -436,11 +448,8 @@ impl WatchTogetherController {
 
     /// Set playback speed
     pub async fn set_speed(&self, speed: f64) -> Result<(), String> {
-        self.send_command(vec![
-            "set_property".into(),
-            "speed".into(),
-            speed.into(),
-        ]).await
+        self.send_command(vec!["set_property".into(), "speed".into(), speed.into()])
+            .await
     }
 
     /// Show OSD message in MPV
@@ -449,7 +458,8 @@ impl WatchTogetherController {
             "show-text".into(),
             message.into(),
             (duration_ms as i64).into(),
-        ]).await
+        ])
+        .await
     }
 
     /// Get estimated current position (accounting for elapsed time since last update)
@@ -478,7 +488,11 @@ impl WatchTogetherController {
 
     /// Apply sync correction based on server-provided authoritative position
     /// This implements Syncplay's drift correction algorithm
-    pub async fn apply_sync(&self, server_position: f64, server_paused: bool) -> Result<(), String> {
+    pub async fn apply_sync(
+        &self,
+        server_position: f64,
+        server_paused: bool,
+    ) -> Result<(), String> {
         let state = self.local_state.write().await;
         let elapsed = state.last_update.elapsed().as_secs_f64();
         let estimated_position = if state.paused {
@@ -516,7 +530,10 @@ impl WatchTogetherController {
             if !self.should_seek_now().await {
                 return Ok(());
             }
-            println!("[WT-MPV] Hard seek: drift={:.3}s, target={:.2}s", diff, server_position);
+            println!(
+                "[WT-MPV] Hard seek: drift={:.3}s, target={:.2}s",
+                diff, server_position
+            );
             self.seek_to(server_position).await?;
             self.set_speed(1.0).await?;
             let mut state = self.local_state.write().await;
@@ -645,7 +662,9 @@ pub fn launch_mpv_wt(
 
     println!("[WT-MPV] Command: {:?}", cmd);
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to start MPV: {}", e))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start MPV: {}", e))?;
     let pid = child.id();
 
     println!("[WT-MPV] Started with PID: {}", pid);

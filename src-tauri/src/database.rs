@@ -2073,18 +2073,18 @@ impl Database {
         })
     }
 
-    /// Get media info for deletion (file_path, is_cloud, cloud_file_id)
+    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, parent_zip_id)
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
-    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>)>> {
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id FROM media WHERE id IN ({})",
+            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
 
@@ -2098,6 +2098,7 @@ impl Database {
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, i32>(2)? == 1,
                 row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
 

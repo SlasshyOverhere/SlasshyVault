@@ -102,6 +102,9 @@ export function SettingsModal({
     cloud_cache_max_mb: 1024,
     cloud_cache_expiry_hours: 24,
     zip_indexing_enabled: true,
+    zip_cache_dir: "",
+    zip_cache_max_gb: 20,
+    zip_cache_expiry_days: 7,
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -265,6 +268,9 @@ export function SettingsModal({
         cloud_cache_max_mb: data.cloud_cache_max_mb ?? 1024,
         cloud_cache_expiry_hours: data.cloud_cache_expiry_hours ?? 24,
         zip_indexing_enabled: data.zip_indexing_enabled ?? true,
+        zip_cache_dir: data.zip_cache_dir || "",
+        zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
+        zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -354,6 +360,21 @@ export function SettingsModal({
       }
     } catch (error) {
       console.error("Failed to open file dialog", error);
+    }
+  };
+
+  const browseZipCacheDir = async () => {
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select ZIP Cache Directory",
+      });
+      if (selected && typeof selected === "string") {
+        setConfig({ ...config, zip_cache_dir: selected });
+      }
+    } catch (error) {
+      console.error("Failed to open directory dialog", error);
     }
   };
 
@@ -967,7 +988,8 @@ export function SettingsModal({
                             </Label>
                             <p className="text-sm text-muted-foreground">
                               Index TV episodes directly from Google Drive ZIP
-                              archives created with Store compression.
+                              archives and keep extracted playback cache under
+                              control.
                             </p>
                           </div>
                           <Switch
@@ -982,9 +1004,86 @@ export function SettingsModal({
                         </div>
 
                         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
-                          Only uncompressed ZIP archives are streamable.
-                          Deflate, encrypted, split, and password-protected ZIPs
-                          are skipped automatically.
+                          Store and Deflate ZIP entries are supported.
+                          Compressed episodes are extracted into a bounded cache
+                          for faster replay and stable seeking in MPV.
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2 md:col-span-2">
+                            <Label>ZIP Cache Directory</Label>
+                            <div className="flex gap-2">
+                              <Input
+                                value={config.zip_cache_dir || ""}
+                                onChange={(e) =>
+                                  setConfig({
+                                    ...config,
+                                    zip_cache_dir: e.target.value,
+                                  })
+                                }
+                                placeholder="Default app cache location"
+                                className="flex-1"
+                              />
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={browseZipCacheDir}
+                                title="Browse"
+                              >
+                                <FolderOpen className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Pick a different drive if you want ZIP extraction
+                              cache stored outside the default app data folder.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>ZIP Cache Size Limit (GB)</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={500}
+                              value={config.zip_cache_max_gb ?? 20}
+                              onChange={(e) =>
+                                setConfig({
+                                  ...config,
+                                  zip_cache_max_gb: Math.max(
+                                    1,
+                                    Number(e.target.value) || 1,
+                                  ),
+                                })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Older ZIP cache files will be replaced first when
+                              the limit is reached.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>ZIP Cache Expiry (Days)</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={365}
+                              value={config.zip_cache_expiry_days ?? 7}
+                              onChange={(e) =>
+                                setConfig({
+                                  ...config,
+                                  zip_cache_expiry_days: Math.max(
+                                    1,
+                                    Number(e.target.value) || 1,
+                                  ),
+                                })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Unused ZIP cache files older than this will be
+                              removed automatically.
+                            </p>
+                          </div>
                         </div>
 
                         <Button

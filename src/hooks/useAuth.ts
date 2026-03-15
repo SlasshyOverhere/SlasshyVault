@@ -217,8 +217,11 @@ export function useAuth() {
   // Handle logout
   const logout = async () => {
     try {
-      const { disconnectGDrive } = await import('@/services/gdrive')
+      const { disconnectGDrive, disconnectSocialAuth } = await import('@/services/gdrive')
       await disconnectGDrive()
+      await disconnectSocialAuth().catch((error) => {
+        console.log('[Auth] Social auth disconnect failed (non-critical):', error)
+      })
       disconnectSocial()
       if (isMountedRef.current) {
         setIsAuthenticated(false)

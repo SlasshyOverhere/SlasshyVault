@@ -8,8 +8,16 @@ import { ChatWindow } from './ChatWindow';
 import { UserProfileModal } from './UserProfileModal';
 import { PrivacySettings } from './PrivacySettings';
 import { ProfileEditor } from './ProfileEditor';
-import { invoke } from '@tauri-apps/api/tauri';
 import {
+  completeSocialAuth,
+  getSocialAccessToken,
+  isSocialAuthConnected,
+  startSocialAuth
+} from '@/services/gdrive';
+import {
+  disconnectSocialAccount,
+  getDefaultAuthServerUrl,
+  getDevSettings,
   isSocialInitialized,
   restoreSocialConnection,
   getCachedProfile,
@@ -21,11 +29,7 @@ import {
   syncLocalWatchDataToSocial
 } from '@/services/social';
 
-interface SocialViewProps {
-  onShowSettings?: () => void;
-}
-
-export function SocialView({ onShowSettings }: SocialViewProps) {
+export function SocialView() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,14 +44,17 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
   const [activityFeedKey, setActivityFeedKey] = useState(0);
   const autoSyncInProgressRef = useRef(false);
 
+  const getResolvedAuthServerUrl = () => {
+    const fromSettings = getDevSettings().authServerUrl?.trim();
+    return fromSettings || getDefaultAuthServerUrl();
+  };
+
   useEffect(() => {
-    checkInitialization();
-    
+    void checkInitialization();
+
     // Cleanup function to disconnect social when component unmounts
     return () => {
-      if (isInitialized) {
-        disconnectSocial();
-      }
+      disconnectSocial();
     };
   }, []);
 
@@ -81,7 +88,8 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
     setLoading(true);
     setError(null);
     try {
-      if (isSocialInitialized()) {
+      const canAttemptRestore = isSocialInitialized() || await isSocialAuthConnected();
+      if (canAttemptRestore) {
         // Show cached profile immediately for instant UI
         const cached = getCachedProfile();
         if (cached) {
@@ -115,23 +123,27 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
     setError(null);
 
     try {
-      // Check if Google Drive is connected
-      const hasTokens = await invoke<boolean>('gdrive_is_connected');
-      console.log('[SocialView] Google Drive connected:', hasTokens);
+      let hasTokens = await isSocialAuthConnected();
+      console.log('[SocialView] Social auth connected:', hasTokens);
+      const authServerUrl = getResolvedAuthServerUrl();
 
       if (!hasTokens) {
-        setError('Please connect Google Drive first in Settings → Cloud Storage');
-        onShowSettings?.();
-        setConnecting(false);
-        return;
+        console.log('[SocialView] Starting Google auth from Social...');
+        await startSocialAuth(authServerUrl);
+        await completeSocialAuth();
+        hasTokens = await isSocialAuthConnected();
+      }
+
+      if (!hasTokens) {
+        throw new Error('Google sign-in did not complete successfully.');
       }
 
       // Get access token
-      const accessToken = await invoke<string>('gdrive_get_access_token');
+      const accessToken = await getSocialAccessToken(authServerUrl);
       console.log('[SocialView] Got access token:', accessToken ? 'yes' : 'no');
 
       if (!accessToken) {
-        setError('Failed to get access token. Try reconnecting Google Drive.');
+        setError('Failed to get Google access token. Try reconnecting your Google account.');
         setConnecting(false);
         return;
       }
@@ -155,8 +167,8 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
     setConnecting(false);
   };
 
-  const handleDisconnect = () => {
-    disconnectSocial();
+  const handleDisconnect = async () => {
+    await disconnectSocialAccount();
     setIsInitialized(false);
     setProfile(null);
     setError(null);
@@ -202,7 +214,8 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
           <h2 className="text-2xl font-bold mb-3">Social Features</h2>
           <p className="text-zinc-400 mb-6">
             Connect with friends, share what you're watching, and discover new content together.
-            Your social data is securely stored in your Google Drive.
+            Your social profile, activity, and chat now sync through the backend database.
+            Google sign-in is still used to identify your account, and you can complete it directly here.
           </p>
 
           {error && (
@@ -224,7 +237,7 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
             ) : (
               <>
                 <LogIn className="w-4 h-4 mr-2" />
-                Connect with Google
+                Continue with Google
               </>
             )}
           </Button>
@@ -284,7 +297,7 @@ export function SocialView({ onShowSettings }: SocialViewProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={handleDisconnect}
+            onClick={() => { void handleDisconnect(); }}
             className="border-red-500/50 text-red-500 hover:bg-red-500/10"
           >
             <LogIn className="w-4 h-4 mr-2 rotate-180" />

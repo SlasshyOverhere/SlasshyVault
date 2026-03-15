@@ -229,6 +229,12 @@ pub struct Config {
     pub cloud_scan_interval_minutes: u32,
     #[serde(default = "default_zip_indexing_enabled")]
     pub zip_indexing_enabled: bool,
+    #[serde(default)]
+    pub zip_cache_dir: Option<String>,
+    #[serde(default = "default_zip_cache_max_gb")]
+    pub zip_cache_max_gb: u32,
+    #[serde(default = "default_zip_cache_expiry_days")]
+    pub zip_cache_expiry_days: u32,
 }
 
 fn default_cloud_cache_max_mb() -> u32 {
@@ -247,6 +253,14 @@ fn default_zip_indexing_enabled() -> bool {
     true
 }
 
+fn default_zip_cache_max_gb() -> u32 {
+    20
+}
+
+fn default_zip_cache_expiry_days() -> u32 {
+    7
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -261,6 +275,9 @@ impl Default for Config {
             cloud_cache_expiry_hours: 24,
             cloud_scan_interval_minutes: 5,
             zip_indexing_enabled: true,
+            zip_cache_dir: None,
+            zip_cache_max_gb: 20,
+            zip_cache_expiry_days: 7,
         }
     }
 }
