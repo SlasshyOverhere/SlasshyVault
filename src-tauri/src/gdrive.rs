@@ -55,6 +55,29 @@ pub struct DriveItem {
     pub web_content_link: Option<String>,
 }
 
+const VIDEO_MIME_TYPES: &[&str] = &[
+    "video/mp4",
+    "video/x-matroska",
+    "video/avi",
+    "video/quicktime",
+    "video/webm",
+    "video/x-m4v",
+    "video/x-ms-wmv",
+    "video/x-flv",
+    "video/mp2t",
+];
+
+const ZIP_MIME_TYPES: &[&str] = &["application/zip", "application/x-zip-compressed"];
+
+pub fn is_zip_archive_item(item: &DriveItem) -> bool {
+    ZIP_MIME_TYPES.contains(&item.mime_type.as_str())
+        || item.name.to_ascii_lowercase().ends_with(".zip")
+}
+
+pub fn is_supported_cloud_media_item(item: &DriveItem) -> bool {
+    VIDEO_MIME_TYPES.contains(&item.mime_type.as_str()) || is_zip_archive_item(item)
+}
+
 /// Response from Drive API files.list
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,7 +151,8 @@ impl GoogleDriveClient {
 
     /// Refresh the access token via backend proxy
     async fn refresh_access_token(&self, refresh_token: &str) -> Result<String, String> {
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(format!("{}/auth/refresh", AUTH_SERVER_URL))
             .json(&serde_json::json!({
                 "refresh_token": refresh_token
@@ -204,7 +228,8 @@ impl GoogleDriveClient {
             url.push_str(&format!("&pageToken={}", token));
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -238,7 +263,8 @@ impl GoogleDriveClient {
             urlencoding::encode(&query)
         );
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -266,25 +292,14 @@ impl GoogleDriveClient {
     ) -> Result<Vec<DriveItem>, String> {
         let access_token = self.get_access_token().await?;
 
-        let video_mimes = [
-            "video/mp4",
-            "video/x-matroska",
-            "video/avi",
-            "video/quicktime",
-            "video/webm",
-            "video/x-m4v",
-            "video/x-ms-wmv",
-            "video/x-flv",
-            "video/mp2t",
-        ];
-
-        let mime_conditions: Vec<String> = video_mimes
+        let mime_conditions: Vec<String> = VIDEO_MIME_TYPES
             .iter()
+            .chain(ZIP_MIME_TYPES.iter())
             .map(|m| format!("mimeType = '{}'", m))
             .collect();
 
         let query = format!(
-            "'{}' in parents and ({}) and trashed = false",
+            "'{}' in parents and (({}) or name contains '.zip' or name contains '.ZIP') and trashed = false",
             folder_id,
             mime_conditions.join(" or ")
         );
@@ -303,7 +318,8 @@ impl GoogleDriveClient {
                 url.push_str(&format!("&pageToken={}", token));
             }
 
-            let response = self.http_client
+            let response = self
+                .http_client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", access_token))
                 .send()
@@ -357,7 +373,8 @@ impl GoogleDriveClient {
             urlencoding::encode(&query)
         );
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -377,10 +394,15 @@ impl GoogleDriveClient {
         Ok(result.files.first().map(|f| f.id.clone()))
     }
 
-    async fn create_app_data_file(&self, file_name: &str, mime_type: &str) -> Result<String, String> {
+    async fn create_app_data_file(
+        &self,
+        file_name: &str,
+        mime_type: &str,
+    ) -> Result<String, String> {
         let access_token = self.get_access_token().await?;
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(format!("{}/files?fields=id", DRIVE_API_BASE))
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
@@ -410,13 +432,17 @@ impl GoogleDriveClient {
     }
 
     pub async fn load_ai_chat_history(&self) -> Result<Option<String>, String> {
-        let file_id = match self.find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME).await? {
+        let file_id = match self
+            .find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME)
+            .await?
+        {
             Some(id) => id,
             None => return Ok(None),
         };
 
         let access_token = self.get_access_token().await?;
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -425,7 +451,10 @@ impl GoogleDriveClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Drive API download AI chat history error: {}", error_text));
+            return Err(format!(
+                "Drive API download AI chat history error: {}",
+                error_text
+            ));
         }
 
         let text = response
@@ -440,14 +469,24 @@ impl GoogleDriveClient {
         serde_json::from_str::<serde_json::Value>(history_json)
             .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
 
-        let file_id = match self.find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME).await? {
+        let file_id = match self
+            .find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME)
+            .await?
+        {
             Some(id) => id,
-            None => self.create_app_data_file(AI_CHAT_HISTORY_FILE_NAME, "application/json").await?,
+            None => {
+                self.create_app_data_file(AI_CHAT_HISTORY_FILE_NAME, "application/json")
+                    .await?
+            }
         };
 
         let access_token = self.get_access_token().await?;
-        let response = self.http_client
-            .patch(format!("{}/files/{}?uploadType=media", DRIVE_UPLOAD_API_BASE, file_id))
+        let response = self
+            .http_client
+            .patch(format!(
+                "{}/files/{}?uploadType=media",
+                DRIVE_UPLOAD_API_BASE, file_id
+            ))
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
             .body(history_json.to_string())
@@ -457,7 +496,10 @@ impl GoogleDriveClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Drive API upload AI chat history error: {}", error_text));
+            return Err(format!(
+                "Drive API upload AI chat history error: {}",
+                error_text
+            ));
         }
 
         Ok(())
@@ -469,11 +511,11 @@ impl GoogleDriveClient {
 
         let url = format!(
             "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,parents,webContentLink",
-            DRIVE_API_BASE,
-            file_id
+            DRIVE_API_BASE, file_id
         );
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -497,7 +539,8 @@ impl GoogleDriveClient {
 
         let url = format!("{}/files/{}", DRIVE_API_BASE, file_id);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .delete(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -520,7 +563,8 @@ impl GoogleDriveClient {
 
         // Get user info
         let user_url = "https://www.googleapis.com/oauth2/v2/userinfo";
-        let user_response = self.http_client
+        let user_response = self
+            .http_client
             .get(user_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -539,7 +583,8 @@ impl GoogleDriveClient {
 
         // Get storage quota
         let quota_url = format!("{}/about?fields=storageQuota,user", DRIVE_API_BASE);
-        let quota_response = self.http_client
+        let quota_response = self
+            .http_client
             .get(&quota_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -580,7 +625,8 @@ impl GoogleDriveClient {
 
         let url = format!("{}/changes/startPageToken", DRIVE_API_BASE);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -614,7 +660,8 @@ impl GoogleDriveClient {
             page_token
         );
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
@@ -642,18 +689,6 @@ impl GoogleDriveClient {
         let mut removed_file_ids = Vec::new();
         let mut current_token = page_token.to_string();
 
-        let video_mimes = [
-            "video/mp4",
-            "video/x-matroska",
-            "video/avi",
-            "video/quicktime",
-            "video/webm",
-            "video/x-m4v",
-            "video/x-ms-wmv",
-            "video/x-flv",
-            "video/mp2t",
-        ];
-
         loop {
             let changes = self.get_changes(&current_token).await?;
 
@@ -667,7 +702,7 @@ impl GoogleDriveClient {
                 }
 
                 if let Some(file) = change.file {
-                    if video_mimes.contains(&file.mime_type.as_str()) {
+                    if is_supported_cloud_media_item(&file) {
                         all_video_files.push(file);
                     }
                 }
@@ -718,13 +753,13 @@ pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
     }
 
     // Get and decode the tokens
-    let tokens_b64 = params.get("tokens")
-        .ok_or("No tokens in callback URL")?;
+    let tokens_b64 = params.get("tokens").ok_or("No tokens in callback URL")?;
 
     let tokens_json = String::from_utf8(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, tokens_b64)
-            .map_err(|e| format!("Failed to decode tokens: {}", e))?
-    ).map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
+            .map_err(|e| format!("Failed to decode tokens: {}", e))?,
+    )
+    .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
 
     let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
         .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
@@ -734,9 +769,7 @@ pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
         .ok_or("Missing access_token")?
         .to_string();
 
-    let refresh_token = token_data["refresh_token"]
-        .as_str()
-        .map(String::from);
+    let refresh_token = token_data["refresh_token"].as_str().map(String::from);
 
     let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
     let expires_at = chrono::Utc::now().timestamp() + expires_in;
@@ -860,13 +893,14 @@ fn extract_tokens_from_request(request_line: &str) -> Result<GoogleTokens, Strin
         .collect();
 
     // Get and decode the tokens
-    let tokens_b64 = params.get("tokens")
-        .ok_or("No tokens in callback URL")?;
+    let tokens_b64 = params.get("tokens").ok_or("No tokens in callback URL")?;
 
     let tokens_json = String::from_utf8(
-        base64::engine::general_purpose::STANDARD.decode(tokens_b64)
-            .map_err(|e| format!("Failed to decode tokens: {}", e))?
-    ).map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
+        base64::engine::general_purpose::STANDARD
+            .decode(tokens_b64)
+            .map_err(|e| format!("Failed to decode tokens: {}", e))?,
+    )
+    .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
 
     let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
         .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
@@ -876,9 +910,7 @@ fn extract_tokens_from_request(request_line: &str) -> Result<GoogleTokens, Strin
         .ok_or("Missing access_token")?
         .to_string();
 
-    let refresh_token = token_data["refresh_token"]
-        .as_str()
-        .map(String::from);
+    let refresh_token = token_data["refresh_token"].as_str().map(String::from);
 
     let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
     let expires_at = chrono::Utc::now().timestamp() + expires_in;
@@ -926,8 +958,7 @@ fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
 
 fn load_tokens() -> Result<GoogleTokens, String> {
     let path = get_tokens_path();
-    let json = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read tokens: {}", e))?;
+    let json = fs::read_to_string(&path).map_err(|e| format!("Failed to read tokens: {}", e))?;
 
     serde_json::from_str(&json).map_err(|e| format!("Failed to parse tokens: {}", e))
 }
@@ -976,9 +1007,6 @@ fn generate_state() -> String {
 
 mod urlencoding {
     pub fn encode(input: &str) -> String {
-        percent_encoding::utf8_percent_encode(
-            input,
-            percent_encoding::NON_ALPHANUMERIC
-        ).to_string()
+        percent_encoding::utf8_percent_encode(input, percent_encoding::NON_ALPHANUMERIC).to_string()
     }
 }
