@@ -44,6 +44,9 @@ import {
   downloadUpdate,
   installUpdate,
   UpdateInfo,
+  MpvAudioTracksDetectedPayload,
+  mergeCachedSeriesAudioTracks,
+  resolveSeriesAudioPreferenceForPlayback,
 } from '@/services/api'
 import {
   Search, Loader2, Play, Film, Tv, Clock,
@@ -534,9 +537,10 @@ function App() {
   // Listen for Tauri events - depends on view to properly refresh data
   useEffect(() => {
     let unlistenProgress: UnlistenFn | undefined
-    let unlistenComplete: UnlistenFn | undefined
-    let unlistenMpvEnded: UnlistenFn | undefined
-    let unlistenLibraryUpdated: UnlistenFn | undefined
+      let unlistenComplete: UnlistenFn | undefined
+      let unlistenMpvEnded: UnlistenFn | undefined
+      let unlistenMpvAudioTracks: UnlistenFn | undefined
+      let unlistenLibraryUpdated: UnlistenFn | undefined
     let unlistenNotification: UnlistenFn | undefined
     let unlistenCloudIndexingStarted: UnlistenFn | undefined
     let unlistenZipProcessing: UnlistenFn | undefined
@@ -652,6 +656,18 @@ function App() {
         await loadContinueWatching()
       })
 
+      unlistenMpvAudioTracks = await listen<MpvAudioTracksDetectedPayload>('mpv-audio-tracks-detected', (event) => {
+        const { series_id, tracks } = event.payload
+        if (!series_id || !Array.isArray(tracks)) {
+          return
+        }
+
+        const nextTracks = [...tracks].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        )
+        mergeCachedSeriesAudioTracks(series_id, nextTracks)
+      })
+
       // Listen for real-time library updates from file watcher
       unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
         const payload = event.payload || {}
@@ -703,6 +719,7 @@ function App() {
       unlistenProgress?.()
       unlistenComplete?.()
       unlistenMpvEnded?.()
+      unlistenMpvAudioTracks?.()
       unlistenLibraryUpdated?.()
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
@@ -953,7 +970,11 @@ function App() {
     }
   }, [])
 
-  const launchPlaybackWithZipLoading = useCallback(async (item: MediaItem, resume: boolean) => {
+  const launchPlaybackWithZipLoading = useCallback(async (
+    item: MediaItem,
+    resume: boolean,
+    audioPreference?: string | null,
+  ) => {
     const loadingState = item.parent_zip_id ? buildZipPlaybackLoadingState(item, resume) : null
     let overlayVisibleSince = 0
     if (loadingState) {
@@ -963,7 +984,7 @@ function App() {
     }
 
     try {
-      await playMedia(item.id, resume)
+      await playMedia(item.id, resume, audioPreference)
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
         await waitForMinimumZipOverlayVisibility(overlayVisibleSince)
@@ -992,7 +1013,11 @@ function App() {
         setResumeDialogData({ item, resumeInfo, posterUrl })
         setResumeDialogOpen(true)
       } else {
-        await launchPlaybackWithZipLoading(item, false)
+        await launchPlaybackWithZipLoading(
+          item,
+          false,
+          resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+        )
         toast({ title: "Playing", description: `Now playing: ${item.title}` })
       }
     } catch {
@@ -1023,7 +1048,11 @@ function App() {
     const { item, resumeInfo } = resumeDialogData
     const resumeTime = resume ? resumeInfo.position : 0
     try {
-      await launchPlaybackWithZipLoading(item, resumeTime > 0)
+      await launchPlaybackWithZipLoading(
+        item,
+        resumeTime > 0,
+        resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+      )
       toast({ title: "Playing", description: `Now playing: ${item.title}` })
       setResumeDialogOpen(false)
       setResumeDialogData(null)

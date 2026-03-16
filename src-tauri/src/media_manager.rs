@@ -1,10 +1,6 @@
-use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::database::Database;

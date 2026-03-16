@@ -6,7 +6,7 @@ import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, Che
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
-    getTmdbImageUrl, refreshSeriesMetadata
+    getTmdbImageUrl, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
@@ -498,7 +498,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             toast({ title: "Metadata Refreshed", description: result });
             // Reload episodes to get updated metadata
             await loadEpisodes();
-        } catch (error) {
+        } catch {
             toast({ title: "Error", description: "Failed to refresh metadata", variant: "destructive" });
         } finally {
             setIsRefreshing(false);
@@ -533,7 +533,11 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     }
 
     const launchPlaybackWithZipLoading = useCallback(
-        async (episode: MediaItem, resume: boolean) => {
+        async (
+            episode: MediaItem,
+            resume: boolean,
+            audioPreference: string | null,
+        ) => {
             const loadingState = episode.parent_zip_id
                 ? buildZipPlaybackLoadingState(episode, resume)
                 : null;
@@ -546,7 +550,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             }
 
             try {
-                await playMedia(episode.id, resume);
+                await playMedia(episode.id, resume, audioPreference);
                 if (loadingState) {
                     await waitForMpvPlaybackStart(episode.id);
                     await waitForMinimumZipOverlayVisibility(
@@ -572,7 +576,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             } else {
                 await startPlayback(episode, 0);
             }
-        } catch (e) {
+        } catch {
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
         }
     }
@@ -586,12 +590,19 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
 
     const startPlayback = async (episode: MediaItem, resumeTime: number) => {
         try {
-            await launchPlaybackWithZipLoading(episode, resumeTime > 0);
+            await launchPlaybackWithZipLoading(
+                episode,
+                resumeTime > 0,
+                resolveSeriesAudioPreferenceForPlayback(
+                    show.id,
+                    episode.season_number,
+                ),
+            );
             toast({
                 title: "Playing",
                 description: `Now playing S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')}`
             })
-        } catch (e) {
+        } catch {
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
         }
     }
@@ -602,12 +613,19 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         // Only MPV is supported now
         if (player === 'mpv') {
             try {
-                await launchPlaybackWithZipLoading(pendingPlayEpisode, pendingResumeTime > 0);
+                await launchPlaybackWithZipLoading(
+                    pendingPlayEpisode,
+                    pendingResumeTime > 0,
+                    resolveSeriesAudioPreferenceForPlayback(
+                        show.id,
+                        pendingPlayEpisode.season_number,
+                    ),
+                );
                 toast({
                     title: "Playing",
                     description: `Now playing S${String(pendingPlayEpisode.season_number).padStart(2, '0')}E${String(pendingPlayEpisode.episode_number).padStart(2, '0')}`
                 })
-            } catch (e) {
+            } catch {
                 toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
             }
         }
