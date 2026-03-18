@@ -1,1072 +1,1454 @@
-import { invoke, convertFileSrc } from '@tauri-apps/api/tauri';
+import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
 
 // Cache for image URLs to prevent repeated IPC calls
 const imageUrlCache = new Map<string, Promise<string | null>>();
 
 export interface MediaItem {
-    id: number;
-    title: string;
-    year?: number;
-    overview?: string;
-    cast_names?: string;
-    director?: string;
-    poster_path?: string;
-    file_path?: string;
-    media_type: 'movie' | 'tvshow' | 'tvepisode';
-    duration_seconds?: number;
-    resume_position_seconds?: number;
-    last_watched?: string;
-    season_number?: number;
-    episode_number?: number;
-    progress_percent?: number;
-    parent_id?: number;
-    tmdb_id?: string;
-    episode_title?: string;
-    still_path?: string;
-    // Cloud storage fields
-    is_cloud?: boolean;
-    cloud_file_id?: string;
+  id: number;
+  title: string;
+  year?: number;
+  overview?: string;
+  cast_names?: string;
+  director?: string;
+  poster_path?: string;
+  file_path?: string;
+  media_type: "movie" | "tvshow" | "tvepisode";
+  duration_seconds?: number;
+  resume_position_seconds?: number;
+  last_watched?: string;
+  season_number?: number;
+  episode_number?: number;
+  progress_percent?: number;
+  parent_id?: number;
+  tmdb_id?: string;
+  episode_title?: string;
+  still_path?: string;
+  // Cloud storage fields
+  is_cloud?: boolean;
+  cloud_file_id?: string;
+  parent_zip_id?: string;
+  zip_entry_path?: string;
+  zip_local_header_offset?: number;
+  zip_data_start_offset?: number;
+  zip_compressed_size?: number;
+  zip_uncompressed_size?: number;
+  zip_crc32?: string;
+  zip_compression_method?: number;
+  // Frontend-only history presentation fields
+  history_group_count?: number;
+  history_group_ids?: number[];
+  history_group_latest_label?: string;
 }
 
 export interface Config {
-    mpv_path?: string;
-    vlc_path?: string;
-    ffprobe_path?: string;
-    ffmpeg_path?: string;
-    tmdb_api_key?: string;
-    // Cloud cache settings
-    cloud_cache_enabled?: boolean;
-    cloud_cache_dir?: string;
-    cloud_cache_max_mb?: number;
-    cloud_cache_expiry_hours?: number;
-    // Cloud auto-scan interval in minutes
-    cloud_scan_interval_minutes?: number;
+  mpv_path?: string;
+  vlc_path?: string;
+  ffprobe_path?: string;
+  ffmpeg_path?: string;
+  tmdb_api_key?: string;
+  // Cloud cache settings
+  cloud_cache_enabled?: boolean;
+  cloud_cache_dir?: string;
+  cloud_cache_max_mb?: number;
+  cloud_cache_expiry_hours?: number;
+  // Cloud auto-scan interval in minutes
+  cloud_scan_interval_minutes?: number;
+  zip_indexing_enabled?: boolean;
+  zip_cache_dir?: string;
+  zip_cache_max_gb?: number;
+  zip_cache_expiry_days?: number;
 }
 
 export interface ResumeInfo {
-    has_progress: boolean;
-    position: number;
-    duration: number;
-    time_str: string;
-    progress_percent: number;
+  has_progress: boolean;
+  position: number;
+  duration: number;
+  time_str: string;
+  progress_percent: number;
 }
 
 export interface StreamInfo {
-    stream_url: string;
-    file_path: string;
-    title: string;
-    poster?: string;
-    duration_seconds?: number;
-    resume_position_seconds?: number;
-    // Cloud streaming fields
-    is_cloud?: boolean;
-    access_token?: string;
+  stream_url: string;
+  file_path: string;
+  title: string;
+  poster?: string;
+  duration_seconds?: number;
+  resume_position_seconds?: number;
+  // Cloud streaming fields
+  is_cloud?: boolean;
+  access_token?: string;
+}
+
+export interface AudioTrackOption {
+  stream_index: number;
+  track_id?: number | null;
+  language_code?: string | null;
+  label: string;
+  detail?: string | null;
+  mpv_value?: string | null;
+}
+
+export interface MpvAudioTracksDetectedPayload {
+  media_id: number;
+  series_id?: number | null;
+  season_number?: number | null;
+  tracks: AudioTrackOption[];
 }
 
 export interface LibraryStats {
-    movies: number;
-    shows: number;
-    episodes: number;
+  movies: number;
+  shows: number;
+  episodes: number;
 }
 
 // TMDB search result
 export interface TmdbSearchResult {
-    id: number;
-    title?: string;
-    name?: string;
-    media_type: 'movie' | 'tv';
-    poster_path?: string;
-    backdrop_path?: string;
-    overview?: string;
-    release_date?: string;
-    first_air_date?: string;
-    vote_average?: number;
+  id: number;
+  title?: string;
+  name?: string;
+  media_type: "movie" | "tv";
+  poster_path?: string;
+  backdrop_path?: string;
+  overview?: string;
+  release_date?: string;
+  first_air_date?: string;
+  vote_average?: number;
 }
 
 export interface TmdbSearchResponse {
-    results: TmdbSearchResult[];
-    total_results: number;
+  results: TmdbSearchResult[];
+  total_results: number;
 }
 
 // Get library items (movies or TV shows)
-export const getLibrary = async (type: 'movie' | 'tv', search: string = ''): Promise<MediaItem[]> => {
-    try {
-        const items = await invoke<MediaItem[]>('get_library', {
-            mediaType: type,
-            search: search || null
-        });
-        return items;
-    } catch (error) {
-        console.error('Failed to get library:', error);
-        return [];
-    }
+export const getLibrary = async (
+  type: "movie" | "tv",
+  search: string = "",
+): Promise<MediaItem[]> => {
+  try {
+    const items = await invoke<MediaItem[]>("get_library", {
+      mediaType: type,
+      search: search || null,
+    });
+    return items;
+  } catch (error) {
+    console.error("Failed to get library:", error);
+    return [];
+  }
 };
 
 // Get library items filtered by cloud status
 export const getLibraryFiltered = async (
-    type: 'movie' | 'tv',
-    search: string = '',
-    isCloud?: boolean
+  type: "movie" | "tv",
+  search: string = "",
+  isCloud?: boolean,
 ): Promise<MediaItem[]> => {
-    try {
-        const items = await invoke<MediaItem[]>('get_library_filtered', {
-            mediaType: type,
-            search: search || null,
-            isCloud: isCloud ?? null
-        });
-        return items;
-    } catch (error) {
-        console.error('Failed to get filtered library:', error);
-        return [];
-    }
+  try {
+    const items = await invoke<MediaItem[]>("get_library_filtered", {
+      mediaType: type,
+      search: search || null,
+      isCloud: isCloud ?? null,
+    });
+    return items;
+  } catch (error) {
+    console.error("Failed to get filtered library:", error);
+    return [];
+  }
 };
 
-export const getLibraryStats = async (isCloud?: boolean): Promise<LibraryStats> => {
-    try {
-        return await invoke<LibraryStats>('get_library_stats', {
-            isCloud: isCloud ?? null
-        });
-    } catch (error) {
-        console.error('Failed to get library stats:', error);
-        return { movies: 0, shows: 0, episodes: 0 };
-    }
+export const getLibraryStats = async (
+  isCloud?: boolean,
+): Promise<LibraryStats> => {
+  try {
+    return await invoke<LibraryStats>("get_library_stats", {
+      isCloud: isCloud ?? null,
+    });
+  } catch (error) {
+    console.error("Failed to get library stats:", error);
+    return { movies: 0, shows: 0, episodes: 0 };
+  }
 };
 
 // Get watch history
 export const getWatchHistory = async (): Promise<MediaItem[]> => {
-    try {
-        const items = await invoke<MediaItem[]>('get_watch_history', { limit: 50 });
-        return items;
-    } catch (error) {
-        console.error('Failed to get watch history:', error);
-        return [];
-    }
+  try {
+    const items = await invoke<MediaItem[]>("get_watch_history", { limit: 50 });
+    return items;
+  } catch (error) {
+    console.error("Failed to get watch history:", error);
+    return [];
+  }
 };
 
 // Remove a single item from watch history
 export const removeFromWatchHistory = async (id: number): Promise<void> => {
-    try {
-        await invoke('remove_from_watch_history', { mediaId: id });
-    } catch (error) {
-        console.error('Failed to remove from watch history:', error);
-        throw error;
-    }
+  try {
+    await invoke("remove_from_watch_history", { mediaId: id });
+  } catch (error) {
+    console.error("Failed to remove from watch history:", error);
+    throw error;
+  }
 };
 
 // Clear all watch history
 export const clearAllWatchHistory = async (): Promise<void> => {
-    try {
-        await invoke('clear_all_watch_history');
-    } catch (error) {
-        console.error('Failed to clear watch history:', error);
-        throw error;
-    }
+  try {
+    await invoke("clear_all_watch_history");
+  } catch (error) {
+    console.error("Failed to clear watch history:", error);
+    throw error;
+  }
 };
 
 // Mark media as complete (100% watched)
-export const markAsComplete = async (mediaId: number): Promise<{ message: string }> => {
-    try {
-        return await invoke('mark_as_complete', { mediaId });
-    } catch (error) {
-        console.error('Failed to mark as complete:', error);
-        throw error;
-    }
+export const markAsComplete = async (
+  mediaId: number,
+): Promise<{ message: string }> => {
+  try {
+    return await invoke("mark_as_complete", { mediaId });
+  } catch (error) {
+    console.error("Failed to mark as complete:", error);
+    throw error;
+  }
 };
 
 // Clear all app data (reset to fresh state)
 export const clearAllAppData = async (): Promise<void> => {
-    try {
-        // Clear localStorage
-        localStorage.clear();
-        // Clear database and image cache via backend
-        await invoke('clear_all_app_data');
-    } catch (error) {
-        console.error('Failed to clear app data:', error);
-        throw error;
-    }
+  try {
+    // Clear localStorage
+    localStorage.clear();
+    // Clear database and image cache via backend
+    await invoke("clear_all_app_data");
+  } catch (error) {
+    console.error("Failed to clear app data:", error);
+    throw error;
+  }
 };
 
 // Cleanup response type
 export interface CleanupResponse {
-    success: boolean;
-    removed_count: number;
-    message: string;
+  success: boolean;
+  removed_count: number;
+  message: string;
 }
 
 // Cleanup orphaned metadata - removes entries and posters for missing files
 export const cleanupMissingMetadata = async (): Promise<CleanupResponse> => {
-    try {
-        return await invoke<CleanupResponse>('cleanup_missing_metadata');
-    } catch (error) {
-        console.error('Failed to cleanup missing metadata:', error);
-        throw error;
-    }
+  try {
+    return await invoke<CleanupResponse>("cleanup_missing_metadata");
+  } catch (error) {
+    console.error("Failed to cleanup missing metadata:", error);
+    throw error;
+  }
 };
 
 // Repair broken file paths - finds files in media folders and updates database
 export const repairFilePaths = async (): Promise<{ message: string }> => {
-    try {
-        return await invoke<{ message: string }>('repair_file_paths');
-    } catch (error) {
-        console.error('Failed to repair file paths:', error);
-        throw error;
-    }
+  try {
+    return await invoke<{ message: string }>("repair_file_paths");
+  } catch (error) {
+    console.error("Failed to repair file paths:", error);
+    throw error;
+  }
 };
 
 // Delete response type
 export interface DeleteResponse {
-    success: boolean;
-    deleted_count: number;
-    failed_count: number;
-    message: string;
+  success: boolean;
+  deleted_count: number;
+  failed_count: number;
+  message: string;
 }
 
 // Episode info for delete selection
 export interface EpisodeDeleteInfo {
-    id: number;
-    title: string;
-    season_number?: number;
-    episode_number?: number;
-    file_path?: string;
+  id: number;
+  title: string;
+  season_number?: number;
+  episode_number?: number;
+  file_path?: string;
+  parent_zip_id?: string;
+  delete_kind?: "episode" | "zip_archive";
+  archive_episode_count?: number;
 }
 
 // Delete media files permanently from disk
-export const deleteMediaFiles = async (mediaIds: number[]): Promise<DeleteResponse> => {
-    try {
-        const response = await invoke<DeleteResponse>('delete_media_files', { mediaIds });
-        return response;
-    } catch (error) {
-        console.error('Failed to delete media files:', error);
-        throw error;
-    }
+export const deleteMediaFiles = async (
+  mediaIds: number[],
+): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_media_files", {
+      mediaIds,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete media files:", error);
+    throw error;
+  }
 };
 
 // Get episodes for delete selection modal
-export const getEpisodesForDelete = async (seriesId: number): Promise<EpisodeDeleteInfo[]> => {
-    try {
-        const episodes = await invoke<EpisodeDeleteInfo[]>('get_episodes_for_delete', { seriesId });
-        return episodes;
-    } catch (error) {
-        console.error('Failed to get episodes for delete:', error);
-        return [];
-    }
+export const getEpisodesForDelete = async (
+  seriesId: number,
+): Promise<EpisodeDeleteInfo[]> => {
+  try {
+    const episodes = await invoke<EpisodeDeleteInfo[]>(
+      "get_episodes_for_delete",
+      { seriesId },
+    );
+    return episodes;
+  } catch (error) {
+    console.error("Failed to get episodes for delete:", error);
+    return [];
+  }
 };
 
 // Delete a TV series and optionally its files
-export const deleteSeries = async (seriesId: number, deleteFiles: boolean): Promise<DeleteResponse> => {
-    try {
-        const response = await invoke<DeleteResponse>('delete_series', { seriesId, deleteFiles });
-        return response;
-    } catch (error) {
-        console.error('Failed to delete series:', error);
-        throw error;
-    }
+export const deleteSeries = async (
+  seriesId: number,
+  deleteFiles: boolean,
+): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_series", {
+      seriesId,
+      deleteFiles,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete series:", error);
+    throw error;
+  }
 };
 
 // Delete just the cloud folder for a TV series (fallback if automatic deletion fails)
-export const deleteSeriesCloudFolder = async (seriesId: number): Promise<{ message: string }> => {
-    try {
-        const response = await invoke<{ message: string }>('delete_series_cloud_folder', { seriesId });
-        return response;
-    } catch (error) {
-        console.error('Failed to delete cloud folder:', error);
-        throw error;
-    }
+export const deleteSeriesCloudFolder = async (
+  seriesId: number,
+): Promise<{ message: string }> => {
+  try {
+    const response = await invoke<{ message: string }>(
+      "delete_series_cloud_folder",
+      { seriesId },
+    );
+    return response;
+  } catch (error) {
+    console.error("Failed to delete cloud folder:", error);
+    throw error;
+  }
 };
-
 
 // Get episodes for a TV show
 export const getEpisodes = async (seriesId: number): Promise<MediaItem[]> => {
-    try {
-        const items = await invoke<MediaItem[]>('get_episodes', { seriesId });
-        return items;
-    } catch (error) {
-        console.error('Failed to get episodes:', error);
-        return [];
-    }
+  try {
+    const items = await invoke<MediaItem[]>("get_episodes", { seriesId });
+    return items;
+  } catch (error) {
+    console.error("Failed to get episodes:", error);
+    return [];
+  }
 };
 
 // Get configuration
 export const getConfig = async (): Promise<Config> => {
-    try {
-        const config = await invoke<Config>('get_config');
-        return config;
-    } catch (error) {
-        console.error('Failed to get config:', error);
-        return {};
-    }
+  try {
+    const config = await invoke<Config>("get_config");
+    return config;
+  } catch (error) {
+    console.error("Failed to get config:", error);
+    return {};
+  }
 };
 
 // Save configuration
 export const saveConfig = async (config: Config): Promise<void> => {
-    try {
-        await invoke('save_config', { newConfig: config });
-    } catch (error) {
-        console.error('Failed to save config:', error);
-        throw error;
-    }
+  try {
+    await invoke("save_config", { newConfig: config });
+  } catch (error) {
+    console.error("Failed to save config:", error);
+    throw error;
+  }
 };
 
 // Auto-detect MPV executable on the system
 export const autoDetectMpv = async (): Promise<string | null> => {
-    try {
-        const path = await invoke<string | null>('auto_detect_mpv');
-        return path;
-    } catch (error) {
-        console.error('Failed to auto-detect MPV:', error);
-        throw error;
-    }
+  try {
+    const path = await invoke<string | null>("auto_detect_mpv");
+    return path;
+  } catch (error) {
+    console.error("Failed to auto-detect MPV:", error);
+    throw error;
+  }
 };
 
 // Get resume info for a media item
 export const getResumeInfo = async (id: number): Promise<ResumeInfo> => {
-    try {
-        const info = await invoke<ResumeInfo>('get_resume_info', { mediaId: id });
-        return info;
-    } catch (error) {
-        console.error('Failed to get resume info:', error);
-        return {
-            has_progress: false,
-            position: 0,
-            duration: 0,
-            time_str: '00:00:00',
-            progress_percent: 0
-        };
-    }
+  try {
+    const info = await invoke<ResumeInfo>("get_resume_info", { mediaId: id });
+    return info;
+  } catch (error) {
+    console.error("Failed to get resume info:", error);
+    return {
+      has_progress: false,
+      position: 0,
+      duration: 0,
+      time_str: "00:00:00",
+      progress_percent: 0,
+    };
+  }
 };
 
 // Get media info by ID
 export const getMediaInfo = async (id: number): Promise<MediaItem> => {
-    try {
-        const media = await invoke<MediaItem>('get_media_info', { mediaId: id });
-        return media;
-    } catch (error) {
-        console.error('Failed to get media info:', error);
-        throw error;
-    }
+  try {
+    const media = await invoke<MediaItem>("get_media_info", { mediaId: id });
+    return media;
+  } catch (error) {
+    console.error("Failed to get media info:", error);
+    throw error;
+  }
 };
 
 // Get stream info for built-in player
 export const getStreamUrl = async (id: number): Promise<StreamInfo> => {
-    try {
-        const info = await invoke<StreamInfo>('get_stream_info', { mediaId: id });
-        return info;
-    } catch (error) {
-        console.error('Failed to get stream info:', error);
-        throw error;
-    }
+  try {
+    const info = await invoke<StreamInfo>("get_stream_info", { mediaId: id });
+    return info;
+  } catch (error) {
+    console.error("Failed to get stream info:", error);
+    throw error;
+  }
+};
+
+export const getAudioTracks = async (
+  id: number,
+): Promise<AudioTrackOption[]> => {
+  try {
+    return await invoke<AudioTrackOption[]>("get_audio_tracks", {
+      mediaId: id,
+    });
+  } catch (error) {
+    console.error("Failed to get audio tracks:", error);
+    return [];
+  }
 };
 
 // Get stream info with automatic transcoding support for incompatible formats
-export const getStreamUrlWithTranscode = async (id: number): Promise<StreamInfo> => {
-    try {
-        const info = await invoke<StreamInfo>('get_stream_info_with_transcode', { mediaId: id });
-        return info;
-    } catch (error) {
-        console.error('Failed to get stream info with transcode:', error);
-        throw error;
-    }
+export const getStreamUrlWithTranscode = async (
+  id: number,
+): Promise<StreamInfo> => {
+  try {
+    const info = await invoke<StreamInfo>("get_stream_info_with_transcode", {
+      mediaId: id,
+    });
+    return info;
+  } catch (error) {
+    console.error("Failed to get stream info with transcode:", error);
+    throw error;
+  }
 };
 
 // Check if a file needs transcoding for HTML5 playback
-export const checkNeedsTranscode = async (filePath: string): Promise<boolean> => {
-    try {
-        return await invoke<boolean>('check_needs_transcode', { filePath });
-    } catch (error) {
-        console.error('Failed to check transcode needs:', error);
-        return false;
-    }
+export const checkNeedsTranscode = async (
+  filePath: string,
+): Promise<boolean> => {
+  try {
+    return await invoke<boolean>("check_needs_transcode", { filePath });
+  } catch (error) {
+    console.error("Failed to check transcode needs:", error);
+    return false;
+  }
 };
 
 // Transcode response type
 export interface TranscodeResponse {
-    session_id: number;
-    stream_url: string;
+  session_id: number;
+  stream_url: string;
 }
 
 // Start transcoding a video file
-export const startTranscodeStream = async (filePath: string, startTime?: number): Promise<TranscodeResponse> => {
-    try {
-        return await invoke<TranscodeResponse>('start_transcode_stream', {
-            filePath,
-            startTime: startTime || null
-        });
-    } catch (error) {
-        console.error('Failed to start transcode stream:', error);
-        throw error;
-    }
+export const startTranscodeStream = async (
+  filePath: string,
+  startTime?: number,
+): Promise<TranscodeResponse> => {
+  try {
+    return await invoke<TranscodeResponse>("start_transcode_stream", {
+      filePath,
+      startTime: startTime || null,
+    });
+  } catch (error) {
+    console.error("Failed to start transcode stream:", error);
+    throw error;
+  }
 };
 
 // Stop a transcoding session
 export const stopTranscodeStream = async (sessionId: number): Promise<void> => {
-    try {
-        await invoke('stop_transcode_stream', { sessionId });
-    } catch (error) {
-        console.error('Failed to stop transcode stream:', error);
-    }
+  try {
+    await invoke("stop_transcode_stream", { sessionId });
+  } catch (error) {
+    console.error("Failed to stop transcode stream:", error);
+  }
 };
 
 // Update watch progress
-export const updateWatchProgress = async (id: number, currentTime: number, duration: number): Promise<void> => {
-    try {
-        await invoke('update_progress', {
-            mediaId: id,
-            currentTime,
-            duration
-        });
-    } catch (error) {
-        console.warn('Failed to update progress:', error);
-    }
+export const updateWatchProgress = async (
+  id: number,
+  currentTime: number,
+  duration: number,
+): Promise<void> => {
+  try {
+    await invoke("update_progress", {
+      mediaId: id,
+      currentTime,
+      duration,
+    });
+  } catch (error) {
+    console.warn("Failed to update progress:", error);
+  }
 };
 
 // Clear progress for a media item
 export const clearProgress = async (id: number): Promise<void> => {
-    try {
-        await invoke('clear_progress', { mediaId: id });
-    } catch (error) {
-        console.error('Failed to clear progress:', error);
-        throw error;
-    }
+  try {
+    await invoke("clear_progress", { mediaId: id });
+  } catch (error) {
+    console.error("Failed to clear progress:", error);
+    throw error;
+  }
 };
 
 // Play media with MPV (external player)
-export const playMedia = async (id: number, resume: boolean): Promise<void> => {
-    try {
-        await invoke('play_with_mpv', { mediaId: id, resume });
-    } catch (error) {
-        console.error('Failed to play with MPV:', error);
-        throw error;
-    }
+export const playMedia = async (
+  id: number,
+  resume: boolean,
+  audioLanguage?: string | null,
+): Promise<void> => {
+  try {
+    await invoke("play_with_mpv", {
+      mediaId: id,
+      resume,
+      audioLanguage: audioLanguage?.trim() || null,
+    });
+  } catch (error) {
+    console.error("Failed to play with MPV:", error);
+    throw error;
+  }
 };
 
 // Play media with VLC (external player)
-export const playWithVlc = async (id: number, resume: boolean): Promise<void> => {
-    try {
-        await invoke('play_with_vlc', { mediaId: id, resume });
-    } catch (error) {
-        console.error('Failed to play with VLC:', error);
-        throw error;
-    }
+export const playWithVlc = async (
+  id: number,
+  resume: boolean,
+): Promise<void> => {
+  try {
+    await invoke("play_with_vlc", { mediaId: id, resume });
+  } catch (error) {
+    console.error("Failed to play with VLC:", error);
+    throw error;
+  }
 };
 
 // Fix match - update metadata from TMDB
-export const fixMatch = async (id: number, tmdbId: string, type: 'movie' | 'tv'): Promise<void> => {
-    try {
-        const timeoutMs = 45000;
-        await Promise.race([
-            invoke('fix_match', {
-                mediaId: id,
-                tmdbId,
-                mediaType: type
-            }),
-            new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Fix Match timed out. Please try again.')), timeoutMs);
-            })
-        ]);
-    } catch (error) {
-        console.error('Failed to fix match:', error);
-        throw error;
-    }
+export const fixMatch = async (
+  id: number,
+  tmdbId: string,
+  type: "movie" | "tv",
+): Promise<void> => {
+  try {
+    const timeoutMs = 45000;
+    await Promise.race([
+      invoke("fix_match", {
+        mediaId: id,
+        tmdbId,
+        mediaType: type,
+      }),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error("Fix Match timed out. Please try again.")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    console.error("Failed to fix match:", error);
+    throw error;
+  }
 };
 
 // Search TMDB by title
-export const searchTmdb = async (query: string): Promise<TmdbSearchResponse> => {
-    try {
-        return await invoke<TmdbSearchResponse>('search_tmdb', { query });
-    } catch (error) {
-        console.error('Failed to search TMDB:', error);
-        throw error;
-    }
+export const searchTmdb = async (
+  query: string,
+): Promise<TmdbSearchResponse> => {
+  try {
+    return await invoke<TmdbSearchResponse>("search_tmdb", { query });
+  } catch (error) {
+    console.error("Failed to search TMDB:", error);
+    throw error;
+  }
 };
 
 // Get cached image URL (converts local path to asset protocol URL)
-export const getCachedImageUrl = (imageName: string): Promise<string | null> => {
-    if (imageUrlCache.has(imageName)) {
-        return imageUrlCache.get(imageName)!;
+export const getCachedImageUrl = (
+  imageName: string,
+): Promise<string | null> => {
+  if (imageUrlCache.has(imageName)) {
+    return imageUrlCache.get(imageName)!;
+  }
+
+  const promise = (async () => {
+    try {
+      const filePath = await invoke<string>("get_cached_image_path", {
+        imageName,
+      });
+      return convertFileSrc(filePath);
+    } catch (error) {
+      console.warn("[Image] Failed to get cached image:", imageName, error);
+      return null;
     }
+  })();
 
-    const promise = (async () => {
-        try {
-            const filePath = await invoke<string>('get_cached_image_path', { imageName });
-            return convertFileSrc(filePath);
-        } catch (error) {
-            console.warn('[Image] Failed to get cached image:', imageName, error);
-            return null;
-        }
-    })();
-
-    imageUrlCache.set(imageName, promise);
-    return promise;
+  imageUrlCache.set(imageName, promise);
+  return promise;
 };
 
 // Helper to get poster URL from media item
 export const getPosterUrl = (item: MediaItem): string | null => {
-    if (!item.poster_path) return null;
+  if (!item.poster_path) return null;
 
-    // If it's already a full URL, return as-is
-    if (item.poster_path.startsWith('http') || item.poster_path.startsWith('asset://')) {
-        return item.poster_path;
-    }
+  // If it's already a full URL, return as-is
+  if (
+    item.poster_path.startsWith("http") ||
+    item.poster_path.startsWith("asset://")
+  ) {
+    return item.poster_path;
+  }
 
-    // For now, return null - components should call getCachedImageUrl() themselves
-    // since it's async and this function is synchronous
-    return null;
+  // For now, return null - components should call getCachedImageUrl() themselves
+  // since it's async and this function is synchronous
+  return null;
 };
 
 // Player preferences
-export type PlayerPreference = 'mpv' | 'vlc' | 'builtin' | 'ask';
+export type PlayerPreference = "mpv" | "vlc" | "builtin" | "ask";
 
 export const getPlayerPreference = (): PlayerPreference => {
-    return (localStorage.getItem('playerPreference') as PlayerPreference) || 'ask';
+  return (
+    (localStorage.getItem("playerPreference") as PlayerPreference) || "ask"
+  );
 };
 
 export const setPlayerPreference = (preference: PlayerPreference): void => {
-    localStorage.setItem('playerPreference', preference);
+  localStorage.setItem("playerPreference", preference);
+};
+
+const SERIES_AUDIO_PREFERENCE_KEY = "streamvault_series_audio_preferences";
+const AUDIO_TRACK_CACHE_KEY = "streamvault_detected_audio_tracks_v2";
+
+const readSeriesAudioPreferenceMap = (): Record<string, string> => {
+  try {
+    const stored = localStorage.getItem(SERIES_AUDIO_PREFERENCE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read series audio preferences:", error);
+    return {};
+  }
+};
+
+export const getSeriesAudioPreference = (
+  seriesId: number,
+): string | null => {
+  const stored = readSeriesAudioPreferenceMap()[String(seriesId)];
+  const normalized = typeof stored === "string" ? stored.trim() : "";
+  return normalized.length > 0 ? normalized : null;
+};
+
+export const setSeriesAudioPreference = (
+  seriesId: number,
+  audioLanguage: string | null,
+): void => {
+  try {
+    const preferences = readSeriesAudioPreferenceMap();
+    const normalized = audioLanguage?.trim() || "";
+
+    if (normalized) {
+      preferences[String(seriesId)] = normalized;
+    } else {
+      delete preferences[String(seriesId)];
+    }
+
+    localStorage.setItem(
+      SERIES_AUDIO_PREFERENCE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch (error) {
+    console.error("Failed to save series audio preference:", error);
+  }
+};
+
+const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> => {
+  try {
+    const stored = localStorage.getItem(AUDIO_TRACK_CACHE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read cached audio tracks:", error);
+    return {};
+  }
+};
+
+export const getCachedSeriesAudioTracks = (
+  seriesId: number,
+): AudioTrackOption[] | null => {
+  const cache = readAudioTrackCacheMap();
+  const direct = cache[String(seriesId)];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  const legacyEntry = Object.entries(cache).find(([key, value]) =>
+    key.startsWith(`${seriesId}:`) && Array.isArray(value),
+  );
+  return legacyEntry?.[1] ?? null;
+};
+
+export const setCachedSeriesAudioTracks = (
+  seriesId: number,
+  tracks: AudioTrackOption[],
+): void => {
+  try {
+    const cache = readAudioTrackCacheMap();
+    cache[String(seriesId)] = tracks;
+    localStorage.setItem(AUDIO_TRACK_CACHE_KEY, JSON.stringify(cache));
+  } catch (error) {
+    console.error("Failed to cache detected audio tracks:", error);
+  }
+};
+
+const normalizeAudioTrackText = (value?: string | null): string => {
+  return value?.trim().toLowerCase() || "";
+};
+
+const audioTrackCacheIdentity = (track: AudioTrackOption): string => {
+  const trackId = track.track_id ?? "";
+  const mpvValue = normalizeAudioTrackText(track.mpv_value);
+  const languageCode = normalizeAudioTrackText(track.language_code);
+  const label = normalizeAudioTrackText(track.label);
+  const detail = normalizeAudioTrackText(track.detail);
+
+  return [trackId, mpvValue, languageCode, label, detail].join("|");
+};
+
+const audioTracksLikelyMatch = (
+  left: AudioTrackOption,
+  right: AudioTrackOption,
+): boolean => {
+  if (
+    left.track_id != null &&
+    right.track_id != null &&
+    left.track_id === right.track_id
+  ) {
+    return true;
+  }
+
+  const leftMpvValue = normalizeAudioTrackText(left.mpv_value);
+  const rightMpvValue = normalizeAudioTrackText(right.mpv_value);
+  if (leftMpvValue && rightMpvValue && leftMpvValue === rightMpvValue) {
+    return true;
+  }
+
+  const leftLanguage = normalizeAudioTrackText(left.language_code);
+  const rightLanguage = normalizeAudioTrackText(right.language_code);
+  const leftLabel = normalizeAudioTrackText(left.label);
+  const rightLabel = normalizeAudioTrackText(right.label);
+
+  return (
+    !!leftLanguage &&
+    !!rightLanguage &&
+    leftLanguage === rightLanguage &&
+    leftLabel === rightLabel
+  );
+};
+
+export const mergeCachedSeriesAudioTracks = (
+  seriesId: number,
+  tracks: AudioTrackOption[],
+): void => {
+  const existingTracks = getCachedSeriesAudioTracks(seriesId) ?? [];
+  if (existingTracks.length === 0) {
+    setCachedSeriesAudioTracks(seriesId, tracks);
+    return;
+  }
+
+  const merged = [...existingTracks];
+
+  for (const incomingTrack of tracks) {
+    const existingIndex = merged.findIndex((cachedTrack) =>
+      audioTracksLikelyMatch(cachedTrack, incomingTrack),
+    );
+
+    if (existingIndex >= 0) {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...incomingTrack,
+      };
+      continue;
+    }
+
+    merged.push(incomingTrack);
+  }
+
+  const deduped = merged.filter((track, index, items) => {
+    const identity = audioTrackCacheIdentity(track);
+    return items.findIndex((candidate) =>
+      audioTrackCacheIdentity(candidate) === identity,
+    ) === index;
+  });
+
+  deduped.sort((left, right) => left.label.localeCompare(right.label));
+  setCachedSeriesAudioTracks(seriesId, deduped);
+};
+
+const matchesAudioTrackPreference = (
+  track: AudioTrackOption,
+  storedPreference: string,
+): boolean => {
+  const normalizedPreference = storedPreference.trim().toLowerCase();
+  if (!normalizedPreference) {
+    return false;
+  }
+
+  const preferenceParts = normalizedPreference
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const languageCode = track.language_code?.trim().toLowerCase();
+  const label = track.label.trim().toLowerCase();
+  const detail = track.detail?.trim().toLowerCase();
+  const mpvValue = track.mpv_value?.trim().toLowerCase();
+
+  return (
+    mpvValue === normalizedPreference ||
+    languageCode === normalizedPreference ||
+    label === normalizedPreference ||
+    detail === normalizedPreference ||
+    (!!languageCode && preferenceParts.includes(languageCode)) ||
+    preferenceParts.includes(label)
+  );
+};
+
+export const resolveSeriesAudioPreferenceForPlayback = (
+  seriesId: number | null | undefined,
+  _seasonNumber?: number | null,
+): string | null => {
+  if (!seriesId) {
+    return null;
+  }
+
+  const storedPreference = getSeriesAudioPreference(seriesId);
+  if (!storedPreference) {
+    return null;
+  }
+
+  const cachedTracks = getCachedSeriesAudioTracks(seriesId);
+  if (!cachedTracks || cachedTracks.length === 0) {
+    return storedPreference;
+  }
+
+  const matchedTrack = cachedTracks.find((track) =>
+    matchesAudioTrackPreference(track, storedPreference),
+  );
+
+  return matchedTrack?.mpv_value?.trim() || storedPreference;
 };
 
 // MPV Status types
 export interface MpvStatus {
-    is_playing: boolean;
-    media_id: number;
-    title?: string;
-    position?: number;
-    duration?: number;
-    paused?: boolean;
+  is_playing: boolean;
+  media_id: number;
+  title?: string;
+  position?: number;
+  duration?: number;
+  paused?: boolean;
 }
 
 export interface MpvSession {
-    media_id: number;
-    pid: number;
-    title: string;
-    start_time: number;
+  media_id: number;
+  pid: number;
+  title: string;
+  start_time: number;
 }
 
 // Get MPV playback status for a media item
 export const getMpvStatus = async (mediaId: number): Promise<MpvStatus> => {
-    try {
-        const status = await invoke<MpvStatus>('get_mpv_status', { mediaId });
-        return status;
-    } catch (error) {
-        console.error('Failed to get MPV status:', error);
-        return { is_playing: false, media_id: mediaId };
-    }
+  try {
+    const status = await invoke<MpvStatus>("get_mpv_status", { mediaId });
+    return status;
+  } catch (error) {
+    console.error("Failed to get MPV status:", error);
+    return { is_playing: false, media_id: mediaId };
+  }
 };
 
 // Get all active MPV sessions
 export const getActiveMpvSessions = async (): Promise<MpvSession[]> => {
-    try {
-        const sessions = await invoke<MpvSession[]>('get_active_mpv_sessions');
-        return sessions;
-    } catch (error) {
-        console.error('Failed to get active MPV sessions:', error);
-        return [];
-    }
+  try {
+    const sessions = await invoke<MpvSession[]>("get_active_mpv_sessions");
+    return sessions;
+  } catch (error) {
+    console.error("Failed to get active MPV sessions:", error);
+    return [];
+  }
 };
 
 // ==================== TMDB EPISODE METADATA ====================
 
 // Episode info from TMDB with rich metadata
 export interface TmdbEpisodeInfo {
-    episode_number: number;
-    name: string;
-    overview?: string;
-    still_path?: string;
-    // Cloud storage fields
-    is_cloud?: boolean;
-    cloud_file_id?: string;
-    air_date?: string;
-    runtime?: number;
-    vote_average?: number;
+  episode_number: number;
+  name: string;
+  overview?: string;
+  still_path?: string;
+  // Cloud storage fields
+  is_cloud?: boolean;
+  cloud_file_id?: string;
+  air_date?: string;
+  runtime?: number;
+  vote_average?: number;
 }
 
 // Season details with episodes from TMDB
 export interface TmdbSeasonDetails {
-    season_number: number;
-    name: string;
-    episodes: TmdbEpisodeInfo[];
+  season_number: number;
+  name: string;
+  episodes: TmdbEpisodeInfo[];
 }
 
 // TV show details with seasons from TMDB
 export interface TmdbShowDetails {
-    id: number;
+  id: number;
+  name: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  overview?: string;
+  number_of_seasons: number;
+  seasons: {
+    season_number: number;
     name: string;
-    poster_path?: string;
-    backdrop_path?: string;
+    episode_count: number;
     overview?: string;
-    number_of_seasons: number;
-    seasons: {
-        season_number: number;
-        name: string;
-        episode_count: number;
-        overview?: string;
-        poster_path?: string;
-        air_date?: string;
-    }[];
-    creator?: string;
+    poster_path?: string;
+    air_date?: string;
+  }[];
+  creator?: string;
 }
 
 export interface TmdbMovieDetails {
-    id: number;
-    title: string;
-    poster_path?: string;
-    backdrop_path?: string;
-    overview?: string;
-    release_date?: string;
-    runtime?: number;
-    director?: string;
+  id: number;
+  title: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  overview?: string;
+  release_date?: string;
+  runtime?: number;
+  director?: string;
 }
 
-export const getMovieDetails = async (movieId: number): Promise<TmdbMovieDetails | null> => {
-    try {
-        const details = await invoke<TmdbMovieDetails>('get_movie_details', { movieId });
-        return details;
-    } catch (error) {
-        console.error('Failed to get movie details:', error);
-        return null;
-    }
+export const getMovieDetails = async (
+  movieId: number,
+): Promise<TmdbMovieDetails | null> => {
+  try {
+    const details = await invoke<TmdbMovieDetails>("get_movie_details", {
+      movieId,
+    });
+    return details;
+  } catch (error) {
+    console.error("Failed to get movie details:", error);
+    return null;
+  }
 };
 
 // Get TV show details including seasons from TMDB
-export const getTvDetails = async (tvId: number): Promise<TmdbShowDetails | null> => {
-    try {
-        const details = await invoke<TmdbShowDetails>('get_tv_details', { tvId });
-        return details;
-    } catch (error) {
-        console.error('Failed to get TV details:', error);
-        return null;
-    }
+export const getTvDetails = async (
+  tvId: number,
+): Promise<TmdbShowDetails | null> => {
+  try {
+    const details = await invoke<TmdbShowDetails>("get_tv_details", { tvId });
+    return details;
+  } catch (error) {
+    console.error("Failed to get TV details:", error);
+    return null;
+  }
 };
 
 // Get episodes for a specific season from TMDB (with full metadata)
-export const getTvSeasonEpisodes = async (tvId: number, seasonNumber: number): Promise<TmdbSeasonDetails | null> => {
-    try {
-        const seasonDetails = await invoke<TmdbSeasonDetails>('get_tv_season_episodes', { tvId, seasonNumber });
-        return seasonDetails;
-    } catch (error) {
-        console.error('Failed to get season episodes:', error);
-        return null;
-    }
+export const getTvSeasonEpisodes = async (
+  tvId: number,
+  seasonNumber: number,
+): Promise<TmdbSeasonDetails | null> => {
+  try {
+    const seasonDetails = await invoke<TmdbSeasonDetails>(
+      "get_tv_season_episodes",
+      { tvId, seasonNumber },
+    );
+    return seasonDetails;
+  } catch (error) {
+    console.error("Failed to get season episodes:", error);
+    return null;
+  }
 };
 
 // Force refresh episode metadata for a TV series (re-downloads images)
-export const refreshSeriesMetadata = async (tvId: number, seriesTitle: string): Promise<string> => {
-    try {
-        const result = await invoke<string>('refresh_series_metadata', { tvId, seriesTitle });
-        return result;
-    } catch (error) {
-        console.error('Failed to refresh series metadata:', error);
-        throw error;
-    }
+export const refreshSeriesMetadata = async (
+  tvId: number,
+  seriesTitle: string,
+): Promise<string> => {
+  try {
+    const result = await invoke<string>("refresh_series_metadata", {
+      tvId,
+      seriesTitle,
+    });
+    return result;
+  } catch (error) {
+    console.error("Failed to refresh series metadata:", error);
+    throw error;
+  }
 };
 
 // TMDB image URL helper
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
+const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
-export const getTmdbImageUrl = (path: string | undefined, size: 'w92' | 'w185' | 'w300' | 'w500' | 'original' = 'w300'): string | null => {
-    if (!path) return null;
-    return `${TMDB_IMAGE_BASE}/${size}${path}`;
+export const getTmdbImageUrl = (
+  path: string | undefined,
+  size: "w92" | "w185" | "w300" | "w500" | "original" = "w300",
+): string | null => {
+  if (!path) return null;
+  return `${TMDB_IMAGE_BASE}/${size}${path}`;
 };
 
 // ==================== ONBOARDING ====================
 
-const ONBOARDING_KEY = 'streamvault_onboarding_completed';
-const ONBOARDING_VERSION = '1'; // Increment to show onboarding again after major updates
+const ONBOARDING_KEY = "streamvault_onboarding_completed";
+const ONBOARDING_VERSION = "1"; // Increment to show onboarding again after major updates
 
 // Check if user has completed onboarding
 export const hasCompletedOnboarding = (): boolean => {
-    try {
-        const completed = localStorage.getItem(ONBOARDING_KEY);
-        return completed === ONBOARDING_VERSION;
-    } catch {
-        return false;
-    }
+  try {
+    const completed = localStorage.getItem(ONBOARDING_KEY);
+    return completed === ONBOARDING_VERSION;
+  } catch {
+    return false;
+  }
 };
 
 // Mark onboarding as complete
 export const completeOnboarding = (): void => {
-    try {
-        localStorage.setItem(ONBOARDING_KEY, ONBOARDING_VERSION);
-    } catch (error) {
-        console.error('Failed to save onboarding state:', error);
-    }
+  try {
+    localStorage.setItem(ONBOARDING_KEY, ONBOARDING_VERSION);
+  } catch (error) {
+    console.error("Failed to save onboarding state:", error);
+  }
 };
 
 // Reset onboarding (for testing or after major updates)
 export const resetOnboarding = (): void => {
-    try {
-        localStorage.removeItem(ONBOARDING_KEY);
-    } catch (error) {
-        console.error('Failed to reset onboarding:', error);
-    }
+  try {
+    localStorage.removeItem(ONBOARDING_KEY);
+  } catch (error) {
+    console.error("Failed to reset onboarding:", error);
+  }
 };
 
 // ==================== TAB VISIBILITY ====================
 
-const TAB_VISIBILITY_KEY = 'streamvault_tab_visibility';
+const TAB_VISIBILITY_KEY = "streamvault_tab_visibility";
 
 export interface TabVisibility {
-    showLocal: boolean;
-    showCloud: boolean;
+  showLocal: boolean;
+  showCloud: boolean;
 }
 
 // Get tab visibility settings
 export const getTabVisibility = (): TabVisibility => {
-    try {
-        const stored = localStorage.getItem(TAB_VISIBILITY_KEY);
-        if (stored) {
-            return JSON.parse(stored);
-        }
-    } catch (error) {
-        console.error('Failed to get tab visibility:', error);
+  try {
+    const stored = localStorage.getItem(TAB_VISIBILITY_KEY);
+    if (stored) {
+      return JSON.parse(stored);
     }
-    // Default: cloud-only mode (no local tab)
-    return { showLocal: false, showCloud: true };
+  } catch (error) {
+    console.error("Failed to get tab visibility:", error);
+  }
+  // Default: cloud-only mode (no local tab)
+  return { showLocal: false, showCloud: true };
 };
 
 // Save tab visibility settings
 export const setTabVisibility = (visibility: TabVisibility): void => {
-    try {
-        localStorage.setItem(TAB_VISIBILITY_KEY, JSON.stringify(visibility));
-    } catch (error) {
-        console.error('Failed to save tab visibility:', error);
-    }
+  try {
+    localStorage.setItem(TAB_VISIBILITY_KEY, JSON.stringify(visibility));
+  } catch (error) {
+    console.error("Failed to save tab visibility:", error);
+  }
 };
 
 // ==================== BETA FEATURES ====================
 
-const BETA_FEATURES_KEY = 'streamvault_beta_features';
+const BETA_FEATURES_KEY = "streamvault_beta_features";
 
 export interface BetaFeatures {
-    enabled: boolean;
+  enabled: boolean;
 }
 
 // Check if beta features are enabled
 export const isBetaEnabled = (): boolean => {
-    try {
-        const stored = localStorage.getItem(BETA_FEATURES_KEY);
-        if (stored) {
-            const parsed = JSON.parse(stored) as BetaFeatures;
-            return parsed.enabled === true;
-        }
-    } catch (error) {
-        console.error('Failed to get beta features state:', error);
+  try {
+    const stored = localStorage.getItem(BETA_FEATURES_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as BetaFeatures;
+      return parsed.enabled === true;
     }
-    return false;
+  } catch (error) {
+    console.error("Failed to get beta features state:", error);
+  }
+  return false;
 };
 
 // Enable or disable beta features
 export const setBetaEnabled = (enabled: boolean): void => {
-    try {
-        localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
-    } catch (error) {
-        console.error('Failed to save beta features state:', error);
-    }
+  try {
+    localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
+  } catch (error) {
+    console.error("Failed to save beta features state:", error);
+  }
 };
 
 // ==================== CLOUD CACHE ====================
 
 export interface CloudCacheInfo {
-    enabled: boolean;
-    cache_dir: string | null;
-    total_size_bytes: number;
-    total_size_mb: number;
-    file_count: number;
-    max_size_mb: number;
-    expiry_hours: number;
+  enabled: boolean;
+  cache_dir: string | null;
+  total_size_bytes: number;
+  total_size_mb: number;
+  file_count: number;
+  max_size_mb: number;
+  expiry_hours: number;
 }
 
 // Get cloud cache info and statistics
 export const getCloudCacheInfo = async (): Promise<CloudCacheInfo> => {
-    try {
-        return await invoke<CloudCacheInfo>('get_cloud_cache_info');
-    } catch (error) {
-        console.error('Failed to get cloud cache info:', error);
-        return {
-            enabled: false,
-            cache_dir: null,
-            total_size_bytes: 0,
-            total_size_mb: 0,
-            file_count: 0,
-            max_size_mb: 1024,
-            expiry_hours: 24,
-        };
-    }
+  try {
+    return await invoke<CloudCacheInfo>("get_cloud_cache_info");
+  } catch (error) {
+    console.error("Failed to get cloud cache info:", error);
+    return {
+      enabled: false,
+      cache_dir: null,
+      total_size_bytes: 0,
+      total_size_mb: 0,
+      file_count: 0,
+      max_size_mb: 1024,
+      expiry_hours: 24,
+    };
+  }
 };
 
 // Clean up expired cache files
 export const cleanupCloudCache = async (): Promise<{ message: string }> => {
-    try {
-        return await invoke<{ message: string }>('cleanup_cloud_cache');
-    } catch (error) {
-        console.error('Failed to cleanup cloud cache:', error);
-        throw error;
-    }
+  try {
+    return await invoke<{ message: string }>("cleanup_cloud_cache");
+  } catch (error) {
+    console.error("Failed to cleanup cloud cache:", error);
+    throw error;
+  }
 };
 
 // Clear all cloud cache
 export const clearCloudCache = async (): Promise<{ message: string }> => {
-    try {
-        return await invoke<{ message: string }>('clear_cloud_cache');
-    } catch (error) {
-        console.error('Failed to clear cloud cache:', error);
-        throw error;
-    }
+  try {
+    return await invoke<{ message: string }>("clear_cloud_cache");
+  } catch (error) {
+    console.error("Failed to clear cloud cache:", error);
+    throw error;
+  }
 };
 
 // ==================== GOOGLE DRIVE ====================
 
 export interface DriveAccountInfo {
-    email: string;
-    display_name: string | null;
-    photo_url: string | null;
-    storage_used: number | null;
-    storage_limit: number | null;
+  email: string;
+  display_name: string | null;
+  photo_url: string | null;
+  storage_used: number | null;
+  storage_limit: number | null;
 }
 
 // Check if connected to Google Drive
 export const isGdriveConnected = async (): Promise<boolean> => {
-    try {
-        return await invoke<boolean>('gdrive_is_connected');
-    } catch (error) {
-        console.error('Failed to check GDrive connection:', error);
-        return false;
-    }
+  try {
+    return await invoke<boolean>("gdrive_is_connected");
+  } catch (error) {
+    console.error("Failed to check GDrive connection:", error);
+    return false;
+  }
 };
 
 // Get Google Drive account info including storage stats
-export const getGdriveAccountInfo = async (): Promise<DriveAccountInfo | null> => {
+export const getGdriveAccountInfo =
+  async (): Promise<DriveAccountInfo | null> => {
     try {
-        return await invoke<DriveAccountInfo>('gdrive_get_account_info');
+      return await invoke<DriveAccountInfo>("gdrive_get_account_info");
     } catch (error) {
-        console.error('Failed to get GDrive account info:', error);
-        return null;
+      console.error("Failed to get GDrive account info:", error);
+      return null;
     }
-};
+  };
 
 // ==================== AUTO-UPDATE ====================
 
 export interface UpdateInfo {
-    available: boolean;
-    current_version: string;
-    latest_version: string;
-    release_notes: string;
-    download_url: string | null;
-    published_at: string | null;
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_notes: string;
+  download_url: string | null;
+  published_at: string | null;
 }
 
 // Check for updates from GitHub releases
 export const checkForUpdates = async (): Promise<UpdateInfo> => {
-    try {
-        return await invoke<UpdateInfo>('check_for_updates');
-    } catch (error) {
-        console.error('Failed to check for updates:', error);
-        throw error;
-    }
+  try {
+    return await invoke<UpdateInfo>("check_for_updates");
+  } catch (error) {
+    console.error("Failed to check for updates:", error);
+    throw error;
+  }
 };
 
 // Download update to temp directory (returns installer path)
 export const downloadUpdate = async (url: string): Promise<string> => {
-    try {
-        return await invoke<string>('download_update', { url });
-    } catch (error) {
-        console.error('Failed to download update:', error);
-        throw error;
-    }
+  try {
+    return await invoke<string>("download_update", { url });
+  } catch (error) {
+    console.error("Failed to download update:", error);
+    throw error;
+  }
 };
 
 // Install update and restart app
 export const installUpdate = async (installerPath: string): Promise<void> => {
-    try {
-        await invoke('install_update', { installerPath });
-    } catch (error) {
-        console.error('Failed to install update:', error);
-        throw error;
-    }
+  try {
+    await invoke("install_update", { installerPath });
+  } catch (error) {
+    console.error("Failed to install update:", error);
+    throw error;
+  }
 };
 
 // Get current app version
 export const getAppVersion = async (): Promise<string> => {
-    try {
-        return await invoke<string>('get_app_version');
-    } catch (error) {
-        console.error('Failed to get app version:', error);
-        return '0.0.0';
-    }
+  try {
+    return await invoke<string>("get_app_version");
+  } catch (error) {
+    console.error("Failed to get app version:", error);
+    return "0.0.0";
+  }
 };
 
 // ==================== WATCH TOGETHER ====================
 
 export interface WatchParticipant {
-    id: string;
-    nickname: string;
-    is_host: boolean;
-    is_ready: boolean;
-    duration?: number;
+  id: string;
+  nickname: string;
+  is_host: boolean;
+  is_ready: boolean;
+  duration?: number;
 }
 
 export interface WatchRoom {
-    code: string;
-    host_id: string;
-    media_title: string;
-    media_id: number;
-    participants: WatchParticipant[];
-    is_playing: boolean;
-    state?: string;
-    current_position: number;
+  code: string;
+  host_id: string;
+  media_title: string;
+  media_id: number;
+  participants: WatchParticipant[];
+  is_playing: boolean;
+  state?: string;
+  current_position: number;
 }
 
 export interface SyncCommand {
-    action: 'play' | 'pause' | 'seek';
-    position: number;
-    from?: string;
-    timestamp?: number;
+  action: "play" | "pause" | "seek";
+  position: number;
+  from?: string;
+  timestamp?: number;
 }
 
 export interface WatchEvent {
-    type: 'room_updated' | 'sync_command' | 'participant_changed' | 'playback_started' | 'state_update' | 'error' | 'disconnected';
-    room?: WatchRoom;
-    command?: SyncCommand;
-    position?: number;
-    message?: string;
+  type:
+    | "room_updated"
+    | "sync_command"
+    | "participant_changed"
+    | "playback_started"
+    | "state_update"
+    | "error"
+    | "disconnected";
+  room?: WatchRoom;
+  command?: SyncCommand;
+  position?: number;
+  message?: string;
 }
 
 // Create a Watch Together room
 export const wtCreateRoom = async (
-    mediaId: number,
-    title: string,
-    mediaMatchKey: string | undefined,
-    nickname: string
+  mediaId: number,
+  title: string,
+  mediaMatchKey: string | undefined,
+  nickname: string,
 ): Promise<WatchRoom> => {
-    try {
-        return await invoke<WatchRoom>('wt_create_room', {
-            mediaId,
-            title,
-            mediaMatchKey: mediaMatchKey ?? null,
-            nickname
-        });
-    } catch (error) {
-        console.error('Failed to create watch room:', error);
-        throw error;
-    }
+  try {
+    return await invoke<WatchRoom>("wt_create_room", {
+      mediaId,
+      title,
+      mediaMatchKey: mediaMatchKey ?? null,
+      nickname,
+    });
+  } catch (error) {
+    console.error("Failed to create watch room:", error);
+    throw error;
+  }
 };
 
 // Join an existing Watch Together room
 export const wtJoinRoom = async (
-    roomCode: string,
-    mediaId: number,
-    mediaTitle: string,
-    mediaMatchKey: string | undefined,
-    nickname: string
+  roomCode: string,
+  mediaId: number,
+  mediaTitle: string,
+  mediaMatchKey: string | undefined,
+  nickname: string,
 ): Promise<WatchRoom> => {
-    try {
-        return await invoke<WatchRoom>('wt_join_room', {
-            roomCode,
-            mediaId,
-            mediaTitle,
-            mediaMatchKey: mediaMatchKey ?? null,
-            nickname
-        });
-    } catch (error) {
-        console.error('Failed to join watch room:', error);
-        throw error;
-    }
+  try {
+    return await invoke<WatchRoom>("wt_join_room", {
+      roomCode,
+      mediaId,
+      mediaTitle,
+      mediaMatchKey: mediaMatchKey ?? null,
+      nickname,
+    });
+  } catch (error) {
+    console.error("Failed to join watch room:", error);
+    throw error;
+  }
 };
 
 // Leave the current Watch Together room
 export const wtLeaveRoom = async (): Promise<void> => {
-    try {
-        await invoke('wt_leave_room');
-    } catch (error) {
-        console.error('Failed to leave watch room:', error);
-        throw error;
-    }
+  try {
+    await invoke("wt_leave_room");
+  } catch (error) {
+    console.error("Failed to leave watch room:", error);
+    throw error;
+  }
 };
 
 // Set ready status with video duration
 export const wtSetReady = async (duration: number): Promise<void> => {
-    try {
-        await invoke('wt_set_ready', { duration });
-    } catch (error) {
-        console.error('Failed to set ready status:', error);
-        throw error;
-    }
+  try {
+    await invoke("wt_set_ready", { duration });
+  } catch (error) {
+    console.error("Failed to set ready status:", error);
+    throw error;
+  }
 };
 
 // Start playback (host only)
 export const wtStartPlayback = async (): Promise<void> => {
-    try {
-        await invoke('wt_start_playback');
-    } catch (error) {
-        console.error('Failed to start playback:', error);
-        throw error;
-    }
+  try {
+    await invoke("wt_start_playback");
+  } catch (error) {
+    console.error("Failed to start playback:", error);
+    throw error;
+  }
 };
 
 // Send a sync command
-export const wtSendSync = async (action: string, position: number): Promise<void> => {
-    try {
-        await invoke('wt_send_sync', { action, position });
-    } catch (error) {
-        console.error('Failed to send sync:', error);
-        throw error;
-    }
+export const wtSendSync = async (
+  action: string,
+  position: number,
+): Promise<void> => {
+  try {
+    await invoke("wt_send_sync", { action, position });
+  } catch (error) {
+    console.error("Failed to send sync:", error);
+    throw error;
+  }
 };
 
 // Get current room state
 export const wtGetRoomState = async (): Promise<WatchRoom | null> => {
-    try {
-        return await invoke<WatchRoom | null>('wt_get_room_state');
-    } catch (error) {
-        console.error('Failed to get room state:', error);
-        return null;
-    }
+  try {
+    return await invoke<WatchRoom | null>("wt_get_room_state");
+  } catch (error) {
+    console.error("Failed to get room state:", error);
+    return null;
+  }
 };
 
 // Check if Watch Together session is active
 export const wtIsActive = async (): Promise<boolean> => {
-    try {
-        return await invoke<boolean>('wt_is_active');
-    } catch (error) {
-        console.error('Failed to check watch session:', error);
-        return false;
-    }
+  try {
+    return await invoke<boolean>("wt_is_active");
+  } catch (error) {
+    console.error("Failed to check watch session:", error);
+    return false;
+  }
 };
 
 // Get local client ID for the current Watch Together session
 export const wtGetClientId = async (): Promise<string> => {
-    try {
-        const clientId = await invoke<string | null>('wt_get_client_id');
-        return clientId || '';
-    } catch (error) {
-        console.error('Failed to get WT client ID:', error);
-        return '';
-    }
+  try {
+    const clientId = await invoke<string | null>("wt_get_client_id");
+    return clientId || "";
+  } catch (error) {
+    console.error("Failed to get WT client ID:", error);
+    return "";
+  }
 };
 
 // Launch MPV in Watch Together sync mode
 export const wtLaunchMpv = async (
-    mediaId: number,
-    sessionId: string,
-    startPosition: number = 0
+  mediaId: number,
+  sessionId: string,
+  startPosition: number = 0,
 ): Promise<number> => {
-    try {
-        return await invoke<number>('wt_launch_mpv', { mediaId, sessionId, startPosition });
-    } catch (error) {
-        console.error('Failed to launch MPV for watch together:', error);
-        throw error;
-    }
+  try {
+    return await invoke<number>("wt_launch_mpv", {
+      mediaId,
+      sessionId,
+      startPosition,
+    });
+  } catch (error) {
+    console.error("Failed to launch MPV for watch together:", error);
+    throw error;
+  }
 };
 
 // Send a command to MPV in Watch Together mode
 export const wtSendMpvCommand = async (
-    sessionId: string,
-    action: string,
-    position: number
+  sessionId: string,
+  action: string,
+  position: number,
 ): Promise<void> => {
-    try {
-        await invoke('wt_send_mpv_command', { sessionId, action, position });
-    } catch (error) {
-        console.error('Failed to send MPV command:', error);
-        throw error;
-    }
+  try {
+    await invoke("wt_send_mpv_command", { sessionId, action, position });
+  } catch (error) {
+    console.error("Failed to send MPV command:", error);
+    throw error;
+  }
 };

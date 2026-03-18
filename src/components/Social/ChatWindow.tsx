@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   getChatHistory,
+  markChatMessagesRead,
   sendChatMessage,
   sendTypingIndicator,
   onSocialEvent,
@@ -44,12 +45,21 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
     }
   }, []);
 
+  const markConversationRead = useCallback(async () => {
+    try {
+      await markChatMessagesRead(friend.id);
+    } catch (error) {
+      console.warn('Failed to mark chat messages as read:', error);
+    }
+  }, [friend.id]);
+
   const loadChatHistory = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const history = await getChatHistory(friend.id);
       setMessages(history);
+      await markConversationRead();
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error('Failed to load chat history:', error);
@@ -57,7 +67,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
     } finally {
       setLoading(false);
     }
-  }, [friend.id, scrollToBottom]);
+  }, [friend.id, markConversationRead, scrollToBottom]);
 
   useEffect(() => {
     void loadChatHistory();
@@ -65,6 +75,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
     const unsubMessage = onSocialEvent('chat_message', (data) => {
       if (data.fromUserId === friend.id) {
         appendMessage(data.message as ChatMessage);
+        void markConversationRead();
         scrollToBottom();
       }
     });
@@ -94,7 +105,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [friend.id, appendMessage, loadChatHistory, scrollToBottom]);
+  }, [friend.id, appendMessage, loadChatHistory, markConversationRead, scrollToBottom]);
 
   const handleSend = async () => {
     if (!newMessage.trim() || sending) return;

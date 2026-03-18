@@ -13,7 +13,8 @@ import {
   MarkCompleteDialog,
   WatchTogetherBanner,
   LoginScreen,
-  ContentDetailsModal
+  ContentDetailsModal,
+  ZipPlaybackLoadingOverlay,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -22,6 +23,7 @@ import {
   getLibraryStats,
   getWatchHistory,
   removeFromWatchHistory,
+  clearAllWatchHistory,
   deleteMediaFiles,
   MediaItem,
   WatchRoom,
@@ -42,17 +44,27 @@ import {
   downloadUpdate,
   installUpdate,
   UpdateInfo,
+  MpvAudioTracksDetectedPayload,
+  mergeCachedSeriesAudioTracks,
+  resolveSeriesAudioPreferenceForPlayback,
 } from '@/services/api'
 import {
   Search, Loader2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
   TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, X, Cloud, RefreshCw, Minus, Bot, Download,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, Archive
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 import { sortMediaItems } from '@/utils/sorting'
+import {
+  buildZipPlaybackLoadingState,
+  type ZipPlaybackLoadingState,
+  waitForMinimumZipOverlayVisibility,
+  waitForMpvPlaybackStart,
+  waitForZipLoadingOverlayPaint,
+} from '@/utils/zipPlayback'
 import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 
 // Lazy load heavy components
@@ -94,6 +106,22 @@ interface MpvPlaybackEndedPayload {
   completed: boolean
 }
 
+interface ZipProcessingStatusPayload {
+  phase: 'detected' | 'complete' | 'error'
+  archiveCount: number
+  archiveName?: string | null
+  episodesIndexed?: number | null
+  message: string
+}
+
+interface ZipProcessingPopupState {
+  phase: 'detected' | 'complete' | 'error'
+  archiveCount: number
+  archiveName?: string | null
+  episodesIndexed?: number | null
+  message: string
+}
+
 type ViewMode = 'grid' | 'list'
 type SortOption = 'title' | 'year' | 'recent' | 'progress'
 type MediaSubTab = 'movies' | 'tv'
@@ -108,12 +136,74 @@ const LoadingFallback = () => (
   </div>
 )
 
+const formatHistoryEpisodeLabel = (item: MediaItem) => {
+  const parts: string[] = []
+
+  if (item.season_number && item.episode_number) {
+    parts.push(`S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}`)
+  }
+
+  const episodeTitle = item.episode_title?.trim()
+  if (episodeTitle && episodeTitle.toLowerCase() !== item.title.trim().toLowerCase()) {
+    parts.push(episodeTitle)
+  }
+
+  return parts.length > 0 ? `Latest: ${parts.join(' · ')}` : 'Latest episode'
+}
+
+const getHistoryGroupKey = (item: MediaItem) => {
+  if (item.media_type !== 'tvepisode') {
+    return `media:${item.id}`
+  }
+
+  const seriesKey = item.parent_id ?? item.tmdb_id ?? item.title.trim().toLowerCase()
+  return `series:${seriesKey}`
+}
+
+const buildGroupedHistoryItems = (historyItems: MediaItem[]) => {
+  const grouped = new Map<string, MediaItem>()
+  const order: string[] = []
+
+  for (const item of historyItems) {
+    const key = getHistoryGroupKey(item)
+
+    if (item.media_type !== 'tvepisode') {
+      grouped.set(key, item)
+      order.push(key)
+      continue
+    }
+
+    const existing = grouped.get(key)
+    if (!existing) {
+      grouped.set(key, {
+        ...item,
+        history_group_count: 1,
+        history_group_ids: [item.id],
+        history_group_latest_label: formatHistoryEpisodeLabel(item),
+      })
+      order.push(key)
+      continue
+    }
+
+    grouped.set(key, {
+      ...existing,
+      history_group_count: (existing.history_group_count ?? 1) + 1,
+      history_group_ids: [...(existing.history_group_ids ?? [existing.id]), item.id],
+    })
+  }
+
+  return order
+    .map((key) => grouped.get(key))
+    .filter((item): item is MediaItem => Boolean(item))
+}
+
 function App() {
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
+  const [isClearingHistory, setIsClearingHistory] = useState(false)
 
   // Sub-tabs for Cloud view
   const [cloudSubTab, setCloudSubTab] = useState<MediaSubTab>('movies')
@@ -133,6 +223,12 @@ function App() {
   const sortedItems = useMemo(() => {
     return sortMediaItems(items, sortBy)
   }, [items, sortBy])
+  const historyItems = useMemo(() => buildGroupedHistoryItems(items), [items])
+  const groupedHistorySeriesCount = useMemo(
+    () => historyItems.filter((item) => (item.history_group_count ?? 0) > 1).length,
+    [historyItems]
+  )
+  const hiddenHistoryEntriesCount = Math.max(0, items.length - historyItems.length)
 
   const refreshWindowState = useCallback(async () => {
     setIsMaximized(await appWindow.isMaximized())
@@ -171,6 +267,14 @@ function App() {
     }
   }, [viewMode])
 
+  useEffect(() => {
+    return () => {
+      if (zipProcessingPopupTimeoutRef.current) {
+        window.clearTimeout(zipProcessingPopupTimeoutRef.current)
+      }
+    }
+  }, [])
+
   // Home search state
   const [homeSearchQuery, setHomeSearchQuery] = useState('')
   const [homeSearchResults, setHomeSearchResults] = useState<MediaItem[]>([])
@@ -197,6 +301,9 @@ function App() {
     moviesFound: number
     tvFound: number
   } | null>(null)
+  const [zipPlaybackLoading, setZipPlaybackLoading] = useState<ZipPlaybackLoadingState | null>(null)
+  const [zipProcessingPopup, setZipProcessingPopup] = useState<ZipProcessingPopupState | null>(null)
+  const zipProcessingPopupTimeoutRef = useRef<number | null>(null)
 
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -277,7 +384,7 @@ function App() {
 
   // Update notification state
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [updateGateStatus, setUpdateGateStatus] = useState<'checking' | 'downloading' | 'installing' | 'error' | 'idle'>('checking')
+  const [updateGateStatus, setUpdateGateStatus] = useState<'checking' | 'downloading' | 'installing' | 'error' | 'idle'>('idle')
   const [updateGateMessage, setUpdateGateMessage] = useState('Checking for updates...')
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
@@ -296,8 +403,10 @@ function App() {
     setBetaEnabledState(isBetaEnabled())
   }, [])
 
-  const runMandatoryUpdate = useCallback(async () => {
-    setUpdateGateStatus('checking')
+  const runMandatoryUpdate = useCallback(async (showCheckErrors = false) => {
+    let updateDetected = false
+
+    setUpdateGateStatus('idle')
     setUpdateGateMessage('Checking for updates...')
     setUpdateGateError(null)
     setUpdateProgress(0)
@@ -312,11 +421,13 @@ function App() {
         return
       }
 
+      updateDetected = true
+      setUpdateInfo(info)
+
       if (!info.download_url) {
         throw new Error('Missing update download URL.')
       }
 
-      setUpdateInfo(info)
       setUpdateGateStatus('downloading')
       setUpdateGateMessage(`Downloading update v${info.latest_version}...`)
 
@@ -334,8 +445,14 @@ function App() {
       await installUpdate(installerPath)
     } catch (error) {
       console.error('[Update] Mandatory update failed:', error)
+      if (!updateDetected && !showCheckErrors) {
+        setUpdateInfo(null)
+        setUpdateGateStatus('idle')
+        return
+      }
+
       setUpdateGateStatus('error')
-      setUpdateGateMessage('Update required to continue.')
+      setUpdateGateMessage(updateDetected ? 'Update required to continue.' : 'Unable to check for updates.')
       setUpdateGateError(error instanceof Error ? error.message : 'Unknown update error.')
     } finally {
       if (unlistenProgress) {
@@ -420,11 +537,13 @@ function App() {
   // Listen for Tauri events - depends on view to properly refresh data
   useEffect(() => {
     let unlistenProgress: UnlistenFn | undefined
-    let unlistenComplete: UnlistenFn | undefined
-    let unlistenMpvEnded: UnlistenFn | undefined
-    let unlistenLibraryUpdated: UnlistenFn | undefined
+      let unlistenComplete: UnlistenFn | undefined
+      let unlistenMpvEnded: UnlistenFn | undefined
+      let unlistenMpvAudioTracks: UnlistenFn | undefined
+      let unlistenLibraryUpdated: UnlistenFn | undefined
     let unlistenNotification: UnlistenFn | undefined
     let unlistenCloudIndexingStarted: UnlistenFn | undefined
+    let unlistenZipProcessing: UnlistenFn | undefined
 
     const setupListeners = async () => {
       unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
@@ -440,6 +559,43 @@ function App() {
       unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', (event) => {
         setIsCloudIndexing(true)
         console.log(`[Cloud] Indexing started: ${event.payload.count} files`)
+      })
+
+      unlistenZipProcessing = await listen<ZipProcessingStatusPayload>('zip-processing-status', (event) => {
+        const payload = event.payload
+
+        if (zipProcessingPopupTimeoutRef.current) {
+          window.clearTimeout(zipProcessingPopupTimeoutRef.current)
+          zipProcessingPopupTimeoutRef.current = null
+        }
+
+        setZipProcessingPopup({
+          phase: payload.phase,
+          archiveCount: payload.archiveCount,
+          archiveName: payload.archiveName ?? null,
+          episodesIndexed: payload.episodesIndexed ?? null,
+          message: payload.message,
+        })
+
+        if (payload.phase === 'detected') {
+          setIsCloudIndexing(true)
+          toast({
+            title: payload.archiveCount > 1 ? 'ZIP archives detected' : 'ZIP archive detected',
+            description: payload.message,
+          })
+          return
+        }
+
+        toast({
+          title: payload.phase === 'complete' ? 'ZIP processing complete' : 'ZIP processing failed',
+          description: payload.message,
+          variant: payload.phase === 'error' ? 'destructive' : 'default',
+        })
+
+        zipProcessingPopupTimeoutRef.current = window.setTimeout(() => {
+          setZipProcessingPopup(null)
+          zipProcessingPopupTimeoutRef.current = null
+        }, payload.phase === 'error' ? 6500 : 5000)
       })
 
       unlistenComplete = await listen<ScanCompletePayload>('scan-complete', async () => {
@@ -500,6 +656,18 @@ function App() {
         await loadContinueWatching()
       })
 
+      unlistenMpvAudioTracks = await listen<MpvAudioTracksDetectedPayload>('mpv-audio-tracks-detected', (event) => {
+        const { series_id, tracks } = event.payload
+        if (!series_id || !Array.isArray(tracks)) {
+          return
+        }
+
+        const nextTracks = [...tracks].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        )
+        mergeCachedSeriesAudioTracks(series_id, nextTracks)
+      })
+
       // Listen for real-time library updates from file watcher
       unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
         const payload = event.payload || {}
@@ -551,9 +719,11 @@ function App() {
       unlistenProgress?.()
       unlistenComplete?.()
       unlistenMpvEnded?.()
+      unlistenMpvAudioTracks?.()
       unlistenLibraryUpdated?.()
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
+      unlistenZipProcessing?.()
     }
   }, [view, searchQuery, cloudSubTab, selectedShow?.id])
 
@@ -800,6 +970,32 @@ function App() {
     }
   }, [])
 
+  const launchPlaybackWithZipLoading = useCallback(async (
+    item: MediaItem,
+    resume: boolean,
+    audioPreference?: string | null,
+  ) => {
+    const loadingState = item.parent_zip_id ? buildZipPlaybackLoadingState(item, resume) : null
+    let overlayVisibleSince = 0
+    if (loadingState) {
+      setZipPlaybackLoading(loadingState)
+      await waitForZipLoadingOverlayPaint()
+      overlayVisibleSince = Date.now()
+    }
+
+    try {
+      await playMedia(item.id, resume, audioPreference)
+      if (loadingState) {
+        await waitForMpvPlaybackStart(item.id)
+        await waitForMinimumZipOverlayVisibility(overlayVisibleSince)
+      }
+    } finally {
+      if (loadingState) {
+        setZipPlaybackLoading(null)
+      }
+    }
+  }, [])
+
   const startPlaybackFlow = useCallback(async (item: MediaItem) => {
     try {
       const resumeInfo = await getResumeInfo(item.id)
@@ -817,13 +1013,17 @@ function App() {
         setResumeDialogData({ item, resumeInfo, posterUrl })
         setResumeDialogOpen(true)
       } else {
-        await playMedia(item.id, false)
+        await launchPlaybackWithZipLoading(
+          item,
+          false,
+          resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+        )
         toast({ title: "Playing", description: `Now playing: ${item.title}` })
       }
     } catch {
       toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
     }
-  }, [toast])
+  }, [launchPlaybackWithZipLoading, toast])
 
   const handleItemClick = useCallback((item: MediaItem) => {
     setContentDetailsItem(item)
@@ -848,7 +1048,11 @@ function App() {
     const { item, resumeInfo } = resumeDialogData
     const resumeTime = resume ? resumeInfo.position : 0
     try {
-      await playMedia(item.id, resumeTime > 0)
+      await launchPlaybackWithZipLoading(
+        item,
+        resumeTime > 0,
+        resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+      )
       toast({ title: "Playing", description: `Now playing: ${item.title}` })
       setResumeDialogOpen(false)
       setResumeDialogData(null)
@@ -915,8 +1119,14 @@ function App() {
 
   const handleRemoveFromHistory = useCallback(async (item: MediaItem) => {
     try {
-      await removeFromWatchHistory(item.id)
-      toast({ title: "Removed", description: `"${item.title}" removed from watch history.` })
+      const historyIds = item.history_group_ids?.length ? item.history_group_ids : [item.id]
+      await Promise.all(historyIds.map((historyId) => removeFromWatchHistory(historyId)))
+      toast({
+        title: "Removed",
+        description: historyIds.length > 1
+          ? `Removed ${historyIds.length} recent episodes from "${item.title}".`
+          : `"${item.title}" removed from watch history.`,
+      })
       await fetchDataRef.current()
       await loadContinueWatching()
     } catch {
@@ -924,12 +1134,34 @@ function App() {
     }
   }, [toast, loadContinueWatching])
 
+  const handleClearHistory = useCallback(async () => {
+    if (items.length === 0 || isClearingHistory) return
+
+    setIsClearingHistory(true)
+    try {
+      await clearAllWatchHistory()
+      toast({
+        title: "History cleared",
+        description: `Removed ${items.length} watch history ${items.length === 1 ? 'entry' : 'entries'}.`,
+      })
+      await fetchDataRef.current()
+      await loadContinueWatching()
+    } catch {
+      toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
+    } finally {
+      setIsClearingHistory(false)
+    }
+  }, [items.length, isClearingHistory, loadContinueWatching, toast])
+
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
     } else {
-      const confirmed = confirm(`Are you sure you want to permanently delete "${item.title}"?`)
+      const deletePrompt = item.parent_zip_id
+        ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
+        : `Are you sure you want to permanently delete "${item.title}"?`
+      const confirmed = confirm(deletePrompt)
       if (confirmed) {
         try {
           const result = await deleteMediaFiles([item.id])
@@ -947,9 +1179,9 @@ function App() {
     }
   }, [toast])
 
-  const handleDeleteComplete = useCallback(async () => {
+  const handleDeleteComplete = useCallback(async (message?: string) => {
     await fetchDataRef.current()
-    toast({ title: "Deleted", description: "Selected episodes have been permanently deleted." })
+    toast({ title: "Deleted", description: message || "Selected content has been permanently deleted." })
   }, [toast])
 
   const handleMarkComplete = async () => {
@@ -999,7 +1231,7 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
-  const isUpdateGateActive = updateGateStatus !== 'idle'
+  const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing' || updateGateStatus === 'error'
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
@@ -1077,6 +1309,8 @@ function App() {
       {/* Main app content - only show when authenticated */}
       {isAuthenticated && (
         <>
+          <ZipPlaybackLoadingOverlay loadingState={zipPlaybackLoading} />
+
           {/* Custom Title Bar */}
           <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black/45 backdrop-blur-2xl">
             <div className="relative h-full w-full flex items-center justify-between">
@@ -1143,6 +1377,67 @@ function App() {
             <div className="bg-orb bg-orb-2" />
             <div className="bg-orb bg-orb-3" />
           </div>
+
+          <AnimatePresence>
+            {zipProcessingPopup && (
+              <motion.div
+                initial={{ opacity: 0, y: 24, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 16, scale: 0.98 }}
+                className="fixed right-5 top-14 z-[230] w-[min(92vw,390px)] rounded-[24px] border border-white/10 bg-[#11141b]/94 p-4 shadow-2xl shadow-black/45 backdrop-blur-xl"
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${
+                    zipProcessingPopup.phase === 'complete'
+                      ? 'border-emerald-400/25 bg-emerald-400/10'
+                      : zipProcessingPopup.phase === 'error'
+                        ? 'border-red-400/25 bg-red-400/10'
+                        : 'border-white/10 bg-white/5'
+                  }`}>
+                    {zipProcessingPopup.phase === 'complete' ? (
+                      <span className="text-lg text-emerald-300">✓</span>
+                    ) : zipProcessingPopup.phase === 'error' ? (
+                      <span className="text-lg text-red-300">!</span>
+                    ) : (
+                      <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
+                      >
+                        <Archive className="h-5 w-5 text-white/80" />
+                      </motion.div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/40">
+                        {zipProcessingPopup.phase === 'complete'
+                          ? 'ZIP Ready'
+                          : zipProcessingPopup.phase === 'error'
+                            ? 'ZIP Error'
+                            : 'ZIP Detected'}
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60">
+                        {zipProcessingPopup.archiveCount} archive{zipProcessingPopup.archiveCount === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <p className="line-clamp-2 text-sm font-medium leading-relaxed text-white/85">
+                      {zipProcessingPopup.message}
+                    </p>
+                    {zipProcessingPopup.archiveName && (
+                      <p className="mt-2 line-clamp-1 text-xs text-white/45">
+                        {zipProcessingPopup.archiveName}
+                      </p>
+                    )}
+                    {typeof zipProcessingPopup.episodesIndexed === 'number' && zipProcessingPopup.phase === 'complete' && (
+                      <p className="mt-2 text-xs text-emerald-200/80">
+                        Indexed {zipProcessingPopup.episodesIndexed} episode{zipProcessingPopup.episodesIndexed === 1 ? '' : 's'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <Sidebar
             currentView={view === 'episodes' ? 'cloud' : view}
@@ -1870,7 +2165,7 @@ function App() {
                         className="h-full"
                       >
                         <Suspense fallback={<LoadingFallback />}>
-                          <SocialView onShowSettings={() => setSettingsOpen(true)} />
+                          <SocialView />
                         </Suspense>
                       </motion.div>
                     )}
@@ -1884,8 +2179,40 @@ function App() {
                         exit={{ opacity: 0 }}
                         className="pt-24"
                       >
+                        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-white/45">
+                              Watch History
+                            </p>
+                            <h2 className="text-2xl font-semibold tracking-tight text-white">
+                              Recently Watched
+                            </h2>
+                            <p className="text-sm text-white/55">
+                              {items.length === 0
+                                ? 'Your recent movies and episodes will show up here.'
+                                : hiddenHistoryEntriesCount > 0
+                                  ? `${historyItems.length} cards from ${items.length} entries, with ${groupedHistorySeriesCount} series grouped together.`
+                                  : `${items.length} recent ${items.length === 1 ? 'entry' : 'entries'}.`}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleClearHistory}
+                            disabled={items.length === 0 || isClearingHistory}
+                            className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.08] px-4 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/[0.12] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {isClearingHistory ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <X className="h-4 w-4" />
+                            )}
+                            Clear History
+                          </button>
+                        </div>
+
                         <div className="grid-media">
-                          {sortedItems.map((item, index) => (
+                          {historyItems.map((item, index) => (
                             <MovieCard
                               key={item.id}
                               item={item}
@@ -1898,7 +2225,7 @@ function App() {
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
                           ))}
-                          {sortedItems.length === 0 && (
+                          {historyItems.length === 0 && (
                             <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                               <motion.div
                                 className="empty-state-enhanced flex flex-col items-center text-center"

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User } from "lucide-react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
-  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails
+  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails,
+  getSeriesAudioPreference, setSeriesAudioPreference, getAudioTracks,
+  getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
+  type AudioTrackOption
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 interface ContentDetailsModalProps {
@@ -17,12 +21,45 @@ interface ContentDetailsModalProps {
 
 const heroArtworkCache = new Map<number, string | null>()
 const runtimeMinutesCache = new Map<number, number | null>()
+const AUTO_AUDIO_VALUE = "__auto__"
+const CUSTOM_AUDIO_VALUE = "__custom__"
+const MANUAL_AUDIO_OPTION = {
+  label: "Manual",
+  value: CUSTOM_AUDIO_VALUE,
+} as const
+
+const resolveAudioPreferenceValue = (
+  selectedValue: string,
+  customValue: string,
+) => {
+  if (selectedValue === AUTO_AUDIO_VALUE) {
+    return null
+  }
+
+  if (selectedValue === CUSTOM_AUDIO_VALUE) {
+    const normalized = customValue.trim()
+    return normalized.length > 0 ? normalized : null
+  }
+
+  return selectedValue
+}
 
 const resolveLocalImage = async (path?: string): Promise<string | null> => {
   if (!path || typeof path !== "string") return null
   if (path.startsWith("http") || path.startsWith("asset://")) return path
   const filename = path.replace("image_cache/", "")
   return getCachedImageUrl(filename)
+}
+
+const getZipCompressionLabel = (method?: number): string | null => {
+  switch (method) {
+    case 0:
+      return "Store"
+    case 8:
+      return "Deflate"
+    default:
+      return null
+  }
 }
 
 function EpisodeThumbnailImage({
@@ -111,6 +148,11 @@ export function ContentDetailsModal({
   const [loadingEpisodes, setLoadingEpisodes] = useState(false)
   const [selectedSeason, setSelectedSeason] = useState<number>(1)
   const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<Map<number, Map<number, TmdbEpisodeInfo>>>(new Map())
+  const [selectedAudioPreference, setSelectedAudioPreference] = useState<string>(AUTO_AUDIO_VALUE)
+  const [customAudioPreference, setCustomAudioPreference] = useState("")
+  const [detectedAudioTracks, setDetectedAudioTracks] = useState<AudioTrackOption[]>([])
+  const [audioTracksLoading, setAudioTracksLoading] = useState(false)
+  const [audioTracksStatus, setAudioTracksStatus] = useState<string>("")
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
 
@@ -119,6 +161,55 @@ export function ContentDetailsModal({
       setActiveItem(item)
     }
   }, [item])
+
+  const seriesPreferenceId = useMemo(() => {
+    if (!item) return null
+    if (item.media_type === "tvshow") return item.id
+    if (item.media_type === "tvepisode") return item.parent_id ?? null
+    return null
+  }, [item])
+
+  useEffect(() => {
+    if (!seriesPreferenceId) {
+      setSelectedAudioPreference(AUTO_AUDIO_VALUE)
+      setCustomAudioPreference("")
+      return
+    }
+
+    const storedPreference = getSeriesAudioPreference(seriesPreferenceId)
+    const presetMatch = detectedAudioTracks.find(
+      (option) => {
+        const normalizedStored = storedPreference?.trim().toLowerCase()
+        if (!normalizedStored) return false
+
+        const preferenceParts = normalizedStored
+          .split(",")
+          .map((part) => part.trim())
+          .filter(Boolean)
+
+        return (
+          option.mpv_value?.trim().toLowerCase() === normalizedStored ||
+          option.language_code?.trim().toLowerCase() === normalizedStored ||
+          preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+        )
+      },
+    )
+
+    if (presetMatch) {
+      setSelectedAudioPreference(presetMatch.mpv_value || AUTO_AUDIO_VALUE)
+      setCustomAudioPreference("")
+      return
+    }
+
+    if (storedPreference) {
+      setSelectedAudioPreference(CUSTOM_AUDIO_VALUE)
+      setCustomAudioPreference(storedPreference)
+      return
+    }
+
+    setSelectedAudioPreference(AUTO_AUDIO_VALUE)
+    setCustomAudioPreference("")
+  }, [detectedAudioTracks, seriesPreferenceId])
 
   // Reset and load episodes
   useEffect(() => {
@@ -293,6 +384,75 @@ export function ContentDetailsModal({
     return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
   }, [episodes, selectedSeason])
 
+  const selectedSeasonHasZipEpisodes = useMemo(() => (
+    filteredEpisodes.some((episode) => !!episode.parent_zip_id)
+  ), [filteredEpisodes])
+
+  useEffect(() => {
+    if (!open || !item || item.media_type !== "tvshow") {
+      setDetectedAudioTracks([])
+      setAudioTracksLoading(false)
+      setAudioTracksStatus("")
+      return
+    }
+
+    if (filteredEpisodes.length === 0) {
+      setDetectedAudioTracks([])
+      setAudioTracksLoading(false)
+      setAudioTracksStatus("")
+      return
+    }
+
+    const cachedTracks = getCachedSeriesAudioTracks(item.id)
+    if (cachedTracks) {
+      setDetectedAudioTracks(cachedTracks)
+      setAudioTracksLoading(false)
+      setAudioTracksStatus(
+        selectedSeasonHasZipEpisodes
+          ? "Learned from playback and updates as you watch."
+          : "Detected earlier for this series.",
+      )
+      return
+    }
+
+    if (selectedSeasonHasZipEpisodes) {
+      setDetectedAudioTracks([])
+      setAudioTracksLoading(false)
+      setAudioTracksStatus("Play one ZIP episode once. Later episodes can expand this list.")
+      return
+    }
+
+    let cancelled = false
+
+    const loadAudioTracks = async () => {
+      setAudioTracksLoading(true)
+      setAudioTracksStatus("Detecting audio tracks...")
+
+      const sampleEpisode = filteredEpisodes[0]
+      const tracks = await getAudioTracks(sampleEpisode.id)
+      if (cancelled) return
+
+      const nextTracks = [...tracks].sort((left, right) =>
+        left.label.localeCompare(right.label),
+      )
+
+      setDetectedAudioTracks(nextTracks)
+      setCachedSeriesAudioTracks(item.id, nextTracks)
+      setAudioTracksStatus(
+        nextTracks.length > 0
+          ? `Detected once from episode ${sampleEpisode.episode_number || 1}.`
+          : "No labeled audio tracks were found in the sampled episode.",
+      )
+      setAudioTracksLoading(false)
+    }
+
+    void loadAudioTracks()
+
+    return () => {
+      cancelled = true
+    }
+  }, [filteredEpisodes, item, open, selectedSeason, selectedSeasonHasZipEpisodes])
+
   if (!activeItem && !item) return null
   const displayItem = item || activeItem
   if (!displayItem) return null
@@ -306,10 +466,127 @@ export function ContentDetailsModal({
   const runtimeLabel = runtimeMinutes
     ? (runtimeMinutes >= 60 ? `${Math.floor(runtimeMinutes / 60)}h ${runtimeMinutes % 60}m` : `${runtimeMinutes}m`)
     : "N/A"
+  const zipCompressionLabel = displayItem.parent_zip_id
+    ? getZipCompressionLabel(displayItem.zip_compression_method)
+    : null
 
   const displayTitle = isEpisode && displayItem.season_number && displayItem.episode_number
     ? `S${String(displayItem.season_number).padStart(2, "0")}E${String(displayItem.episode_number).padStart(2, "0")} · ${displayItem.title}`
     : displayItem.title
+
+  const handleAudioPreferenceSelect = (value: string) => {
+    setSelectedAudioPreference(value)
+    if (!seriesPreferenceId) return
+
+    setSeriesAudioPreference(
+      seriesPreferenceId,
+      resolveAudioPreferenceValue(
+        value,
+        value === CUSTOM_AUDIO_VALUE ? customAudioPreference : "",
+      ),
+    )
+  }
+
+  const handleCustomAudioPreferenceChange = (value: string) => {
+    setCustomAudioPreference(value)
+    if (!seriesPreferenceId || selectedAudioPreference !== CUSTOM_AUDIO_VALUE) return
+
+    setSeriesAudioPreference(
+      seriesPreferenceId,
+      resolveAudioPreferenceValue(CUSTOM_AUDIO_VALUE, value),
+    )
+  }
+
+  const selectedDetectedAudioTrack = detectedAudioTracks.find(
+    (track) => track.mpv_value === selectedAudioPreference,
+  )
+  const selectedAudioSummary = selectedAudioPreference === CUSTOM_AUDIO_VALUE
+    ? (customAudioPreference.trim() || "Manual")
+    : selectedDetectedAudioTrack?.label || (selectedAudioPreference === AUTO_AUDIO_VALUE ? "Auto" : null)
+
+  const audioControls = isShow ? (
+    <div className="w-full max-w-[420px]">
+      <div className="flex flex-col items-start gap-2.5 sm:items-end">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <span className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/46">
+            <AudioLines className="h-3.5 w-3.5" />
+            Audio
+          </span>
+
+          {selectedAudioSummary && !audioTracksLoading && (
+            <span className="rounded-full border border-white/12 px-2.5 py-1 text-[10px] font-medium text-white/68">
+              {selectedAudioSummary}
+            </span>
+          )}
+        </div>
+
+        <p className="max-w-[360px] text-[11px] leading-4 text-white/34 sm:text-right">
+          {audioTracksLoading ? "Detecting tracks..." : audioTracksStatus}
+        </p>
+
+        <div className="flex flex-wrap gap-2 sm:flex-nowrap sm:justify-end">
+          <button
+            onClick={() => handleAudioPreferenceSelect(AUTO_AUDIO_VALUE)}
+            className={cn(
+              "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
+              selectedAudioPreference === AUTO_AUDIO_VALUE
+                ? "border-white/70 bg-white text-black"
+                : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
+            )}
+          >
+            Auto
+          </button>
+
+          {detectedAudioTracks.map((track) => (
+            <button
+              key={`${track.stream_index}-${track.mpv_value || track.label}`}
+              onClick={() => track.mpv_value && handleAudioPreferenceSelect(track.mpv_value)}
+              disabled={!track.mpv_value}
+              className={cn(
+                "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                selectedAudioPreference === track.mpv_value
+                  ? "border-white/70 bg-white text-black"
+                  : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
+                !track.mpv_value && "cursor-not-allowed opacity-45",
+              )}
+              title={track.detail || track.label}
+            >
+              {track.label}
+            </button>
+          ))}
+
+        <button
+          onClick={() => handleAudioPreferenceSelect(MANUAL_AUDIO_OPTION.value)}
+          className={cn(
+            "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
+            selectedAudioPreference === CUSTOM_AUDIO_VALUE
+              ? "border-white/70 bg-white text-black"
+              : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
+            )}
+          >
+            Manual
+          </button>
+        </div>
+
+        {selectedAudioPreference === CUSTOM_AUDIO_VALUE && (
+          <div className="w-full sm:max-w-[260px]">
+            <Input
+              value={customAudioPreference}
+              onChange={(e) => handleCustomAudioPreferenceChange(e.target.value)}
+              placeholder="Language code, e.g. hi,hin,hindi"
+              className="h-9 rounded-full border-white/12 bg-white/6 px-4 text-sm text-white placeholder:text-white/28"
+            />
+          </div>
+        )}
+
+        {!audioTracksLoading && detectedAudioTracks.length === 0 && !selectedSeasonHasZipEpisodes && (
+          <p className="max-w-[320px] text-[11px] leading-4 text-white/28 sm:text-right">
+            No labeled tracks found. Use Auto or Manual.
+          </p>
+        )}
+      </div>
+    </div>
+  ) : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -339,8 +616,8 @@ export function ContentDetailsModal({
 
           {/* Content Layer */}
           <div className="relative z-10 flex flex-col h-full min-h-0">
-            <div className={cn("p-6 sm:p-10 shrink-0", isShow ? "pb-0 pt-8" : "mt-auto pb-12")}>
-              <div className="flex flex-col sm:flex-row items-end gap-8">
+            <div className={cn("p-6 sm:px-10 shrink-0", isShow ? "pb-0 pt-7" : "mt-auto sm:py-10 pb-12")}>
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
                 {posterImageUrl && !isShow && (
                   <div className="hidden sm:block w-[160px] aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border border-white/10 shrink-0 scale-100 hover:scale-[1.02] transition-transform duration-500">
                     <img src={posterImageUrl} alt="" className="w-full h-full object-cover" />
@@ -356,12 +633,17 @@ export function ContentDetailsModal({
                   )}>{displayTitle}</h2>
                   
                   <div className={cn(
-                    "flex flex-wrap items-center gap-5 text-sm font-semibold text-white/90",
-                    isShow ? "mb-3" : "mb-5"
+                    "flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-white/90",
+                    isShow ? "mb-2" : "mb-5"
                   )}>
                     <span className="flex items-center gap-2"><Calendar className="w-4 h-4 text-white/60" />{displayItem.year || "N/A"}</span>
                     {!isShow && <span className="flex items-center gap-2"><Clock className="w-4 h-4 text-white/60" />{runtimeLabel}</span>}
                     {isShow && <span className="flex items-center gap-2"><Tv className="w-4 h-4 text-white/60" />{seasons.length} Seasons</span>}
+                    {zipCompressionLabel && (
+                      <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
+                        ZIP: {zipCompressionLabel}
+                      </span>
+                    )}
                     {(director || creator) && (
                       <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
                         <User className="w-4 h-4 text-white/60" />
@@ -369,13 +651,6 @@ export function ContentDetailsModal({
                       </span>
                     )}
                   </div>
-                  
-                  <p className={cn(
-                    "text-sm sm:text-base text-white/80 leading-relaxed max-w-3xl",
-                    isShow ? "line-clamp-2 mb-2" : "line-clamp-3 mb-4"
-                  )}>
-                    {displayItem.overview || "No synopsis available."}
-                  </p>
                   
                   {!isShow && castList.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2">
@@ -387,6 +662,12 @@ export function ContentDetailsModal({
                     </div>
                   )}
                 </div>
+
+                {audioControls && (
+                  <div className="w-full sm:w-auto sm:min-w-[380px] sm:max-w-[420px] sm:self-start sm:pl-6 sm:pr-12 lg:pl-10 lg:pr-14">
+                    {audioControls}
+                  </div>
+                )}
                 
                 {!isShow && (
                   <div className="shrink-0 mb-2">
@@ -402,18 +683,18 @@ export function ContentDetailsModal({
             </div>
 
             {isShow && (
-              <div className="flex-1 min-h-0 flex flex-col p-6 sm:p-10 pt-0">
-                <div className="flex justify-between items-center mb-3 shrink-0">
+              <div className="flex-1 min-h-0 flex flex-col px-6 pb-6 sm:px-10 sm:pb-8 pt-0">
+                <div className="flex justify-between items-center mb-2 shrink-0">
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
                       <button 
                         key={s} 
                         onClick={() => setSelectedSeason(s)} 
                         className={cn(
-                          "px-6 py-2.5 rounded-2xl text-xs font-bold border transition-all shrink-0", 
-                          selectedSeason === s 
-                            ? "bg-white text-black border-white shadow-xl scale-105" 
-                            : "bg-white/5 text-white/50 border-white/5 hover:bg-white/10 hover:text-white"
+                          "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-[999px] px-4 text-[9px] leading-none font-bold uppercase tracking-[0.16em] border backdrop-blur-xl transition-all duration-300 shrink-0",
+                          selectedSeason === s
+                            ? "bg-white text-black border-white shadow-lg"
+                            : "bg-white/10 text-white/75 border-white/10 hover:bg-white/15 hover:text-white hover:border-white/20"
                         )}
                       >
                         Season {s}
@@ -422,9 +703,9 @@ export function ContentDetailsModal({
                   </div>
                   
                   {filteredEpisodes.length > 3 && (
-                    <div className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[10px] font-bold uppercase tracking-widest text-white shadow-glow-sm animate-pulse">
+                    <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 shadow-glow-sm animate-pulse">
                       <span>Scroll for next episodes</span>
-                      <ChevronDown className="w-3 h-3" />
+                      <ChevronDown className="w-2.5 h-2.5" />
                     </div>
                   )}
                 </div>
@@ -441,20 +722,23 @@ export function ContentDetailsModal({
                         <p className="font-medium tracking-wide">No episodes found for this season.</p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 gap-4 pb-16">
+                      <div className="grid grid-cols-1 gap-3 pb-8">
                         {filteredEpisodes.map(ep => {
                           const tmdbData = tmdbEpisodesBySeason.get(selectedSeason)?.get(ep.episode_number || 0)
                           const rating = tmdbData?.vote_average
                           const airDate = tmdbData?.air_date
                           const runtime = tmdbData?.runtime
+                          const episodeZipCompressionLabel = ep.parent_zip_id
+                            ? getZipCompressionLabel(ep.zip_compression_method)
+                            : null
                           
                           return (
                             <div 
                               key={ep.id} 
                               onClick={() => onPrimaryAction(ep)} 
-                              className="group flex gap-5 p-4 rounded-3xl bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
+                              className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
-                              <div className="relative w-40 sm:w-56 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
+                              <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
                                 <EpisodeThumbnailImage 
                                   localStillPath={ep.still_path} 
                                   tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')} 
@@ -480,13 +764,20 @@ export function ContentDetailsModal({
                                   </div>
                                 ) : null}
                               </div>
-                              <div className="flex-1 min-w-0 py-1">
-                                <div className="flex justify-between items-start mb-2">
+                              <div className="flex-1 min-w-0 py-0.5">
+                                <div className="flex justify-between items-start mb-1.5">
                                   <div className="min-w-0">
-                                    <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] mb-1">EPISODE {ep.episode_number}</p>
-                                    <h4 className="text-lg font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
+                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                      <p className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">EPISODE {ep.episode_number}</p>
+                                      {episodeZipCompressionLabel && (
+                                        <span className="rounded-lg border border-white/10 bg-white/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/80">
+                                          ZIP: {episodeZipCompressionLabel}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
                                   </div>
-                                  <div className="flex items-center gap-4 shrink-0 mt-1">
+                                  <div className="flex items-center gap-3 shrink-0 mt-0.5">
                                     {rating && rating > 0 && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
                                         <Star className="w-3 h-3 fill-current text-yellow-500" />
@@ -503,13 +794,13 @@ export function ContentDetailsModal({
                                 </div>
                                 
                                 {airDate && (
-                                  <div className="flex items-center gap-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.15em] mb-3">
+                                  <div className="flex items-center gap-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.15em] mb-2">
                                     <Calendar className="w-3 h-3 opacity-50" />
                                     {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                                   </div>
                                 )}
                                 
-                                <p className="text-sm text-white/50 line-clamp-2 leading-relaxed group-hover:text-white/70 transition-colors">{ep.overview || tmdbData?.overview || "No description available."}</p>
+                                <p className="text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors">{ep.overview || tmdbData?.overview || "No description available."}</p>
                               </div>
                             </div>
                           )

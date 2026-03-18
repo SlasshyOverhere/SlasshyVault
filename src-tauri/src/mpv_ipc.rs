@@ -1,11 +1,11 @@
 // MPV Progress Tracking Module
 // Uses a watch-later style approach with a temp file that MPV updates via script
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 
 /// Progress info saved/loaded from temp file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -32,8 +32,9 @@ fn get_progress_file_path(media_id: i64) -> PathBuf {
 fn get_lua_script_content(progress_file: &str) -> String {
     // Use forward slashes for Lua to avoid backslash escaping hell
     let clean_path = progress_file.replace("\\", "/");
-    
-    format!(r#"
+
+    format!(
+        r#"
 -- StreamVault Progress Tracker for MPV
 -- Saves playback position to a JSON file periodically and on quit
 
@@ -126,35 +127,38 @@ mp.register_event("file-loaded", function()
 end)
 
 mp.msg.info("StreamVault progress tracker loaded.")
-"#, clean_path)
+"#,
+        clean_path
+    )
 }
 
 /// Create the Lua script file for MPV
 fn create_lua_script(media_id: i64) -> Result<PathBuf, String> {
     let progress_dir = get_progress_dir();
-    fs::create_dir_all(&progress_dir).map_err(|e| format!("Failed to create progress dir: {}", e))?;
-    
+    fs::create_dir_all(&progress_dir)
+        .map_err(|e| format!("Failed to create progress dir: {}", e))?;
+
     let script_path = progress_dir.join(format!("tracker_{}.lua", media_id));
     let progress_file = get_progress_file_path(media_id);
-    
+
     let script_content = get_lua_script_content(&progress_file.to_string_lossy());
-    
+
     let mut file = fs::File::create(&script_path)
         .map_err(|e| format!("Failed to create Lua script: {}", e))?;
     file.write_all(script_content.as_bytes())
         .map_err(|e| format!("Failed to write Lua script: {}", e))?;
-    
+
     Ok(script_path)
 }
 
 /// Read last saved progress for a media item
 pub fn read_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
     let progress_file = get_progress_file_path(media_id);
-    
+
     if !progress_file.exists() {
         return None;
     }
-    
+
     let content = fs::read_to_string(&progress_file).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -163,7 +167,7 @@ pub fn read_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
 pub fn clear_mpv_progress(media_id: i64) {
     let progress_file = get_progress_file_path(media_id);
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
-    
+
     let _ = fs::remove_file(progress_file);
     let _ = fs::remove_file(script_file);
 }
@@ -223,8 +227,14 @@ pub fn launch_mpv_with_tracking(
     start_position: f64,
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
+    audio_language: Option<&str>,
+    ipc_server: Option<&str>,
 ) -> Result<u32, String> {
     crate::config::validate_executable_path(mpv_path, "mpv")?;
+
+    // Remove stale progress from previous sessions so frontend startup checks
+    // only react to the new MPV instance once it has actually loaded media.
+    clear_mpv_progress(media_id);
 
     println!("[MPV] ========== LAUNCHING MPV ==========");
     println!("[MPV] Media ID: {}", media_id);
@@ -232,8 +242,15 @@ pub fn launch_mpv_with_tracking(
     println!("[MPV] Source: {}", file_or_url);
     println!("[MPV] Is URL: {}", file_or_url.starts_with("http"));
     println!("[MPV] Has auth header: {}", auth_header.is_some());
-    println!("[MPV] Disk cache: {}", cache_settings.map(|c| c.enabled).unwrap_or(false));
+    println!(
+        "[MPV] Disk cache: {}",
+        cache_settings.map(|c| c.enabled).unwrap_or(false)
+    );
     println!("[MPV] Start position: {:.2}s", start_position);
+    println!(
+        "[MPV] Audio language preference: {}",
+        audio_language.unwrap_or("MPV default")
+    );
 
     // Only verify file exists for local files (not URLs)
     let is_url = file_or_url.starts_with("http://") || file_or_url.starts_with("https://");
@@ -260,6 +277,8 @@ pub fn launch_mpv_with_tracking(
     } else {
         (file_or_url.to_string(), false)
     };
+    let is_local_zip_proxy =
+        actual_source.starts_with("http://127.0.0.1:") && actual_source.ends_with("/stream");
 
     // Create the Lua tracking script
     let script_path = create_lua_script(media_id)?;
@@ -275,6 +294,19 @@ pub fn launch_mpv_with_tracking(
     // Add start position if resuming
     if start_position > 0.0 {
         cmd.arg(format!("--start={}", start_position as i64));
+    }
+
+    if let Some(language) = audio_language.filter(|value| !value.trim().is_empty()) {
+        let trimmed = language.trim();
+        if let Some(track_id) = trimmed.strip_prefix("aid:") {
+            cmd.arg(format!("--aid={}", track_id.trim()));
+        } else {
+            cmd.arg(format!("--alang={}", trimmed));
+        }
+    }
+
+    if let Some(ipc_path) = ipc_server.filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--input-ipc-server={}", ipc_path.trim()));
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL
@@ -298,8 +330,8 @@ pub fn launch_mpv_with_tracking(
         if let Some(cache) = cache_settings {
             if cache.enabled && !cache.cache_dir.is_empty() {
                 // Create media-specific cache subdirectory
-                let media_cache_dir = std::path::Path::new(&cache.cache_dir)
-                    .join(format!("media_{}", media_id));
+                let media_cache_dir =
+                    std::path::Path::new(&cache.cache_dir).join(format!("media_{}", media_id));
 
                 if let Err(e) = std::fs::create_dir_all(&media_cache_dir) {
                     println!("[MPV] Warning: Failed to create cache dir: {}", e);
@@ -320,20 +352,37 @@ pub fn launch_mpv_with_tracking(
                     cmd.arg(format!("--demuxer-max-bytes={}", cache_bytes));
                     cmd.arg(format!("--demuxer-max-back-bytes={}", cache_bytes / 4));
 
-                    println!("[MPV] Disk cache enabled: {} (max {}MB)",
-                        media_cache_dir.display(), cache.max_size_mb);
+                    println!(
+                        "[MPV] Disk cache enabled: {} (max {}MB)",
+                        media_cache_dir.display(),
+                        cache.max_size_mb
+                    );
                 }
             } else {
                 // Memory-only cache
-                cmd.arg("--demuxer-max-bytes=500MiB");
-                cmd.arg("--demuxer-max-back-bytes=100MiB");
                 cmd.arg("--cache=yes");
+                if is_local_zip_proxy {
+                    cmd.arg("--demuxer-max-bytes=256MiB");
+                    cmd.arg("--demuxer-max-back-bytes=128MiB");
+                    cmd.arg("--cache-secs=60");
+                    println!("[MPV] Using expanded cache profile for local ZIP proxy");
+                } else {
+                    cmd.arg("--demuxer-max-bytes=500MiB");
+                    cmd.arg("--demuxer-max-back-bytes=100MiB");
+                }
             }
         } else {
             // Default memory cache for URLs
-            cmd.arg("--demuxer-max-bytes=500MiB");
-            cmd.arg("--demuxer-max-back-bytes=100MiB");
             cmd.arg("--cache=yes");
+            if is_local_zip_proxy {
+                cmd.arg("--demuxer-max-bytes=256MiB");
+                cmd.arg("--demuxer-max-back-bytes=128MiB");
+                cmd.arg("--cache-secs=60");
+                println!("[MPV] Using expanded cache profile for local ZIP proxy");
+            } else {
+                cmd.arg("--demuxer-max-bytes=500MiB");
+                cmd.arg("--demuxer-max-back-bytes=100MiB");
+            }
         }
     }
 
@@ -352,7 +401,8 @@ pub fn launch_mpv_with_tracking(
     cmd.stderr(std::process::Stdio::inherit());
 
     // Spawn MPV process
-    let child = cmd.spawn()
+    let child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start MPV: {}", e))?;
 
     let pid = child.id();
@@ -366,8 +416,10 @@ pub fn is_mpv_running(pid: u32) -> bool {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
-        
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+
         unsafe {
             let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
             if handle == 0 {
@@ -378,7 +430,7 @@ pub fn is_mpv_running(pid: u32) -> bool {
             result == WAIT_TIMEOUT
         }
     }
-    
+
     #[cfg(not(windows))]
     {
         use std::process::Command;
@@ -397,12 +449,15 @@ pub fn monitor_mpv_and_save_progress(
     media_id: i64,
     pid: u32,
 ) -> MpvLaunchResult {
-    println!("[MPV] Monitoring MPV process {} for media {}", pid, media_id);
-    
+    println!(
+        "[MPV] Monitoring MPV process {} for media {}",
+        pid, media_id
+    );
+
     // Wait for MPV to exit
     while is_mpv_running(pid) {
         std::thread::sleep(Duration::from_millis(500));
-        
+
         // Periodically check progress and save to database
         if let Some(progress) = read_mpv_progress(media_id) {
             if progress.duration > 0.0 {
@@ -411,17 +466,19 @@ pub fn monitor_mpv_and_save_progress(
             }
         }
     }
-    
+
     // MPV has exited - give it a moment to flush the final save
     std::thread::sleep(Duration::from_millis(300));
-    
+
     // Read final progress
     let final_progress = read_mpv_progress(media_id);
-    
+
     let result = if let Some(progress) = final_progress {
-        println!("[MPV] Final progress: {:.2}s / {:.2}s (EOF: {})", 
-            progress.position, progress.duration, progress.eof_reached);
-        
+        println!(
+            "[MPV] Final progress: {:.2}s / {:.2}s (EOF: {})",
+            progress.position, progress.duration, progress.eof_reached
+        );
+
         // Save final progress to database, but ONLY if we have a valid duration
         // This prevents overwriting valid progress with 0s if MPV crashed or didn't load the file
         if progress.duration > 0.0 {
@@ -429,13 +486,13 @@ pub fn monitor_mpv_and_save_progress(
         } else {
             println!("[MPV] Warning: Invalid duration (0.0), skipping final DB update to preserve existing data");
         }
-        
+
         let completed = if progress.duration > 0.0 {
             (progress.position / progress.duration) >= 0.95 || progress.eof_reached
         } else {
             false
         };
-        
+
         MpvLaunchResult {
             success: true,
             error: None,
@@ -453,11 +510,11 @@ pub fn monitor_mpv_and_save_progress(
             completed: false,
         }
     };
-    
+
     // Clean up the Lua script (keep progress file for debugging)
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
     let _ = fs::remove_file(script_file);
-    
+
     result
 }
 
@@ -501,12 +558,17 @@ pub struct MpvSyncCommand {
 }
 
 /// Get the Lua script content for Watch Together sync mode
-fn get_sync_lua_script_content(progress_file: &str, event_file: &str, command_file: &str) -> String {
+fn get_sync_lua_script_content(
+    progress_file: &str,
+    event_file: &str,
+    command_file: &str,
+) -> String {
     let clean_progress = progress_file.replace("\\", "/");
     let clean_event = event_file.replace("\\", "/");
     let clean_command = command_file.replace("\\", "/");
 
-    format!(r#"
+    format!(
+        r#"
 -- StreamVault Watch Together Sync Script for MPV
 -- Handles bidirectional sync: captures user actions and applies remote commands
 
@@ -672,14 +734,17 @@ mp.register_event("file-loaded", function()
 end)
 
 mp.msg.info("StreamVault Watch Together sync script loaded.")
-"#, clean_progress, clean_event, clean_command)
+"#,
+        clean_progress, clean_event, clean_command
+    )
 }
 
 /// Create the Lua script file for Watch Together sync mode
 fn create_sync_lua_script(media_id: i64, session_id: &str) -> Result<PathBuf, String> {
     let progress_dir = get_progress_dir();
     let sync_dir = get_sync_dir();
-    fs::create_dir_all(&progress_dir).map_err(|e| format!("Failed to create progress dir: {}", e))?;
+    fs::create_dir_all(&progress_dir)
+        .map_err(|e| format!("Failed to create progress dir: {}", e))?;
     fs::create_dir_all(&sync_dir).map_err(|e| format!("Failed to create sync dir: {}", e))?;
 
     let script_path = sync_dir.join(format!("sync_{}.lua", session_id));
@@ -730,7 +795,10 @@ pub fn launch_mpv_with_sync(
 
     // Initialize command file
     let command_file = get_sync_command_file(session_id);
-    let _ = fs::write(&command_file, r#"{"action":"","position":0,"processed":true}"#);
+    let _ = fs::write(
+        &command_file,
+        r#"{"action":"","position":0,"processed":true}"#,
+    );
 
     // Build MPV command
     let mut cmd = std::process::Command::new(mpv_path);
@@ -764,7 +832,8 @@ pub fn launch_mpv_with_sync(
     cmd.stdout(std::process::Stdio::inherit());
     cmd.stderr(std::process::Stdio::inherit());
 
-    let child = cmd.spawn()
+    let child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start MPV: {}", e))?;
 
     let pid = child.id();
@@ -786,8 +855,7 @@ pub fn send_mpv_sync_command(session_id: &str, action: &str, position: f64) -> R
     let json = serde_json::to_string(&command)
         .map_err(|e| format!("Failed to serialize command: {}", e))?;
 
-    fs::write(&command_file, json)
-        .map_err(|e| format!("Failed to write command file: {}", e))?;
+    fs::write(&command_file, json).map_err(|e| format!("Failed to write command file: {}", e))?;
 
     println!("[MPV-SYNC] Sent command: {} at {:.2}s", action, position);
     Ok(())

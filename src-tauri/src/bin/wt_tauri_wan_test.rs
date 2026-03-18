@@ -320,13 +320,14 @@ async fn run() -> Result<(), String> {
     let mut host_inbox = EventInbox::new("host", host_rx);
 
     let (guest_tx, guest_rx) = mpsc::unbounded_channel::<TimedEvent>();
-    guest.set_event_callback(move |event| {
-        let _ = guest_tx.send(TimedEvent {
-            at: Instant::now(),
-            event,
-        });
-    })
-    .await;
+    guest
+        .set_event_callback(move |event| {
+            let _ = guest_tx.send(TimedEvent {
+                at: Instant::now(),
+                event,
+            });
+        })
+        .await;
     let mut guest_inbox = EventInbox::new("guest", guest_rx);
 
     let host_room = host
@@ -397,7 +398,9 @@ async fn run() -> Result<(), String> {
     if let Some(max_interval) = state_intervals
         .iter()
         .copied()
-        .fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a| a.max(v))))
+        .fold(None, |acc: Option<f64>, v| {
+            Some(acc.map_or(v, |a| a.max(v)))
+        })
     {
         if max_interval > 2200.0 {
             return Err(format!(
@@ -407,8 +410,10 @@ async fn run() -> Result<(), String> {
         }
     }
 
-    let host_to_guest = measure_latency(&host, &mut guest_inbox, &host_id, rounds, pos + 20.0).await?;
-    let guest_to_host = measure_latency(&guest, &mut host_inbox, &guest_id, rounds, pos + 50.0).await?;
+    let host_to_guest =
+        measure_latency(&host, &mut guest_inbox, &host_id, rounds, pos + 20.0).await?;
+    let guest_to_host =
+        measure_latency(&guest, &mut host_inbox, &guest_id, rounds, pos + 50.0).await?;
     let (concurrent_h2g, concurrent_g2h) = measure_concurrent_latency(
         &host,
         &guest,

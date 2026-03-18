@@ -11,6 +11,11 @@
 
 import { invoke } from '@tauri-apps/api/tauri';
 import {
+  disconnectSocialAuth,
+  getSocialAccessToken,
+  isSocialAuthConnected
+} from './gdrive';
+import {
   SOCIAL_STORAGE_KEY,
   PROFILE_CACHE_KEY,
   SOCIAL_LAST_SYNC_KEY,
@@ -88,6 +93,14 @@ export interface Activity {
   userAvatar?: string;
 }
 
+export interface ActivityFeedResponse {
+  activities: Activity[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
 export interface CurrentlyWatching {
   contentId: string;
   title: string;
@@ -105,6 +118,12 @@ export interface ChatMessage {
   senderAvatar?: string;
   text: string;
   timestamp: number;
+}
+
+export interface UnreadChatCounts {
+  totalUnread: number;
+  unreadByUser: Record<string, number>;
+  lastMessageAtByUser: Record<string, number>;
 }
 
 export interface SocialEvent {
@@ -412,7 +431,7 @@ async function refreshAccessToken(reason: string): Promise<string | null> {
 
   tokenRefreshPromise = (async () => {
     try {
-      const refreshed = await invoke<string>('gdrive_get_access_token');
+      const refreshed = await getSocialAccessToken(getAuthServerUrl());
       const normalized = typeof refreshed === 'string' ? refreshed.trim() : '';
       if (!normalized) {
         return null;
@@ -436,7 +455,19 @@ async function refreshAccessToken(reason: string): Promise<string | null> {
  */
 export async function restoreSocialConnection(): Promise<boolean> {
   reconnectEnabled = true;
-  const { accessToken: token } = getSocialCredentials();
+  let { accessToken: token } = getSocialCredentials();
+
+  if (!token) {
+    try {
+      const socialConnected = await isSocialAuthConnected();
+      if (socialConnected) {
+        token = await refreshAccessToken('restore-social-auth');
+      }
+    } catch (error) {
+      console.warn('[Social] Failed to restore token from social auth:', error);
+    }
+  }
+
   if (!token) return false;
 
   // Load cached profile immediately for instant UI
@@ -462,6 +493,15 @@ function clearSocialStorage() {
   accessToken = null;
   googleId = null;
   cachedProfile = null;
+}
+
+export async function disconnectSocialAccount(): Promise<void> {
+  disconnectSocial();
+  try {
+    await disconnectSocialAuth();
+  } catch (error) {
+    console.warn('[Social] Failed to clear social auth session:', error);
+  }
 }
 
 /**
@@ -873,15 +913,24 @@ export async function getMyActivity(): Promise<Activity[]> {
 export async function getFriendsActivity(filters?: {
   contentType?: 'movie' | 'tv';
   genre?: string;
-  userId?: string
-}): Promise<Activity[]> {
+  userId?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<ActivityFeedResponse> {
   const params = new URLSearchParams();
   if (filters?.contentType) params.set('contentType', filters.contentType);
   if (filters?.genre) params.set('genre', filters.genre);
   if (filters?.userId) params.set('userId', filters.userId);
+  if (filters?.page) params.set('page', String(filters.page));
+  if (filters?.pageSize) params.set('pageSize', String(filters.pageSize));
 
   const queryString = params.toString();
-  return apiGet<Activity[]>(`/api/social/activity/feed${queryString ? `?${queryString}` : ''}`);
+  return apiGet<ActivityFeedResponse>(`/api/social/activity/feed${queryString ? `?${queryString}` : ''}`);
+}
+
+export async function getActivityGenres(): Promise<string[]> {
+  const response = await apiGet<{ genres?: string[] }>('/api/social/activity/genres');
+  return Array.isArray(response?.genres) ? response.genres : [];
 }
 
 /**
@@ -1016,6 +1065,17 @@ export async function getFriendsWatching(): Promise<(CurrentlyWatching & { userI
  */
 export async function getChatHistory(friendId: string): Promise<ChatMessage[]> {
   return apiGet<ChatMessage[]>(`/api/social/chat/${friendId}`);
+}
+
+export async function getUnreadChatCounts(): Promise<UnreadChatCounts> {
+  return apiGet<UnreadChatCounts>('/api/social/chat/unread/count');
+}
+
+export async function markChatMessagesRead(friendId: string): Promise<number> {
+  const response = await apiPost<{ success: boolean; marked?: number }>(
+    `/api/social/chat/${encodeURIComponent(friendId)}/read`
+  );
+  return response?.marked ?? 0;
 }
 
 interface SendChatResponse {

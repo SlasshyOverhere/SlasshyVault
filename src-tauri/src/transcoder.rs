@@ -1,9 +1,9 @@
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::net::TcpListener;
-use tiny_http::{Server, Response, Header};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use tiny_http::{Header, Response, Server};
 
 // Store active transcoding sessions
 lazy_static::lazy_static! {
@@ -30,8 +30,20 @@ pub fn needs_transcoding(file_path: &str) -> bool {
     let ext = file_path.split('.').last().unwrap_or("").to_lowercase();
 
     // These formats/containers typically need transcoding for HTML5
-    matches!(ext.as_str(),
-        "mkv" | "avi" | "wmv" | "flv" | "mov" | "m2ts" | "ts" | "vob" | "divx" | "xvid" | "rmvb" | "rm"
+    matches!(
+        ext.as_str(),
+        "mkv"
+            | "avi"
+            | "wmv"
+            | "flv"
+            | "mov"
+            | "m2ts"
+            | "ts"
+            | "vob"
+            | "divx"
+            | "xvid"
+            | "rmvb"
+            | "rm"
     )
 }
 
@@ -76,7 +88,8 @@ pub fn start_transcode(
     // We'll use fragmented MP4 for better seeking support
     let mut args = vec![
         "-hide_banner".to_string(),
-        "-loglevel".to_string(), "warning".to_string(),
+        "-loglevel".to_string(),
+        "warning".to_string(),
     ];
 
     // Add start time if resuming
@@ -88,23 +101,36 @@ pub fn start_transcode(
     }
 
     args.extend(vec![
-        "-i".to_string(), file_path.to_string(),
+        "-i".to_string(),
+        file_path.to_string(),
         // Video: transcode to H.264 baseline for maximum compatibility
-        "-c:v".to_string(), "libx264".to_string(),
-        "-preset".to_string(), "ultrafast".to_string(),
-        "-tune".to_string(), "zerolatency".to_string(),
-        "-profile:v".to_string(), "baseline".to_string(),
-        "-level".to_string(), "3.0".to_string(),
-        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "ultrafast".to_string(),
+        "-tune".to_string(),
+        "zerolatency".to_string(),
+        "-profile:v".to_string(),
+        "baseline".to_string(),
+        "-level".to_string(),
+        "3.0".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
         // Scale down if too large (max 1080p)
-        "-vf".to_string(), "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease".to_string(),
+        "-vf".to_string(),
+        "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease".to_string(),
         // Audio: transcode to AAC stereo
-        "-c:a".to_string(), "aac".to_string(),
-        "-ac".to_string(), "2".to_string(),
-        "-b:a".to_string(), "192k".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-ac".to_string(),
+        "2".to_string(),
+        "-b:a".to_string(),
+        "192k".to_string(),
         // Output format: fragmented MP4 for streaming
-        "-f".to_string(), "mp4".to_string(),
-        "-movflags".to_string(), "frag_keyframe+empty_moov+faststart".to_string(),
+        "-f".to_string(),
+        "mp4".to_string(),
+        "-movflags".to_string(),
+        "frag_keyframe+empty_moov+faststart".to_string(),
         // Output to pipe
         "pipe:1".to_string(),
     ]);
@@ -175,10 +201,7 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
             }
 
             // Start FFmpeg and stream output
-            let mut args = vec![
-                "-hide_banner",
-                "-loglevel", "warning",
-            ];
+            let mut args = vec!["-hide_banner", "-loglevel", "warning"];
 
             let start_str;
             if let Some(time) = start_time {
@@ -190,19 +213,32 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
             }
 
             args.extend(vec![
-                "-i", file_path,
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-profile:v", "baseline",
-                "-level", "3.0",
-                "-pix_fmt", "yuv420p",
-                "-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
-                "-c:a", "aac",
-                "-ac", "2",
-                "-b:a", "192k",
-                "-f", "mp4",
-                "-movflags", "frag_keyframe+empty_moov+faststart",
+                "-i",
+                file_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "baseline",
+                "-level",
+                "3.0",
+                "-pix_fmt",
+                "yuv420p",
+                "-vf",
+                "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+                "-b:a",
+                "192k",
+                "-f",
+                "mp4",
+                "-movflags",
+                "frag_keyframe+empty_moov+faststart",
                 "pipe:1",
             ]);
 
@@ -214,10 +250,8 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
             {
                 Ok(mut child) => {
                     if let Some(stdout) = child.stdout.take() {
-                        let content_type = Header::from_bytes(
-                            &b"Content-Type"[..],
-                            &b"video/mp4"[..]
-                        ).unwrap();
+                        let content_type =
+                            Header::from_bytes(&b"Content-Type"[..], &b"video/mp4"[..]).unwrap();
 
                         let reader = BufReader::new(stdout);
                         let response = Response::new(
@@ -236,8 +270,8 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
                 }
                 Err(e) => {
                     println!("[TRANSCODE] Failed to start FFmpeg: {}", e);
-                    let response = Response::from_string(format!("FFmpeg error: {}", e))
-                        .with_status_code(500);
+                    let response =
+                        Response::from_string(format!("FFmpeg error: {}", e)).with_status_code(500);
                     let _ = request.respond(response);
                 }
             }

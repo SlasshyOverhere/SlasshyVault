@@ -1,6 +1,9 @@
+use rusqlite::types::FromSql;
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+use crate::zip_manager;
 
 const APP_NAME: &str = "StreamVault";
 
@@ -40,6 +43,13 @@ pub fn get_image_cache_dir() -> String {
         .to_string()
 }
 
+pub fn get_zip_cache_dir() -> String {
+    get_app_data_dir()
+        .join("zip_cache")
+        .to_string_lossy()
+        .to_string()
+}
+
 pub fn get_config_path() -> String {
     get_app_data_dir()
         .join("media_config.json")
@@ -71,6 +81,27 @@ pub struct MediaItem {
     // Cloud storage fields
     pub is_cloud: Option<bool>,
     pub cloud_file_id: Option<String>,
+    pub parent_zip_id: Option<String>,
+    pub zip_entry_path: Option<String>,
+    pub zip_local_header_offset: Option<i64>,
+    pub zip_data_start_offset: Option<i64>,
+    pub zip_compressed_size: Option<i64>,
+    pub zip_uncompressed_size: Option<i64>,
+    pub zip_crc32: Option<String>,
+    pub zip_compression_method: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZipArchiveRecord {
+    pub zip_file_id: String,
+    pub filename: String,
+    pub file_size_bytes: i64,
+    pub compression_type: String,
+    pub central_dir_offset: i64,
+    pub central_dir_size: i64,
+    pub total_entries: i64,
+    pub video_entries: i64,
+    pub last_analyzed: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +309,54 @@ impl Database {
                 [],
             )?;
         }
+        if !columns.contains(&"parent_zip_id".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN parent_zip_id TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_entry_path".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_entry_path TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_local_header_offset".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_local_header_offset INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_data_start_offset".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_data_start_offset INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_compressed_size".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_compressed_size INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_uncompressed_size".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_uncompressed_size INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_crc32".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_crc32 TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"zip_compression_method".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN zip_compression_method INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
 
         // Create cached_episode_metadata table for pre-fetched episode info from TMDB
         self.conn.execute(
@@ -362,6 +441,21 @@ impl Database {
             [],
         )?;
 
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS zip_archives (
+                zip_file_id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                file_size_bytes INTEGER NOT NULL,
+                compression_type TEXT NOT NULL,
+                central_dir_offset INTEGER,
+                central_dir_size INTEGER,
+                total_entries INTEGER,
+                video_entries INTEGER,
+                last_analyzed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
         // Cover the common library list queries: filter by media_type, then order by title.
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_type_title ON media(media_type, title)",
@@ -393,6 +487,14 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_media_cloud_file_id ON media(cloud_file_id) WHERE cloud_file_id IS NOT NULL",
             [],
         )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_parent_zip_id ON media(parent_zip_id) WHERE parent_zip_id IS NOT NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_zip_archives_file_id ON zip_archives(zip_file_id)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -401,8 +503,9 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id,
-                    is_cloud, cloud_file_id
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method
              FROM media WHERE media_type = ?",
         );
 
@@ -441,8 +544,9 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id,
-                    is_cloud, cloud_file_id
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method
              FROM media WHERE media_type = ?",
         );
 
@@ -484,8 +588,9 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id,
-                    is_cloud, cloud_file_id
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method
              FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
         )?;
 
@@ -518,7 +623,17 @@ impl Database {
                 m.parent_id,
                 CASE WHEN m.media_type = 'tvepisode' THEN p.tmdb_id ELSE m.tmdb_id END as tmdb_id,
                 m.episode_title,
-                m.still_path
+                m.still_path,
+                m.is_cloud,
+                m.cloud_file_id,
+                m.parent_zip_id,
+                m.zip_entry_path,
+                m.zip_local_header_offset,
+                m.zip_data_start_offset,
+                m.zip_compressed_size,
+                m.zip_uncompressed_size,
+                m.zip_crc32,
+                m.zip_compression_method
              FROM media m
              LEFT JOIN media p ON m.parent_id = p.id
              WHERE m.last_watched IS NOT NULL
@@ -541,7 +656,9 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method
              FROM media WHERE id = ?",
         )?;
 
@@ -1272,12 +1389,129 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    pub fn insert_zip_archive(&self, archive: &zip_manager::ZipArchiveInfo) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO zip_archives (
+                zip_file_id, filename, file_size_bytes, compression_type,
+                central_dir_offset, central_dir_size, total_entries, video_entries,
+                last_analyzed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(zip_file_id) DO UPDATE SET
+                filename = excluded.filename,
+                file_size_bytes = excluded.file_size_bytes,
+                compression_type = excluded.compression_type,
+                central_dir_offset = excluded.central_dir_offset,
+                central_dir_size = excluded.central_dir_size,
+                total_entries = excluded.total_entries,
+                video_entries = excluded.video_entries,
+                last_analyzed = CURRENT_TIMESTAMP",
+            params![
+                &archive.zip_file_id,
+                &archive.filename,
+                archive.file_size_bytes as i64,
+                format!("{:?}", archive.compression_type).to_lowercase(),
+                archive.central_dir_offset as i64,
+                archive.central_dir_size as i64,
+                archive.total_entries as i64,
+                archive.video_entries as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_zip_archive(&self, zip_file_id: &str) -> Result<ZipArchiveRecord> {
+        self.conn.query_row(
+            "SELECT zip_file_id, filename, file_size_bytes, compression_type,
+                    central_dir_offset, central_dir_size, total_entries, video_entries, last_analyzed
+             FROM zip_archives WHERE zip_file_id = ?",
+            params![zip_file_id],
+            |row| {
+                Ok(ZipArchiveRecord {
+                    zip_file_id: row.get(0)?,
+                    filename: row.get(1)?,
+                    file_size_bytes: row.get(2)?,
+                    compression_type: row.get(3)?,
+                    central_dir_offset: row.get(4)?,
+                    central_dir_size: row.get(5)?,
+                    total_entries: row.get(6)?,
+                    video_entries: row.get(7)?,
+                    last_analyzed: row.get(8).unwrap_or(None),
+                })
+            },
+        )
+    }
+
+    pub fn insert_cloud_episode_from_zip(
+        &self,
+        title: &str,
+        parent_id: i64,
+        season: i32,
+        episode: i32,
+        cloud_folder_id: &str,
+        zip_file_id: &str,
+        zip_entry_path: &str,
+        zip_local_header_offset: i64,
+        zip_data_start_offset: i64,
+        zip_compressed_size: i64,
+        zip_uncompressed_size: i64,
+        zip_crc32: &str,
+        zip_compression_method: i64,
+        episode_title: Option<&str>,
+        overview: Option<&str>,
+        still_path: Option<&str>,
+    ) -> Result<i64> {
+        let virtual_path = format!("zip://{}/{}", zip_file_id, zip_entry_path);
+
+        self.conn.execute(
+            "INSERT INTO media (
+                title, file_path, media_type, parent_id, season_number, episode_number,
+                is_cloud, cloud_file_id, cloud_folder_id, episode_title, overview, still_path,
+                parent_zip_id, zip_entry_path, zip_local_header_offset, zip_data_start_offset,
+                zip_compressed_size, zip_uncompressed_size, zip_crc32, zip_compression_method
+            ) VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                title,
+                virtual_path,
+                parent_id,
+                season,
+                episode,
+                zip_file_id,
+                cloud_folder_id,
+                episode_title,
+                overview,
+                still_path,
+                zip_file_id,
+                zip_entry_path,
+                zip_local_header_offset,
+                zip_data_start_offset,
+                zip_compressed_size,
+                zip_uncompressed_size,
+                zip_crc32,
+                zip_compression_method,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn delete_zip_archive(&self, zip_file_id: &str) -> Result<usize> {
+        self.conn.execute(
+            "DELETE FROM media WHERE parent_zip_id = ?",
+            params![zip_file_id],
+        )?;
+        let deleted = self.conn.execute(
+            "DELETE FROM zip_archives WHERE zip_file_id = ?",
+            params![zip_file_id],
+        )?;
+        Ok(deleted)
+    }
+
     /// Check if a cloud file already exists in the database
     pub fn cloud_file_exists(&self, cloud_file_id: &str) -> bool {
         self.conn
             .query_row(
-                "SELECT 1 FROM media WHERE cloud_file_id = ?",
-                params![cloud_file_id],
+                "SELECT 1 FROM media WHERE cloud_file_id = ? OR parent_zip_id = ?",
+                params![cloud_file_id, cloud_file_id],
                 |_| Ok(()),
             )
             .is_ok()
@@ -1484,6 +1718,41 @@ impl Database {
         &self,
         cloud_file_id: &str,
     ) -> Result<Option<(i64, String, String, Option<i64>)>> {
+        let zip_episode_count: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM media WHERE parent_zip_id = ?",
+                params![cloud_file_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(episode_count) = zip_episode_count.filter(|count| *count > 0) {
+            let archive_name = self
+                .conn
+                .query_row(
+                    "SELECT filename FROM zip_archives WHERE zip_file_id = ?",
+                    params![cloud_file_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_else(|_| "ZIP archive".to_string());
+            self.conn.execute(
+                "DELETE FROM media WHERE parent_zip_id = ?",
+                params![cloud_file_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM zip_archives WHERE zip_file_id = ?",
+                params![cloud_file_id],
+            )?;
+
+            return Ok(Some((
+                -1,
+                format!("{} ({} episode(s))", archive_name, episode_count),
+                "zip_archive".to_string(),
+                None,
+            )));
+        }
+
         let media_info: Option<(i64, String, String, Option<i64>)> = self
             .conn
             .query_row(
@@ -1804,18 +2073,18 @@ impl Database {
         })
     }
 
-    /// Get media info for deletion (file_path, is_cloud, cloud_file_id)
+    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, parent_zip_id)
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
-    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>)>> {
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id FROM media WHERE id IN ({})",
+            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
 
@@ -1829,6 +2098,7 @@ impl Database {
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, i32>(2)? == 1,
                 row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
 
@@ -2345,9 +2615,9 @@ impl Database {
     }
 
     fn map_media_item(row: &rusqlite::Row) -> rusqlite::Result<MediaItem> {
-        let duration: Option<f64> = row.get("duration_seconds").unwrap_or(None);
-        let resume_pos: Option<f64> = row.get("resume_position_seconds").unwrap_or(None);
-        let last_watched: Option<String> = row.get("last_watched").unwrap_or(None);
+        let duration: Option<f64> = Self::get_optional_named(row, "duration_seconds");
+        let resume_pos: Option<f64> = Self::get_optional_named(row, "resume_position_seconds");
+        let last_watched: Option<String> = Self::get_optional_named(row, "last_watched");
 
         // Calculate progress_percent
         // If resume_position is 0 but last_watched is set and duration > 0,
@@ -2362,32 +2632,48 @@ impl Database {
         };
 
         // Get is_cloud as integer and convert to bool
-        let is_cloud_int: Option<i32> = row.get("is_cloud").unwrap_or(None);
+        let is_cloud_int: Option<i32> = Self::get_optional_named(row, "is_cloud");
         let is_cloud = is_cloud_int.map(|v| v != 0);
 
         Ok(MediaItem {
             id: row.get("id")?,
             title: row.get("title")?,
-            year: row.get("year").unwrap_or(None),
-            overview: row.get("overview").unwrap_or(None),
-            cast_names: row.get("cast_names").unwrap_or(None),
-            director: row.get("director").unwrap_or(None),
-            poster_path: row.get("poster_path").unwrap_or(None),
-            file_path: row.get("file_path").unwrap_or(None),
+            year: Self::get_optional_named(row, "year"),
+            overview: Self::get_optional_named(row, "overview"),
+            cast_names: Self::get_optional_named(row, "cast_names"),
+            director: Self::get_optional_named(row, "director"),
+            poster_path: Self::get_optional_named(row, "poster_path"),
+            file_path: Self::get_optional_named(row, "file_path"),
             media_type: row.get("media_type")?,
             duration_seconds: duration,
             resume_position_seconds: resume_pos,
             last_watched,
-            season_number: row.get("season_number").unwrap_or(None),
-            episode_number: row.get("episode_number").unwrap_or(None),
-            parent_id: row.get("parent_id").unwrap_or(None),
+            season_number: Self::get_optional_named(row, "season_number"),
+            episode_number: Self::get_optional_named(row, "episode_number"),
+            parent_id: Self::get_optional_named(row, "parent_id"),
             progress_percent,
-            tmdb_id: row.get("tmdb_id").unwrap_or(None),
-            episode_title: row.get("episode_title").unwrap_or(None),
-            still_path: row.get("still_path").unwrap_or(None),
+            tmdb_id: Self::get_optional_named(row, "tmdb_id"),
+            episode_title: Self::get_optional_named(row, "episode_title"),
+            still_path: Self::get_optional_named(row, "still_path"),
             is_cloud,
-            cloud_file_id: row.get("cloud_file_id").unwrap_or(None),
+            cloud_file_id: Self::get_optional_named(row, "cloud_file_id"),
+            parent_zip_id: Self::get_optional_named(row, "parent_zip_id"),
+            zip_entry_path: Self::get_optional_named(row, "zip_entry_path"),
+            zip_local_header_offset: Self::get_optional_named(row, "zip_local_header_offset"),
+            zip_data_start_offset: Self::get_optional_named(row, "zip_data_start_offset"),
+            zip_compressed_size: Self::get_optional_named(row, "zip_compressed_size"),
+            zip_uncompressed_size: Self::get_optional_named(row, "zip_uncompressed_size"),
+            zip_crc32: Self::get_optional_named(row, "zip_crc32"),
+            zip_compression_method: Self::get_optional_named(row, "zip_compression_method"),
         })
+    }
+
+    fn get_optional_named<T>(row: &rusqlite::Row, name: &str) -> Option<T>
+    where
+        T: FromSql,
+    {
+        let idx = row.as_ref().column_index(name).ok()?;
+        row.get(idx).ok()
     }
 }
 

@@ -6,14 +6,22 @@ import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, Che
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
-    getTmdbImageUrl, refreshSeriesMetadata
+    getTmdbImageUrl, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
 import { ResumeDialog } from "@/components/ResumeDialog"
 import { ContentDetailsModal } from "@/components/ContentDetailsModal"
+import { ZipPlaybackLoadingOverlay } from "@/components/ZipPlaybackLoadingOverlay"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
+import {
+    buildZipPlaybackLoadingState,
+    type ZipPlaybackLoadingState,
+    waitForMinimumZipOverlayVisibility,
+    waitForMpvPlaybackStart,
+    waitForZipLoadingOverlayPaint,
+} from "@/utils/zipPlayback"
 
 interface EpisodeBrowserProps {
     show: MediaItem
@@ -124,6 +132,17 @@ interface EpisodeItemProps {
     onWatchTogether?: (episode: MediaItem) => void;
 }
 
+const getZipCompressionLabel = (method?: number): string | null => {
+    switch (method) {
+        case 0:
+            return "Store";
+        case 8:
+            return "Deflate";
+        default:
+            return null;
+    }
+};
+
 const EpisodeItemBase = ({
     episode,
     index,
@@ -154,6 +173,9 @@ const EpisodeItemBase = ({
         ? tmdbData.runtime
         : null;
     const runtimeMinutes = localRuntimeMinutes ?? tmdbRuntimeMinutes;
+    const zipCompressionLabel = episode.parent_zip_id
+        ? getZipCompressionLabel(episode.zip_compression_method)
+        : null;
 
     return (
         <motion.div
@@ -210,6 +232,11 @@ const EpisodeItemBase = ({
                                     <span className="text-[10px] lg:text-xs font-medium text-white">
                                         Episode {episode.episode_number}
                                     </span>
+                                    {zipCompressionLabel && (
+                                        <span className="text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-white/10 text-white border border-white/15">
+                                            ZIP: {zipCompressionLabel}
+                                        </span>
+                                    )}
                                     {isFinished && (
                                         <span className="flex items-center gap-1 text-[10px] lg:text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">
                                             <Check className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
@@ -351,6 +378,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         episode: MediaItem;
         resumeInfo: ResumeInfo;
     } | null>(null)
+    const [zipPlaybackLoading, setZipPlaybackLoading] = useState<ZipPlaybackLoadingState | null>(null)
 
     // Metadata refresh state
     const [isRefreshing, setIsRefreshing] = useState(false)
@@ -470,7 +498,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             toast({ title: "Metadata Refreshed", description: result });
             // Reload episodes to get updated metadata
             await loadEpisodes();
-        } catch (error) {
+        } catch {
             toast({ title: "Error", description: "Failed to refresh metadata", variant: "destructive" });
         } finally {
             setIsRefreshing(false);
@@ -504,6 +532,40 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         await handlePlay(episode);
     }
 
+    const launchPlaybackWithZipLoading = useCallback(
+        async (
+            episode: MediaItem,
+            resume: boolean,
+            audioPreference: string | null,
+        ) => {
+            const loadingState = episode.parent_zip_id
+                ? buildZipPlaybackLoadingState(episode, resume)
+                : null;
+            let overlayVisibleSince = 0;
+
+            if (loadingState) {
+                setZipPlaybackLoading(loadingState);
+                await waitForZipLoadingOverlayPaint();
+                overlayVisibleSince = Date.now();
+            }
+
+            try {
+                await playMedia(episode.id, resume, audioPreference);
+                if (loadingState) {
+                    await waitForMpvPlaybackStart(episode.id);
+                    await waitForMinimumZipOverlayVisibility(
+                        overlayVisibleSince,
+                    );
+                }
+            } finally {
+                if (loadingState) {
+                    setZipPlaybackLoading(null);
+                }
+            }
+        },
+        [],
+    );
+
     const handlePlay = async (episode: MediaItem) => {
         try {
             const resumeInfo = await getResumeInfo(episode.id);
@@ -514,7 +576,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             } else {
                 await startPlayback(episode, 0);
             }
-        } catch (e) {
+        } catch {
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
         }
     }
@@ -528,12 +590,19 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
 
     const startPlayback = async (episode: MediaItem, resumeTime: number) => {
         try {
-            await playMedia(episode.id, resumeTime > 0);
+            await launchPlaybackWithZipLoading(
+                episode,
+                resumeTime > 0,
+                resolveSeriesAudioPreferenceForPlayback(
+                    show.id,
+                    episode.season_number,
+                ),
+            );
             toast({
                 title: "Playing",
                 description: `Now playing S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')}`
             })
-        } catch (e) {
+        } catch {
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
         }
     }
@@ -544,12 +613,19 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         // Only MPV is supported now
         if (player === 'mpv') {
             try {
-                await playMedia(pendingPlayEpisode.id, pendingResumeTime > 0);
+                await launchPlaybackWithZipLoading(
+                    pendingPlayEpisode,
+                    pendingResumeTime > 0,
+                    resolveSeriesAudioPreferenceForPlayback(
+                        show.id,
+                        pendingPlayEpisode.season_number,
+                    ),
+                );
                 toast({
                     title: "Playing",
                     description: `Now playing S${String(pendingPlayEpisode.season_number).padStart(2, '0')}E${String(pendingPlayEpisode.episode_number).padStart(2, '0')}`
                 })
-            } catch (e) {
+            } catch {
                 toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
             }
         }
@@ -562,6 +638,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
 
     return (
         <>
+            <ZipPlaybackLoadingOverlay loadingState={zipPlaybackLoading} zIndexClassName="z-[200]" />
+
             <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}

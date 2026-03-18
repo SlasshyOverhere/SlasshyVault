@@ -122,7 +122,9 @@ fn search_directory_for_mpv(dir: &str, max_depth: u32) -> Option<String> {
     }
 
     // Search subdirectories (only look in likely directories to avoid slow scans)
-    let likely_subdirs = ["mpv", "mpv.net", "video", "media", "players", "tools", "portable", "apps"];
+    let likely_subdirs = [
+        "mpv", "mpv.net", "video", "media", "players", "tools", "portable", "apps",
+    ];
 
     if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.filter_map(|e| e.ok()) {
@@ -130,10 +132,9 @@ fn search_directory_for_mpv(dir: &str, max_depth: u32) -> Option<String> {
 
             // Only recurse into likely directories or if at top level
             if max_depth >= 2 || likely_subdirs.iter().any(|&s| entry_name.contains(s)) {
-                if let Some(found) = search_directory_for_mpv(
-                    &entry.path().to_string_lossy(),
-                    max_depth - 1,
-                ) {
+                if let Some(found) =
+                    search_directory_for_mpv(&entry.path().to_string_lossy(), max_depth - 1)
+                {
                     return Some(found);
                 }
             }
@@ -154,7 +155,8 @@ pub fn validate_executable_path(path: &str, expected_name: &str) -> Result<(), S
     let path = Path::new(path);
 
     // Extract the file stem (filename without extension)
-    let file_stem = path.file_stem()
+    let file_stem = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid executable path: {}", path.display()))?;
 
@@ -177,7 +179,10 @@ pub fn auto_detect_mpv(config: &mut Config) -> Option<String> {
             println!("[MPV] Using configured path: {}", path);
             return Some(path.clone());
         }
-        println!("[MPV] Configured path doesn't exist: {}, searching...", path);
+        println!(
+            "[MPV] Configured path doesn't exist: {}, searching...",
+            path
+        );
     }
 
     // Auto-detect
@@ -185,7 +190,10 @@ pub fn auto_detect_mpv(config: &mut Config) -> Option<String> {
         config.mpv_path = Some(found_path.clone());
         // Save to config file
         if let Err(e) = save_config(config) {
-            println!("[MPV] Warning: Failed to save detected path to config: {}", e);
+            println!(
+                "[MPV] Warning: Failed to save detected path to config: {}",
+                e
+            );
         } else {
             println!("[MPV] Saved detected path to config: {}", found_path);
         }
@@ -219,6 +227,14 @@ pub struct Config {
     // Cloud auto-scan interval in minutes (default 5 minutes)
     #[serde(default = "default_cloud_scan_interval_minutes")]
     pub cloud_scan_interval_minutes: u32,
+    #[serde(default = "default_zip_indexing_enabled")]
+    pub zip_indexing_enabled: bool,
+    #[serde(default)]
+    pub zip_cache_dir: Option<String>,
+    #[serde(default = "default_zip_cache_max_gb")]
+    pub zip_cache_max_gb: u32,
+    #[serde(default = "default_zip_cache_expiry_days")]
+    pub zip_cache_expiry_days: u32,
 }
 
 fn default_cloud_cache_max_mb() -> u32 {
@@ -231,6 +247,18 @@ fn default_cloud_cache_expiry_hours() -> u32 {
 
 fn default_cloud_scan_interval_minutes() -> u32 {
     5 // Scan every 5 minutes by default
+}
+
+fn default_zip_indexing_enabled() -> bool {
+    true
+}
+
+fn default_zip_cache_max_gb() -> u32 {
+    20
+}
+
+fn default_zip_cache_expiry_days() -> u32 {
+    7
 }
 
 impl Default for Config {
@@ -246,38 +274,42 @@ impl Default for Config {
             cloud_cache_max_mb: 1024,
             cloud_cache_expiry_hours: 24,
             cloud_scan_interval_minutes: 5,
+            zip_indexing_enabled: true,
+            zip_cache_dir: None,
+            zip_cache_max_gb: 20,
+            zip_cache_expiry_days: 7,
         }
     }
 }
 
 pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     let config_path = get_config_path();
-    
+
     if !std::path::Path::new(&config_path).exists() {
         let default_config = Config::default();
         save_config(&default_config)?;
         return Ok(default_config);
     }
-    
+
     let mut file = fs::File::open(&config_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-    
+
     let config: Config = serde_json::from_str(&contents)?;
     Ok(config)
 }
 
 pub fn save_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = get_config_path();
-    
+
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&config_path).parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     let json = serde_json::to_string_pretty(config)?;
     let mut file = fs::File::create(&config_path)?;
     file.write_all(json.as_bytes())?;
-    
+
     Ok(())
 }
