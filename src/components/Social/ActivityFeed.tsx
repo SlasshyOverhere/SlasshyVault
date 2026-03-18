@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Film, Tv, Filter, User, X, AlertCircle, RefreshCw, LogIn } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -404,13 +404,29 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
   );
 }
 
+/**
+ * ⚡ Bolt: Performance Optimization
+ *
+ * What: Extracted `ActivityItem` into a `React.memo` component and memoized handlers.
+ * Why: The ActivityFeed receives real-time updates (via WebSocket) which causes it to re-render
+ *      frequently. Without memoization, all ActivityItem components re-render on every new
+ *      event (like a friend's watch status updating), causing O(N) rendering overhead.
+ * Impact: Reduces main thread blocking during active social feeds.
+ * Measurement: Open React Profiler, observe ActivityItem re-renders are skipped unless their specific activity changes.
+ */
 interface ActivityItemProps {
   activity: Activity;
   onViewProfile?: (userId: string) => void;
 }
 
-function ActivityItem({ activity, onViewProfile }: ActivityItemProps) {
+const ActivityItem = React.memo(function ActivityItem({ activity, onViewProfile }: ActivityItemProps) {
   const isMovie = activity.contentType === 'movie';
+
+  const handleViewProfile = useCallback(() => {
+    if (activity.userId && onViewProfile) {
+      onViewProfile(activity.userId);
+    }
+  }, [activity.userId, onViewProfile]);
 
   return (
     <motion.div
@@ -438,7 +454,7 @@ function ActivityItem({ activity, onViewProfile }: ActivityItemProps) {
         <div className="flex items-center gap-2 mb-1">
           <div
             className="flex items-center gap-1.5 cursor-pointer hover:text-purple-400 transition-colors"
-            onClick={() => activity.userId && onViewProfile?.(activity.userId)}
+            onClick={handleViewProfile}
           >
             <div className="w-5 h-5 rounded-full bg-zinc-700 overflow-hidden">
               {activity.userAvatar ? (
@@ -476,4 +492,4 @@ function ActivityItem({ activity, onViewProfile }: ActivityItemProps) {
       </div>
     </motion.div>
   );
-}
+});
