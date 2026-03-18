@@ -4162,6 +4162,9 @@ async fn play_with_vlc(
         );
     }
 
+    // Security check: Validate VLC executable
+    config::validate_executable_path(vlc_path, "vlc")?;
+
     let (media, resume_info) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
