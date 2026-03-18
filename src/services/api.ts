@@ -79,6 +79,22 @@ export interface StreamInfo {
   access_token?: string;
 }
 
+export interface AudioTrackOption {
+  stream_index: number;
+  track_id?: number | null;
+  language_code?: string | null;
+  label: string;
+  detail?: string | null;
+  mpv_value?: string | null;
+}
+
+export interface MpvAudioTracksDetectedPayload {
+  media_id: number;
+  series_id?: number | null;
+  season_number?: number | null;
+  tracks: AudioTrackOption[];
+}
+
 export interface LibraryStats {
   movies: number;
   shows: number;
@@ -402,6 +418,19 @@ export const getStreamUrl = async (id: number): Promise<StreamInfo> => {
   }
 };
 
+export const getAudioTracks = async (
+  id: number,
+): Promise<AudioTrackOption[]> => {
+  try {
+    return await invoke<AudioTrackOption[]>("get_audio_tracks", {
+      mediaId: id,
+    });
+  } catch (error) {
+    console.error("Failed to get audio tracks:", error);
+    return [];
+  }
+};
+
 // Get stream info with automatic transcoding support for incompatible formats
 export const getStreamUrlWithTranscode = async (
   id: number,
@@ -488,9 +517,17 @@ export const clearProgress = async (id: number): Promise<void> => {
 };
 
 // Play media with MPV (external player)
-export const playMedia = async (id: number, resume: boolean): Promise<void> => {
+export const playMedia = async (
+  id: number,
+  resume: boolean,
+  audioLanguage?: string | null,
+): Promise<void> => {
   try {
-    await invoke("play_with_mpv", { mediaId: id, resume });
+    await invoke("play_with_mpv", {
+      mediaId: id,
+      resume,
+      audioLanguage: audioLanguage?.trim() || null,
+    });
   } catch (error) {
     console.error("Failed to play with MPV:", error);
     throw error;
@@ -601,6 +638,236 @@ export const getPlayerPreference = (): PlayerPreference => {
 
 export const setPlayerPreference = (preference: PlayerPreference): void => {
   localStorage.setItem("playerPreference", preference);
+};
+
+const SERIES_AUDIO_PREFERENCE_KEY = "streamvault_series_audio_preferences";
+const AUDIO_TRACK_CACHE_KEY = "streamvault_detected_audio_tracks_v2";
+
+const readSeriesAudioPreferenceMap = (): Record<string, string> => {
+  try {
+    const stored = localStorage.getItem(SERIES_AUDIO_PREFERENCE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read series audio preferences:", error);
+    return {};
+  }
+};
+
+export const getSeriesAudioPreference = (
+  seriesId: number,
+): string | null => {
+  const stored = readSeriesAudioPreferenceMap()[String(seriesId)];
+  const normalized = typeof stored === "string" ? stored.trim() : "";
+  return normalized.length > 0 ? normalized : null;
+};
+
+export const setSeriesAudioPreference = (
+  seriesId: number,
+  audioLanguage: string | null,
+): void => {
+  try {
+    const preferences = readSeriesAudioPreferenceMap();
+    const normalized = audioLanguage?.trim() || "";
+
+    if (normalized) {
+      preferences[String(seriesId)] = normalized;
+    } else {
+      delete preferences[String(seriesId)];
+    }
+
+    localStorage.setItem(
+      SERIES_AUDIO_PREFERENCE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch (error) {
+    console.error("Failed to save series audio preference:", error);
+  }
+};
+
+const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> => {
+  try {
+    const stored = localStorage.getItem(AUDIO_TRACK_CACHE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read cached audio tracks:", error);
+    return {};
+  }
+};
+
+export const getCachedSeriesAudioTracks = (
+  seriesId: number,
+): AudioTrackOption[] | null => {
+  const cache = readAudioTrackCacheMap();
+  const direct = cache[String(seriesId)];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  const legacyEntry = Object.entries(cache).find(([key, value]) =>
+    key.startsWith(`${seriesId}:`) && Array.isArray(value),
+  );
+  return legacyEntry?.[1] ?? null;
+};
+
+export const setCachedSeriesAudioTracks = (
+  seriesId: number,
+  tracks: AudioTrackOption[],
+): void => {
+  try {
+    const cache = readAudioTrackCacheMap();
+    cache[String(seriesId)] = tracks;
+    localStorage.setItem(AUDIO_TRACK_CACHE_KEY, JSON.stringify(cache));
+  } catch (error) {
+    console.error("Failed to cache detected audio tracks:", error);
+  }
+};
+
+const normalizeAudioTrackText = (value?: string | null): string => {
+  return value?.trim().toLowerCase() || "";
+};
+
+const audioTrackCacheIdentity = (track: AudioTrackOption): string => {
+  const trackId = track.track_id ?? "";
+  const mpvValue = normalizeAudioTrackText(track.mpv_value);
+  const languageCode = normalizeAudioTrackText(track.language_code);
+  const label = normalizeAudioTrackText(track.label);
+  const detail = normalizeAudioTrackText(track.detail);
+
+  return [trackId, mpvValue, languageCode, label, detail].join("|");
+};
+
+const audioTracksLikelyMatch = (
+  left: AudioTrackOption,
+  right: AudioTrackOption,
+): boolean => {
+  if (
+    left.track_id != null &&
+    right.track_id != null &&
+    left.track_id === right.track_id
+  ) {
+    return true;
+  }
+
+  const leftMpvValue = normalizeAudioTrackText(left.mpv_value);
+  const rightMpvValue = normalizeAudioTrackText(right.mpv_value);
+  if (leftMpvValue && rightMpvValue && leftMpvValue === rightMpvValue) {
+    return true;
+  }
+
+  const leftLanguage = normalizeAudioTrackText(left.language_code);
+  const rightLanguage = normalizeAudioTrackText(right.language_code);
+  const leftLabel = normalizeAudioTrackText(left.label);
+  const rightLabel = normalizeAudioTrackText(right.label);
+
+  return (
+    !!leftLanguage &&
+    !!rightLanguage &&
+    leftLanguage === rightLanguage &&
+    leftLabel === rightLabel
+  );
+};
+
+export const mergeCachedSeriesAudioTracks = (
+  seriesId: number,
+  tracks: AudioTrackOption[],
+): void => {
+  const existingTracks = getCachedSeriesAudioTracks(seriesId) ?? [];
+  if (existingTracks.length === 0) {
+    setCachedSeriesAudioTracks(seriesId, tracks);
+    return;
+  }
+
+  const merged = [...existingTracks];
+
+  for (const incomingTrack of tracks) {
+    const existingIndex = merged.findIndex((cachedTrack) =>
+      audioTracksLikelyMatch(cachedTrack, incomingTrack),
+    );
+
+    if (existingIndex >= 0) {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...incomingTrack,
+      };
+      continue;
+    }
+
+    merged.push(incomingTrack);
+  }
+
+  const deduped = merged.filter((track, index, items) => {
+    const identity = audioTrackCacheIdentity(track);
+    return items.findIndex((candidate) =>
+      audioTrackCacheIdentity(candidate) === identity,
+    ) === index;
+  });
+
+  deduped.sort((left, right) => left.label.localeCompare(right.label));
+  setCachedSeriesAudioTracks(seriesId, deduped);
+};
+
+const matchesAudioTrackPreference = (
+  track: AudioTrackOption,
+  storedPreference: string,
+): boolean => {
+  const normalizedPreference = storedPreference.trim().toLowerCase();
+  if (!normalizedPreference) {
+    return false;
+  }
+
+  const preferenceParts = normalizedPreference
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const languageCode = track.language_code?.trim().toLowerCase();
+  const label = track.label.trim().toLowerCase();
+  const detail = track.detail?.trim().toLowerCase();
+  const mpvValue = track.mpv_value?.trim().toLowerCase();
+
+  return (
+    mpvValue === normalizedPreference ||
+    languageCode === normalizedPreference ||
+    label === normalizedPreference ||
+    detail === normalizedPreference ||
+    (!!languageCode && preferenceParts.includes(languageCode)) ||
+    preferenceParts.includes(label)
+  );
+};
+
+export const resolveSeriesAudioPreferenceForPlayback = (
+  seriesId: number | null | undefined,
+  _seasonNumber?: number | null,
+): string | null => {
+  if (!seriesId) {
+    return null;
+  }
+
+  const storedPreference = getSeriesAudioPreference(seriesId);
+  if (!storedPreference) {
+    return null;
+  }
+
+  const cachedTracks = getCachedSeriesAudioTracks(seriesId);
+  if (!cachedTracks || cachedTracks.length === 0) {
+    return storedPreference;
+  }
+
+  const matchedTrack = cachedTracks.find((track) =>
+    matchesAudioTrackPreference(track, storedPreference),
+  );
+
+  return matchedTrack?.mpv_value?.trim() || storedPreference;
 };
 
 // MPV Status types

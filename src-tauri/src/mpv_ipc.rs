@@ -227,6 +227,8 @@ pub fn launch_mpv_with_tracking(
     start_position: f64,
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
+    audio_language: Option<&str>,
+    ipc_server: Option<&str>,
 ) -> Result<u32, String> {
     crate::config::validate_executable_path(mpv_path, "mpv")?;
 
@@ -245,6 +247,10 @@ pub fn launch_mpv_with_tracking(
         cache_settings.map(|c| c.enabled).unwrap_or(false)
     );
     println!("[MPV] Start position: {:.2}s", start_position);
+    println!(
+        "[MPV] Audio language preference: {}",
+        audio_language.unwrap_or("MPV default")
+    );
 
     // Only verify file exists for local files (not URLs)
     let is_url = file_or_url.starts_with("http://") || file_or_url.starts_with("https://");
@@ -288,6 +294,19 @@ pub fn launch_mpv_with_tracking(
     // Add start position if resuming
     if start_position > 0.0 {
         cmd.arg(format!("--start={}", start_position as i64));
+    }
+
+    if let Some(language) = audio_language.filter(|value| !value.trim().is_empty()) {
+        let trimmed = language.trim();
+        if let Some(track_id) = trimmed.strip_prefix("aid:") {
+            cmd.arg(format!("--aid={}", track_id.trim()));
+        } else {
+            cmd.arg(format!("--alang={}", trimmed));
+        }
+    }
+
+    if let Some(ipc_path) = ipc_server.filter(|value| !value.trim().is_empty()) {
+        cmd.arg(format!("--input-ipc-server={}", ipc_path.trim()));
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL

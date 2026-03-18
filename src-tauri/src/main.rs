@@ -18,7 +18,7 @@ mod zip_stream_proxy;
 use tauri_plugin_autostart::MacosLauncher;
 
 use notify_rust::Notification as SystemNotification;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -2906,6 +2906,560 @@ pub struct StreamInfo {
     pub access_token: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct AudioTrackInfo {
+    pub stream_index: i32,
+    pub track_id: Option<i32>,
+    pub language_code: Option<String>,
+    pub label: String,
+    pub detail: Option<String>,
+    pub mpv_value: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct MpvAudioTracksDetectedPayload {
+    media_id: i64,
+    series_id: Option<i64>,
+    season_number: Option<i32>,
+    tracks: Vec<AudioTrackInfo>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeStreamsOutput {
+    #[serde(default)]
+    streams: Vec<FfprobeAudioStream>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeAudioStream {
+    index: i32,
+    #[serde(default)]
+    tags: HashMap<String, String>,
+}
+
+struct AudioProbeSource {
+    stream_url: String,
+    access_token: Option<String>,
+    temp_zip_proxy: Option<zip_stream_proxy::ZipStreamProxyHandle>,
+}
+
+#[derive(Deserialize)]
+struct MpvIpcMessage {
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    data: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    request_id: Option<u64>,
+}
+
+fn resolve_ffprobe_path(config: &config::Config) -> Option<String> {
+    let configured = config
+        .ffprobe_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if let Some(path) = configured {
+        if std::path::Path::new(&path).exists()
+            && config::validate_executable_path(&path, "ffprobe").is_ok()
+        {
+            return Some(path);
+        }
+    }
+
+    if let Some(ffmpeg_path) = config
+        .ffmpeg_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let sibling = std::path::Path::new(ffmpeg_path).with_file_name("ffprobe.exe");
+        if sibling.exists()
+            && config::validate_executable_path(&sibling.to_string_lossy(), "ffprobe").is_ok()
+        {
+            return Some(sibling.to_string_lossy().to_string());
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("where")
+        .arg("ffprobe.exe")
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(paths) = String::from_utf8(output.stdout) {
+                if let Some(path) = paths.lines().map(str::trim).find(|value| !value.is_empty()) {
+                    if std::path::Path::new(path).exists()
+                        && config::validate_executable_path(path, "ffprobe").is_ok()
+                    {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn infer_language_from_text(value: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    let normalized = value.trim().to_lowercase();
+
+    match normalized.as_str() {
+        "en" | "eng" | "english" => Some(("en", "English", "en,eng,english")),
+        "hi" | "hin" | "hindi" => Some(("hi", "Hindi", "hi,hin,hindi")),
+        "ta" | "tam" | "tamil" => Some(("ta", "Tamil", "ta,tam,tamil")),
+        "te" | "tel" | "telugu" => Some(("te", "Telugu", "te,tel,telugu")),
+        "ml" | "mal" | "malayalam" => Some(("ml", "Malayalam", "ml,mal,malayalam")),
+        "ja" | "jpn" | "japanese" => Some(("ja", "Japanese", "ja,jpn,japanese")),
+        "ko" | "kor" | "korean" => Some(("ko", "Korean", "ko,kor,korean")),
+        "ar" | "ara" | "arabic" => Some(("ar", "Arabic", "ar,ara,arabic")),
+        "fr" | "fra" | "fre" | "french" => Some(("fr", "French", "fr,fra,french")),
+        "es" | "spa" | "spanish" => Some(("es", "Spanish", "es,spa,spanish")),
+        "de" | "deu" | "ger" | "german" => Some(("de", "German", "de,deu,german")),
+        "it" | "ita" | "italian" => Some(("it", "Italian", "it,ita,italian")),
+        "ru" | "rus" | "russian" => Some(("ru", "Russian", "ru,rus,russian")),
+        "und" | "" => None,
+        _ => {
+            let contains = |needle: &str| normalized.contains(needle);
+
+            if contains("english") {
+                Some(("en", "English", "en,eng,english"))
+            } else if contains("hindi") {
+                Some(("hi", "Hindi", "hi,hin,hindi"))
+            } else if contains("tamil") {
+                Some(("ta", "Tamil", "ta,tam,tamil"))
+            } else if contains("telugu") {
+                Some(("te", "Telugu", "te,tel,telugu"))
+            } else if contains("malayalam") {
+                Some(("ml", "Malayalam", "ml,mal,malayalam"))
+            } else if contains("japanese") {
+                Some(("ja", "Japanese", "ja,jpn,japanese"))
+            } else if contains("korean") {
+                Some(("ko", "Korean", "ko,kor,korean"))
+            } else if contains("arabic") {
+                Some(("ar", "Arabic", "ar,ara,arabic"))
+            } else if contains("french") {
+                Some(("fr", "French", "fr,fra,french"))
+            } else if contains("spanish") {
+                Some(("es", "Spanish", "es,spa,spanish"))
+            } else if contains("german") {
+                Some(("de", "German", "de,deu,german"))
+            } else if contains("italian") {
+                Some(("it", "Italian", "it,ita,italian"))
+            } else if contains("russian") {
+                Some(("ru", "Russian", "ru,rus,russian"))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn build_audio_track_info(
+    stream_index: i32,
+    track_id: Option<i32>,
+    language_tag: Option<String>,
+    title: Option<String>,
+) -> AudioTrackInfo {
+    let language_tag = language_tag
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let title = title
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let inferred = language_tag
+        .as_deref()
+        .and_then(infer_language_from_text)
+        .or_else(|| title.as_deref().and_then(infer_language_from_text));
+
+    let (language_code, label, mpv_value) = if let Some((code, name, mpv_value)) = inferred {
+        (
+            Some(code.to_string()),
+            name.to_string(),
+            Some(mpv_value.to_string()),
+        )
+    } else if let Some(tag) = language_tag.as_deref() {
+        (
+            Some(tag.to_lowercase()),
+            tag.to_uppercase(),
+            Some(tag.to_lowercase()),
+        )
+    } else {
+        (
+            None,
+            title
+                .clone()
+                .unwrap_or_else(|| format!("Track {}", stream_index + 1)),
+            None,
+        )
+    };
+
+    let detail = match title {
+        Some(track_title) if track_title.to_lowercase() != label.to_lowercase() => Some(track_title),
+        _ => language_tag
+            .filter(|tag| tag.to_lowercase() != label.to_lowercase())
+            .filter(|tag| tag.to_lowercase() != language_code.clone().unwrap_or_default()),
+    };
+
+    AudioTrackInfo {
+        stream_index,
+        track_id,
+        language_code,
+        label,
+        detail,
+        mpv_value,
+    }
+}
+
+fn normalize_audio_track(stream: FfprobeAudioStream) -> AudioTrackInfo {
+    let language_tag = stream
+        .tags
+        .get("language")
+        .or_else(|| stream.tags.get("LANGUAGE"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let title = stream
+        .tags
+        .get("title")
+        .or_else(|| stream.tags.get("handler_name"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    build_audio_track_info(stream.index, None, language_tag, title)
+}
+
+fn normalize_mpv_audio_track(track: &serde_json::Value) -> Option<AudioTrackInfo> {
+    if track.get("type").and_then(|value| value.as_str()) != Some("audio") {
+        return None;
+    }
+
+    let stream_index = track
+        .get("ff-index")
+        .and_then(|value| value.as_i64())
+        .or_else(|| track.get("id").and_then(|value| value.as_i64()))
+        .unwrap_or(0) as i32;
+    let track_id = track.get("id").and_then(|value| value.as_i64()).map(|value| value as i32);
+    let language_tag = track
+        .get("lang")
+        .or_else(|| track.get("language"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let title = track
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let codec = track
+        .get("codec")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let selected = track
+        .get("selected")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    let mut normalized = build_audio_track_info(stream_index, track_id, language_tag, title);
+    if let Some(id) = track_id.filter(|value| *value > 0) {
+        normalized.mpv_value = Some(format!("aid:{}", id));
+    }
+    let mut detail_parts = Vec::new();
+
+    if let Some(detail) = normalized.detail.take() {
+        detail_parts.push(detail);
+    }
+
+    if let Some(codec_name) = codec {
+        let already_listed = detail_parts
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case(&codec_name));
+        if !already_listed {
+            detail_parts.push(codec_name);
+        }
+    }
+
+    if selected {
+        detail_parts.push("Selected".to_string());
+    }
+
+    normalized.detail = if detail_parts.is_empty() {
+        None
+    } else {
+        Some(detail_parts.join(" • "))
+    };
+
+    Some(normalized)
+}
+
+fn parse_mpv_audio_tracks(value: &serde_json::Value) -> Vec<AudioTrackInfo> {
+    let serde_json::Value::Array(items) = value else {
+        return Vec::new();
+    };
+
+    let mut seen = HashSet::new();
+    let mut tracks = Vec::new();
+
+    for track in items.iter().filter_map(normalize_mpv_audio_track) {
+        let key = (
+            track.stream_index,
+            track.label.to_lowercase(),
+            track.mpv_value.clone().unwrap_or_default(),
+        );
+        if seen.insert(key) {
+            tracks.push(track);
+        }
+    }
+
+    tracks
+}
+
+#[cfg(windows)]
+fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrackInfo>, String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let mut file = None;
+    for _ in 0..100 {
+        let wide_name: Vec<u16> = pipe_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let handle = unsafe {
+            CreateFileW(
+                wide_name.as_ptr(),
+                0x80000000 | 0x40000000,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                0,
+            )
+        };
+
+        if handle != INVALID_HANDLE_VALUE {
+            file = Some(unsafe {
+                std::fs::File::from_raw_handle(handle as *mut std::ffi::c_void)
+            });
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let mut pipe_file =
+        file.ok_or_else(|| format!("Failed to connect to MPV pipe: {}", pipe_name))?;
+    let read_file = pipe_file
+        .try_clone()
+        .map_err(|error| format!("Failed to clone MPV pipe handle: {}", error))?;
+    let mut reader = BufReader::new(read_file);
+
+    let observe_tracks = serde_json::json!({
+        "command": ["observe_property", 91, "track-list"],
+    });
+    let read_tracks = serde_json::json!({
+        "command": ["get_property", "track-list"],
+        "request_id": 901,
+    });
+
+    writeln!(pipe_file, "{}", observe_tracks)
+        .map_err(|error| format!("Failed to observe MPV track-list: {}", error))?;
+    writeln!(pipe_file, "{}", read_tracks)
+        .map_err(|error| format!("Failed to request MPV track-list: {}", error))?;
+
+    loop {
+        let mut line = String::new();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("Failed to read MPV IPC response: {}", error))?;
+
+        if bytes_read == 0 {
+            return Ok(Vec::new());
+        }
+
+        let message = match serde_json::from_str::<MpvIpcMessage>(line.trim()) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        match message.event.as_deref() {
+            Some("file-loaded") => {
+                writeln!(pipe_file, "{}", read_tracks)
+                    .map_err(|error| format!("Failed to refresh MPV track-list: {}", error))?;
+            }
+            Some("shutdown") | Some("end-file") => return Ok(Vec::new()),
+            _ => {}
+        }
+
+        let is_track_update = matches!(
+            message.event.as_deref(),
+            Some("property-change")
+        ) && message.name.as_deref() == Some("track-list");
+        let is_track_response = message.request_id == Some(901)
+            && message.error.as_deref() != Some("property unavailable");
+
+        if is_track_update || is_track_response {
+            if let Some(data) = message.data.as_ref() {
+                let tracks = parse_mpv_audio_tracks(data);
+                if !tracks.is_empty() {
+                    return Ok(tracks);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn detect_audio_tracks_from_running_mpv(_pipe_name: &str) -> Result<Vec<AudioTrackInfo>, String> {
+    Err("MPV IPC audio detection is currently supported only on Windows".to_string())
+}
+
+fn probe_audio_tracks_with_ffprobe(
+    ffprobe_path: &str,
+    source: &str,
+    access_token: Option<&str>,
+) -> Result<Vec<AudioTrackInfo>, String> {
+    config::validate_executable_path(ffprobe_path, "ffprobe")?;
+
+    let mut command = std::process::Command::new(ffprobe_path);
+    command
+        .arg("-v")
+        .arg("error")
+        .arg("-probesize")
+        .arg("1048576")
+        .arg("-analyzeduration")
+        .arg("1000000")
+        .arg("-select_streams")
+        .arg("a")
+        .arg("-show_entries")
+        .arg("stream=index:stream_tags=language,title,handler_name,LANGUAGE")
+        .arg("-of")
+        .arg("json");
+
+    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        command.arg("-headers").arg(format!("Authorization: Bearer {}\r\n", token));
+    }
+
+    let output = command
+        .arg(source)
+        .output()
+        .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffprobe could not read audio streams: {}", stderr.trim()));
+    }
+
+    let parsed: FfprobeStreamsOutput = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Failed to parse ffprobe output: {}", error))?;
+
+    Ok(parsed
+        .streams
+        .into_iter()
+        .map(normalize_audio_track)
+        .collect())
+}
+
+async fn resolve_audio_probe_source(
+    state: &AppState,
+    media: &database::MediaItem,
+) -> Result<AudioProbeSource, String> {
+    let file_path = media.file_path.clone().unwrap_or_default();
+    let is_cloud = media.is_cloud.unwrap_or(false);
+    let is_zip_media = media.parent_zip_id.is_some();
+
+    if is_cloud {
+        if is_zip_media {
+            match zip_manager::zip_entry_compression_method(media).map_err(|e| e.to_string())? {
+                0 => {
+                    let (stream_url, proxy) = build_temporary_zip_stream_url(state, media).await?;
+                    return Ok(AudioProbeSource {
+                        stream_url,
+                        access_token: None,
+                        temp_zip_proxy: Some(proxy),
+                    });
+                }
+                8 => {
+                    let extracted_path = build_zip_extracted_path(state, media).await?;
+                    return Ok(AudioProbeSource {
+                        stream_url: extracted_path,
+                        access_token: None,
+                        temp_zip_proxy: None,
+                    });
+                }
+                method => {
+                    return Err(format!(
+                        "ZIP entry compression method {} is not supported for audio detection",
+                        method
+                    ));
+                }
+            }
+        }
+
+        if let Some(ref cloud_file_id) = media.cloud_file_id {
+            let (stream_url, access_token) = state.gdrive_client.get_stream_url(cloud_file_id).await?;
+            return Ok(AudioProbeSource {
+                stream_url,
+                access_token: Some(access_token),
+                temp_zip_proxy: None,
+            });
+        }
+
+        return Err("Cloud file ID not found".to_string());
+    }
+
+    if file_path.is_empty() || !std::path::Path::new(&file_path).exists() {
+        return Err("File not found".to_string());
+    }
+
+    Ok(AudioProbeSource {
+        stream_url: file_path,
+        access_token: None,
+        temp_zip_proxy: None,
+    })
+}
+
+#[tauri::command]
+async fn get_audio_tracks(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<Vec<AudioTrackInfo>, String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+    let ffprobe_path = resolve_ffprobe_path(&config).ok_or_else(|| {
+        "FFprobe is not configured. Set FFprobe in Settings > Player to detect audio tracks.".to_string()
+    })?;
+    let media = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_media_by_id(media_id).map_err(|e| e.to_string())?
+    };
+
+    let mut source = resolve_audio_probe_source(&state, &media).await?;
+    let result = probe_audio_tracks_with_ffprobe(
+        &ffprobe_path,
+        &source.stream_url,
+        source.access_token.as_deref(),
+    );
+
+    if let Some(proxy) = source.temp_zip_proxy.as_mut() {
+        proxy.stop();
+    }
+
+    result
+}
+
 #[tauri::command]
 async fn get_stream_info(state: State<'_, AppState>, media_id: i64) -> Result<StreamInfo, String> {
     let media = {
@@ -3216,6 +3770,7 @@ async fn play_with_mpv(
     state: State<'_, AppState>,
     media_id: i64,
     resume: bool,
+    audio_language: Option<String>,
 ) -> Result<ApiResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
@@ -3248,6 +3803,19 @@ async fn play_with_mpv(
     let season_number = media.season_number;
     let episode_number = media.episode_number;
     let media_type = media.media_type.clone();
+    let series_id = if media.media_type == "tvshow" {
+        Some(media.id)
+    } else {
+        media.parent_id
+    };
+    let audio_language = audio_language.and_then(|value| {
+        let normalized = value.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
 
     // Determine start position before picking the playback source so ZIP playback can
     // choose between proxy streaming and cache-backed local playback.
@@ -3441,6 +4009,15 @@ async fn play_with_mpv(
     };
 
     config::validate_executable_path(&mpv_path, "mpv")?;
+    let mpv_audio_probe_pipe = if is_zip_media {
+        Some(format!(
+            r"\\.\pipe\streamvault-mpv-{}-{}",
+            media_id,
+            chrono::Utc::now().timestamp_millis()
+        ))
+    } else {
+        None
+    };
 
     // Launch MPV with progress tracking
     let mpv_path_clone = mpv_path.clone();
@@ -3467,6 +4044,8 @@ async fn play_with_mpv(
         start_position,
         auth_header.as_deref(),
         cache_settings.as_ref(),
+        audio_language.as_deref(),
+        mpv_audio_probe_pipe.as_deref(),
     )?;
 
     // Store the session
@@ -3493,6 +4072,28 @@ async fn play_with_mpv(
     let db_path = database::get_database_path();
     let window_clone = window.clone();
     let app_handle = window.app_handle();
+
+    if let Some(pipe_name) = mpv_audio_probe_pipe {
+        let window_for_audio = window.clone();
+        std::thread::spawn(move || match detect_audio_tracks_from_running_mpv(&pipe_name) {
+            Ok(tracks) if !tracks.is_empty() => {
+                let payload = MpvAudioTracksDetectedPayload {
+                    media_id,
+                    series_id,
+                    season_number,
+                    tracks,
+                };
+                let _ = window_for_audio.emit("mpv-audio-tracks-detected", payload);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                println!(
+                    "[MPV] Audio track detection via playback pipe failed for media {}: {}",
+                    media_id, error
+                );
+            }
+        });
+    }
 
     std::thread::spawn(move || {
         println!("[MPV] Starting progress monitor for media ID: {}", media_id);
@@ -3560,6 +4161,9 @@ async fn play_with_vlc(
             "VLC path not set or invalid. Please configure it in Settings > Player.".to_string(),
         );
     }
+
+    // Security check: Validate VLC executable
+    config::validate_executable_path(vlc_path, "vlc")?;
 
     let (media, resume_info) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -5470,6 +6074,26 @@ async fn build_zip_stream_url(
     );
 
     Ok(stream_url)
+}
+
+async fn build_temporary_zip_stream_url(
+    state: &AppState,
+    media: &database::MediaItem,
+) -> Result<(String, zip_stream_proxy::ZipStreamProxyHandle), String> {
+    let stream_info = zip_manager::build_zip_stream_info(media).map_err(|e| e.to_string())?;
+    let (drive_url, access_token) = state
+        .gdrive_client
+        .get_stream_url(&stream_info.zip_file_id)
+        .await?;
+
+    let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
+        drive_url,
+        access_token,
+        &stream_info,
+        None,
+    ))?;
+
+    Ok((zip_stream_proxy::localhost_stream_url(proxy.port), proxy))
 }
 
 fn is_zip_drive_item(file: &gdrive::DriveItem) -> bool {
@@ -7832,6 +8456,7 @@ fn main() {
             get_resume_info,
             get_media_info,
             get_stream_info,
+            get_audio_tracks,
             zip_analyze,
             zip_index_episodes,
             zip_get_stream_info,
