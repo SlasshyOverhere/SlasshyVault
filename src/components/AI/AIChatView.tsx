@@ -1482,7 +1482,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     });
   };
 
-  const fetchTmdbProxyJson = async (path: string): Promise<Record<string, unknown>> => {
+  const fetchTmdbProxyJson = useCallback(async (path: string): Promise<Record<string, unknown>> => {
     const baseUrl = resolveMainBackendUrl();
     if (!baseUrl) {
       throw new Error('Backend URL is not configured');
@@ -1500,7 +1500,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     }
 
     return response.json();
-  };
+  }, []);
 
   const fetchLinkedTmdbContext = async (linkedItem: LinkedMediaItem): Promise<Record<string, unknown>> => {
     const fromCache = linkedContextCacheRef.current.get(linkedItem.key);
@@ -1651,7 +1651,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     }
   };
 
-  const openTmdbMoreInfo = async (profile: TmdbDeepProfileData) => {
+  const openTmdbMoreInfo = useCallback(async (profile: TmdbDeepProfileData) => {
     setTmdbMoreInfoOpen(true);
     setTmdbMoreInfoLoading(true);
     setTmdbMoreInfoError(null);
@@ -1912,7 +1912,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     } finally {
       setTmdbMoreInfoLoading(false);
     }
-  };
+  }, [fetchTmdbProxyJson]);
 
   const addMessage = (line: ChatLine) => {
     setMessages((prev) => [...prev, line].slice(-MAX_HISTORY_LINES));
@@ -2162,6 +2162,59 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
   const hasQuotaExhausted = !!quota && quota.remaining <= 0;
   const showQuotaNudge = hasQuotaExhausted && !isBanned && !dismissedQuotaNudge;
 
+  const memoizedMessages = useMemo(() => {
+    return messages.map((line) => {
+      const deepProfile = line.role === 'assistant'
+        ? parseTmdbDeepProfileForCard(line.content)
+        : null;
+
+      return (
+        <motion.div
+          key={line.id}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          data-chat-line-id={line.id}
+          className={`flex ${line.role === 'user' ? 'justify-end' : 'justify-start'}`}
+        >
+          <div
+            className={`rounded-2xl text-sm leading-relaxed shadow-md ${
+              line.role === 'user'
+                ? 'max-w-[88%] border border-white/20 bg-white px-4 py-3 text-black'
+                : deepProfile
+                  ? 'max-w-[95%] border border-white/12 bg-white/[0.08] p-2 text-white'
+                  : 'max-w-[88%] border border-white/12 bg-white/[0.08] px-4 py-3 text-white'
+            }`}
+          >
+            {line.role === 'assistant' ? (
+              deepProfile ? (
+                <TmdbDeepProfileCard
+                  profile={deepProfile}
+                  onMoreInfo={() => { openTmdbMoreInfo(deepProfile); }}
+                />
+              ) : (
+                <div
+                  className="max-w-none break-words text-sm leading-relaxed [&_a]:text-sky-300 [&_a]:underline [&_a]:underline-offset-2 hover:[&_a]:text-sky-200 [&_blockquote]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:border-white/20 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-300 [&_code]:rounded [&_code]:bg-white/12 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_em]:text-neutral-200 [&_h1]:mb-2 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h1]:leading-snug [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:leading-snug [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-medium [&_li]:mb-1 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_p:last-child]:mb-0 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-black/45 [&_pre]:p-2 [&_strong]:font-semibold [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5"
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={MARKDOWN_COMPONENTS}
+                  >
+                    {line.content}
+                  </ReactMarkdown>
+                </div>
+              )
+            ) : (
+              <p className="whitespace-pre-wrap break-words">{line.content}</p>
+            )}
+            <p className={`text-[10px] ${line.role === 'user' ? 'mt-2 text-black/60' : (deepProfile ? 'mt-1 px-1 text-neutral-400' : 'mt-2 text-neutral-400')}`}>
+              {formatIstTime(line.createdAt)}
+            </p>
+          </div>
+        </motion.div>
+      );
+    });
+  }, [messages, openTmdbMoreInfo]);
+
   return (
     <motion.div
       key="ai-chat-view"
@@ -2251,58 +2304,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
               ) : (
                 <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto pr-1">
                   <div className="space-y-3">
-                    {messages.map((line) => (
-                      (() => {
-                        const deepProfile = line.role === 'assistant'
-                          ? parseTmdbDeepProfileForCard(line.content)
-                          : null;
-
-                        return (
-                          <motion.div
-                            key={line.id}
-                            initial={{ opacity: 0, y: 8 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            data-chat-line-id={line.id}
-                            className={`flex ${line.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                          >
-                            <div
-                              className={`rounded-2xl text-sm leading-relaxed shadow-md ${
-                                line.role === 'user'
-                                  ? 'max-w-[88%] border border-white/20 bg-white px-4 py-3 text-black'
-                                  : deepProfile
-                                    ? 'max-w-[95%] border border-white/12 bg-white/[0.08] p-2 text-white'
-                                    : 'max-w-[88%] border border-white/12 bg-white/[0.08] px-4 py-3 text-white'
-                              }`}
-                            >
-                              {line.role === 'assistant' ? (
-                                deepProfile ? (
-                                  <TmdbDeepProfileCard
-                                    profile={deepProfile}
-                                    onMoreInfo={() => { openTmdbMoreInfo(deepProfile); }}
-                                  />
-                                ) : (
-                                  <div
-                                    className="max-w-none break-words text-sm leading-relaxed [&_a]:text-sky-300 [&_a]:underline [&_a]:underline-offset-2 hover:[&_a]:text-sky-200 [&_blockquote]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:border-white/20 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-300 [&_code]:rounded [&_code]:bg-white/12 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_em]:text-neutral-200 [&_h1]:mb-2 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h1]:leading-snug [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:leading-snug [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-medium [&_li]:mb-1 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_p:last-child]:mb-0 [&_pre]:mb-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-black/45 [&_pre]:p-2 [&_strong]:font-semibold [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5"
-                                  >
-                                    <ReactMarkdown
-                                      remarkPlugins={[remarkGfm]}
-                                      components={MARKDOWN_COMPONENTS}
-                                    >
-                                      {line.content}
-                                    </ReactMarkdown>
-                                  </div>
-                                )
-                              ) : (
-                                <p className="whitespace-pre-wrap break-words">{line.content}</p>
-                              )}
-                              <p className={`text-[10px] ${line.role === 'user' ? 'mt-2 text-black/60' : (deepProfile ? 'mt-1 px-1 text-neutral-400' : 'mt-2 text-neutral-400')}`}>
-                                {formatIstTime(line.createdAt)}
-                              </p>
-                            </div>
-                          </motion.div>
-                        );
-                      })()
-                    ))}
+                    {memoizedMessages}
 
                     <AnimatePresence>
                       {sending && (
