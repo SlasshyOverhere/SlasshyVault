@@ -797,17 +797,22 @@ function App() {
 
       const combined = [...localMovies, ...localTv, ...cloudMovies, ...cloudTv]
       const query = homeSearchQuery.toLowerCase()
-      combined.sort((a, b) => {
-        const aTitle = a.title.toLowerCase()
-        const bTitle = b.title.toLowerCase()
-        if (aTitle === query && bTitle !== query) return -1
-        if (bTitle === query && aTitle !== query) return 1
-        if (aTitle.startsWith(query) && !bTitle.startsWith(query)) return -1
-        if (bTitle.startsWith(query) && !aTitle.startsWith(query)) return 1
-        return aTitle.localeCompare(bTitle)
-      })
 
-      setHomeSearchResults(combined)
+      // ⚡ Bolt: Performance Optimization
+      // Schwartzian transform (map-sort-map) to avoid calling .toLowerCase() on every comparison
+      // which turns an O(N log N) string allocation problem into O(N)
+      const sorted = combined
+        .map(item => ({ item, titleLower: item.title.toLowerCase() }))
+        .sort((a, b) => {
+          if (a.titleLower === query && b.titleLower !== query) return -1
+          if (b.titleLower === query && a.titleLower !== query) return 1
+          if (a.titleLower.startsWith(query) && !b.titleLower.startsWith(query)) return -1
+          if (b.titleLower.startsWith(query) && !a.titleLower.startsWith(query)) return 1
+          return a.titleLower.localeCompare(b.titleLower)
+        })
+        .map(({ item }) => item)
+
+      setHomeSearchResults(sorted)
     } catch (error) {
       console.error("Failed to search", error)
     } finally {
