@@ -15,6 +15,17 @@ interface FriendsListProps {
 export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile, loading }: FriendsListProps) {
   const onlineSet = useMemo(() => new Set(onlineFriends), [onlineFriends]);
 
+  // Sort: Online first, then by name
+  const sortedFriends = useMemo(() => {
+    return [...friends].sort((a, b) => {
+      const aOnline = onlineSet.has(a.id);
+      const bOnline = onlineSet.has(b.id);
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [friends, onlineSet]);
+
   if (loading && friends.length === 0) {
     return (
       <div className="flex flex-col gap-2 p-2">
@@ -38,17 +49,6 @@ export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile,
       </div>
     );
   }
-
-  // Sort: Online first, then by name
-  const sortedFriends = useMemo(() => {
-    return [...friends].sort((a, b) => {
-      const aOnline = onlineSet.has(a.id);
-      const bOnline = onlineSet.has(b.id);
-      if (aOnline && !bOnline) return -1;
-      if (!aOnline && bOnline) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [friends, onlineSet]);
 
   return (
     <div className="flex flex-col gap-1 p-2">
