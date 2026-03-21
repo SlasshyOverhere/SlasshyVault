@@ -299,14 +299,31 @@ pub fn launch_mpv_with_tracking(
     if let Some(language) = audio_language.filter(|value| !value.trim().is_empty()) {
         let trimmed = language.trim();
         if let Some(track_id) = trimmed.strip_prefix("aid:") {
-            cmd.arg(format!("--aid={}", track_id.trim()));
+            let tid = track_id.trim();
+            // Validate aid: numeric, "auto", or "no"
+            if tid == "auto" || tid == "no" || tid.chars().all(|c| c.is_ascii_digit()) {
+                cmd.arg(format!("--aid={}", tid));
+            } else {
+                println!("[MPV] Warning: Invalid aid parameter '{}', ignoring", tid);
+            }
         } else {
-            cmd.arg(format!("--alang={}", trimmed));
+            // Validate alang: alphanumeric, comma, dash, underscore
+            if trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == ',' || c == '-' || c == '_') {
+                cmd.arg(format!("--alang={}", trimmed));
+            } else {
+                println!("[MPV] Warning: Invalid alang parameter '{}', ignoring", trimmed);
+            }
         }
     }
 
     if let Some(ipc_path) = ipc_server.filter(|value| !value.trim().is_empty()) {
-        cmd.arg(format!("--input-ipc-server={}", ipc_path.trim()));
+        let path = ipc_path.trim();
+        // Validate ipc_server: alphanumeric, slashes, dots, hyphens, underscores, colons
+        if path.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '\\' || c == '.' || c == '-' || c == '_' || c == ':') {
+            cmd.arg(format!("--input-ipc-server={}", path));
+        } else {
+            println!("[MPV] Warning: Invalid ipc_server parameter '{}', ignoring", path);
+        }
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL

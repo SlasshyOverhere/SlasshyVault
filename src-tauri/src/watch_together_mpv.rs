@@ -120,9 +120,14 @@ pub struct WatchTogetherController {
 
 impl WatchTogetherController {
     pub fn new(session_id: &str, is_host: bool) -> Self {
-        let pipe_name = format!("\\\\.\\pipe\\mpv-wt-{}", session_id);
+        // Sanitize session_id to prevent path traversal or invalid pipe names
+        let safe_session_id: String = session_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        let pipe_name = format!("\\\\.\\pipe\\mpv-wt-{}", safe_session_id);
         Self {
-            session_id: session_id.to_string(),
+            session_id: safe_session_id,
             pipe_name,
             is_host,
             local_state: Arc::new(RwLock::new(PlayerState::default())),
