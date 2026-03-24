@@ -797,9 +797,17 @@ function App() {
 
       const combined = [...localMovies, ...localTv, ...cloudMovies, ...cloudTv]
       const query = homeSearchQuery.toLowerCase()
-      combined.sort((a, b) => {
-        const aTitle = a.title.toLowerCase()
-        const bTitle = b.title.toLowerCase()
+
+      // Use a Schwartzian transform (map-sort-map) to avoid calling toLowerCase()
+      // repeatedly in the sort comparator, improving performance for large results
+      const mapped = combined.map(item => ({
+        item,
+        lowerTitle: item.title.toLowerCase()
+      }))
+
+      mapped.sort((a, b) => {
+        const aTitle = a.lowerTitle
+        const bTitle = b.lowerTitle
         if (aTitle === query && bTitle !== query) return -1
         if (bTitle === query && aTitle !== query) return 1
         if (aTitle.startsWith(query) && !bTitle.startsWith(query)) return -1
@@ -807,7 +815,7 @@ function App() {
         return aTitle.localeCompare(bTitle)
       })
 
-      setHomeSearchResults(combined)
+      setHomeSearchResults(mapped.map(m => m.item))
     } catch (error) {
       console.error("Failed to search", error)
     } finally {
