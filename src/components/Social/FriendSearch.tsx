@@ -26,7 +26,9 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
     setLoading(true);
     try {
       const data = await searchUsers(value);
-      setSearchResults(data.filter(u => !excludeIds.includes(u.id)));
+      // ⚡ Bolt: Use O(1) Set lookup instead of O(N) Array.includes to avoid O(N*M) complexity for large lists
+      const excludeSet = new Set(excludeIds);
+      setSearchResults(data.filter(u => !excludeSet.has(u.id)));
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
