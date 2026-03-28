@@ -75,7 +75,7 @@ Windows:
 
 ```bash
 git clone https://github.com/SlasshyOverhere/StreamVault.git
-cd StreamVault/slasshy-desktop
+cd StreamVault/streamvault
 npm install
 npm run tauri dev
 ```
@@ -118,7 +118,7 @@ Common supported formats include:
 ## Project Structure
 
 ```text
-slasshy-desktop/
+streamvault/
 ├── src/                 React frontend
 ├── src-tauri/           Rust + Tauri backend
 ├── package.json
