@@ -7,6 +7,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
+
 /// Progress info saved/loaded from temp file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MpvProgressInfo {
@@ -224,6 +226,7 @@ pub fn launch_mpv_with_tracking(
     mpv_path: &str,
     file_or_url: &str,
     media_id: i64,
+    display_title: Option<&str>,
     start_position: f64,
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
@@ -250,6 +253,10 @@ pub fn launch_mpv_with_tracking(
     println!(
         "[MPV] Audio language preference: {}",
         audio_language.unwrap_or("MPV default")
+    );
+    println!(
+        "[MPV] Display title: {}",
+        display_title.unwrap_or("MPV default")
     );
 
     // Only verify file exists for local files (not URLs)
@@ -290,6 +297,10 @@ pub fn launch_mpv_with_tracking(
     // Add the tracking script
     let script_arg = format!("--script={}", script_path.to_string_lossy());
     cmd.arg(&script_arg);
+
+    if let Some(title) = display_title.map(str::trim).filter(|value| !value.is_empty()) {
+        cmd.arg(format!("--force-media-title={}", title));
+    }
 
     // Add start position if resuming
     if start_position > 0.0 {
@@ -488,7 +499,8 @@ pub fn monitor_mpv_and_save_progress(
         }
 
         let completed = if progress.duration > 0.0 {
-            (progress.position / progress.duration) >= 0.95 || progress.eof_reached
+            (progress.position / progress.duration) > AUTO_MARK_WATCHED_THRESHOLD_RATIO
+                || progress.eof_reached
         } else {
             false
         };

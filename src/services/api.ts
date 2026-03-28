@@ -40,6 +40,39 @@ export interface MediaItem {
   history_group_latest_label?: string;
 }
 
+export interface WatchHistoryEvent {
+  event_id: string;
+  media_id?: number | null;
+  parent_media_id?: number | null;
+  title: string;
+  parent_title?: string | null;
+  media_type: "movie" | "tvshow" | "tvepisode";
+  year?: number;
+  overview?: string;
+  poster_path?: string;
+  still_path?: string;
+  tmdb_id?: string;
+  parent_tmdb_id?: string;
+  episode_title?: string;
+  season_number?: number;
+  episode_number?: number;
+  is_cloud: boolean;
+  progress_percent: number;
+  resume_position_seconds: number;
+  duration_seconds: number;
+  completed: boolean;
+  started_at: string;
+  ended_at: string;
+  updated_at: string;
+}
+
+export interface WatchHistorySyncStatus {
+  synced: boolean;
+  merged_remote_events: number;
+  uploaded_events: number;
+  skipped_reason?: string | null;
+}
+
 export interface Config {
   mpv_path?: string;
   vlc_path?: string;
@@ -180,6 +213,17 @@ export const getWatchHistory = async (): Promise<MediaItem[]> => {
   }
 };
 
+export const getWatchHistoryEvents = async (): Promise<WatchHistoryEvent[]> => {
+  try {
+    return await invoke<WatchHistoryEvent[]>("get_watch_history_events", {
+      limit: 200,
+    });
+  } catch (error) {
+    console.error("Failed to get watch history events:", error);
+    return [];
+  }
+};
+
 // Remove a single item from watch history
 export const removeFromWatchHistory = async (id: number): Promise<void> => {
   try {
@@ -190,12 +234,30 @@ export const removeFromWatchHistory = async (id: number): Promise<void> => {
   }
 };
 
+export const removeWatchHistoryEntry = async (eventId: string): Promise<void> => {
+  try {
+    await invoke("remove_watch_history_entry", { eventId });
+  } catch (error) {
+    console.error("Failed to remove watch history entry:", error);
+    throw error;
+  }
+};
+
 // Clear all watch history
 export const clearAllWatchHistory = async (): Promise<void> => {
   try {
     await invoke("clear_all_watch_history");
   } catch (error) {
     console.error("Failed to clear watch history:", error);
+    throw error;
+  }
+};
+
+export const syncWatchHistory = async (): Promise<WatchHistorySyncStatus> => {
+  try {
+    return await invoke<WatchHistorySyncStatus>("sync_watch_history");
+  } catch (error) {
+    console.error("Failed to sync watch history:", error);
     throw error;
   }
 };
@@ -1102,8 +1164,13 @@ export const setTabVisibility = (visibility: TabVisibility): void => {
 // ==================== BETA FEATURES ====================
 
 const BETA_FEATURES_KEY = "streamvault_beta_features";
+const UNSTABLE_FEATURES_KEY = "streamvault_unstable_features";
 
 export interface BetaFeatures {
+  enabled: boolean;
+}
+
+export interface UnstableFeatures {
   enabled: boolean;
 }
 
@@ -1127,6 +1194,29 @@ export const setBetaEnabled = (enabled: boolean): void => {
     localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
   } catch (error) {
     console.error("Failed to save beta features state:", error);
+  }
+};
+
+// Check if unstable features are enabled
+export const isUnstableEnabled = (): boolean => {
+  try {
+    const stored = localStorage.getItem(UNSTABLE_FEATURES_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as UnstableFeatures;
+      return parsed.enabled === true;
+    }
+  } catch (error) {
+    console.error("Failed to get unstable features state:", error);
+  }
+  return false;
+};
+
+// Enable or disable unstable features
+export const setUnstableEnabled = (enabled: boolean): void => {
+  try {
+    localStorage.setItem(UNSTABLE_FEATURES_KEY, JSON.stringify({ enabled }));
+  } catch (error) {
+    console.error("Failed to save unstable features state:", error);
   }
 };
 
