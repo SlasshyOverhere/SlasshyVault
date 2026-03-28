@@ -42,7 +42,7 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
         title: "Request Sent",
         description: `Friend request sent to ${name}`,
       });
-    } catch (error) {
+    } catch {
       toast({
         title: "Error",
         description: "Failed to send friend request",

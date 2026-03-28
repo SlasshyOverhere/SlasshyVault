@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod archive_manager;
 mod database;
 mod gdrive;
 mod media_manager;
@@ -37,6 +38,8 @@ lazy_static::lazy_static! {
         let (tx, rx) = mpsc::channel();
         (Mutex::new(tx), Mutex::new(rx))
     };
+    static ref RECENT_UI_NOTIFICATIONS: Mutex<HashMap<String, std::time::Instant>> =
+        Mutex::new(HashMap::new());
 }
 
 // MPV session info
@@ -82,6 +85,21 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct WatchHistorySnapshot {
+    version: i32,
+    exported_at: String,
+    events: Vec<database::WatchHistoryEvent>,
+}
+
+#[derive(Debug, Serialize)]
+struct WatchHistorySyncStatus {
+    synced: bool,
+    merged_remote_events: usize,
+    uploaded_events: usize,
+    skipped_reason: Option<String>,
+}
+
 // Scan event payloads
 #[derive(Clone, Serialize)]
 struct ScanProgressPayload {
@@ -93,6 +111,74 @@ struct ScanProgressPayload {
 struct ScanCompletePayload {
     movies_count: usize,
     tv_count: usize,
+}
+
+fn enrich_media_item_archive_assessment(mut media: database::MediaItem) -> database::MediaItem {
+    if let Some(assessment) = archive_manager::assess_archive_playback(&media) {
+        media.archive_playback_can_play = Some(assessment.can_play);
+        media.archive_playback_mode = Some(assessment.mode);
+        media.archive_playback_message = Some(assessment.message);
+        media.archive_playback_details = Some(assessment.details);
+    }
+
+    media
+}
+
+fn enrich_media_items_archive_assessment(
+    items: Vec<database::MediaItem>,
+) -> Vec<database::MediaItem> {
+    items.into_iter()
+        .map(enrich_media_item_archive_assessment)
+        .collect()
+}
+
+async fn sync_watch_history_to_drive(
+    state: &AppState,
+) -> Result<WatchHistorySyncStatus, String> {
+    if !state.gdrive_client.is_authenticated() {
+        return Ok(WatchHistorySyncStatus {
+            synced: false,
+            merged_remote_events: 0,
+            uploaded_events: 0,
+            skipped_reason: Some("Google Drive is not connected".to_string()),
+        });
+    }
+
+    let mut merged_remote_events = 0usize;
+
+    if let Some(remote_json) = state.gdrive_client.load_watch_history_snapshot().await? {
+        let remote_snapshot: WatchHistorySnapshot = serde_json::from_str(&remote_json)
+            .map_err(|e| format!("Failed to parse remote watch history snapshot: {}", e))?;
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        merged_remote_events = db
+            .upsert_watch_history_events(&remote_snapshot.events)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let events = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_watch_history_events(5000)
+            .map_err(|e| e.to_string())?
+    };
+
+    let snapshot = WatchHistorySnapshot {
+        version: 1,
+        exported_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        events: events.clone(),
+    };
+    let snapshot_json = serde_json::to_string(&snapshot)
+        .map_err(|e| format!("Failed to serialize watch history snapshot: {}", e))?;
+    state
+        .gdrive_client
+        .save_watch_history_snapshot(&snapshot_json)
+        .await?;
+
+    Ok(WatchHistorySyncStatus {
+        synced: true,
+        merged_remote_events,
+        uploaded_events: events.len(),
+        skipped_reason: None,
+    })
 }
 
 // Get library items (movies or TV shows)
@@ -108,8 +194,10 @@ async fn get_library(
     } else {
         "movie"
     };
-    db.get_library(db_type, search.as_deref())
-        .map_err(|e| e.to_string())
+    let items = db
+        .get_library(db_type, search.as_deref())
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
 }
 
 // Get library filtered by cloud status
@@ -126,8 +214,10 @@ async fn get_library_filtered(
     } else {
         "movie"
     };
-    db.get_library_filtered(db_type, search.as_deref(), is_cloud)
-        .map_err(|e| e.to_string())
+    let items = db
+        .get_library_filtered(db_type, search.as_deref(), is_cloud)
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
 }
 
 // Get episodes for a TV show
@@ -137,7 +227,8 @@ async fn get_episodes(
     series_id: i64,
 ) -> Result<Vec<database::MediaItem>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_episodes(series_id).map_err(|e| e.to_string())
+    let items = db.get_episodes(series_id).map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
 }
 
 // Get watch history
@@ -147,7 +238,19 @@ async fn get_watch_history(
     limit: Option<i32>,
 ) -> Result<Vec<database::MediaItem>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_watch_history(limit.unwrap_or(50))
+    let items = db
+        .get_watch_history(limit.unwrap_or(50))
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
+#[tauri::command]
+async fn get_watch_history_events(
+    state: State<'_, AppState>,
+    limit: Option<i32>,
+) -> Result<Vec<database::WatchHistoryEvent>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_watch_history_events(limit.unwrap_or(200))
         .map_err(|e| e.to_string())
 }
 
@@ -174,6 +277,19 @@ async fn remove_from_watch_history(
     })
 }
 
+#[tauri::command]
+async fn remove_watch_history_entry(
+    state: State<'_, AppState>,
+    event_id: String,
+) -> Result<ApiResponse, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.remove_watch_history_event(&event_id)
+        .map_err(|e| e.to_string())?;
+    Ok(ApiResponse {
+        message: "Watch history entry removed".to_string(),
+    })
+}
+
 // Mark media as complete (set progress to 100%)
 #[tauri::command]
 async fn mark_as_complete(
@@ -186,7 +302,7 @@ async fn mark_as_complete(
     let item = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
 
     let duration = item.duration_seconds.unwrap_or(3600.0); // Default 1 hour if no duration
-                                                            // Set position to duration (100% complete) - this will trigger the 95% reset in update_progress
+                                                            // Set position to duration (100% complete) - this will trigger the watched reset in update_progress
     db.update_progress(media_id, duration, duration)
         .map_err(|e| e.to_string())?;
 
@@ -203,6 +319,11 @@ async fn clear_all_watch_history(state: State<'_, AppState>) -> Result<ApiRespon
     Ok(ApiResponse {
         message: format!("Cleared {} items from watch history", count),
     })
+}
+
+#[tauri::command]
+async fn sync_watch_history(state: State<'_, AppState>) -> Result<WatchHistorySyncStatus, String> {
+    sync_watch_history_to_drive(&state).await
 }
 
 // ==================== STREAMING HISTORY COMMANDS ====================
@@ -588,12 +709,28 @@ async fn gdrive_scan_folder(
         .await?;
     println!("[CLOUD] Found {} video files", files.len());
 
+    let unsupported_archives: Vec<String> = files
+        .iter()
+        .filter(|file| is_unsupported_archive_drive_item(file))
+        .map(|file| {
+            let _ = unsupported_archive_reason(file);
+            file.name.clone()
+        })
+        .collect();
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|file| !is_unsupported_archive_drive_item(file))
+        .collect();
+
+    notify_unsupported_archives_window(&window, &unsupported_archives);
+
     // Get API key from config
-    let (api_key, zip_indexing_enabled) = {
+    let (api_key, zip_indexing_enabled, archive_cache_config) = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
         (
             tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default()),
             config.zip_indexing_enabled,
+            build_zip_cache_config(&config),
         )
     };
 
@@ -629,7 +766,7 @@ async fn gdrive_scan_folder(
             archive_name,
             None,
             &format!(
-                "ZIP archive{} detected in {}. Processing episode entries...",
+                "Archive{} detected in {}. Processing episode entries...",
                 if zip_files_detected.len() == 1 {
                     ""
                 } else {
@@ -690,6 +827,7 @@ async fn gdrive_scan_folder(
                     &folder_id_clone,
                     &api_key,
                     &image_cache_dir,
+                    &archive_cache_config,
                     &mut tv_show_cache,
                     &mut season_cache,
                 ) {
@@ -704,7 +842,7 @@ async fn gdrive_scan_folder(
                             tv_count += 1;
                             entry_counter += 1;
                             println!(
-                                "[INDEX] #{} ZIP episode '{}' S{:02}E{:02} (db_id: {}, zip_file_id: {})",
+                                "[INDEX] #{} archive episode '{}' S{:02}E{:02} (db_id: {}, archive_file_id: {})",
                                 entry_counter,
                                 title,
                                 season.unwrap_or(0),
@@ -716,7 +854,7 @@ async fn gdrive_scan_folder(
                         continue;
                     }
                     Err(error) => {
-                        println!("[ZIP] Failed to index '{}': {}", file.name, error);
+                        println!("[ARCHIVE] Failed to index '{}': {}", file.name, error);
                         skipped_count += 1;
                         continue;
                     }
@@ -932,6 +1070,7 @@ async fn gdrive_scan_folder(
     }).await.map_err(|e| format!("Task failed: {}", e))??;
 
     let (indexed_count, skipped_count, movies_count, tv_count) = result;
+    let skipped_count = skipped_count + unsupported_archives.len();
 
     if !zip_files_detected.is_empty() {
         let archive_name = zip_files_detected.first().map(|name| name.as_str());
@@ -1113,13 +1252,26 @@ async fn scan_all_cloud_folders(
                 continue;
             }
         };
+        let unsupported_archives: Vec<String> = files
+            .iter()
+            .filter(|file| is_unsupported_archive_drive_item(file))
+            .map(|file| file.name.clone())
+            .collect();
+        if !unsupported_archives.is_empty() {
+            notify_unsupported_archives_window(&window, &unsupported_archives);
+        }
+        let files: Vec<_> = files
+            .into_iter()
+            .filter(|file| !is_unsupported_archive_drive_item(file))
+            .collect();
 
         // Get API key from config
-        let (api_key, zip_indexing_enabled) = {
+        let (api_key, zip_indexing_enabled, archive_cache_config) = {
             let config = state.config.lock().map_err(|e| e.to_string())?;
             (
                 tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default()),
                 config.zip_indexing_enabled,
+                build_zip_cache_config(&config),
             )
         };
 
@@ -1180,6 +1332,7 @@ async fn scan_all_cloud_folders(
                         &folder_id_clone,
                         &api_key,
                         &image_cache_dir,
+                        &archive_cache_config,
                         &mut tv_show_cache,
                         &mut season_cache,
                     ) {
@@ -1409,7 +1562,7 @@ async fn scan_all_cloud_folders(
 
         let (indexed, skipped, movies, tv) = result;
         total_indexed += indexed;
-        total_skipped += skipped;
+        total_skipped += skipped + unsupported_archives.len();
         total_movies += movies;
         total_tv += tv;
 
@@ -1580,18 +1733,77 @@ async fn check_cloud_changes(
 
         if !removed_titles.is_empty() {
             window.emit("library-updated", ()).ok();
+
+            // Group TV episodes by series name to avoid spamming notifications
+            let mut series_episodes: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            let mut non_tv_titles: Vec<String> = Vec::new();
+
             for title in &removed_titles {
-                emit_ui_notification(
-                    &window,
-                    "StreamVault",
-                    &format!("{} removed (deleted from Drive)", title),
-                    "info",
-                );
-                send_system_notification(
-                    &window.app_handle(),
-                    "StreamVault",
-                    &format!("{} removed (deleted from Drive)", title),
-                );
+                // Check if this is a TV episode (format: "Title SXXEXX" or "Title SXEX")
+                // Examples: "Breaking Bad S01E01", "Breaking Bad S1E1", "Breaking Bad S10E15"
+                let is_tv_episode = if let Some(pos) = title.find(" S") {
+                    let rest = &title[pos + 2..]; // Skip " S"
+                    if rest.len() >= 3 && rest.starts_with(|c: char| c.is_ascii_digit()) {
+                        // Look for pattern: digit(s) + 'E' + digit(s)
+                        if let Some(e_pos) = rest.find(|c: char| c.to_ascii_uppercase() == 'E') {
+                            if e_pos > 0 && e_pos < rest.len() - 1 {
+                                let season_part = &rest[..e_pos];
+                                let episode_part = &rest[e_pos + 1..];
+                                // Both season and episode should be numeric
+                                season_part.chars().all(|c| c.is_ascii_digit()) && 
+                                episode_part.chars().all(|c| c.is_ascii_digit()) &&
+                                !season_part.is_empty() && !episode_part.is_empty()
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_tv_episode {
+                    // Extract series name (everything before " S")
+                    if let Some(pos) = title.find(" S") {
+                        let series_name = &title[..pos];
+                        series_episodes.entry(series_name.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(title.clone());
+                        continue;
+                    }
+                }
+                // Not a TV episode, add to regular titles
+                non_tv_titles.push(title.clone());
+            }
+
+            let mut messages = Vec::new();
+
+            for (series_name, episodes) in &series_episodes {
+                let episode_count = episodes.len();
+                if episode_count == 1 {
+                    messages.push(format!("{} (1 episode)", series_name));
+                } else {
+                    messages.push(format!("{} ({} episodes)", series_name, episode_count));
+                }
+            }
+
+            for title in &non_tv_titles {
+                messages.push(title.clone());
+            }
+
+            if !messages.is_empty() {
+                let message = if messages.len() == 1 {
+                    format!("{} removed (deleted from Drive)", messages[0])
+                } else {
+                    format!("{} items removed (deleted from Drive)", messages.len())
+                };
+
+                dispatch_notification(&window, "StreamVault", &message, "info");
             }
         }
     }
@@ -1650,6 +1862,19 @@ async fn check_cloud_changes(
         })
         .collect();
 
+    let unsupported_archives: Vec<String> = files_to_index
+        .iter()
+        .filter(|file| is_unsupported_archive_drive_item(file))
+        .map(|file| file.name.clone())
+        .collect();
+    if !unsupported_archives.is_empty() {
+        notify_unsupported_archives_window(&window, &unsupported_archives);
+    }
+    let files_to_index: Vec<gdrive::DriveItem> = files_to_index
+        .into_iter()
+        .filter(|file| !is_unsupported_archive_drive_item(file))
+        .collect();
+
     if files_to_index.is_empty() {
         let total_duration = start_time.elapsed();
         println!(
@@ -1660,10 +1885,17 @@ async fn check_cloud_changes(
         return Ok(CloudIndexResult {
             success: true,
             indexed_count: 0,
-            skipped_count: 0,
+            skipped_count: unsupported_archives.len(),
             movies_count: 0,
             tv_count: 0,
-            message: "No new files in tracked folders".to_string(),
+            message: if unsupported_archives.is_empty() {
+                "No new files in tracked folders".to_string()
+            } else {
+                format!(
+                    "Skipped {} unsupported TAR archive(s) in tracked folders",
+                    unsupported_archives.len()
+                )
+            },
         });
     }
 
@@ -1687,9 +1919,9 @@ async fn check_cloud_changes(
 
     let db_path = database::get_database_path();
     let _files_count = files_to_index.len();
-    let zip_indexing_enabled = {
+    let (zip_indexing_enabled, archive_cache_config) = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
-        config.zip_indexing_enabled
+        (config.zip_indexing_enabled, build_zip_cache_config(&config))
     };
     let zip_access_token = if zip_indexing_enabled && files_to_index.iter().any(is_zip_drive_item) {
         Some(state.gdrive_client.get_access_token().await?)
@@ -1787,13 +2019,14 @@ async fn check_cloud_changes(
                         continue;
                     };
 
-                    match index_zip_archive_without_metadata(
-                        &db,
-                        access_token,
-                        &pseudo_file,
-                        &folder_id,
-                        &mut tv_show_cache,
-                    ) {
+                        match index_zip_archive_without_metadata(
+                            &db,
+                            access_token,
+                            &pseudo_file,
+                            &folder_id,
+                            &archive_cache_config,
+                            &mut tv_show_cache,
+                        ) {
                         Ok(items) => {
                             if items.is_empty() {
                                 skipped_count += 1;
@@ -1950,6 +2183,7 @@ async fn check_cloud_changes(
     let phase1_result = phase1_result?;
 
     let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
+    let skipped_count = skipped_count + unsupported_archives.len();
     let indexed_count = indexed_items.len();
     let phase1_duration = index_start.elapsed();
 
@@ -1989,17 +2223,11 @@ async fn check_cloud_changes(
 
         // Send Windows notification for each item (simple format)
         for title in &titles {
-            emit_ui_notification(
+            dispatch_notification(
                 &window,
                 "StreamVault",
                 &format!("{} added to your library", title),
                 "success",
-            );
-
-            send_system_notification(
-                &window.app_handle(),
-                "StreamVault",
-                &format!("{} added to your library", title),
             );
         }
     }
@@ -2889,7 +3117,18 @@ async fn get_media_info(
     media_id: i64,
 ) -> Result<database::MediaItem, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_media_by_id(media_id).map_err(|e| e.to_string())
+    let item = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
+    Ok(enrich_media_item_archive_assessment(item))
+}
+
+#[tauri::command]
+async fn get_archive_playback_assessment(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<Option<archive_manager::ArchivePlaybackAssessment>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let item = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
+    Ok(archive_manager::assess_archive_playback(&item))
 }
 
 // Get stream info for built-in player
@@ -3380,28 +3619,53 @@ async fn resolve_audio_probe_source(
 
     if is_cloud {
         if is_zip_media {
-            match zip_manager::zip_entry_compression_method(media).map_err(|e| e.to_string())? {
-                0 => {
-                    let (stream_url, proxy) = build_temporary_zip_stream_url(state, media).await?;
-                    return Ok(AudioProbeSource {
-                        stream_url,
-                        access_token: None,
-                        temp_zip_proxy: Some(proxy),
-                    });
+            match archive_manager::archive_format_for_media(media) {
+                archive_manager::ArchiveFormat::Zip => {
+                    match zip_manager::zip_entry_compression_method(media)
+                        .map_err(|e| e.to_string())?
+                    {
+                        0 => {
+                            let (stream_url, proxy) =
+                                build_temporary_zip_stream_url(state, media).await?;
+                            return Ok(AudioProbeSource {
+                                stream_url,
+                                access_token: None,
+                                temp_zip_proxy: Some(proxy),
+                            });
+                        }
+                        8 => {
+                            let extracted_path = build_zip_extracted_path(state, media).await?;
+                            return Ok(AudioProbeSource {
+                                stream_url: extracted_path,
+                                access_token: None,
+                                temp_zip_proxy: None,
+                            });
+                        }
+                        method => {
+                            return Err(format!(
+                                "ZIP entry compression method {} is not supported for audio detection",
+                                method
+                            ));
+                        }
+                    }
                 }
-                8 => {
+                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+                    if archive_manager::build_archive_stream_info(media).is_ok() {
+                        let (stream_url, proxy) =
+                            build_temporary_zip_stream_url(state, media).await?;
+                        return Ok(AudioProbeSource {
+                            stream_url,
+                            access_token: None,
+                            temp_zip_proxy: Some(proxy),
+                        });
+                    }
+
                     let extracted_path = build_zip_extracted_path(state, media).await?;
                     return Ok(AudioProbeSource {
                         stream_url: extracted_path,
                         access_token: None,
                         temp_zip_proxy: None,
                     });
-                }
-                method => {
-                    return Err(format!(
-                        "ZIP entry compression method {} is not supported for audio detection",
-                        method
-                    ));
                 }
             }
         }
@@ -3474,22 +3738,62 @@ async fn get_stream_info(state: State<'_, AppState>, media_id: i64) -> Result<St
     // Handle cloud media
     if is_cloud {
         if is_zip_media {
-            match zip_manager::zip_entry_compression_method(&media).map_err(|e| e.to_string())? {
-                0 => {
-                    let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
+            match archive_manager::archive_format_for_media(&media) {
+                archive_manager::ArchiveFormat::Zip => {
+                    match zip_manager::zip_entry_compression_method(&media)
+                        .map_err(|e| e.to_string())?
+                    {
+                        0 => {
+                            let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
 
-                    return Ok(StreamInfo {
-                        stream_url,
-                        file_path,
-                        title: media.title,
-                        poster: poster_asset_url(media.poster_path.as_ref()),
-                        duration_seconds: media.duration_seconds,
-                        resume_position_seconds: media.resume_position_seconds,
-                        is_cloud: true,
-                        access_token: None,
-                    });
+                            return Ok(StreamInfo {
+                                stream_url,
+                                file_path,
+                                title: media.title,
+                                poster: poster_asset_url(media.poster_path.as_ref()),
+                                duration_seconds: media.duration_seconds,
+                                resume_position_seconds: media.resume_position_seconds,
+                                is_cloud: true,
+                                access_token: None,
+                            });
+                        }
+                        8 => {
+                            let extracted_path = build_zip_extracted_path(&state, &media).await?;
+
+                            return Ok(StreamInfo {
+                                stream_url: extracted_path.clone(),
+                                file_path: extracted_path,
+                                title: media.title,
+                                poster: poster_asset_url(media.poster_path.as_ref()),
+                                duration_seconds: media.duration_seconds,
+                                resume_position_seconds: media.resume_position_seconds,
+                                is_cloud: false,
+                                access_token: None,
+                            });
+                        }
+                        method => {
+                            return Err(format!(
+                                "ZIP entry compression method {} is not supported for playback",
+                                method
+                            ));
+                        }
+                    }
                 }
-                8 => {
+                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+                    if archive_manager::build_archive_stream_info(&media).is_ok() {
+                        let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
+                        return Ok(StreamInfo {
+                            stream_url,
+                            file_path,
+                            title: media.title,
+                            poster: poster_asset_url(media.poster_path.as_ref()),
+                            duration_seconds: media.duration_seconds,
+                            resume_position_seconds: media.resume_position_seconds,
+                            is_cloud: true,
+                            access_token: None,
+                        });
+                    }
+
                     let extracted_path = build_zip_extracted_path(&state, &media).await?;
 
                     return Ok(StreamInfo {
@@ -3502,12 +3806,6 @@ async fn get_stream_info(state: State<'_, AppState>, media_id: i64) -> Result<St
                         is_cloud: false,
                         access_token: None,
                     });
-                }
-                method => {
-                    return Err(format!(
-                        "ZIP entry compression method {} is not supported for playback",
-                        method
-                    ));
                 }
             }
         }
@@ -3594,7 +3892,7 @@ async fn zip_index_episodes(
         Some(&drive_item.name),
         None,
         &format!(
-            "ZIP detected: {}. Processing episode entries...",
+            "Archive detected: {}. Processing episode entries...",
             drive_item.name
         ),
     );
@@ -3602,6 +3900,10 @@ async fn zip_index_episodes(
     std::fs::create_dir_all(&image_cache_dir).ok();
     let db_path = database::get_database_path();
     let drive_item_for_index = drive_item.clone();
+    let archive_cache_config = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        build_zip_cache_config(&config)
+    };
 
     let indexed_items = tokio::task::spawn_blocking(move || {
         let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
@@ -3615,6 +3917,7 @@ async fn zip_index_episodes(
             &folder_id,
             &api_key,
             &image_cache_dir,
+            &archive_cache_config,
             &mut tv_show_cache,
             &mut season_cache,
         )
@@ -3827,7 +4130,9 @@ async fn play_with_mpv(
 
     // Get the playback URL and optional auth header
     let is_zip_media = media.parent_zip_id.is_some();
-    let zip_compression_method = if is_zip_media {
+    let zip_compression_method = if is_zip_media
+        && archive_manager::archive_format_for_media(&media) == archive_manager::ArchiveFormat::Zip
+    {
         Some(zip_manager::zip_entry_compression_method(&media).map_err(|e| e.to_string())?)
     } else {
         None
@@ -3861,66 +4166,89 @@ async fn play_with_mpv(
                 );
                 (extracted_path, None, None, false)
             } else {
-                match zip_compression_method.unwrap_or_default() {
-                    0 => {
-                        let stream_info = zip_manager::build_zip_stream_info(&media)
-                            .map_err(|e| e.to_string())?;
-                        let (drive_url, access_token) = state
-                            .gdrive_client
-                            .get_stream_url(&stream_info.zip_file_id)
-                            .await?;
-                        let (
-                            cache_spec,
-                            local_cache_path,
-                            cache_is_complete,
-                            use_partial_cache_via_proxy,
-                        ) = {
-                            let cache_config = build_zip_cache_config(&config);
-                            match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
-                                Ok(snapshot) => {
-                                    let local_cache_path = choose_store_zip_local_cache_for_mpv(
-                                        &media,
-                                        &snapshot,
-                                        start_position,
-                                    );
-                                    let use_partial_cache_via_proxy =
-                                        !snapshot.is_complete && local_cache_path.is_some();
-                                    (
-                                        Some(zip_stream_proxy::ProxyCacheSpec {
-                                            cache_paths: snapshot.paths,
-                                            cache_config,
-                                            // Keep filling the partial ZIP cache as aggressively
-                                            // as possible while playback is active.
-                                            start_delay_ms: 0,
-                                            throttle_delay_ms: 0,
-                                        }),
-                                        local_cache_path,
-                                        snapshot.is_complete,
-                                        use_partial_cache_via_proxy,
-                                    )
-                                }
-                                Err(error) => {
-                                    println!(
-                                        "[ZIP CACHE] Falling back to stream-only proxy for '{}': {:?}",
-                                        media.title, error
-                                    );
-                                    (None, None, false, false)
-                                }
-                            }
-                        };
-                        let proxy =
-                            zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
-                                drive_url,
-                                access_token,
-                                &stream_info,
+                match archive_manager::archive_format_for_media(&media) {
+                    archive_manager::ArchiveFormat::Zip => match zip_compression_method.unwrap_or_default() {
+                        0 => {
+                            let stream_info = archive_manager::build_archive_stream_info(&media)?;
+                            let (drive_url, access_token) = state
+                                .gdrive_client
+                                .get_stream_url(&stream_info.zip_file_id)
+                                .await?;
+                            let (
                                 cache_spec,
-                            ))?;
-                        if let Some(local_path) = local_cache_path {
-                            if use_partial_cache_via_proxy {
+                                local_cache_path,
+                                cache_is_complete,
+                                use_partial_cache_via_proxy,
+                            ) = {
+                                let cache_config = build_zip_cache_config(&config);
+                                match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
+                                    Ok(snapshot) => {
+                                        let local_cache_path = choose_store_zip_local_cache_for_mpv(
+                                            &media,
+                                            &snapshot,
+                                            start_position,
+                                        );
+                                        let use_partial_cache_via_proxy =
+                                            !snapshot.is_complete && local_cache_path.is_some();
+                                        (
+                                            Some(zip_stream_proxy::ProxyCacheSpec {
+                                                cache_paths: snapshot.paths,
+                                                cache_config,
+                                                start_delay_ms: 0,
+                                                throttle_delay_ms: 0,
+                                            }),
+                                            local_cache_path,
+                                            snapshot.is_complete,
+                                            use_partial_cache_via_proxy,
+                                        )
+                                    }
+                                    Err(error) => {
+                                        println!(
+                                            "[ZIP CACHE] Falling back to stream-only proxy for '{}': {:?}",
+                                            media.title, error
+                                        );
+                                        (None, None, false, false)
+                                    }
+                                }
+                            };
+                            let proxy =
+                                zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
+                                    drive_url,
+                                    access_token,
+                                    &stream_info,
+                                    cache_spec,
+                                ))?;
+                            if let Some(local_path) = local_cache_path {
+                                if use_partial_cache_via_proxy {
+                                    println!(
+                                        "[ZIP] Using streaming proxy for MPV with local partial cache assist: '{}' (partial cache: {}) -> {}",
+                                        media.title,
+                                        local_path,
+                                        zip_stream_proxy::localhost_stream_url(proxy.port)
+                                    );
+                                    (
+                                        zip_stream_proxy::localhost_stream_url(proxy.port),
+                                        None,
+                                        Some(proxy),
+                                        true,
+                                    )
+                                } else {
+                                    println!(
+                                        "[ZIP] Using local {}cache for MPV: '{}' -> {}",
+                                        if cache_is_complete {
+                                            "complete "
+                                        } else {
+                                            "partial "
+                                        },
+                                        media.title,
+                                        local_path
+                                    );
+                                    (local_path, None, Some(proxy), false)
+                                }
+                            } else {
                                 println!(
-                                    "[ZIP] Using streaming proxy for MPV with local partial cache assist: '{}' (partial cache: {}) -> {}",
+                                    "[ZIP] Using streaming proxy for MPV: '{}' -> {}",
                                     media.title,
-                                    local_path,
                                     zip_stream_proxy::localhost_stream_url(proxy.port)
                                 );
                                 (
@@ -3929,42 +4257,27 @@ async fn play_with_mpv(
                                     Some(proxy),
                                     true,
                                 )
-                            } else {
-                                println!(
-                                    "[ZIP] Using local {}cache for MPV: '{}' -> {}",
-                                    if cache_is_complete {
-                                        "complete "
-                                    } else {
-                                        "partial "
-                                    },
-                                    media.title,
-                                    local_path
-                                );
-                                (local_path, None, Some(proxy), false)
                             }
-                        } else {
-                            println!(
-                                "[ZIP] Using streaming proxy for MPV: '{}' -> {}",
-                                media.title,
-                                zip_stream_proxy::localhost_stream_url(proxy.port)
-                            );
-                            (
-                                zip_stream_proxy::localhost_stream_url(proxy.port),
-                                None,
-                                Some(proxy),
-                                true,
-                            )
                         }
-                    }
-                    8 => {
-                        let extracted_path = build_zip_extracted_path(&state, &media).await?;
-                        (extracted_path, None, None, false)
-                    }
-                    method => {
-                        return Err(format!(
-                            "ZIP entry compression method {} is not supported for playback",
-                            method
-                        ));
+                        8 => {
+                            let extracted_path = build_zip_extracted_path(&state, &media).await?;
+                            (extracted_path, None, None, false)
+                        }
+                        method => {
+                            return Err(format!(
+                                "ZIP entry compression method {} is not supported for playback",
+                                method
+                            ));
+                        }
+                    },
+                    archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+                        let (stream_url, proxy) =
+                            build_temporary_zip_stream_url(&state, &media).await?;
+                        println!(
+                            "[ARCHIVE] Using direct proxy passthrough for MPV: '{}' -> {}",
+                            media.title, stream_url
+                        );
+                        (stream_url, None, Some(proxy), true)
                     }
                 }
             }
@@ -4037,10 +4350,13 @@ async fn play_with_mpv(
         None
     };
 
+    let display_title = build_mpv_display_title(&media);
+
     let pid = mpv_ipc::launch_mpv_with_tracking(
         &mpv_path_clone,
         &playback_url_clone,
         media_id,
+        Some(&display_title),
         start_position,
         auth_header.as_deref(),
         cache_settings.as_ref(),
@@ -5432,72 +5748,94 @@ async fn get_stream_info_with_transcode(
     // Handle cloud media - same as get_stream_info
     if is_cloud {
         if is_zip_media {
-            match zip_manager::zip_entry_compression_method(&media).map_err(|e| e.to_string())? {
-                0 => {
-                    let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
+            match archive_manager::archive_format_for_media(&media) {
+                archive_manager::ArchiveFormat::Zip => {
+                    match zip_manager::zip_entry_compression_method(&media)
+                        .map_err(|e| e.to_string())?
+                    {
+                        0 => {
+                            let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
 
-                    return Ok(StreamInfo {
-                        stream_url,
-                        file_path,
-                        title: media.title,
-                        poster: poster_asset_url(media.poster_path.as_ref()),
-                        duration_seconds: media.duration_seconds,
-                        resume_position_seconds: media.resume_position_seconds,
-                        is_cloud: true,
-                        access_token: None,
-                    });
-                }
-                8 => {
-                    let extracted_path = build_zip_extracted_path(&state, &media).await?;
-                    let poster = poster_asset_url(media.poster_path.as_ref());
-                    let needs_transcode = transcoder::needs_transcoding(&extracted_path);
-
-                    if needs_transcode {
-                        let ffmpeg_path = {
-                            let config = state.config.lock().map_err(|e| e.to_string())?;
-                            config.ffmpeg_path.clone()
-                        };
-
-                        if let Some(ref path) = ffmpeg_path {
-                            if !path.is_empty() && std::path::Path::new(path).exists() {
-                                let start_time = media.resume_position_seconds;
-                                let (_, stream_url) =
-                                    transcoder::start_transcode(path, &extracted_path, start_time)?;
-
-                                return Ok(StreamInfo {
-                                    stream_url,
-                                    file_path: extracted_path,
-                                    title: media.title,
-                                    poster,
-                                    duration_seconds: media.duration_seconds,
-                                    resume_position_seconds: Some(0.0),
-                                    is_cloud: false,
-                                    access_token: None,
-                                });
-                            }
+                            return Ok(StreamInfo {
+                                stream_url,
+                                file_path,
+                                title: media.title,
+                                poster: poster_asset_url(media.poster_path.as_ref()),
+                                duration_seconds: media.duration_seconds,
+                                resume_position_seconds: media.resume_position_seconds,
+                                is_cloud: true,
+                                access_token: None,
+                            });
                         }
-
-                        return Err("This ZIP video format requires transcoding. Please configure FFmpeg in Settings > Player, or use MPV/VLC player instead.".to_string());
+                        8 => {}
+                        method => {
+                            return Err(format!(
+                                "ZIP entry compression method {} is not supported for playback",
+                                method
+                            ));
+                        }
                     }
-
-                    return Ok(StreamInfo {
-                        stream_url: extracted_path.clone(),
-                        file_path: extracted_path,
-                        title: media.title,
-                        poster,
-                        duration_seconds: media.duration_seconds,
-                        resume_position_seconds: media.resume_position_seconds,
-                        is_cloud: false,
-                        access_token: None,
-                    });
                 }
-                method => {
-                    return Err(format!(
-                        "ZIP entry compression method {} is not supported for playback",
-                        method
-                    ));
+                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+                    if archive_manager::build_archive_stream_info(&media).is_ok() {
+                        let stream_url = build_zip_stream_url(&state, &media, media_id).await?;
+
+                        return Ok(StreamInfo {
+                            stream_url,
+                            file_path,
+                            title: media.title,
+                            poster: poster_asset_url(media.poster_path.as_ref()),
+                            duration_seconds: media.duration_seconds,
+                            resume_position_seconds: media.resume_position_seconds,
+                            is_cloud: true,
+                            access_token: None,
+                        });
+                    }
                 }
             }
+
+            let extracted_path = build_zip_extracted_path(&state, &media).await?;
+            let poster = poster_asset_url(media.poster_path.as_ref());
+            let needs_transcode = transcoder::needs_transcoding(&extracted_path);
+
+            if needs_transcode {
+                let ffmpeg_path = {
+                    let config = state.config.lock().map_err(|e| e.to_string())?;
+                    config.ffmpeg_path.clone()
+                };
+
+                if let Some(ref path) = ffmpeg_path {
+                    if !path.is_empty() && std::path::Path::new(path).exists() {
+                        let start_time = media.resume_position_seconds;
+                        let (_, stream_url) =
+                            transcoder::start_transcode(path, &extracted_path, start_time)?;
+
+                        return Ok(StreamInfo {
+                            stream_url,
+                            file_path: extracted_path,
+                            title: media.title,
+                            poster,
+                            duration_seconds: media.duration_seconds,
+                            resume_position_seconds: Some(0.0),
+                            is_cloud: false,
+                            access_token: None,
+                        });
+                    }
+                }
+
+                return Err("This archived video format requires transcoding. Please configure FFmpeg in Settings > Player, or use MPV/VLC player instead.".to_string());
+            }
+
+            return Ok(StreamInfo {
+                stream_url: extracted_path.clone(),
+                file_path: extracted_path,
+                title: media.title,
+                poster,
+                duration_seconds: media.duration_seconds,
+                resume_position_seconds: media.resume_position_seconds,
+                is_cloud: false,
+                access_token: None,
+            });
         }
 
         if let Some(ref cloud_file_id) = media.cloud_file_id {
@@ -5837,6 +6175,31 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
     }
 }
 
+/// Format a standardized "added" notification message for a single item.
+/// For TV episodes, includes the S##E## designator.
+fn format_added_notification(title: &str, is_tv: bool, season: Option<i32>, episode: Option<i32>) -> String {
+    if is_tv {
+        format!(
+            "{} S{:02}E{:02} added to your library",
+            title,
+            season.unwrap_or(1),
+            episode.unwrap_or(1)
+        )
+    } else {
+        format!("{} added to your library", title)
+    }
+}
+
+/// Format a standardized "removed" notification message.
+/// When count > 1, uses plural form; otherwise uses the item title directly.
+#[allow(dead_code)]
+fn format_removed_notification(title: &str, count: Option<usize>) -> String {
+    match count {
+        Some(n) if n > 1 => format!("{} - {} items removed (deleted from Drive)", title, n),
+        _ => format!("{} removed (deleted from Drive)", title),
+    }
+}
+
 type IndexedCloudItem = (
     i64,
     String,
@@ -5912,13 +6275,20 @@ fn should_extract_zip_for_mpv(
     media: &database::MediaItem,
     _start_position: f64,
 ) -> Result<bool, String> {
-    match zip_manager::zip_entry_compression_method(media).map_err(|e| e.to_string())? {
-        8 => Ok(true),
-        0 => Ok(false),
-        method => Err(format!(
-            "ZIP entry compression method {} is not supported for playback",
-            method
-        )),
+    match archive_manager::archive_format_for_media(media) {
+        archive_manager::ArchiveFormat::Zip => {
+            match zip_manager::zip_entry_compression_method(media).map_err(|e| e.to_string())? {
+                8 => Ok(true),
+                0 => Ok(false),
+                method => Err(format!(
+                    "ZIP entry compression method {} is not supported for playback",
+                    method
+                )),
+            }
+        }
+        archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+            Ok(archive_manager::build_archive_stream_info(media).is_err())
+        }
     }
 }
 
@@ -6010,8 +6380,7 @@ async fn build_zip_extracted_path(
     let cache_config = cache_config.clone();
 
     tokio::task::spawn_blocking(move || {
-        zip_manager::extract_zip_entry_to_cache(&access_token, &media, &cache_config)
-            .map_err(|e| e.to_string())
+        archive_manager::extract_archive_entry_to_cache(&access_token, &media, &cache_config)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -6033,12 +6402,13 @@ async fn build_zip_stream_url(
     cleanup_expired_zip_streams(state);
     stop_zip_stream_proxy(state, media_id);
 
-    let stream_info = zip_manager::build_zip_stream_info(media).map_err(|e| e.to_string())?;
+    let stream_info = archive_manager::build_archive_stream_info(media)?;
     let (drive_url, access_token) = state
         .gdrive_client
         .get_stream_url(&stream_info.zip_file_id)
         .await?;
-    let proxy_cache_spec = match zip_manager::zip_entry_compression_method(media) {
+    let proxy_cache_spec = match archive_manager::archive_format_for_media(media) {
+        archive_manager::ArchiveFormat::Zip => match zip_manager::zip_entry_compression_method(media) {
         Ok(0) => match zip_manager::prepare_stream_cache_target(media, &cache_config) {
             Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
                 cache_paths,
@@ -6055,6 +6425,8 @@ async fn build_zip_stream_url(
             }
         },
         _ => None,
+        },
+        archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => None,
     };
     let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
         drive_url,
@@ -6080,7 +6452,7 @@ async fn build_temporary_zip_stream_url(
     state: &AppState,
     media: &database::MediaItem,
 ) -> Result<(String, zip_stream_proxy::ZipStreamProxyHandle), String> {
-    let stream_info = zip_manager::build_zip_stream_info(media).map_err(|e| e.to_string())?;
+    let stream_info = archive_manager::build_archive_stream_info(media)?;
     let (drive_url, access_token) = state
         .gdrive_client
         .get_stream_url(&stream_info.zip_file_id)
@@ -6097,7 +6469,68 @@ async fn build_temporary_zip_stream_url(
 }
 
 fn is_zip_drive_item(file: &gdrive::DriveItem) -> bool {
-    gdrive::is_zip_archive_item(file) || zip_manager::is_zip_filename(&file.name)
+    gdrive::is_supported_archive_item(file)
+}
+
+fn is_unsupported_archive_drive_item(file: &gdrive::DriveItem) -> bool {
+    gdrive::is_unsupported_archive_item(file)
+}
+
+fn unsupported_archive_reason(file: &gdrive::DriveItem) -> Option<String> {
+    if !is_unsupported_archive_drive_item(file) {
+        return None;
+    }
+
+    Some(
+        "TAR archives are not supported because indexing them requires reading the entire archive sequentially from Google Drive, which can consume full bandwidth and cannot behave like ZIP store mode."
+            .to_string(),
+    )
+}
+
+fn notify_unsupported_archives_window(
+    window: &Window,
+    archive_names: &[String],
+) {
+    if archive_names.is_empty() {
+        return;
+    }
+
+    let message = if archive_names.len() == 1 {
+        format!(
+            "{} is not supported. TAR archives require a full sequential read from Google Drive during indexing, which consumes full bandwidth and cannot work like ZIP store mode.",
+            archive_names[0]
+        )
+    } else {
+        format!(
+            "{} TAR archive(s) were skipped. TAR archives require a full sequential read from Google Drive during indexing, which consumes full bandwidth and cannot work like ZIP store mode.",
+            archive_names.len()
+        )
+    };
+
+    dispatch_notification(window, "Unsupported TAR Archive", &message, "warning");
+}
+
+fn notify_unsupported_archives_handle(
+    app_handle: &AppHandle,
+    archive_names: &[String],
+) {
+    if archive_names.is_empty() {
+        return;
+    }
+
+    let message = if archive_names.len() == 1 {
+        format!(
+            "{} is not supported. TAR archives require a full sequential read from Google Drive during indexing, which consumes full bandwidth and cannot work like ZIP store mode.",
+            archive_names[0]
+        )
+    } else {
+        format!(
+            "{} TAR archive(s) were skipped. TAR archives require a full sequential read from Google Drive during indexing, which consumes full bandwidth and cannot work like ZIP store mode.",
+            archive_names.len()
+        )
+    };
+
+    dispatch_notification_from_handle(app_handle, "Unsupported TAR Archive", &message, "warning");
 }
 
 fn ensure_cloud_show_with_metadata(
@@ -6240,11 +6673,17 @@ fn index_zip_archive_with_metadata(
     folder_id_fallback: &str,
     api_key: &str,
     image_cache_dir: &str,
+    cache_config: &zip_manager::ZipCacheConfig,
     tv_show_cache: &mut HashMap<String, (i64, Option<String>, String)>,
     season_cache: &mut HashMap<(String, i32), Vec<tmdb::TmdbEpisodeInfo>>,
 ) -> Result<Vec<IndexedCloudItem>, String> {
-    let analyzed =
-        zip_manager::analyze_zip_from_drive(access_token, &file.id).map_err(|e| e.to_string())?;
+    let analyzed = archive_manager::analyze_archive_from_drive(
+        access_token,
+        &file.id,
+        &file.name,
+        Some(&file.mime_type),
+        cache_config,
+    )?;
 
     if analyzed.indexed_entries.is_empty() {
         return Ok(Vec::new());
@@ -6252,6 +6691,7 @@ fn index_zip_archive_with_metadata(
 
     db.insert_zip_archive(&analyzed.archive)
         .map_err(|e| e.to_string())?;
+    let archive_format = analyzed.archive.archive_format.clone();
 
     let folder_id = file
         .parents
@@ -6297,6 +6737,7 @@ fn index_zip_archive_with_metadata(
                 season,
                 episode,
                 &show_folder_id,
+                &archive_format,
                 &file.id,
                 &entry.entry_path,
                 entry.local_header_offset as i64,
@@ -6331,10 +6772,16 @@ fn index_zip_archive_without_metadata(
     access_token: &str,
     file: &gdrive::DriveItem,
     folder_id_fallback: &str,
+    cache_config: &zip_manager::ZipCacheConfig,
     tv_show_cache: &mut HashMap<String, i64>,
 ) -> Result<Vec<IndexedCloudItem>, String> {
-    let analyzed =
-        zip_manager::analyze_zip_from_drive(access_token, &file.id).map_err(|e| e.to_string())?;
+    let analyzed = archive_manager::analyze_archive_from_drive(
+        access_token,
+        &file.id,
+        &file.name,
+        Some(&file.mime_type),
+        cache_config,
+    )?;
 
     if analyzed.indexed_entries.is_empty() {
         return Ok(Vec::new());
@@ -6342,6 +6789,7 @@ fn index_zip_archive_without_metadata(
 
     db.insert_zip_archive(&analyzed.archive)
         .map_err(|e| e.to_string())?;
+    let archive_format = analyzed.archive.archive_format.clone();
 
     let folder_id = file
         .parents
@@ -6375,6 +6823,7 @@ fn index_zip_archive_without_metadata(
                 season,
                 episode,
                 &folder_id,
+                &archive_format,
                 &file.id,
                 &entry.entry_path,
                 entry.local_header_offset as i64,
@@ -6405,12 +6854,44 @@ fn index_zip_archive_without_metadata(
 }
 
 fn emit_ui_notification(window: &tauri::Window, title: &str, message: &str, kind: &str) {
-    window
+    let notification_key = format!("{}|{}|{}", kind, title, message);
+    let now = std::time::Instant::now();
+    let dedupe_window = Duration::from_secs(3);
+
+    if let Ok(mut recent) = RECENT_UI_NOTIFICATIONS.lock() {
+        recent.retain(|_, instant| now.duration_since(*instant) <= dedupe_window);
+        if let Some(last_seen) = recent.get(&notification_key) {
+            if now.duration_since(*last_seen) <= dedupe_window {
+                return;
+            }
+        }
+        recent.insert(notification_key, now);
+    }
+
+    if let Err(e) = window
         .emit(
             "notification",
             serde_json::json!({ "type": kind, "title": title, "message": message }),
         )
-        .ok();
+    {
+        eprintln!("[NOTIFY] Failed to emit notification: {}", e);
+    }
+}
+
+fn should_show_in_app_notification(window: &tauri::Window) -> bool {
+    if window.is_minimized().unwrap_or(false) {
+        return false;
+    }
+
+    window.is_focused().unwrap_or(false)
+}
+
+fn dispatch_notification(window: &tauri::Window, title: &str, message: &str, kind: &str) {
+    if should_show_in_app_notification(window) {
+        emit_ui_notification(window, title, message, kind);
+    } else {
+        send_system_notification(&window.app_handle(), title, message);
+    }
 }
 
 fn emit_ui_notification_from_handle(
@@ -6420,8 +6901,20 @@ fn emit_ui_notification_from_handle(
     kind: &str,
 ) {
     if let Some(window) = app_handle.get_window("main") {
-        emit_ui_notification(&window, title, message, kind);
+        dispatch_notification(&window, title, message, kind);
+    } else {
+        // Window not available, send system notification only
+        send_system_notification(app_handle, title, message);
     }
+}
+
+fn dispatch_notification_from_handle(
+    app_handle: &AppHandle,
+    title: &str,
+    message: &str,
+    kind: &str,
+) {
+    emit_ui_notification_from_handle(app_handle, title, message, kind);
 }
 
 fn emit_zip_processing_event(
@@ -6441,6 +6934,53 @@ fn emit_zip_processing_event(
     };
 
     window.emit("zip-processing-status", payload).ok();
+}
+
+fn build_mpv_display_title(media: &database::MediaItem) -> String {
+    let inferred_episode_numbers = media
+        .zip_entry_path
+        .as_deref()
+        .or(media.file_path.as_deref())
+        .and_then(infer_episode_numbers_from_path);
+
+    let season = media
+        .season_number
+        .or(inferred_episode_numbers.map(|(season, _)| season));
+    let episode = media
+        .episode_number
+        .or(inferred_episode_numbers.map(|(_, episode)| episode));
+    let is_episode = matches!(
+        media.media_type.as_str(),
+        "tv" | "tvepisode" | "episode"
+    ) || season.is_some() || episode.is_some();
+
+    if is_episode {
+        let season = season.unwrap_or(1);
+        let episode = episode.unwrap_or(1);
+        let mut display_title = format!("{} S{:02}E{:02}", media.title, season, episode);
+
+        if let Some(episode_title) = media
+            .episode_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != media.title)
+        {
+            display_title.push_str(" - ");
+            display_title.push_str(episode_title);
+        }
+
+        display_title
+    } else {
+        media.title.clone()
+    }
+}
+
+fn infer_episode_numbers_from_path(path: &str) -> Option<(i32, i32)> {
+    let pattern = regex::Regex::new(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b").ok()?;
+    let captures = pattern.captures(path)?;
+    let season = captures.name("season")?.as_str().parse::<i32>().ok()?;
+    let episode = captures.name("episode")?.as_str().parse::<i32>().ok()?;
+    Some((season, episode))
 }
 
 fn emit_zip_processing_event_from_handle(
@@ -6613,18 +7153,77 @@ async fn background_check_cloud_changes(
             if let Some(window) = app_handle.get_window("main") {
                 window.emit("library-updated", ()).ok();
             }
+
+            // Group TV episodes by series name to avoid spamming notifications
+            let mut series_episodes: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            let mut non_tv_titles: Vec<String> = Vec::new();
+
             for title in &removed_titles {
-                emit_ui_notification_from_handle(
-                    app_handle,
-                    "StreamVault",
-                    &format!("{} removed (deleted from Drive)", title),
-                    "info",
-                );
-                send_system_notification(
-                    app_handle,
-                    "StreamVault",
-                    &format!("{} removed (deleted from Drive)", title),
-                );
+                // Check if this is a TV episode (format: "Title SXXEXX" or "Title SXEX")
+                // Examples: "Breaking Bad S01E01", "Breaking Bad S1E1", "Breaking Bad S10E15"
+                let is_tv_episode = if let Some(pos) = title.find(" S") {
+                    let rest = &title[pos + 2..]; // Skip " S"
+                    if rest.len() >= 3 && rest.starts_with(|c: char| c.is_ascii_digit()) {
+                        // Look for pattern: digit(s) + 'E' + digit(s)
+                        if let Some(e_pos) = rest.find(|c: char| c.to_ascii_uppercase() == 'E') {
+                            if e_pos > 0 && e_pos < rest.len() - 1 {
+                                let season_part = &rest[..e_pos];
+                                let episode_part = &rest[e_pos + 1..];
+                                // Both season and episode should be numeric
+                                season_part.chars().all(|c| c.is_ascii_digit()) && 
+                                episode_part.chars().all(|c| c.is_ascii_digit()) &&
+                                !season_part.is_empty() && !episode_part.is_empty()
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_tv_episode {
+                    // Extract series name (everything before " S")
+                    if let Some(pos) = title.find(" S") {
+                        let series_name = &title[..pos];
+                        series_episodes.entry(series_name.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(title.clone());
+                        continue;
+                    }
+                }
+                // Not a TV episode, add to regular titles
+                non_tv_titles.push(title.clone());
+            }
+
+            let mut messages = Vec::new();
+
+            for (series_name, episodes) in &series_episodes {
+                let episode_count = episodes.len();
+                if episode_count == 1 {
+                    messages.push(format!("{} (1 episode)", series_name));
+                } else {
+                    messages.push(format!("{} ({} episodes)", series_name, episode_count));
+                }
+            }
+
+            for title in &non_tv_titles {
+                messages.push(title.clone());
+            }
+
+            if !messages.is_empty() {
+                let message = if messages.len() == 1 {
+                    format!("{} removed (deleted from Drive)", messages[0])
+                } else {
+                    format!("{} items removed (deleted from Drive)", messages.len())
+                };
+
+                dispatch_notification_from_handle(app_handle, "StreamVault", &message, "info");
             }
         }
     }
@@ -6659,23 +7258,44 @@ async fn background_check_cloud_changes(
     );
 
     // Index all detected video files (no folder filtering)
-    let files_to_index = changed_files;
+    let unsupported_archives: Vec<String> = changed_files
+        .iter()
+        .filter(|file| is_unsupported_archive_drive_item(file))
+        .map(|file| file.name.clone())
+        .collect();
+    if !unsupported_archives.is_empty() {
+        notify_unsupported_archives_handle(app_handle, &unsupported_archives);
+    }
+    let files_to_index: Vec<_> = changed_files
+        .into_iter()
+        .filter(|file| !is_unsupported_archive_drive_item(file))
+        .collect();
 
     if files_to_index.is_empty() {
         return Ok(CloudIndexResult {
             success: true,
             indexed_count: 0,
-            skipped_count: 0,
+            skipped_count: unsupported_archives.len(),
             movies_count: 0,
             tv_count: 0,
-            message: "No new files detected".to_string(),
+            message: if unsupported_archives.is_empty() {
+                "No new files detected".to_string()
+            } else {
+                format!(
+                    "Skipped {} unsupported TAR archive(s)",
+                    unsupported_archives.len()
+                )
+            },
         });
     }
 
     // Get API key from config
-    let api_key = {
+    let (api_key, archive_cache_config) = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
-        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+        (
+            tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default()),
+            build_zip_cache_config(&config),
+        )
     };
 
     let image_cache_dir = database::get_image_cache_dir();
@@ -6709,7 +7329,7 @@ async fn background_check_cloud_changes(
             archive_name,
             None,
             &format!(
-                "ZIP archive{} detected in Google Drive. Processing episode entries...",
+                "Archive{} detected in Google Drive. Processing episode entries...",
                 if zip_files_detected.len() == 1 {
                     ""
                 } else {
@@ -6797,6 +7417,7 @@ async fn background_check_cloud_changes(
                         access_token,
                         &pseudo_file,
                         &folder_id,
+                        &archive_cache_config,
                         &mut tv_show_cache,
                     ) {
                         Ok(items) => {
@@ -6934,6 +7555,7 @@ async fn background_check_cloud_changes(
     }?;
 
     let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
+    let skipped_count = skipped_count + unsupported_archives.len();
     let indexed_count = indexed_items.len();
 
     if !zip_files_detected.is_empty() {
@@ -6951,37 +7573,59 @@ async fn background_check_cloud_changes(
         );
     }
 
-    // Send notifications for new items
+    // Send a consolidated notification for new items (batched to avoid notification spam)
     if indexed_count > 0 {
-        let titles: Vec<String> = indexed_items
-            .iter()
-            .map(|(_, title, _, is_tv, season, episode, _, _)| {
-                if *is_tv {
-                    format!(
-                        "{} S{:02}E{:02}",
-                        title,
-                        season.unwrap_or(1),
-                        episode.unwrap_or(1)
-                    )
-                } else {
-                    title.clone()
+        // Group additions by type: TV series (grouped) vs movies
+        let mut series_episodes: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut movie_count: usize = 0;
+        let mut single_movie_title: Option<String> = None;
+
+        for (_, title, _, is_tv, season, episode, _, _) in &indexed_items {
+            if *is_tv {
+                // Group by series name. Use format_added_notification for single-episode case.
+                *series_episodes.entry(title.clone()).or_insert(0) += 1;
+                let _ = (season, episode); // consumed by format_added_notification when needed
+            } else {
+                movie_count += 1;
+                if movie_count == 1 {
+                    single_movie_title = Some(title.clone());
                 }
-            })
-            .collect();
+            }
+        }
 
-        for title in &titles {
-            emit_ui_notification_from_handle(
-                app_handle,
-                "StreamVault",
-                &format!("{} added to your library", title),
-                "success",
-            );
+        // Build consolidated notification messages
+        let mut notification_parts: Vec<String> = Vec::new();
 
-            send_system_notification(
-                app_handle,
-                "StreamVault",
-                &format!("{} added to your library", title),
-            );
+        // TV series summary
+        for (series_name, ep_count) in &series_episodes {
+            if *ep_count == 1 {
+                notification_parts.push(format!("{} (1 episode)", series_name));
+            } else {
+                notification_parts.push(format!("{} ({} episodes)", series_name, ep_count));
+            }
+        }
+
+        // Movies summary
+        if movie_count == 1 {
+            if let Some(ref title) = single_movie_title {
+                notification_parts.push(format_added_notification(title, false, None, None));
+            }
+        } else if movie_count > 1 {
+            notification_parts.push(format!("{} movies added to your library", movie_count));
+        }
+
+        // Send a single consolidated notification
+        if !notification_parts.is_empty() {
+            let message = if notification_parts.len() == 1 {
+                // Single entry: use the specific message directly
+                notification_parts[0].clone()
+            } else {
+                // Multiple entries: summarise
+                format!("{} items added to your library", indexed_count)
+            };
+
+            dispatch_notification_from_handle(app_handle, "StreamVault", &message, "success");
         }
 
         // Emit library-updated if window exists
@@ -7799,16 +8443,18 @@ async fn wt_launch_mpv(
     start_position: f64,
 ) -> Result<u32, String> {
     // Get media info and config
-    let (file_path, mpv_path, is_cloud, cloud_file_id) = {
+    let (file_path, mpv_path, is_cloud, cloud_file_id, display_title) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
         let config = state.config.lock().map_err(|e| e.to_string())?;
         let mpv = config.mpv_path.clone().unwrap_or_else(|| "mpv".to_string());
+        let display_title = build_mpv_display_title(&media);
         (
             media.file_path,
             mpv,
             media.is_cloud.unwrap_or(false),
             media.cloud_file_id,
+            display_title,
         )
     };
 
@@ -7850,6 +8496,7 @@ async fn wt_launch_mpv(
         &mpv_path,
         &file_or_url,
         media_id,
+        Some(&display_title),
         &session_id,
         start_position,
         auth_header.as_deref(),
@@ -8428,8 +9075,11 @@ fn main() {
             get_library_stats,
             get_episodes,
             get_watch_history,
+            get_watch_history_events,
             remove_from_watch_history,
+            remove_watch_history_entry,
             clear_all_watch_history,
+            sync_watch_history,
             mark_as_complete,
             // Streaming history commands
             save_streaming_progress,
@@ -8455,6 +9105,7 @@ fn main() {
             get_scan_status,
             get_resume_info,
             get_media_info,
+            get_archive_playback_assessment,
             get_stream_info,
             get_audio_tracks,
             zip_analyze,

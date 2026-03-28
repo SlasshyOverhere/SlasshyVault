@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use crate::zip_manager;
 
 const APP_NAME: &str = "StreamVault";
+const AUTO_MARK_WATCHED_THRESHOLD_PERCENT: f64 = 93.0;
+const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
 
 /// Get the app data directory, with separate paths for dev and production builds
 /// Dev builds use "StreamVault-Dev" to keep data isolated from production
@@ -81,6 +83,7 @@ pub struct MediaItem {
     // Cloud storage fields
     pub is_cloud: Option<bool>,
     pub cloud_file_id: Option<String>,
+    pub archive_format: Option<String>,
     pub parent_zip_id: Option<String>,
     pub zip_entry_path: Option<String>,
     pub zip_local_header_offset: Option<i64>,
@@ -89,12 +92,17 @@ pub struct MediaItem {
     pub zip_uncompressed_size: Option<i64>,
     pub zip_crc32: Option<String>,
     pub zip_compression_method: Option<i64>,
+    pub archive_playback_can_play: Option<bool>,
+    pub archive_playback_mode: Option<String>,
+    pub archive_playback_message: Option<String>,
+    pub archive_playback_details: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZipArchiveRecord {
     pub zip_file_id: String,
     pub filename: String,
+    pub archive_format: String,
     pub file_size_bytes: i64,
     pub compression_type: String,
     pub central_dir_offset: i64,
@@ -185,6 +193,33 @@ pub struct WatchActivityItem {
     pub episode: Option<i32>,
     pub duration_seconds: Option<f64>,
     pub last_watched: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchHistoryEvent {
+    pub event_id: String,
+    pub media_id: Option<i64>,
+    pub parent_media_id: Option<i64>,
+    pub title: String,
+    pub parent_title: Option<String>,
+    pub media_type: String,
+    pub year: Option<i32>,
+    pub overview: Option<String>,
+    pub poster_path: Option<String>,
+    pub still_path: Option<String>,
+    pub tmdb_id: Option<String>,
+    pub parent_tmdb_id: Option<String>,
+    pub episode_title: Option<String>,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub is_cloud: bool,
+    pub progress_percent: f64,
+    pub resume_position_seconds: f64,
+    pub duration_seconds: f64,
+    pub completed: bool,
+    pub started_at: String,
+    pub ended_at: String,
+    pub updated_at: String,
 }
 
 pub struct Database {
@@ -303,6 +338,12 @@ impl Database {
                 [],
             )?;
         }
+        if !columns.contains(&"archive_format".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN archive_format TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
         if !columns.contains(&"cloud_folder_id".to_string()) {
             self.conn.execute(
                 "ALTER TABLE media ADD COLUMN cloud_folder_id TEXT DEFAULT NULL",
@@ -392,6 +433,35 @@ impl Database {
             [],
         )?;
 
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS watch_history_events (
+                event_id TEXT PRIMARY KEY,
+                media_id INTEGER,
+                parent_media_id INTEGER,
+                title TEXT NOT NULL,
+                parent_title TEXT,
+                media_type TEXT NOT NULL,
+                year INTEGER,
+                overview TEXT,
+                poster_path TEXT,
+                still_path TEXT,
+                tmdb_id TEXT,
+                parent_tmdb_id TEXT,
+                episode_title TEXT,
+                season_number INTEGER,
+                episode_number INTEGER,
+                is_cloud INTEGER NOT NULL DEFAULT 0,
+                progress_percent REAL NOT NULL DEFAULT 0,
+                resume_position_seconds REAL NOT NULL DEFAULT 0,
+                duration_seconds REAL NOT NULL DEFAULT 0,
+                completed INTEGER NOT NULL DEFAULT 0,
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )",
+            [],
+        )?;
+
         // Clean up duplicate entries before creating unique index
         // Keep only the most recent entry for each unique combination
         self.conn.execute(
@@ -445,6 +515,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS zip_archives (
                 zip_file_id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
+                archive_format TEXT NOT NULL DEFAULT 'zip',
                 file_size_bytes INTEGER NOT NULL,
                 compression_type TEXT NOT NULL,
                 central_dir_offset INTEGER,
@@ -455,6 +526,12 @@ impl Database {
             )",
             [],
         )?;
+        self.conn
+            .execute(
+                "ALTER TABLE zip_archives ADD COLUMN archive_format TEXT NOT NULL DEFAULT 'zip'",
+                [],
+            )
+            .ok();
 
         // Cover the common library list queries: filter by media_type, then order by title.
         self.conn.execute(
@@ -495,6 +572,83 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_zip_archives_file_id ON zip_archives(zip_file_id)",
             [],
         )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_watch_history_events_ended_at ON watch_history_events(ended_at DESC)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_watch_history_events_media_recent ON watch_history_events(media_id, updated_at DESC)",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT INTO watch_history_events (
+                event_id,
+                media_id,
+                parent_media_id,
+                title,
+                parent_title,
+                media_type,
+                year,
+                overview,
+                poster_path,
+                still_path,
+                tmdb_id,
+                parent_tmdb_id,
+                episode_title,
+                season_number,
+                episode_number,
+                is_cloud,
+                progress_percent,
+                resume_position_seconds,
+                duration_seconds,
+                completed,
+                started_at,
+                ended_at,
+                updated_at
+            )
+            SELECT
+                lower(hex(randomblob(16))),
+                m.id,
+                m.parent_id,
+                m.title,
+                p.title,
+                m.media_type,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END,
+                m.overview,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END,
+                m.still_path,
+                m.tmdb_id,
+                p.tmdb_id,
+                m.episode_title,
+                m.season_number,
+                m.episode_number,
+                COALESCE(m.is_cloud, 0),
+                CASE
+                    WHEN COALESCE(m.duration_seconds, 0) > 0 AND COALESCE(m.resume_position_seconds, 0) = 0 THEN 100
+                    WHEN COALESCE(m.duration_seconds, 0) > 0 THEN (COALESCE(m.resume_position_seconds, 0) * 100.0) / m.duration_seconds
+                    ELSE 0
+                END,
+                COALESCE(m.resume_position_seconds, 0),
+                COALESCE(m.duration_seconds, 0),
+                CASE
+                    WHEN COALESCE(m.duration_seconds, 0) > 0 AND COALESCE(m.resume_position_seconds, 0) = 0 THEN 1
+                    ELSE 0
+                END,
+                m.last_watched,
+                m.last_watched,
+                m.last_watched
+            FROM media m
+            LEFT JOIN media p ON m.parent_id = p.id
+            WHERE m.last_watched IS NOT NULL
+              AND m.media_type IN ('movie', 'tvepisode')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM watch_history_events w
+                  WHERE w.media_id = m.id
+                    AND w.ended_at = m.last_watched
+              )",
+            [],
+        )?;
         Ok(())
     }
 
@@ -503,6 +657,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method
@@ -544,6 +699,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method
@@ -588,6 +744,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method
@@ -624,6 +781,7 @@ impl Database {
                 CASE WHEN m.media_type = 'tvepisode' THEN p.tmdb_id ELSE m.tmdb_id END as tmdb_id,
                 m.episode_title,
                 m.still_path,
+                m.archive_format,
                 m.is_cloud,
                 m.cloud_file_id,
                 m.parent_zip_id,
@@ -651,11 +809,47 @@ impl Database {
             .collect()
     }
 
+    pub fn get_watch_history_events(&self, limit: i32) -> Result<Vec<WatchHistoryEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                event_id,
+                media_id,
+                parent_media_id,
+                title,
+                parent_title,
+                media_type,
+                year,
+                overview,
+                poster_path,
+                still_path,
+                tmdb_id,
+                parent_tmdb_id,
+                episode_title,
+                season_number,
+                episode_number,
+                is_cloud,
+                progress_percent,
+                resume_position_seconds,
+                duration_seconds,
+                completed,
+                started_at,
+                ended_at,
+                updated_at
+             FROM watch_history_events
+             ORDER BY ended_at DESC
+             LIMIT ?",
+        )?;
+
+        let items = stmt.query_map(params![limit], Self::map_watch_history_event)?;
+        items.collect()
+    }
+
     pub fn get_media_by_id(&self, id: i64) -> Result<MediaItem> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method
@@ -683,8 +877,8 @@ impl Database {
             0.0
         };
 
-        // Don't return progress if >= 95%
-        if progress_percent >= 95.0 {
+        // Don't return progress once it should count as watched.
+        if progress_percent > AUTO_MARK_WATCHED_THRESHOLD_PERCENT {
             return Ok(ResumeInfo {
                 has_progress: false,
                 position: 0.0,
@@ -711,14 +905,14 @@ impl Database {
     }
 
     pub fn update_progress(&self, media_id: i64, current_time: f64, duration: f64) -> Result<()> {
-        // Clear progress if >= 95%
+        // Clear progress once playback is close enough to count as watched.
         let progress_percent = if duration > 0.0 {
             current_time / duration
         } else {
             0.0
         };
 
-        if progress_percent >= 0.95 {
+        if progress_percent > AUTO_MARK_WATCHED_THRESHOLD_RATIO {
             self.conn.execute(
                 "UPDATE media SET resume_position_seconds = 0, duration_seconds = ?, 
                  last_watched = datetime('now') WHERE id = ?",
@@ -730,6 +924,190 @@ impl Database {
                  duration_seconds = CASE WHEN ? > 0 THEN ? ELSE duration_seconds END,
                  last_watched = datetime('now') WHERE id = ?",
                 params![current_time, duration, duration, media_id],
+            )?;
+        }
+
+        if current_time > 0.0 || duration > 0.0 {
+            self.record_watch_event(media_id, current_time, duration)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn record_watch_event(&self, media_id: i64, current_time: f64, duration: f64) -> Result<()> {
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                m.id,
+                m.parent_id,
+                m.title,
+                p.title,
+                m.media_type,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END,
+                m.overview,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END,
+                m.still_path,
+                m.tmdb_id,
+                p.tmdb_id,
+                m.episode_title,
+                m.season_number,
+                m.episode_number,
+                COALESCE(m.is_cloud, 0)
+             FROM media m
+             LEFT JOIN media p ON m.parent_id = p.id
+             WHERE m.id = ?",
+        )?;
+
+        let snapshot = stmt.query_row(params![media_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<i32>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<i32>>(12)?,
+                row.get::<_, Option<i32>>(13)?,
+                row.get::<_, i64>(14)? != 0,
+            ))
+        })?;
+
+        let completed = duration > 0.0 && (current_time / duration) > AUTO_MARK_WATCHED_THRESHOLD_RATIO;
+        let progress_percent = if duration > 0.0 {
+            if completed {
+                100.0
+            } else {
+                (current_time / duration) * 100.0
+            }
+        } else {
+            0.0
+        };
+        let resume_position_seconds = if completed { 0.0 } else { current_time.max(0.0) };
+        let duration_seconds = duration.max(0.0);
+
+        let existing: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT event_id, started_at
+                 FROM watch_history_events
+                 WHERE media_id = ?
+                   AND datetime(updated_at) >= datetime('now', '-20 minutes')
+                 ORDER BY updated_at DESC
+                 LIMIT 1",
+                params![media_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        if let Some((event_id, started_at)) = existing {
+            self.conn.execute(
+                "UPDATE watch_history_events
+                 SET
+                    parent_media_id = ?,
+                    title = ?,
+                    parent_title = ?,
+                    media_type = ?,
+                    year = ?,
+                    overview = ?,
+                    poster_path = ?,
+                    still_path = ?,
+                    tmdb_id = ?,
+                    parent_tmdb_id = ?,
+                    episode_title = ?,
+                    season_number = ?,
+                    episode_number = ?,
+                    is_cloud = ?,
+                    progress_percent = ?,
+                    resume_position_seconds = ?,
+                    duration_seconds = ?,
+                    completed = ?,
+                    started_at = ?,
+                    ended_at = ?,
+                    updated_at = ?
+                 WHERE event_id = ?",
+                params![
+                    snapshot.1,
+                    snapshot.2,
+                    snapshot.3,
+                    snapshot.4,
+                    snapshot.5,
+                    snapshot.6,
+                    snapshot.7,
+                    snapshot.8,
+                    snapshot.9,
+                    snapshot.10,
+                    snapshot.11,
+                    snapshot.12,
+                    snapshot.13,
+                    if snapshot.14 { 1 } else { 0 },
+                    progress_percent,
+                    resume_position_seconds,
+                    duration_seconds,
+                    if completed { 1 } else { 0 },
+                    started_at,
+                    now,
+                    now,
+                    event_id,
+                ],
+            )?;
+        } else {
+            self.conn.execute(
+                "INSERT INTO watch_history_events (
+                    event_id,
+                    media_id,
+                    parent_media_id,
+                    title,
+                    parent_title,
+                    media_type,
+                    year,
+                    overview,
+                    poster_path,
+                    still_path,
+                    tmdb_id,
+                    parent_tmdb_id,
+                    episode_title,
+                    season_number,
+                    episode_number,
+                    is_cloud,
+                    progress_percent,
+                    resume_position_seconds,
+                    duration_seconds,
+                    completed,
+                    started_at,
+                    ended_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    snapshot.0,
+                    snapshot.1,
+                    snapshot.2,
+                    snapshot.3,
+                    snapshot.4,
+                    snapshot.5,
+                    snapshot.6,
+                    snapshot.7,
+                    snapshot.8,
+                    snapshot.9,
+                    snapshot.10,
+                    snapshot.11,
+                    snapshot.12,
+                    snapshot.13,
+                    if snapshot.14 { 1 } else { 0 },
+                    progress_percent,
+                    resume_position_seconds,
+                    duration_seconds,
+                    if completed { 1 } else { 0 },
+                    now,
+                    now,
+                    now,
+                ],
             )?;
         }
 
@@ -758,6 +1136,18 @@ impl Database {
             "UPDATE media SET last_watched = NULL, resume_position_seconds = 0 WHERE id = ?",
             params![media_id],
         )?;
+        self.conn.execute(
+            "DELETE FROM watch_history_events WHERE media_id = ?",
+            params![media_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_watch_history_event(&self, event_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM watch_history_events WHERE event_id = ?",
+            params![event_id],
+        )?;
         Ok(())
     }
 
@@ -767,7 +1157,110 @@ impl Database {
             "UPDATE media SET last_watched = NULL, resume_position_seconds = 0 WHERE last_watched IS NOT NULL",
             [],
         )?;
+        self.conn.execute("DELETE FROM watch_history_events", [])?;
         Ok(count as i32)
+    }
+
+    pub fn upsert_watch_history_events(&self, events: &[WatchHistoryEvent]) -> Result<usize> {
+        let mut merged = 0usize;
+
+        for event in events {
+            let existing_updated_at: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT updated_at FROM watch_history_events WHERE event_id = ?",
+                    params![event.event_id],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if existing_updated_at
+                .as_deref()
+                .map(|value| value >= event.updated_at.as_str())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            self.conn.execute(
+                "INSERT INTO watch_history_events (
+                    event_id,
+                    media_id,
+                    parent_media_id,
+                    title,
+                    parent_title,
+                    media_type,
+                    year,
+                    overview,
+                    poster_path,
+                    still_path,
+                    tmdb_id,
+                    parent_tmdb_id,
+                    episode_title,
+                    season_number,
+                    episode_number,
+                    is_cloud,
+                    progress_percent,
+                    resume_position_seconds,
+                    duration_seconds,
+                    completed,
+                    started_at,
+                    ended_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    media_id = excluded.media_id,
+                    parent_media_id = excluded.parent_media_id,
+                    title = excluded.title,
+                    parent_title = excluded.parent_title,
+                    media_type = excluded.media_type,
+                    year = excluded.year,
+                    overview = excluded.overview,
+                    poster_path = excluded.poster_path,
+                    still_path = excluded.still_path,
+                    tmdb_id = excluded.tmdb_id,
+                    parent_tmdb_id = excluded.parent_tmdb_id,
+                    episode_title = excluded.episode_title,
+                    season_number = excluded.season_number,
+                    episode_number = excluded.episode_number,
+                    is_cloud = excluded.is_cloud,
+                    progress_percent = excluded.progress_percent,
+                    resume_position_seconds = excluded.resume_position_seconds,
+                    duration_seconds = excluded.duration_seconds,
+                    completed = excluded.completed,
+                    started_at = excluded.started_at,
+                    ended_at = excluded.ended_at,
+                    updated_at = excluded.updated_at",
+                params![
+                    event.event_id,
+                    event.media_id,
+                    event.parent_media_id,
+                    event.title,
+                    event.parent_title,
+                    event.media_type,
+                    event.year,
+                    event.overview,
+                    event.poster_path,
+                    event.still_path,
+                    event.tmdb_id,
+                    event.parent_tmdb_id,
+                    event.episode_title,
+                    event.season_number,
+                    event.episode_number,
+                    if event.is_cloud { 1 } else { 0 },
+                    event.progress_percent,
+                    event.resume_position_seconds,
+                    event.duration_seconds,
+                    if event.completed { 1 } else { 0 },
+                    event.started_at,
+                    event.ended_at,
+                    event.updated_at,
+                ],
+            )?;
+            merged += 1;
+        }
+
+        Ok(merged)
     }
 
     // ==================== STREAMING HISTORY FUNCTIONS ====================
@@ -1392,12 +1885,13 @@ impl Database {
     pub fn insert_zip_archive(&self, archive: &zip_manager::ZipArchiveInfo) -> Result<()> {
         self.conn.execute(
             "INSERT INTO zip_archives (
-                zip_file_id, filename, file_size_bytes, compression_type,
+                zip_file_id, filename, archive_format, file_size_bytes, compression_type,
                 central_dir_offset, central_dir_size, total_entries, video_entries,
                 last_analyzed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(zip_file_id) DO UPDATE SET
                 filename = excluded.filename,
+                archive_format = excluded.archive_format,
                 file_size_bytes = excluded.file_size_bytes,
                 compression_type = excluded.compression_type,
                 central_dir_offset = excluded.central_dir_offset,
@@ -1408,6 +1902,7 @@ impl Database {
             params![
                 &archive.zip_file_id,
                 &archive.filename,
+                &archive.archive_format,
                 archive.file_size_bytes as i64,
                 format!("{:?}", archive.compression_type).to_lowercase(),
                 archive.central_dir_offset as i64,
@@ -1421,7 +1916,7 @@ impl Database {
 
     pub fn get_zip_archive(&self, zip_file_id: &str) -> Result<ZipArchiveRecord> {
         self.conn.query_row(
-            "SELECT zip_file_id, filename, file_size_bytes, compression_type,
+            "SELECT zip_file_id, filename, archive_format, file_size_bytes, compression_type,
                     central_dir_offset, central_dir_size, total_entries, video_entries, last_analyzed
              FROM zip_archives WHERE zip_file_id = ?",
             params![zip_file_id],
@@ -1429,13 +1924,14 @@ impl Database {
                 Ok(ZipArchiveRecord {
                     zip_file_id: row.get(0)?,
                     filename: row.get(1)?,
-                    file_size_bytes: row.get(2)?,
-                    compression_type: row.get(3)?,
-                    central_dir_offset: row.get(4)?,
-                    central_dir_size: row.get(5)?,
-                    total_entries: row.get(6)?,
-                    video_entries: row.get(7)?,
-                    last_analyzed: row.get(8).unwrap_or(None),
+                    archive_format: row.get(2)?,
+                    file_size_bytes: row.get(3)?,
+                    compression_type: row.get(4)?,
+                    central_dir_offset: row.get(5)?,
+                    central_dir_size: row.get(6)?,
+                    total_entries: row.get(7)?,
+                    video_entries: row.get(8)?,
+                    last_analyzed: row.get(9).unwrap_or(None),
                 })
             },
         )
@@ -1448,6 +1944,7 @@ impl Database {
         season: i32,
         episode: i32,
         cloud_folder_id: &str,
+        archive_format: &str,
         zip_file_id: &str,
         zip_entry_path: &str,
         zip_local_header_offset: i64,
@@ -1460,15 +1957,16 @@ impl Database {
         overview: Option<&str>,
         still_path: Option<&str>,
     ) -> Result<i64> {
-        let virtual_path = format!("zip://{}/{}", zip_file_id, zip_entry_path);
+        let virtual_path = format!("{}://{}/{}", archive_format, zip_file_id, zip_entry_path);
 
         self.conn.execute(
             "INSERT INTO media (
                 title, file_path, media_type, parent_id, season_number, episode_number,
                 is_cloud, cloud_file_id, cloud_folder_id, episode_title, overview, still_path,
+                archive_format,
                 parent_zip_id, zip_entry_path, zip_local_header_offset, zip_data_start_offset,
                 zip_compressed_size, zip_uncompressed_size, zip_crc32, zip_compression_method
-            ) VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 title,
                 virtual_path,
@@ -1480,6 +1978,7 @@ impl Database {
                 episode_title,
                 overview,
                 still_path,
+                archive_format,
                 zip_file_id,
                 zip_entry_path,
                 zip_local_header_offset,
@@ -1523,7 +2022,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id
+                    archive_format, is_cloud, cloud_file_id
              FROM media WHERE cloud_folder_id = ?",
         )?;
 
@@ -1808,7 +2307,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id
+                    archive_format, is_cloud, cloud_file_id
              FROM media WHERE LOWER(title) = LOWER(?) AND media_type = 'tvshow'",
         )?;
 
@@ -1961,7 +2460,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    is_cloud, cloud_file_id
+                    archive_format, is_cloud, cloud_file_id
              FROM media",
         )?;
 
@@ -2448,8 +2947,8 @@ impl Database {
 
     /// Get aggregated watch stats from both media and streaming_history tables.
     /// "Completed" means: for media table, resume_position = 0 AND last_watched IS NOT NULL AND duration > 0
-    /// (because update_progress resets position to 0 at >= 95%).
-    /// For streaming_history, completed means duration > 0 AND progress >= 95%.
+    /// (because update_progress resets position to 0 once playback passes 93%).
+    /// For streaming_history, completed means duration > 0 AND progress > 93%.
     pub fn get_watch_stats(&self) -> Result<WatchStatsAggregated> {
         // Query completed items from the media table
         let (media_movies, media_episodes, media_time): (i64, i64, f64) = self.conn.query_row(
@@ -2475,7 +2974,7 @@ impl Database {
              FROM streaming_history
              WHERE duration_seconds > 0
                AND (resume_position_seconds = 0
-                    OR (resume_position_seconds * 1.0 / duration_seconds) >= 0.95)",
+                    OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
@@ -2584,7 +3083,7 @@ impl Database {
              WHERE last_watched > ?
                AND duration_seconds > 0
                AND (resume_position_seconds = 0
-                    OR (resume_position_seconds * 1.0 / duration_seconds) >= 0.95)
+                    OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93)
              ORDER BY last_watched DESC"
         )?;
 
@@ -2655,6 +3154,7 @@ impl Database {
             tmdb_id: Self::get_optional_named(row, "tmdb_id"),
             episode_title: Self::get_optional_named(row, "episode_title"),
             still_path: Self::get_optional_named(row, "still_path"),
+            archive_format: Self::get_optional_named(row, "archive_format"),
             is_cloud,
             cloud_file_id: Self::get_optional_named(row, "cloud_file_id"),
             parent_zip_id: Self::get_optional_named(row, "parent_zip_id"),
@@ -2665,6 +3165,38 @@ impl Database {
             zip_uncompressed_size: Self::get_optional_named(row, "zip_uncompressed_size"),
             zip_crc32: Self::get_optional_named(row, "zip_crc32"),
             zip_compression_method: Self::get_optional_named(row, "zip_compression_method"),
+            archive_playback_can_play: None,
+            archive_playback_mode: None,
+            archive_playback_message: None,
+            archive_playback_details: None,
+        })
+    }
+
+    fn map_watch_history_event(row: &rusqlite::Row) -> rusqlite::Result<WatchHistoryEvent> {
+        Ok(WatchHistoryEvent {
+            event_id: row.get(0)?,
+            media_id: row.get(1)?,
+            parent_media_id: row.get(2)?,
+            title: row.get(3)?,
+            parent_title: row.get(4)?,
+            media_type: row.get(5)?,
+            year: row.get(6)?,
+            overview: row.get(7)?,
+            poster_path: row.get(8)?,
+            still_path: row.get(9)?,
+            tmdb_id: row.get(10)?,
+            parent_tmdb_id: row.get(11)?,
+            episode_title: row.get(12)?,
+            season_number: row.get(13)?,
+            episode_number: row.get(14)?,
+            is_cloud: row.get::<_, i64>(15)? != 0,
+            progress_percent: row.get(16)?,
+            resume_position_seconds: row.get(17)?,
+            duration_seconds: row.get(18)?,
+            completed: row.get::<_, i64>(19)? != 0,
+            started_at: row.get(20)?,
+            ended_at: row.get(21)?,
+            updated_at: row.get(22)?,
         })
     }
 
