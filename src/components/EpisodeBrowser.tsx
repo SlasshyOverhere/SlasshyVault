@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, memo } from "react"
+import { useEffect, useState, useMemo, useCallback, memo, useRef } from "react"
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -422,6 +422,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     const [loading, setLoading] = useState(true)
     const [posterUrl, setPosterUrl] = useState<string | null>(null)
     const [selectedSeason, setSelectedSeason] = useState<number>(1)
+
+    // ⚡ Bolt: Chunked rendering state to prevent rendering bottlenecks with large seasons
+    const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(20)
+    const loadMoreRef = useRef<HTMLDivElement>(null)
     const { toast } = useToast()
 
     // TMDB episode metadata
@@ -581,6 +585,38 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             .filter(ep => (ep.season_number || 1) === selectedSeason)
             .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
     }, [episodes, selectedSeason])
+
+    // ⚡ Bolt: Reset visible count when switching seasons to prevent sudden layout jumps
+    useEffect(() => {
+        setVisibleEpisodeCount(20)
+    }, [selectedSeason])
+
+    // ⚡ Bolt: IntersectionObserver to load more episodes as user scrolls
+    useEffect(() => {
+        const sentinel = loadMoreRef.current
+        if (!sentinel || filteredEpisodes.length <= visibleEpisodeCount) return
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        setVisibleEpisodeCount((prev) =>
+                            Math.min(prev + 20, filteredEpisodes.length)
+                        )
+                    }
+                }
+            },
+            { root: null, rootMargin: '200px 0px', threshold: 0.01 }
+        )
+
+        observer.observe(sentinel)
+        return () => observer.disconnect()
+    }, [filteredEpisodes.length, visibleEpisodeCount])
+
+    // ⚡ Bolt: Slice episodes to only render what's visible
+    const episodesToRender = useMemo(() => {
+        return filteredEpisodes.slice(0, visibleEpisodeCount)
+    }, [filteredEpisodes, visibleEpisodeCount])
 
     const handleEpisodeClick = useCallback((episode: MediaItem) => {
         setContentDetailsItem(episode);
@@ -831,8 +867,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                         No episodes found for Season {selectedSeason}
                                     </div>
                                 ) : (
-                                    <div className="divide-y divide-border">
-                                        {filteredEpisodes.map((episode, index) => {
+                                    <div className="divide-y divide-border pb-4">
+                                        {episodesToRender.map((episode, index) => {
                                             const tmdbData = tmdbEpisodesBySeason
                                                 .get(selectedSeason)
                                                 ?.get(episode.episode_number || 0);
@@ -851,6 +887,14 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                                 />
                                             );
                                         })}
+                                        {filteredEpisodes.length > visibleEpisodeCount && (
+                                            <div
+                                                ref={loadMoreRef}
+                                                className="h-16 flex items-center justify-center text-xs text-muted-foreground/70"
+                                            >
+                                                Loading more episodes...
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </ScrollArea>
