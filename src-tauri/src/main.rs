@@ -3341,7 +3341,9 @@ fn build_audio_track_info(
     };
 
     let detail = match title {
-        Some(track_title) if track_title.to_lowercase() != label.to_lowercase() => Some(track_title),
+        Some(track_title) if track_title.to_lowercase() != label.to_lowercase() => {
+            Some(track_title)
+        }
         _ => language_tag
             .filter(|tag| tag.to_lowercase() != label.to_lowercase())
             .filter(|tag| tag.to_lowercase() != language_code.clone().unwrap_or_default()),
@@ -3384,7 +3386,10 @@ fn normalize_mpv_audio_track(track: &serde_json::Value) -> Option<AudioTrackInfo
         .and_then(|value| value.as_i64())
         .or_else(|| track.get("id").and_then(|value| value.as_i64()))
         .unwrap_or(0) as i32;
-    let track_id = track.get("id").and_then(|value| value.as_i64()).map(|value| value as i32);
+    let track_id = track
+        .get("id")
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32);
     let language_tag = track
         .get("lang")
         .or_else(|| track.get("language"))
@@ -3469,10 +3474,7 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
 
     let mut file = None;
     for _ in 0..100 {
-        let wide_name: Vec<u16> = pipe_name
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let wide_name: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
 
         let handle = unsafe {
             CreateFileW(
@@ -3487,9 +3489,7 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
         };
 
         if handle != INVALID_HANDLE_VALUE {
-            file = Some(unsafe {
-                std::fs::File::from_raw_handle(handle as *mut std::ffi::c_void)
-            });
+            file = Some(unsafe { std::fs::File::from_raw_handle(handle as *mut std::ffi::c_void) });
             break;
         }
 
@@ -3540,10 +3540,8 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
             _ => {}
         }
 
-        let is_track_update = matches!(
-            message.event.as_deref(),
-            Some("property-change")
-        ) && message.name.as_deref() == Some("track-list");
+        let is_track_update = matches!(message.event.as_deref(), Some("property-change"))
+            && message.name.as_deref() == Some("track-list");
         let is_track_response = message.request_id == Some(901)
             && message.error.as_deref() != Some("property unavailable");
 
@@ -3586,7 +3584,9 @@ fn probe_audio_tracks_with_ffprobe(
         .arg("json");
 
     if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
-        command.arg("-headers").arg(format!("Authorization: Bearer {}\r\n", token));
+        command
+            .arg("-headers")
+            .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
     let output = command
@@ -3596,7 +3596,10 @@ fn probe_audio_tracks_with_ffprobe(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffprobe could not read audio streams: {}", stderr.trim()));
+        return Err(format!(
+            "ffprobe could not read audio streams: {}",
+            stderr.trim()
+        ));
     }
 
     let parsed: FfprobeStreamsOutput = serde_json::from_slice(&output.stdout)
@@ -3671,7 +3674,8 @@ async fn resolve_audio_probe_source(
         }
 
         if let Some(ref cloud_file_id) = media.cloud_file_id {
-            let (stream_url, access_token) = state.gdrive_client.get_stream_url(cloud_file_id).await?;
+            let (stream_url, access_token) =
+                state.gdrive_client.get_stream_url(cloud_file_id).await?;
             return Ok(AudioProbeSource {
                 stream_url,
                 access_token: Some(access_token),
@@ -3703,7 +3707,8 @@ async fn get_audio_tracks(
         c.clone()
     };
     let ffprobe_path = resolve_ffprobe_path(&config).ok_or_else(|| {
-        "FFprobe is not configured. Set FFprobe in Settings > Player to detect audio tracks.".to_string()
+        "FFprobe is not configured. Set FFprobe in Settings > Player to detect audio tracks."
+            .to_string()
     })?;
     let media = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -4391,24 +4396,26 @@ async fn play_with_mpv(
 
     if let Some(pipe_name) = mpv_audio_probe_pipe {
         let window_for_audio = window.clone();
-        std::thread::spawn(move || match detect_audio_tracks_from_running_mpv(&pipe_name) {
-            Ok(tracks) if !tracks.is_empty() => {
-                let payload = MpvAudioTracksDetectedPayload {
-                    media_id,
-                    series_id,
-                    season_number,
-                    tracks,
-                };
-                let _ = window_for_audio.emit("mpv-audio-tracks-detected", payload);
-            }
-            Ok(_) => {}
-            Err(error) => {
-                println!(
-                    "[MPV] Audio track detection via playback pipe failed for media {}: {}",
-                    media_id, error
-                );
-            }
-        });
+        std::thread::spawn(
+            move || match detect_audio_tracks_from_running_mpv(&pipe_name) {
+                Ok(tracks) if !tracks.is_empty() => {
+                    let payload = MpvAudioTracksDetectedPayload {
+                        media_id,
+                        series_id,
+                        season_number,
+                        tracks,
+                    };
+                    let _ = window_for_audio.emit("mpv-audio-tracks-detected", payload);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    println!(
+                        "[MPV] Audio track detection via playback pipe failed for media {}: {}",
+                        media_id, error
+                    );
+                }
+            },
+        );
     }
 
     std::thread::spawn(move || {
@@ -5873,18 +5880,7 @@ async fn get_stream_info_with_transcode(
                 let start_time = media.resume_position_seconds;
                 let (_, stream_url) = transcoder::start_transcode(path, &file_path, start_time)?;
 
-                let poster = media.poster_path.as_ref().map(|p| {
-                    let cache_dir = database::get_image_cache_dir();
-                    let full_path =
-                        std::path::Path::new(&cache_dir).join(p.replace("image_cache/", ""));
-                    format!(
-                        "asset://localhost/{}",
-                        full_path
-                            .to_string_lossy()
-                            .replace("\\", "/")
-                            .replace(":", "")
-                    )
-                });
+                let poster = poster_asset_url(media.poster_path.as_ref());
 
                 return Ok(StreamInfo {
                     stream_url,
@@ -5907,17 +5903,7 @@ async fn get_stream_info_with_transcode(
 
     // No transcoding needed - return local file path
     if !file_path.is_empty() && std::path::Path::new(&file_path).exists() {
-        let poster = media.poster_path.as_ref().map(|p| {
-            let cache_dir = database::get_image_cache_dir();
-            let full_path = std::path::Path::new(&cache_dir).join(p.replace("image_cache/", ""));
-            format!(
-                "asset://localhost/{}",
-                full_path
-                    .to_string_lossy()
-                    .replace("\\", "/")
-                    .replace(":", "")
-            )
-        });
+        let poster = poster_asset_url(media.poster_path.as_ref());
 
         return Ok(StreamInfo {
             stream_url: file_path.clone(),
@@ -6212,16 +6198,30 @@ type IndexedCloudItem = (
 );
 
 fn poster_asset_url(poster_path: Option<&String>) -> Option<String> {
-    poster_path.map(|path| {
+    poster_path.and_then(|path| {
         let cache_dir = database::get_image_cache_dir();
-        let full_path = std::path::Path::new(&cache_dir).join(path.replace("image_cache/", ""));
-        format!(
+        // Prevent path traversal by extracting just the file name.
+        // If no valid file name is found (e.g. path is empty or ".."), return None.
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())?;
+
+        let full_path = std::path::Path::new(&cache_dir).join(file_name);
+
+        let path_cow = full_path.to_string_lossy();
+        let path_str = path_cow.as_ref();
+
+        #[cfg(windows)]
+        let path_str = if path_str.starts_with(r"\\?\") {
+            &path_str[4..]
+        } else {
+            path_str
+        };
+
+        Some(format!(
             "asset://localhost/{}",
-            full_path
-                .to_string_lossy()
-                .replace("\\", "/")
-                .replace(":", "")
-        )
+            path_str.replace("\\", "/").replace(":", "")
+        ))
     })
 }
 
@@ -7793,6 +7793,7 @@ async fn background_check_cloud_changes(
 
 // GitHub PAT for accessing private releases
 const GITHUB_RELEASE_TOKEN: &str = ""; // User will provide their PAT
+const ALLOWED_REPO: &str = "SlasshyOverhere/StreamVault";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateInfo {
@@ -7930,26 +7931,28 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
     println!("[UPDATE] Downloading update from: {}", url);
 
-    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
     let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
-    if parsed_url.scheme() != "https" {
-        return Err("Only HTTPS URLs are allowed".to_string());
+
+    if !is_authorized_update_url(&parsed_url, false) {
+        return Err("Unauthorized update URL".to_string());
     }
 
-    if let Some(host_str) = parsed_url.host_str() {
-        if host_str != "github.com"
-            && host_str != "api.github.com"
-            && host_str != "objects.githubusercontent.com"
-            && !host_str.ends_with(".github.com")
-            && !host_str.ends_with(".githubusercontent.com")
-        {
-            return Err("URL domain not allowed".to_string());
+    // Use a custom redirect policy to ensure redirects don't lead to malicious sites
+    let custom_policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if !is_authorized_update_url(attempt.url(), true) {
+            return attempt.error("Unauthorized redirect URL");
         }
-    } else {
-        return Err("Invalid URL domain".to_string());
-    }
+        if attempt.previous().len() > 5 {
+            return attempt.error("Too many redirects");
+        }
+        attempt.follow()
+    });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(custom_policy)
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
     let mut request = client.get(&url);
 
     // Add auth header if PAT is configured
@@ -8009,6 +8012,29 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
 fn updater_staging_root() -> std::path::PathBuf {
     std::env::temp_dir().join("streamvault-updater")
+}
+
+fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
+    if url.scheme() != "https" {
+        return false;
+    }
+
+    let Some(host) = url.host_str() else { return false };
+    let path = url.path();
+
+    if host == "github.com" {
+        return path.starts_with(&format!("/{}", ALLOWED_REPO));
+    }
+
+    if host == "api.github.com" {
+        return path.starts_with(&format!("/repos/{}", ALLOWED_REPO));
+    }
+
+    if is_redirect && (host == "objects.githubusercontent.com" || host.ends_with(".objects.githubusercontent.com")) {
+        return true;
+    }
+
+    false
 }
 
 fn sanitize_update_filename(parsed_url: &url::Url) -> String {
