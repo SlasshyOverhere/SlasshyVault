@@ -1,191 +1,147 @@
 # StreamVault
 
-A modern, cloud-first media library manager built with **Tauri**, **Rust**, and **React**. Indexes your Google Drive video collection, fetches rich metadata from TMDB, and provides seamless playback through **MPV**.
+StreamVault is a cloud-first desktop media library app built with Tauri, Rust, React, and TypeScript.
 
-![Monochrome Design](https://img.shields.io/badge/design-monochrome-black?style=flat-square)
+It indexes video content from Google Drive, enriches it with TMDB metadata, and plays it through MPV with progress tracking, resume support, and archive-aware playback.
+
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.2-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.26-green?style=flat-square)
 
-## Features
+## What StreamVault Does
 
-### Cloud-First Library
-- **Google Drive Integration** - Index your entire Google Drive with one click
-- **Real-time Change Detection** - Monitors Google Drive for new content using Changes API (5-second polling)
-- **Incremental Updates** - Only indexes new content, skips already-indexed files
-- **Background Sync** - Detects new files even when minimized to system tray
-- **Windows Notifications** - Get notified when new media is added to your library
+- Indexes your Google Drive video library into a local SQLite database
+- Fetches posters, thumbnails, episode metadata, and overviews from TMDB
+- Plays media through MPV with resume, history, and progress saving
+- Detects cloud changes in the background and keeps the library updated
+- Supports archive-aware playback for supported cases, including playable `.rar` archives
+- Shows clear frontend warnings when archive media is not directly playable
 
-### Metadata & Organization
-- **TMDB Integration** - Fetches posters, backdrops, overviews, and ratings
-- **TV Show Support** - Properly groups episodes by series and season with episode thumbnails
-- **Fix Match** - Manually correct misidentified media
-- **Episode Browser** - Browse seasons and episodes with full metadata
+## Key Features
 
-### Playback
-- **MPV Integration** - Native playback of any format (MKV, MP4, AVI, HDR, etc.) without transcoding
-- **Resume Playback** - Remembers your position across all media
-- **Watch History** - Track what you've watched
+- Cloud-first library management
+- TV show and episode grouping
+- Watch history and resume playback
+- System tray support
+- Windows notifications when the app is minimized or in the background
+- In-app toast notifications while the app is open and focused
+- Manual metadata correction with Fix Match
+- Archive playback status and compatibility messaging
 
-### User Experience
-- **Monochrome UI** - Sleek black & white design with smooth animations
-- **System Tray** - Runs in background with Windows notifications for new content
-- **Onboarding** - Guided setup for first-time users
-- **Context Menus** - Right-click actions for quick operations
+## Archive Support
+
+StreamVault can detect and assess archived media before playback.
+
+- `.zip`: supported where the archive entry can be played or prepared by the backend
+- `.rar`: supported for playable archive cases
+- `.tar`: currently not playable
+
+If StreamVault detects a `.tar` file, it informs the user in the UI and explains why it cannot be indexed for playback right now.
+
+## Playback
+
+Playback is powered by MPV.
+
+- Native playback for common video formats
+- Resume from previous progress
+- Watch history tracking
+- Better MPV display titles for archived TV episodes, including `SxxExx`
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| Frontend | React 18, TypeScript, TailwindCSS, Radix UI, Framer Motion |
+|---|---|
+| Frontend | React 18, TypeScript, Tailwind CSS, Radix UI, Framer Motion |
 | Backend | Rust, Tauri |
-| Database | SQLite (rusqlite) |
-| Playback | MPV (via IPC) |
-| Metadata | TMDB API |
+| Database | SQLite |
+| Playback | MPV |
+| Metadata | TMDB |
 | Cloud | Google Drive API |
-
-## Backend (Fork / Self-Host)
-
-Official backend repository:
-
-- `https://github.com/SlasshyOverhere/StreamVault-Backend`
-
-If you want to fork/build your own backend:
-
-1. Fork and deploy the backend repo above.
-2. In frontend `.env`, set:
-   - `VITE_AUTH_SERVER_URL=https://your-backend-domain`
-3. For Tauri-side backend routing, set environment variables before building:
-   - `STREAMVAULT_AUTH_SERVER_URL=https://your-backend-domain`
-   - `STREAMVAULT_TMDB_PROXY_URL=https://your-backend-domain/api/tmdb` (optional explicit TMDB proxy override)
-   - `STREAMVAULT_WS_URL=wss://your-backend-domain/ws/watchtogether`
-4. Update `AUTH_SERVER_URL` in `src-tauri/src/gdrive.rs` to your deployed backend URL (used for `/auth/google` and `/auth/refresh`).
-5. Build the app after these values are configured.
-
-## Supported Formats
-
-`.mkv` `.mp4` `.avi` `.mov` `.webm` `.m4v` `.wmv` `.flv` `.ts` `.m2ts`
 
 ## Prerequisites
 
-1. **Node.js** v18+
-2. **Rust** (latest stable)
-3. **MPV Media Player**
-   - **Windows:** Download from [mpv.io](https://mpv.io/installation/) or [SourceForge builds](https://sourceforge.net/projects/mpv-player-windows/files/) and add to system `PATH`
-   - **Linux:** `sudo apt install mpv` or equivalent
-   - **macOS:** `brew install mpv`
+Before running StreamVault locally, install:
 
-## Installation
+1. Node.js 18+
+2. Rust stable
+3. MPV
+
+Windows:
+
+- Install MPV from [mpv.io](https://mpv.io/installation/) or a trusted Windows build
+- Make sure `mpv.exe` is available in your system `PATH`, or configure it in app settings
+
+## Local Development
 
 ```bash
-# Clone the repository
 git clone https://github.com/SlasshyOverhere/StreamVault.git
-cd StreamVault
-
-# Install dependencies
+cd StreamVault/streamvault
 npm install
-
-# Run in development mode
 npm run tauri dev
 ```
 
-## Building
+## Production Build
 
 ```bash
-# Create production build
 npm run tauri build
 ```
 
-Build output: `src-tauri/target/release/`
+Installers are generated under `src-tauri/target/release/bundle/`.
 
-Installers will be generated in `src-tauri/target/release/bundle/`
+## First-Time Setup
 
-## Configuration
+1. Launch StreamVault
+2. Complete onboarding
+3. Connect Google Drive
+4. Add your TMDB API key if you want metadata and artwork
+5. Run a library update
 
-### First Launch
-1. Complete the onboarding wizard
-2. Connect Google Drive for cloud media
-3. Enter your TMDB API key (optional, for metadata)
-4. Click "Update Library" to index your content
+## Backend / Self-Hosting
 
-### Settings
-- **Google Drive** - Connect/disconnect cloud storage
-- **TMDB API Key** - Required for poster and metadata fetching
-- **Player Preferences** - Configure MPV path and behavior
+Official backend repository:
 
-### Getting a TMDB API Key
-1. Create an account at [themoviedb.org](https://www.themoviedb.org/)
-2. Go to Settings > API
-3. Request an API key (free for personal use)
-4. Copy the "API Read Access Token" into StreamVault settings
+- [StreamVault-Backend](https://github.com/SlasshyOverhere/StreamVault-Backend)
 
-### Google Drive Setup
-1. Click "Connect Google Drive" in Settings
-2. Authorize StreamVault to access your Drive
-3. Use "Update Library" button in sidebar to scan your cloud media
+If you want to use your own backend:
+
+1. Deploy the backend
+2. Set `VITE_AUTH_SERVER_URL` in `.env`
+3. Set backend-related environment variables for Tauri builds as needed
+4. Build the app with those values
+
+## Supported Video Formats
+
+Common supported formats include:
+
+`.mkv` `.mp4` `.avi` `.mov` `.webm` `.m4v` `.wmv` `.flv` `.ts` `.m2ts`
 
 ## Project Structure
 
-```
+```text
 streamvault/
-├── src/                    # React frontend
-│   ├── components/         # UI components
-│   ├── services/           # API & utility functions
-│   └── App.tsx            # Main application
-├── src-tauri/             # Rust backend
-│   ├── src/
-│   │   ├── main.rs        # Tauri commands & app logic
-│   │   ├── database.rs    # SQLite operations
-│   │   ├── media_manager.rs # Cloud file parsing
-│   │   ├── gdrive.rs      # Google Drive API client
-│   │   ├── tmdb.rs        # TMDB API client
-│   │   └── mpv_ipc.rs     # MPV player control
-│   └── tauri.conf.json    # Tauri configuration
-└── package.json
+├── src/                 React frontend
+├── src-tauri/           Rust + Tauri backend
+├── package.json
+└── README.md
 ```
 
-## How It Works
+## Recent Highlights
 
-1. **Cloud Sync** - Monitors Google Drive for changes using Changes API (5-second polling)
-2. **Parsing** - Extracts title, year, season/episode from filenames
-3. **Metadata Fetch** - Queries TMDB for rich metadata and downloads images
-4. **Database Storage** - Stores everything in local SQLite for fast access
-5. **Duplicate Detection** - Skips already-indexed files automatically
-6. **Playback** - Launches MPV with IPC for progress tracking and resume support
-
-## What's New in v3.0.2
-
-- **Cloud-Only Mode** - Removed local library support, app is now fully cloud-based
-- **Simplified UI** - Single "Update Library" button for cloud indexing
-- **Background Polling** - 5-second change detection runs even when minimized to tray
-- **Incremental Indexing** - Only indexes new files not already in database
-- **Streamlined Navigation** - Removed local tab from sidebar and settings
-
-## What's New in v3.0.0
-
-- **Monochrome Design** - Complete UI overhaul with black/white/grayscale aesthetic
-- **Full Drive Indexing** - Index entire Google Drive with one click
-- **Simplified Cloud Settings** - Removed folder-based cloud management
-- **Improved Change Detection** - Better Google Drive sync with Changes API
+- Improved notification behavior and reduced repeated notifications
+- Added `.rar` archive support for supported playback cases
+- Added frontend archive compatibility messaging
+- Added `.tar` detection with clear unsupported reason
+- Fixed MPV archive playback titles so TV episodes show better metadata
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Pull requests are welcome.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. Fork the repo
+2. Create a branch
+3. Make your changes
+4. Open a pull request
 
 ## License
 
 [MIT License](LICENSE)
-
-## Acknowledgments
-
-- [Tauri](https://tauri.app/) - Desktop app framework
-- [MPV](https://mpv.io/) - Media player
-- [TMDB](https://www.themoviedb.org/) - Metadata provider
-- [Google Drive API](https://developers.google.com/drive) - Cloud storage
-- [Radix UI](https://www.radix-ui.com/) - UI primitives

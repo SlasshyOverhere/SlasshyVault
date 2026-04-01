@@ -1,9 +1,9 @@
 [package]
 name = "streamvault"
-version = "3.0.25"
+version = "3.0.26"
 description = "A Tauri Media Library App"
 authors = ["Suman Patgiri"]
-license = ""
+license = "MIT"
 repository = "https://github.com/SlasshyOverhere/StreamVault"
 edition = "2021"
 default-run = "streamvault"
@@ -46,6 +46,9 @@ dunce = "1.0.5"
 thiserror = "1.0"
 flate2 = "1.0"
 crc32fast = "1.4"
+tar = "0.4"
+rar-stream = { version = "5.3.2", features = ["async"] }
+unrar = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Security"] }

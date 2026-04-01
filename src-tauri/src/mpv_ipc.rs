@@ -7,6 +7,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
+
 /// Progress info saved/loaded from temp file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MpvProgressInfo {
@@ -224,6 +226,7 @@ pub fn launch_mpv_with_tracking(
     mpv_path: &str,
     file_or_url: &str,
     media_id: i64,
+    display_title: Option<&str>,
     start_position: f64,
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
@@ -250,6 +253,10 @@ pub fn launch_mpv_with_tracking(
     println!(
         "[MPV] Audio language preference: {}",
         audio_language.unwrap_or("MPV default")
+    );
+    println!(
+        "[MPV] Display title: {}",
+        display_title.unwrap_or("MPV default")
     );
 
     // Only verify file exists for local files (not URLs)
@@ -291,22 +298,59 @@ pub fn launch_mpv_with_tracking(
     let script_arg = format!("--script={}", script_path.to_string_lossy());
     cmd.arg(&script_arg);
 
+    if let Some(title) = display_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        cmd.arg(format!("--force-media-title={}", title));
+    }
+
     // Add start position if resuming
     if start_position > 0.0 {
         cmd.arg(format!("--start={}", start_position as i64));
     }
 
+    // Security enhancement: Validate user-provided audio language parameters
     if let Some(language) = audio_language.filter(|value| !value.trim().is_empty()) {
         let trimmed = language.trim();
         if let Some(track_id) = trimmed.strip_prefix("aid:") {
-            cmd.arg(format!("--aid={}", track_id.trim()));
+            let id = track_id.trim();
+            // Validate track_id is alphanumeric (auto, no, or numeric)
+            if id == "auto" || id == "no" || id.chars().all(|c| c.is_ascii_digit()) {
+                cmd.arg(format!("--aid={}", id));
+            } else {
+                println!("[MPV] Security warning: Rejected invalid aid parameter");
+            }
         } else {
-            cmd.arg(format!("--alang={}", trimmed));
+            // Validate alang is alphanumeric and specific separators
+            if trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ',' || c == '_')
+            {
+                cmd.arg(format!("--alang={}", trimmed));
+            } else {
+                println!("[MPV] Security warning: Rejected invalid alang parameter");
+            }
         }
     }
 
+    // Security enhancement: Validate user-provided IPC server path
     if let Some(ipc_path) = ipc_server.filter(|value| !value.trim().is_empty()) {
-        cmd.arg(format!("--input-ipc-server={}", ipc_path.trim()));
+        let path = ipc_path.trim();
+        // Allow valid path characters (alphanumeric, slash, backslash, dot, hyphen, underscore, colon for Windows drives/pipes)
+        if path.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || c == '/'
+                || c == '\\'
+                || c == '.'
+                || c == '-'
+                || c == '_'
+                || c == ':'
+        }) {
+            cmd.arg(format!("--input-ipc-server={}", path));
+        } else {
+            println!("[MPV] Security warning: Rejected invalid ipc server path");
+        }
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL
@@ -488,7 +532,8 @@ pub fn monitor_mpv_and_save_progress(
         }
 
         let completed = if progress.duration > 0.0 {
-            (progress.position / progress.duration) >= 0.95 || progress.eof_reached
+            (progress.position / progress.duration) > AUTO_MARK_WATCHED_THRESHOLD_RATIO
+                || progress.eof_reached
         } else {
             false
         };

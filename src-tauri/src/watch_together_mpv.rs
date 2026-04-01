@@ -120,9 +120,14 @@ pub struct WatchTogetherController {
 
 impl WatchTogetherController {
     pub fn new(session_id: &str, is_host: bool) -> Self {
-        let pipe_name = format!("\\\\.\\pipe\\mpv-wt-{}", session_id);
+        // Sanitize session_id to prevent path traversal or invalid pipe names
+        let safe_session_id: String = session_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        let pipe_name = format!("\\\\.\\pipe\\mpv-wt-{}", safe_session_id);
         Self {
-            session_id: session_id.to_string(),
+            session_id: safe_session_id,
             pipe_name,
             is_host,
             local_state: Arc::new(RwLock::new(PlayerState::default())),
@@ -596,6 +601,7 @@ pub fn launch_mpv_wt(
     mpv_path: &str,
     file_or_url: &str,
     media_id: i64,
+    display_title: Option<&str>,
     session_id: &str,
     start_position: f64,
     auth_header: Option<&str>,
@@ -608,6 +614,10 @@ pub fn launch_mpv_wt(
     println!("[WT-MPV] Session ID: {}", session_id);
     println!("[WT-MPV] Is Host: {}", is_host);
     println!("[WT-MPV] Source: {}", file_or_url);
+    println!(
+        "[WT-MPV] Display title: {}",
+        display_title.unwrap_or("MPV default")
+    );
 
     let is_url = file_or_url.starts_with("http://") || file_or_url.starts_with("https://");
     if !is_url && !std::path::Path::new(file_or_url).exists() {
@@ -622,6 +632,10 @@ pub fn launch_mpv_wt(
 
     // IPC for bidirectional communication via named pipe
     cmd.arg(controller.get_ipc_arg());
+
+    if let Some(title) = display_title.map(str::trim).filter(|value| !value.is_empty()) {
+        cmd.arg(format!("--force-media-title={}", title));
+    }
 
     // Start position
     if start_position > 0.0 {

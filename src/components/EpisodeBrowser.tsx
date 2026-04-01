@@ -1,12 +1,12 @@
-import { useEffect, useState, useMemo, useCallback, memo } from "react"
-import { listen, UnlistenFn } from "@tauri-apps/api/event"
+import { useEffect, useState, useMemo, useCallback, memo, useRef } from "react"
+import { emit, listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, ChevronUp, RefreshCw, Users } from "lucide-react"
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
-    getTmdbImageUrl, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback
+    getTmdbImageUrl, markAsComplete, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
@@ -22,6 +22,11 @@ import {
     waitForMpvPlaybackStart,
     waitForZipLoadingOverlayPaint,
 } from "@/utils/zipPlayback"
+import {
+    getMediaProgressPercent,
+    isMediaMarkedWatched,
+    isProgressPastAutoCompleteThreshold,
+} from "@/utils/playbackProgress"
 
 interface EpisodeBrowserProps {
     show: MediaItem
@@ -129,6 +134,7 @@ interface EpisodeItemProps {
     isExpanded: boolean;
     onEpisodeClick: (episode: MediaItem) => void;
     onToggleExpand: (episodeId: number) => void;
+    onMarkWatched: (episode: MediaItem) => void;
     onWatchTogether?: (episode: MediaItem) => void;
 }
 
@@ -150,13 +156,11 @@ const EpisodeItemBase = ({
     isExpanded,
     onEpisodeClick,
     onToggleExpand,
+    onMarkWatched,
     onWatchTogether
 }: EpisodeItemProps) => {
-    const progress = episode.progress_percent ||
-        (episode.resume_position_seconds && episode.duration_seconds
-            ? (episode.resume_position_seconds / episode.duration_seconds) * 100
-            : 0);
-    const isFinished = progress >= 95;
+    const progress = getMediaProgressPercent(episode);
+    const isFinished = isMediaMarkedWatched(episode);
     const hasProgress = progress > 0 && !isFinished;
 
     // Prefer local still_path over TMDB
@@ -255,8 +259,22 @@ const EpisodeItemBase = ({
                                 </h4>
                             </div>
 
-                            {/* Play button - hidden on small screens */}
-                            <div className="flex items-center gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hidden md:flex">
+                            {/* Episode actions */}
+                            <div className="hidden md:flex items-center gap-2 flex-shrink-0">
+                                {!isFinished && (
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="border-white/15 text-white/80 bg-white/5 hover:bg-white/12 hover:text-white"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onMarkWatched(episode);
+                                        }}
+                                    >
+                                        <Check className="w-4 h-4 mr-1" />
+                                        Mark as watched
+                                    </Button>
+                                )}
                                 <Button
                                     size="sm"
                                     onClick={(e) => {
@@ -285,8 +303,9 @@ const EpisodeItemBase = ({
                         </div>
 
                         {/* Metadata row - local duration first, fallback to TMDB runtime */}
-                        {(runtimeMinutes || (tmdbData?.vote_average && tmdbData.vote_average > 0)) && (
-                            <div className="flex items-center gap-2 lg:gap-3 mt-1 lg:mt-1.5 text-[10px] lg:text-xs text-muted-foreground">
+                        <div className="mt-1 lg:mt-1.5 flex flex-wrap items-center gap-2 lg:gap-3 text-[10px] lg:text-xs text-muted-foreground">
+                            {runtimeMinutes || (tmdbData?.vote_average && tmdbData.vote_average > 0) ? (
+                                <>
                                 {runtimeMinutes && (
                                     <span className="flex items-center gap-1">
                                         <Timer className="w-2.5 h-2.5 lg:w-3 lg:h-3" />
@@ -299,8 +318,53 @@ const EpisodeItemBase = ({
                                         {tmdbData.vote_average.toFixed(1)}
                                     </span>
                                 )}
-                            </div>
-                        )}
+                                </>
+                            ) : null}
+                            {isFinished ? (
+                                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[10px] lg:text-xs font-semibold text-white/72">
+                                    <Check className="w-3 h-3" />
+                                    Watched
+                                </span>
+                            ) : (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onMarkWatched(episode);
+                                    }}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/6 px-2.5 py-1 text-[10px] lg:text-xs font-semibold text-white/78 transition-colors hover:bg-white/12 hover:text-white"
+                                >
+                                    <Check className="w-3 h-3" />
+                                    Mark as watched
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-2 md:hidden">
+                            <Button
+                                size="sm"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEpisodeClick(episode);
+                                }}
+                            >
+                                <Play className="w-4 h-4 fill-current mr-1" />
+                                Play
+                            </Button>
+                            {onWatchTogether && (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-purple-500/50 text-purple-400 hover:bg-purple-500/20"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onWatchTogether(episode);
+                                    }}
+                                >
+                                    <Users className="w-4 h-4 mr-1" />
+                                    Together
+                                </Button>
+                            )}
+                        </div>
 
                         {/* Overview/Description - hidden on small screens */}
                         {(episode.overview || tmdbData?.overview) && (
@@ -346,6 +410,7 @@ const areEpisodeItemPropsEqual = (prevProps: EpisodeItemProps, nextProps: Episod
         prevProps.tmdbData === nextProps.tmdbData &&
         prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
         prevProps.onToggleExpand === nextProps.onToggleExpand &&
+        prevProps.onMarkWatched === nextProps.onMarkWatched &&
         prevProps.onWatchTogether === nextProps.onWatchTogether
     );
 };
@@ -357,6 +422,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     const [loading, setLoading] = useState(true)
     const [posterUrl, setPosterUrl] = useState<string | null>(null)
     const [selectedSeason, setSelectedSeason] = useState<number>(1)
+
+    // ⚡ Bolt: Chunked rendering state to prevent rendering bottlenecks with large seasons
+    const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(20)
+    const loadMoreRef = useRef<HTMLDivElement>(null)
     const { toast } = useToast()
 
     // TMDB episode metadata
@@ -517,6 +586,38 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
     }, [episodes, selectedSeason])
 
+    // ⚡ Bolt: Reset visible count when switching seasons to prevent sudden layout jumps
+    useEffect(() => {
+        setVisibleEpisodeCount(20)
+    }, [selectedSeason])
+
+    // ⚡ Bolt: IntersectionObserver to load more episodes as user scrolls
+    useEffect(() => {
+        const sentinel = loadMoreRef.current
+        if (!sentinel || filteredEpisodes.length <= visibleEpisodeCount) return
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        setVisibleEpisodeCount((prev) =>
+                            Math.min(prev + 20, filteredEpisodes.length)
+                        )
+                    }
+                }
+            },
+            { root: null, rootMargin: '200px 0px', threshold: 0.01 }
+        )
+
+        observer.observe(sentinel)
+        return () => observer.disconnect()
+    }, [filteredEpisodes.length, visibleEpisodeCount])
+
+    // ⚡ Bolt: Slice episodes to only render what's visible
+    const episodesToRender = useMemo(() => {
+        return filteredEpisodes.slice(0, visibleEpisodeCount)
+    }, [filteredEpisodes, visibleEpisodeCount])
+
     const handleEpisodeClick = useCallback((episode: MediaItem) => {
         setContentDetailsItem(episode);
         setContentDetailsOpen(true);
@@ -525,6 +626,33 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
     const handleToggleExpand = useCallback((id: number) => {
         setExpandedEpisode(prev => prev === id ? null : id);
     }, []);
+
+    const handleMarkWatched = useCallback(async (episode: MediaItem) => {
+        try {
+            await markAsComplete(episode.id);
+            await emit('media-marked-complete', { media_id: episode.id });
+            setEpisodes((currentEpisodes) =>
+                currentEpisodes.map((currentEpisode) =>
+                    currentEpisode.id === episode.id
+                        ? {
+                            ...currentEpisode,
+                            progress_percent: 100,
+                            resume_position_seconds: 0,
+                            duration_seconds: currentEpisode.duration_seconds ?? episode.duration_seconds,
+                            last_watched: new Date().toISOString(),
+                        }
+                        : currentEpisode,
+                ),
+            );
+            await loadEpisodes();
+            toast({
+                title: "Marked as watched",
+                description: `S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')} saved to history.`,
+            });
+        } catch {
+            toast({ title: "Error", description: "Failed to mark episode as watched", variant: "destructive" });
+        }
+    }, [toast]);
 
     const handleDetailsPrimaryAction = async (episode: MediaItem) => {
         setContentDetailsOpen(false);
@@ -570,7 +698,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
         try {
             const resumeInfo = await getResumeInfo(episode.id);
 
-            if (resumeInfo.has_progress && resumeInfo.progress_percent < 95) {
+            if (resumeInfo.has_progress && !isProgressPastAutoCompleteThreshold(resumeInfo.progress_percent)) {
                 setResumeDialogData({ episode, resumeInfo });
                 setResumeDialogOpen(true);
             } else {
@@ -739,8 +867,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                         No episodes found for Season {selectedSeason}
                                     </div>
                                 ) : (
-                                    <div className="divide-y divide-border">
-                                        {filteredEpisodes.map((episode, index) => {
+                                    <div className="divide-y divide-border pb-4">
+                                        {episodesToRender.map((episode, index) => {
                                             const tmdbData = tmdbEpisodesBySeason
                                                 .get(selectedSeason)
                                                 ?.get(episode.episode_number || 0);
@@ -754,10 +882,19 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                                                     isExpanded={expandedEpisode === episode.id}
                                                     onEpisodeClick={handleEpisodeClick}
                                                     onToggleExpand={handleToggleExpand}
+                                                    onMarkWatched={handleMarkWatched}
                                                     onWatchTogether={onWatchTogether}
                                                 />
                                             );
                                         })}
+                                        {filteredEpisodes.length > visibleEpisodeCount && (
+                                            <div
+                                                ref={loadMoreRef}
+                                                className="h-16 flex items-center justify-center text-xs text-muted-foreground/70"
+                                            >
+                                                Loading more episodes...
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </ScrollArea>
@@ -797,6 +934,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                 onOpenChange={setContentDetailsOpen}
                 item={contentDetailsItem}
                 onPrimaryAction={handleDetailsPrimaryAction}
+                onSecondaryAction={handleMarkWatched}
+                secondaryActionLabel="Mark as watched"
             />
         </>
     )
