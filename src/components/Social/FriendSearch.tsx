@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Search, UserPlus, Loader2, User } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,13 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
   const [pendingRequests, setPendingRequests] = useState<string[]>([]);
   const { toast } = useToast();
 
+  // ⚡ Bolt Performance Optimization:
+  // Convert lookup arrays to Sets to change O(N) array.includes() into O(1) set.has().
+  // This prevents O(N*M) lookups when filtering search results against excluded IDs
+  // and O(M) checks per rendered user item when checking pending requests.
+  const excludeSet = useMemo(() => new Set(excludeIds), [excludeIds]);
+  const pendingSet = useMemo(() => new Set(pendingRequests), [pendingRequests]);
+
   const handleSearch = async (value: string) => {
     setQuery(value);
     if (value.trim().length < 2) {
@@ -26,7 +33,7 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
     setLoading(true);
     try {
       const data = await searchUsers(value);
-      setSearchResults(data.filter(u => !excludeIds.includes(u.id)));
+      setSearchResults(data.filter(u => !excludeSet.has(u.id)));
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
@@ -89,11 +96,11 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
             </div>
             <Button
               size="sm"
-              disabled={pendingRequests.includes(user.id)}
+              disabled={pendingSet.has(user.id)}
               onClick={() => handleAddFriend(user.id, user.displayName)}
               className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg h-8 text-xs font-bold"
             >
-              {pendingRequests.includes(user.id) ? (
+              {pendingSet.has(user.id) ? (
                 "Sent"
               ) : (
                 <>
