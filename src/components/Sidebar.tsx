@@ -11,6 +11,7 @@ interface SidebarProps {
   className?: string
   currentView: string
   setView: (view: string) => void
+  onAiChatClick?: () => void
   onOpenSettings: () => void
   onCloudScan?: () => void
   theme?: 'dark' | 'light'
@@ -23,18 +24,23 @@ interface SidebarProps {
   } | null
   showCloudTab?: boolean
   betaEnabled?: boolean
+  unstableEnabled?: boolean
+  aiChatPaused?: boolean
 }
 
 export function Sidebar({
   className,
   currentView,
   setView,
+  onAiChatClick,
   onOpenSettings,
   onCloudScan,
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
   betaEnabled = false,
+  unstableEnabled = false,
+  aiChatPaused = false,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [isManualCollapsed, setIsManualCollapsed] = useState(() => {
@@ -82,7 +88,7 @@ export function Sidebar({
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Google Drive", icon: Cloud, hidden: !showCloudTab },
-    { id: "ai", label: "AI Chat", icon: Bot, isNew: true },
+    { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);
@@ -111,12 +117,19 @@ export function Sidebar({
               return (
                 <button
                   key={item.id}
-                  onClick={() => setView(item.id)}
+                  onClick={() => {
+                    if (item.id === "ai" && item.paused) {
+                      onAiChatClick?.()
+                      return
+                    }
+                    setView(item.id)
+                  }}
                   className={cn(
                     "group relative w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition-colors duration-300",
                     isActive
                       ? "bg-white/[0.08] text-white shadow-[0_0_20px_rgba(255,255,255,0.05)] border border-white/10"
                       : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.03]",
+                    item.paused ? "opacity-75" : "",
                     isCollapsed ? "justify-center px-0" : ""
                   )}
                 >
@@ -157,7 +170,16 @@ export function Sidebar({
                       )}>
                         {item.label}
                       </span>
-                      {item.isNew && (
+                      {item.paused ? (
+                        <span className={cn(
+                          "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase border transition-colors duration-300",
+                          isActive
+                            ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
+                            : "border-amber-400/45 bg-amber-400/15 text-amber-300"
+                        )}>
+                          Paused
+                        </span>
+                      ) : item.isNew && (
                         <span className={cn(
                           "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase",
                           "border transition-colors duration-300",
@@ -175,7 +197,9 @@ export function Sidebar({
                   {isCollapsed && (
                     <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
-                      {item.isNew && (
+                      {item.paused ? (
+                        <span className="text-xs font-bold text-amber-300 tracking-wider">{" • PAUSED"}</span>
+                      ) : item.isNew && (
                         <span className="text-xs font-bold text-amber-300 tracking-wider">{" • NEW"}</span>
                       )}
                     </div>

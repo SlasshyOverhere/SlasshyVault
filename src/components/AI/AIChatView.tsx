@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, AtSign, Bot, ExternalLink, Loader2, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -1682,7 +1682,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
       const movieSearch = await fetchTmdbProxyJson(`search/movie?${movieParams.toString()}`);
       const movieResults = Array.isArray(movieSearch.results) ? movieSearch.results : [];
       const byYear = profile.year
-        ? movieResults.find((row) => {
+        ? movieResults.find((row: unknown) => {
           if (!row || typeof row !== 'object') return false;
           const releaseDate = String((row as Record<string, unknown>).release_date || '');
           return releaseDate.startsWith(profile.year || '');
@@ -1707,7 +1707,7 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
       const tvSearch = await fetchTmdbProxyJson(`search/tv?${tvParams.toString()}`);
       const tvResults = Array.isArray(tvSearch.results) ? tvSearch.results : [];
       const tvByYear = profile.year
-        ? tvResults.find((row) => {
+        ? tvResults.find((row: unknown) => {
           if (!row || typeof row !== 'object') return false;
           const airDate = String((row as Record<string, unknown>).first_air_date || '');
           return airDate.startsWith(profile.year || '');

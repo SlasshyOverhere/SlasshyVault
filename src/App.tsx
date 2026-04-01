@@ -22,10 +22,13 @@ import {
   getLibraryFiltered,
   getLibraryStats,
   getWatchHistory,
+  getWatchHistoryEvents,
   removeFromWatchHistory,
+  removeWatchHistoryEntry,
   clearAllWatchHistory,
   deleteMediaFiles,
   MediaItem,
+  WatchHistoryEvent,
   WatchRoom,
   playMedia,
   getResumeInfo,
@@ -40,9 +43,12 @@ import {
   markAsComplete,
   isBetaEnabled,
   setBetaEnabled,
+  isUnstableEnabled,
+  setUnstableEnabled,
   checkForUpdates,
   downloadUpdate,
   installUpdate,
+  syncWatchHistory,
   UpdateInfo,
   MpvAudioTracksDetectedPayload,
   mergeCachedSeriesAudioTracks,
@@ -59,6 +65,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 import { sortMediaItems } from '@/utils/sorting'
 import {
+  getMediaProgressPercent,
+  isProgressPastAutoCompleteThreshold,
+  shouldPromptToMarkComplete,
+} from '@/utils/playbackProgress'
+import {
   buildZipPlaybackLoadingState,
   type ZipPlaybackLoadingState,
   waitForMinimumZipOverlayVisibility,
@@ -66,6 +77,7 @@ import {
   waitForZipLoadingOverlayPaint,
 } from '@/utils/zipPlayback'
 import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
+import { HistoryEventCard } from '@/components/HistoryEventCard'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -81,6 +93,8 @@ const SocialView = lazy(() => loadSocialView().then(module => ({ default: module
 const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module.AIChatView })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
+
+const AI_CHAT_PAUSED = true
 
 
 interface ScanProgressPayload {
@@ -105,6 +119,8 @@ interface MpvPlaybackEndedPayload {
   final_duration?: number
   completed: boolean
 }
+
+const AUTO_MARK_WATCHED_THRESHOLD_PERCENT = 93
 
 interface ZipProcessingStatusPayload {
   phase: 'detected' | 'complete' | 'error'
@@ -136,74 +152,15 @@ const LoadingFallback = () => (
   </div>
 )
 
-const formatHistoryEpisodeLabel = (item: MediaItem) => {
-  const parts: string[] = []
-
-  if (item.season_number && item.episode_number) {
-    parts.push(`S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}`)
-  }
-
-  const episodeTitle = item.episode_title?.trim()
-  if (episodeTitle && episodeTitle.toLowerCase() !== item.title.trim().toLowerCase()) {
-    parts.push(episodeTitle)
-  }
-
-  return parts.length > 0 ? `Latest: ${parts.join(' · ')}` : 'Latest episode'
-}
-
-const getHistoryGroupKey = (item: MediaItem) => {
-  if (item.media_type !== 'tvepisode') {
-    return `media:${item.id}`
-  }
-
-  const seriesKey = item.parent_id ?? item.tmdb_id ?? item.title.trim().toLowerCase()
-  return `series:${seriesKey}`
-}
-
-const buildGroupedHistoryItems = (historyItems: MediaItem[]) => {
-  const grouped = new Map<string, MediaItem>()
-  const order: string[] = []
-
-  for (const item of historyItems) {
-    const key = getHistoryGroupKey(item)
-
-    if (item.media_type !== 'tvepisode') {
-      grouped.set(key, item)
-      order.push(key)
-      continue
-    }
-
-    const existing = grouped.get(key)
-    if (!existing) {
-      grouped.set(key, {
-        ...item,
-        history_group_count: 1,
-        history_group_ids: [item.id],
-        history_group_latest_label: formatHistoryEpisodeLabel(item),
-      })
-      order.push(key)
-      continue
-    }
-
-    grouped.set(key, {
-      ...existing,
-      history_group_count: (existing.history_group_count ?? 1) + 1,
-      history_group_ids: [...(existing.history_group_ids ?? [existing.id]), item.id],
-    })
-  }
-
-  return order
-    .map((key) => grouped.get(key))
-    .filter((item): item is MediaItem => Boolean(item))
-}
-
 function App() {
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
+  const [historyEvents, setHistoryEvents] = useState<WatchHistoryEvent[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
   const [isClearingHistory, setIsClearingHistory] = useState(false)
+  const [isHistorySyncing, setIsHistorySyncing] = useState(false)
 
   // Sub-tabs for Cloud view
   const [cloudSubTab, setCloudSubTab] = useState<MediaSubTab>('movies')
@@ -223,12 +180,6 @@ function App() {
   const sortedItems = useMemo(() => {
     return sortMediaItems(items, sortBy)
   }, [items, sortBy])
-  const historyItems = useMemo(() => buildGroupedHistoryItems(items), [items])
-  const groupedHistorySeriesCount = useMemo(
-    () => historyItems.filter((item) => (item.history_group_count ?? 0) > 1).length,
-    [historyItems]
-  )
-  const hiddenHistoryEntriesCount = Math.max(0, items.length - historyItems.length)
 
   const refreshWindowState = useCallback(async () => {
     setIsMaximized(await appWindow.isMaximized())
@@ -243,7 +194,6 @@ function App() {
     return sortedItems.slice(0, visibleCloudItemsCount)
   }, [sortedItems, isChunkedCloudRender, visibleCloudItemsCount])
   const disableCloudEntryAnimation = false
-  const disableHistoryEntryAnimation = false
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null
@@ -320,7 +270,6 @@ function App() {
       void loadSettingsModal()
       void loadEpisodeBrowser()
       void loadSocialView()
-      void loadAIChatView()
       void loadWatchTogetherModal()
       void loadFixMatchModal()
     }, 1500)
@@ -381,6 +330,7 @@ function App() {
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
+  const [unstableEnabled, setUnstableEnabledState] = useState(false)
 
   // Update notification state
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -401,6 +351,7 @@ function App() {
   // Initialize beta features
   useEffect(() => {
     setBetaEnabledState(isBetaEnabled())
+    setUnstableEnabledState(isUnstableEnabled())
   }, [])
 
   const runMandatoryUpdate = useCallback(async (showCheckErrors = false) => {
@@ -481,6 +432,27 @@ function App() {
     })
   }
 
+  const handleUnstableToggle = (enabled: boolean) => {
+    setUnstableEnabled(enabled)
+    setUnstableEnabledState(enabled)
+    if (!enabled && view === 'ai') {
+      setView('home')
+    }
+    toast({
+      title: enabled ? "Unstable Features Enabled" : "Unstable Features Disabled",
+      description: enabled
+        ? "Paused AI Chat entry points are now visible"
+        : "AI Chat is now hidden again"
+    })
+  }
+
+  const handleAiChatPaused = useCallback(() => {
+    toast({
+      title: "AI Chat Paused",
+      description: "AI Chat is temporarily disabled and will return shortly in a future update.",
+    })
+  }, [toast])
+
   const handleOnboardingComplete = () => {
     completeOnboarding()
     setShowOnboarding(false)
@@ -536,198 +508,6 @@ function App() {
 
   // Listen for Tauri events - depends on view to properly refresh data
   useEffect(() => {
-    let unlistenProgress: UnlistenFn | undefined
-      let unlistenComplete: UnlistenFn | undefined
-      let unlistenMpvEnded: UnlistenFn | undefined
-      let unlistenMpvAudioTracks: UnlistenFn | undefined
-      let unlistenLibraryUpdated: UnlistenFn | undefined
-    let unlistenNotification: UnlistenFn | undefined
-    let unlistenCloudIndexingStarted: UnlistenFn | undefined
-    let unlistenZipProcessing: UnlistenFn | undefined
-
-    const setupListeners = async () => {
-      unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
-        const payload = event.payload
-        setScanProgress({
-          current: payload.current,
-          total: payload.total,
-          title: payload.title
-        })
-      })
-
-      // Cloud indexing started
-      unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', (event) => {
-        setIsCloudIndexing(true)
-        console.log(`[Cloud] Indexing started: ${event.payload.count} files`)
-      })
-
-      unlistenZipProcessing = await listen<ZipProcessingStatusPayload>('zip-processing-status', (event) => {
-        const payload = event.payload
-
-        if (zipProcessingPopupTimeoutRef.current) {
-          window.clearTimeout(zipProcessingPopupTimeoutRef.current)
-          zipProcessingPopupTimeoutRef.current = null
-        }
-
-        setZipProcessingPopup({
-          phase: payload.phase,
-          archiveCount: payload.archiveCount,
-          archiveName: payload.archiveName ?? null,
-          episodesIndexed: payload.episodesIndexed ?? null,
-          message: payload.message,
-        })
-
-        if (payload.phase === 'detected') {
-          setIsCloudIndexing(true)
-          toast({
-            title: payload.archiveCount > 1 ? 'ZIP archives detected' : 'ZIP archive detected',
-            description: payload.message,
-          })
-          return
-        }
-
-        toast({
-          title: payload.phase === 'complete' ? 'ZIP processing complete' : 'ZIP processing failed',
-          description: payload.message,
-          variant: payload.phase === 'error' ? 'destructive' : 'default',
-        })
-
-        zipProcessingPopupTimeoutRef.current = window.setTimeout(() => {
-          setZipProcessingPopup(null)
-          zipProcessingPopupTimeoutRef.current = null
-        }, payload.phase === 'error' ? 6500 : 5000)
-      })
-
-      unlistenComplete = await listen<ScanCompletePayload>('scan-complete', async () => {
-        setIsScanning(false)
-        setScanProgress(null)
-        // Refresh based on current view
-        if (view === 'cloud' || view === 'history') {
-          await fetchData()
-        }
-        await loadLibraryStats()
-        await loadContinueWatching()
-
-        toast({ title: "Scan Complete", description: "Library has been updated." })
-      })
-
-      unlistenMpvEnded = await listen<MpvPlaybackEndedPayload>('mpv-playback-ended', async (event) => {
-        const { media_id, title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
-
-        // Build season/episode string for TV episodes
-        const seasonEpisode = media_type === 'tvepisode' && season_number && episode_number
-          ? `S${String(season_number).padStart(2, '0')}E${String(episode_number).padStart(2, '0')}`
-          : undefined
-
-        if (completed) {
-          // MPV detected end chapter - ask user to confirm completion
-          setMarkCompleteData({
-            mediaId: media_id,
-            title: title,
-            seasonEpisode,
-            progressPercent: 100,
-            isCompletionConfirmation: true
-          })
-          setMarkCompleteDialogOpen(true)
-        } else if (final_position && final_duration && final_position > 30) {
-          const progressPercent = (final_position / final_duration) * 100
-
-          // Show mark as complete dialog if progress is between 80-95%
-          if (progressPercent >= 80 && progressPercent < 95) {
-            setMarkCompleteData({
-              mediaId: media_id,
-              title: title,
-              seasonEpisode,
-              progressPercent: progressPercent,
-              isCompletionConfirmation: false
-            })
-            setMarkCompleteDialogOpen(true)
-          } else {
-            const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
-            toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
-          }
-        }
-
-        // Refresh based on current view - don't clear items for views that don't need refresh
-        if (view === 'cloud' || view === 'history') {
-          await fetchData()
-        }
-        // Always refresh continue watching since progress changed
-        await loadContinueWatching()
-      })
-
-      unlistenMpvAudioTracks = await listen<MpvAudioTracksDetectedPayload>('mpv-audio-tracks-detected', (event) => {
-        const { series_id, tracks } = event.payload
-        if (!series_id || !Array.isArray(tracks)) {
-          return
-        }
-
-        const nextTracks = [...tracks].sort((left, right) =>
-          left.label.localeCompare(right.label),
-        )
-        mergeCachedSeriesAudioTracks(series_id, nextTracks)
-      })
-
-      // Listen for real-time library updates from file watcher
-      unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
-        const payload = event.payload || {}
-        const type = payload.type || 'updated'
-        const title = payload.title || 'Library'
-        console.log(`[WATCHER] Library updated: ${type} - ${title}`)
-
-        // Stop cloud indexing indicator
-        setIsCloudIndexing(false)
-
-        // Refresh based on current view
-        if (view === 'cloud' || view === 'history') {
-          await fetchData()
-        } else if (view === 'episodes' && selectedShow) {
-          try {
-            const selectedId = selectedShow.id
-            const changedMediaId = typeof payload.media_id === 'number' ? payload.media_id : null
-            const changedParentId = typeof payload.parent_id === 'number' ? payload.parent_id : null
-
-            if (
-              changedMediaId === null
-              || changedParentId === selectedId
-              || changedMediaId === selectedId
-            ) {
-              const refreshedShow = await getMediaInfo(selectedId)
-              setSelectedShow(refreshedShow)
-            }
-          } catch (error) {
-            console.warn('[App] Failed to refresh selected show after library update:', error)
-          }
-        }
-        await loadLibraryStats()
-        await loadContinueWatching()
-      })
-
-      // Listen for notification events from file watcher
-      unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
-        const { type, title, message } = event.payload
-        toast({
-          title,
-          description: message,
-          variant: type === 'success' ? 'default' : type === 'info' ? 'default' : 'destructive'
-        })
-      })
-    }
-
-    setupListeners()
-    return () => {
-      unlistenProgress?.()
-      unlistenComplete?.()
-      unlistenMpvEnded?.()
-      unlistenMpvAudioTracks?.()
-      unlistenLibraryUpdated?.()
-      unlistenNotification?.()
-      unlistenCloudIndexingStarted?.()
-      unlistenZipProcessing?.()
-    }
-  }, [view, searchQuery, cloudSubTab, selectedShow?.id])
-
-  useEffect(() => {
     document.documentElement.classList.add('dark')
 
     // Disable right-click context menu in production
@@ -739,12 +519,6 @@ function App() {
       return () => document.removeEventListener('contextmenu', handleContextMenu)
     }
   }, [])
-
-  // Load initial data
-  useEffect(() => {
-    loadContinueWatching()
-    loadLibraryStats()
-  }, [tabVisibility])
 
   // Cloud change detection is now handled by the Rust backend
   // The backend polls every 60 seconds and emits 'library-updated' events
@@ -764,18 +538,36 @@ function App() {
   const loadContinueWatching = useCallback(async () => {
     try {
       const history = await getWatchHistory()
-      // Filter to items with progress < 95%
+      // Filter to items that are still meaningfully in progress.
       const inProgress = history
         .filter(item => {
-          const progress = item.progress_percent || (item.resume_position_seconds && item.duration_seconds
-            ? (item.resume_position_seconds / item.duration_seconds) * 100
-            : 0)
-          return progress > 0 && progress < 95
+          const progress = getMediaProgressPercent(item)
+          return progress > 0 && !isProgressPastAutoCompleteThreshold(progress)
         })
         .slice(0, 10)
       setContinueWatching(inProgress)
     } catch (error) {
       console.error('Failed to load continue watching', error)
+    }
+  }, [])
+
+  const loadHistoryEvents = useCallback(async () => {
+    try {
+      const events = await getWatchHistoryEvents()
+      setHistoryEvents(events)
+    } catch (error) {
+      console.error('Failed to load history events', error)
+    }
+  }, [])
+
+  const runWatchHistorySync = useCallback(async () => {
+    setIsHistorySyncing(true)
+    try {
+      await syncWatchHistory()
+    } catch (error) {
+      console.warn('[History] Sync failed:', error)
+    } finally {
+      setIsHistorySyncing(false)
     }
   }, [])
 
@@ -822,8 +614,6 @@ function App() {
         // Cloud view - filter by is_cloud = true
         const mediaType = cloudSubTab === 'movies' ? 'movie' : 'tv'
         data = await getLibraryFiltered(mediaType, searchQuery, true)
-      } else if (view === 'history') {
-        data = await getWatchHistory()
       }
 
       // Sorting is now handled by useMemo (sortedItems)
@@ -837,16 +627,246 @@ function App() {
   const fetchDataRef = useRef(fetchData)
   fetchDataRef.current = fetchData
 
+  // Load initial data
+  useEffect(() => {
+    loadContinueWatching()
+    loadLibraryStats()
+  }, [tabVisibility, loadContinueWatching, loadLibraryStats])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setHistoryEvents([])
+      return
+    }
+
+    let cancelled = false
+
+    const syncAndRefresh = async () => {
+      await runWatchHistorySync()
+      if (cancelled) return
+      await loadContinueWatching()
+      if (cancelled) return
+      await loadHistoryEvents()
+    }
+
+    void syncAndRefresh()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated, loadContinueWatching, loadHistoryEvents, runWatchHistorySync])
+
+  useEffect(() => {
+    let unlistenProgress: UnlistenFn | undefined
+    let unlistenComplete: UnlistenFn | undefined
+    let unlistenMpvEnded: UnlistenFn | undefined
+    let unlistenMpvAudioTracks: UnlistenFn | undefined
+    let unlistenLibraryUpdated: UnlistenFn | undefined
+    let unlistenNotification: UnlistenFn | undefined
+    let unlistenCloudIndexingStarted: UnlistenFn | undefined
+    let unlistenZipProcessing: UnlistenFn | undefined
+
+    const setupListeners = async () => {
+      unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
+        const payload = event.payload
+        setScanProgress({
+          current: payload.current,
+          total: payload.total,
+          title: payload.title
+        })
+      })
+
+      unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', (event) => {
+        setIsCloudIndexing(true)
+        console.log(`[Cloud] Indexing started: ${event.payload.count} files`)
+      })
+
+      unlistenZipProcessing = await listen<ZipProcessingStatusPayload>('zip-processing-status', (event) => {
+        const payload = event.payload
+
+        if (zipProcessingPopupTimeoutRef.current) {
+          window.clearTimeout(zipProcessingPopupTimeoutRef.current)
+          zipProcessingPopupTimeoutRef.current = null
+        }
+
+        setZipProcessingPopup({
+          phase: payload.phase,
+          archiveCount: payload.archiveCount,
+          archiveName: payload.archiveName ?? null,
+          episodesIndexed: payload.episodesIndexed ?? null,
+          message: payload.message,
+        })
+
+        if (payload.phase === 'detected') {
+          setIsCloudIndexing(true)
+          toast({
+            title: payload.archiveCount > 1 ? 'ZIP archives detected' : 'ZIP archive detected',
+            description: payload.message,
+          })
+          return
+        }
+
+        toast({
+          title: payload.phase === 'complete' ? 'ZIP processing complete' : 'ZIP processing failed',
+          description: payload.message,
+          variant: payload.phase === 'error' ? 'destructive' : 'default',
+        })
+
+        zipProcessingPopupTimeoutRef.current = window.setTimeout(() => {
+          setZipProcessingPopup(null)
+          zipProcessingPopupTimeoutRef.current = null
+        }, payload.phase === 'error' ? 6500 : 5000)
+      })
+
+      unlistenComplete = await listen<ScanCompletePayload>('scan-complete', async () => {
+        setIsScanning(false)
+        setScanProgress(null)
+        if (view === 'cloud') {
+          await fetchData()
+        } else if (view === 'history') {
+          await loadHistoryEvents()
+        }
+        await loadLibraryStats()
+        await loadContinueWatching()
+
+        toast({ title: "Scan Complete", description: "Library has been updated." })
+      })
+
+      unlistenMpvEnded = await listen<MpvPlaybackEndedPayload>('mpv-playback-ended', async (event) => {
+        const { media_id, title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
+
+        const seasonEpisode = media_type === 'tvepisode' && season_number && episode_number
+          ? `S${String(season_number).padStart(2, '0')}E${String(episode_number).padStart(2, '0')}`
+          : undefined
+        const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
+        const autoMarkAsWatched = async () => {
+          await markAsComplete(media_id)
+          await emit('media-marked-complete', { media_id })
+          toast({ title: "Marked Complete", description: `${displayTitle} marked as watched` })
+        }
+
+        if (completed) {
+          try {
+            await autoMarkAsWatched()
+          } catch {
+            toast({ title: "Progress Saved", description: `${displayTitle} - 100% watched` })
+          }
+        } else if (final_position && final_duration && final_position > 30) {
+          const progressPercent = (final_position / final_duration) * 100
+
+          if (isProgressPastAutoCompleteThreshold(progressPercent)) {
+            try {
+              await autoMarkAsWatched()
+            } catch {
+              toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
+            }
+          } else if (shouldPromptToMarkComplete(progressPercent)) {
+            setMarkCompleteData({
+              mediaId: media_id,
+              title,
+              seasonEpisode,
+              progressPercent,
+              isCompletionConfirmation: false
+            })
+            setMarkCompleteDialogOpen(true)
+          } else {
+            const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
+            toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
+          }
+        }
+
+        if (view === 'cloud') {
+          await fetchData()
+        } else if (view === 'history') {
+          await loadHistoryEvents()
+        }
+        await loadContinueWatching()
+        await runWatchHistorySync()
+      })
+
+      unlistenMpvAudioTracks = await listen<MpvAudioTracksDetectedPayload>('mpv-audio-tracks-detected', (event) => {
+        const { series_id, tracks } = event.payload
+        if (!series_id || !Array.isArray(tracks)) {
+          return
+        }
+
+        const nextTracks = [...tracks].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        )
+        mergeCachedSeriesAudioTracks(series_id, nextTracks)
+      })
+
+      unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
+        const payload = event.payload || {}
+        const type = payload.type || 'updated'
+        const title = payload.title || 'Library'
+        console.log(`[WATCHER] Library updated: ${type} - ${title}`)
+
+        setIsCloudIndexing(false)
+
+        if (view === 'cloud') {
+          await fetchData()
+        } else if (view === 'history') {
+          await loadHistoryEvents()
+        } else if (view === 'episodes' && selectedShow) {
+          try {
+            const selectedId = selectedShow.id
+            const changedMediaId = typeof payload.media_id === 'number' ? payload.media_id : null
+            const changedParentId = typeof payload.parent_id === 'number' ? payload.parent_id : null
+
+            if (
+              changedMediaId === null
+              || changedParentId === selectedId
+              || changedMediaId === selectedId
+            ) {
+              const refreshedShow = await getMediaInfo(selectedId)
+              setSelectedShow(refreshedShow)
+            }
+          } catch (error) {
+            console.warn('[App] Failed to refresh selected show after library update:', error)
+          }
+        }
+        await loadLibraryStats()
+        await loadContinueWatching()
+      })
+
+      unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
+        const { type, title, message } = event.payload
+        toast({
+          title,
+          description: message,
+          variant: type === 'success' ? 'default' : type === 'info' ? 'info' : 'destructive'
+        })
+      })
+    }
+
+    void setupListeners()
+    return () => {
+      unlistenProgress?.()
+      unlistenComplete?.()
+      unlistenMpvEnded?.()
+      unlistenMpvAudioTracks?.()
+      unlistenLibraryUpdated?.()
+      unlistenNotification?.()
+      unlistenCloudIndexingStarted?.()
+      unlistenZipProcessing?.()
+    }
+  }, [view, selectedShow, fetchData, loadContinueWatching, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, toast])
+
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
+        if (view === 'history') {
+          loadHistoryEvents()
+          return
+        }
         fetchData()
       }, delayMs)
       return () => window.clearTimeout(timer)
     }
-  }, [view, searchQuery, cloudSubTab, fetchData])
+  }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents])
 
   useEffect(() => {
     if (view !== 'cloud') return
@@ -1000,7 +1020,7 @@ function App() {
     try {
       const resumeInfo = await getResumeInfo(item.id)
 
-      if (resumeInfo.has_progress && resumeInfo.progress_percent < 95) {
+      if (resumeInfo.has_progress && resumeInfo.progress_percent <= AUTO_MARK_WATCHED_THRESHOLD_PERCENT) {
         let posterUrl: string | undefined
         if (item.poster_path) {
           try {
@@ -1043,6 +1063,27 @@ function App() {
     await startPlaybackFlow(item)
   }, [startPlaybackFlow])
 
+  const handleDetailsMarkWatched = useCallback(async (item: MediaItem) => {
+    try {
+      await markAsComplete(item.id)
+      await emit('media-marked-complete', { media_id: item.id })
+      toast({
+        title: "Marked as watched",
+        description: item.media_type === 'tvepisode'
+          ? `${item.title} saved as watched.`
+          : `${item.title} marked as watched.`,
+      })
+      await Promise.all([
+        loadContinueWatching(),
+        loadHistoryEvents(),
+        runWatchHistorySync(),
+        fetchData(),
+      ])
+    } catch {
+      toast({ title: "Error", description: "Failed to mark as watched", variant: "destructive" })
+    }
+  }, [fetchData, loadContinueWatching, loadHistoryEvents, runWatchHistorySync, toast])
+
   const handleResumeChoice = async (resume: boolean) => {
     if (!resumeDialogData) return
     const { item, resumeInfo } = resumeDialogData
@@ -1067,6 +1108,10 @@ function App() {
   }, [])
 
   const handleAskAiFromContent = useCallback((item: MediaItem) => {
+    if (!unstableEnabled || AI_CHAT_PAUSED) {
+      handleAiChatPaused()
+      return
+    }
     setAiLaunchRequest({
       item,
       nonce: Date.now(),
@@ -1076,7 +1121,13 @@ function App() {
       title: "Opening AI Chat",
       description: `Fetching insights for "${item.title}"...`,
     })
-  }, [toast])
+  }, [unstableEnabled, handleAiChatPaused, toast])
+
+  useEffect(() => {
+    if (view === 'ai' && (!unstableEnabled || AI_CHAT_PAUSED)) {
+      setView('home')
+    }
+  }, [view, unstableEnabled])
 
   const handleFixMatchSuccess = useCallback(async () => {
     const fixedItem = itemToFix
@@ -1117,41 +1168,58 @@ function App() {
     }
   }, [itemToFix, fetchData, loadLibraryStats, loadContinueWatching, selectedShow, view])
 
-  const handleRemoveFromHistory = useCallback(async (item: MediaItem) => {
+  const handleHistoryEntryOpen = useCallback(async (event: WatchHistoryEvent) => {
+    if (!event.media_id) return
     try {
-      const historyIds = item.history_group_ids?.length ? item.history_group_ids : [item.id]
-      await Promise.all(historyIds.map((historyId) => removeFromWatchHistory(historyId)))
+      const media = await getMediaInfo(event.media_id)
+      await handleItemClick(media)
+    } catch (error) {
+      console.warn('[History] Failed to open history item:', error)
+      toast({
+        title: 'Unavailable',
+        description: 'This watch entry is still saved, but the media item is no longer in your library.',
+        variant: 'destructive',
+      })
+    }
+  }, [handleItemClick, toast])
+
+  const handleRemoveHistoryEntry = useCallback(async (event: WatchHistoryEvent) => {
+    try {
+      await removeWatchHistoryEntry(event.event_id)
+      if (event.media_id) {
+        await removeFromWatchHistory(event.media_id)
+      }
       toast({
         title: "Removed",
-        description: historyIds.length > 1
-          ? `Removed ${historyIds.length} recent episodes from "${item.title}".`
-          : `"${item.title}" removed from watch history.`,
+        description: `"${event.parent_title || event.title}" removed from watch history.`,
       })
-      await fetchDataRef.current()
+      await loadHistoryEvents()
       await loadContinueWatching()
+      await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
-  }, [toast, loadContinueWatching])
+  }, [toast, loadContinueWatching, loadHistoryEvents, runWatchHistorySync])
 
   const handleClearHistory = useCallback(async () => {
-    if (items.length === 0 || isClearingHistory) return
+    if (historyEvents.length === 0 || isClearingHistory) return
 
     setIsClearingHistory(true)
     try {
       await clearAllWatchHistory()
       toast({
         title: "History cleared",
-        description: `Removed ${items.length} watch history ${items.length === 1 ? 'entry' : 'entries'}.`,
+        description: `Removed ${historyEvents.length} watch history ${historyEvents.length === 1 ? 'entry' : 'entries'}.`,
       })
-      await fetchDataRef.current()
+      await loadHistoryEvents()
       await loadContinueWatching()
+      await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
     } finally {
       setIsClearingHistory(false)
     }
-  }, [items.length, isClearingHistory, loadContinueWatching, toast])
+  }, [historyEvents.length, isClearingHistory, loadContinueWatching, toast, loadHistoryEvents, runWatchHistorySync])
 
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
@@ -1192,6 +1260,8 @@ function App() {
       // Emit event so EpisodeBrowser and other components can refresh
       await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
       await loadContinueWatching()
+      await loadHistoryEvents()
+      await runWatchHistorySync()
       // Refresh library items to update progress display on cards
       await fetchData()
     } catch {
@@ -1457,6 +1527,9 @@ function App() {
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
             betaEnabled={betaEnabled}
+            unstableEnabled={unstableEnabled}
+            aiChatPaused={AI_CHAT_PAUSED}
+            onAiChatClick={handleAiChatPaused}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
@@ -1645,7 +1718,7 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-            ) : view === 'ai' ? (
+) : view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
                   <AnimatePresence mode="wait">
@@ -1749,13 +1822,18 @@ function App() {
                                   <span>Google Drive</span>
                                 </button>
                               )}
-                              <button
-                                onClick={() => setView('ai')}
-                                className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                              >
-                                <Bot className="w-4 h-4 text-emerald-300" />
-                                <span>AI Chat</span>
-                              </button>
+                              {unstableEnabled && (
+                                <button
+                                  onClick={handleAiChatPaused}
+                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
+                                >
+                                  <Bot className="w-4 h-4 text-amber-300" />
+                                  <span>AI Chat</span>
+                                  <span className="rounded-full border border-amber-400/35 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-300">
+                                    Paused
+                                  </span>
+                                </button>
+                              )}
                             </motion.div>
                           </div>
                         </div>
@@ -2137,7 +2215,7 @@ function App() {
                     )}
 
                     {/* AI Chat View */}
-                    {view === 'ai' && (
+                {view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED && (
                       <motion.div
                         key="ai"
                         initial={{ opacity: 0 }}
@@ -2185,47 +2263,45 @@ function App() {
                               Watch History
                             </p>
                             <h2 className="text-2xl font-semibold tracking-tight text-white">
-                              Recently Watched
+                              Your Watch Timeline
                             </h2>
                             <p className="text-sm text-white/55">
-                              {items.length === 0
-                                ? 'Your recent movies and episodes will show up here.'
-                                : hiddenHistoryEntriesCount > 0
-                                  ? `${historyItems.length} cards from ${items.length} entries, with ${groupedHistorySeriesCount} series grouped together.`
-                                  : `${items.length} recent ${items.length === 1 ? 'entry' : 'entries'}.`}
+                              {historyEvents.length === 0
+                                ? 'Every movie and episode session will be saved here with the exact date and time.'
+                                : `${historyEvents.length} saved ${historyEvents.length === 1 ? 'session' : 'sessions'} across your local library and Google Drive sync.`}
                             </p>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={handleClearHistory}
-                            disabled={items.length === 0 || isClearingHistory}
-                            className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.08] px-4 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/[0.12] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {isClearingHistory ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <X className="h-4 w-4" />
-                            )}
-                            Clear History
-                          </button>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="inline-flex h-10 items-center justify-center rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 text-sm font-semibold text-emerald-100">
+                              {isHistorySyncing ? 'Syncing to Google Drive...' : 'Google Drive history sync ready'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleClearHistory}
+                              disabled={historyEvents.length === 0 || isClearingHistory}
+                              className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.08] px-4 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/[0.12] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {isClearingHistory ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <X className="h-4 w-4" />
+                              )}
+                              Clear History
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="grid-media">
-                          {historyItems.map((item, index) => (
-                            <MovieCard
-                              key={item.id}
-                              item={item}
-                              index={index}
-                              disableEntryAnimation={disableHistoryEntryAnimation}
-                              onClick={handleItemClick}
-                              onFixMatch={handleFixMatch}
-                              onRemoveFromHistory={handleRemoveFromHistory}
-                              onDelete={handleDelete}
-                              onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                        <div className="space-y-2.5">
+                          {historyEvents.map((event) => (
+                            <HistoryEventCard
+                              key={event.event_id}
+                              event={event}
+                              onOpen={event.media_id ? handleHistoryEntryOpen : undefined}
+                              onRemove={handleRemoveHistoryEntry}
                             />
                           ))}
-                          {historyItems.length === 0 && (
+                          {historyEvents.length === 0 && (
                             <div className="col-span-full flex items-center justify-center min-h-[60vh]">
                               <motion.div
                                 className="empty-state-enhanced flex flex-col items-center text-center"
@@ -2237,9 +2313,9 @@ function App() {
                                     <Film className="w-10 h-10 text-muted-foreground" />
                                   </div>
                                 </div>
-                                <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No watch history yet</h3>
+                                <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No watch sessions yet</h3>
                                 <p className="text-muted-foreground max-w-sm text-center mx-auto">
-                                  Start watching content from your library
+                                  Start watching a movie or episode and StreamVault will save the exact session time here and sync it to your Google Drive account.
                                 </p>
                               </motion.div>
                             </div>
@@ -2267,7 +2343,7 @@ function App() {
                               disableEntryAnimation={disableCloudEntryAnimation}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
-                              onAskAI={handleAskAiFromContent}
+                          onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
                               onDelete={handleDelete}
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
@@ -2456,9 +2532,11 @@ function App() {
               tabVisibility={tabVisibility}
               onTabVisibilityChange={handleTabVisibilityChange}
               onLogout={handleLogout}
-              betaEnabled={betaEnabled}
-              onBetaToggle={handleBetaToggle}
-            />
+            betaEnabled={betaEnabled}
+            onBetaToggle={handleBetaToggle}
+            unstableEnabled={unstableEnabled}
+            onUnstableToggle={handleUnstableToggle}
+          />
           </Suspense>
 
           <Suspense fallback={null}>
@@ -2475,6 +2553,8 @@ function App() {
             onOpenChange={handleContentDetailsOpenChange}
             item={contentDetailsItem}
             onPrimaryAction={handleDetailsPrimaryAction}
+            onEpisodeSecondaryAction={handleDetailsMarkWatched}
+            episodeSecondaryActionLabel="Mark as watched"
           />
 
           {resumeDialogData && (

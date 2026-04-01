@@ -26,6 +26,7 @@ const ZIP_TEMP_CACHE_MAX_AGE_SECS: u64 = 86_400;
 pub struct ZipArchiveInfo {
     pub zip_file_id: String,
     pub filename: String,
+    pub archive_format: String,
     pub file_size_bytes: u64,
     pub compression_type: ZipCompressionType,
     pub central_dir_offset: u64,
@@ -565,6 +566,7 @@ fn analyze_zip_with_client(
         archive: ZipArchiveInfo {
             zip_file_id: metadata.id,
             filename: metadata.name,
+            archive_format: "zip".to_string(),
             file_size_bytes: file_size,
             compression_type,
             central_dir_offset: eocd.cd_offset,

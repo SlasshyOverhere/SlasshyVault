@@ -11,12 +11,17 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { isMediaMarkedWatched } from "@/utils/playbackProgress"
 
 interface ContentDetailsModalProps {
   open: boolean
   item: MediaItem | null
   onOpenChange: (open: boolean) => void
   onPrimaryAction: (item: MediaItem) => void | Promise<void>
+  onSecondaryAction?: (item: MediaItem) => void | Promise<void>
+  secondaryActionLabel?: string
+  onEpisodeSecondaryAction?: (item: MediaItem) => void | Promise<void>
+  episodeSecondaryActionLabel?: string
 }
 
 const heroArtworkCache = new Map<number, string | null>()
@@ -137,6 +142,10 @@ export function ContentDetailsModal({
   item,
   onOpenChange,
   onPrimaryAction,
+  onSecondaryAction,
+  secondaryActionLabel,
+  onEpisodeSecondaryAction,
+  episodeSecondaryActionLabel,
 }: ContentDetailsModalProps) {
   const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null)
   const [posterImageUrl, setPosterImageUrl] = useState<string | null>(null)
@@ -155,6 +164,39 @@ export function ContentDetailsModal({
   const [audioTracksStatus, setAudioTracksStatus] = useState<string>("")
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
+
+  const handleEpisodeMarkWatched = async (episode: MediaItem) => {
+    if (!onEpisodeSecondaryAction) return
+
+    await onEpisodeSecondaryAction(episode)
+
+    const markedAt = new Date().toISOString()
+    setEpisodes((currentEpisodes) =>
+      currentEpisodes.map((currentEpisode) =>
+        currentEpisode.id === episode.id
+          ? {
+              ...currentEpisode,
+              progress_percent: 100,
+              resume_position_seconds: 0,
+              duration_seconds: currentEpisode.duration_seconds ?? episode.duration_seconds,
+              last_watched: markedAt,
+            }
+          : currentEpisode,
+      ),
+    )
+
+    setActiveItem((currentActiveItem) =>
+      currentActiveItem?.id === episode.id
+        ? {
+            ...currentActiveItem,
+            progress_percent: 100,
+            resume_position_seconds: 0,
+            duration_seconds: currentActiveItem.duration_seconds ?? episode.duration_seconds,
+            last_watched: markedAt,
+          }
+        : currentActiveItem,
+    )
+  }
 
   useEffect(() => {
     if (item) {
@@ -670,7 +712,16 @@ export function ContentDetailsModal({
                 )}
                 
                 {!isShow && (
-                  <div className="shrink-0 mb-2">
+                  <div className="shrink-0 mb-2 flex flex-wrap gap-3">
+                    {onSecondaryAction && secondaryActionLabel && (
+                      <Button
+                        onClick={() => onSecondaryAction(displayItem)}
+                        variant="outline"
+                        className="h-16 px-8 rounded-2xl text-base font-bold border-white/15 text-white/85 bg-white/8 hover:bg-white/14 hover:text-white"
+                      >
+                        <Check className="w-5 h-5 mr-3" /> {secondaryActionLabel}
+                      </Button>
+                    )}
                     <Button 
                       onClick={() => onPrimaryAction(displayItem)} 
                       className="h-16 px-12 rounded-2xl text-lg font-bold shadow-glow hover:scale-105 active:scale-95 transition-all duration-300 bg-white text-black hover:bg-white/90"
@@ -728,6 +779,7 @@ export function ContentDetailsModal({
                           const rating = tmdbData?.vote_average
                           const airDate = tmdbData?.air_date
                           const runtime = tmdbData?.runtime
+                          const isWatched = isMediaMarkedWatched(ep)
                           const episodeZipCompressionLabel = ep.parent_zip_id
                             ? getZipCompressionLabel(ep.zip_compression_method)
                             : null
@@ -758,7 +810,7 @@ export function ContentDetailsModal({
                                     />
                                   </div>
                                 ) : null}
-                                {ep.progress_percent && ep.progress_percent >= 95 ? (
+                                {isWatched ? (
                                   <div className="absolute top-3 right-3 p-1.5 rounded-xl bg-black/60 backdrop-blur-md text-white border border-white/10 shadow-lg">
                                     <Check className="w-4 h-4" />
                                   </div>
@@ -778,6 +830,23 @@ export function ContentDetailsModal({
                                     <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
+                                    {isWatched ? (
+                                      <div className="inline-flex items-center gap-1.5 rounded-full border border-green-500/35 bg-green-500/18 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-green-300">
+                                        <Check className="w-3.5 h-3.5" />
+                                        Watched
+                                      </div>
+                                    ) : onEpisodeSecondaryAction && episodeSecondaryActionLabel ? (
+                                      <button
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          void handleEpisodeMarkWatched(ep)
+                                        }}
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/6 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/78 transition-colors hover:bg-white/12 hover:text-white"
+                                      >
+                                        <Check className="w-3.5 h-3.5" />
+                                        {episodeSecondaryActionLabel}
+                                      </button>
+                                    ) : null}
                                     {rating && rating > 0 && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
                                         <Star className="w-3 h-3 fill-current text-yellow-500" />

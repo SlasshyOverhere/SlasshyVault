@@ -3,6 +3,7 @@ import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from 
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
+import { getMediaProgressPercent, isProgressPastAutoCompleteThreshold } from "@/utils/playbackProgress"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -103,8 +104,8 @@ function MovieCardBase({
   const shouldAnimateEntry = !disableEntryAnimation && index < 24
   const enableMotionEffects = !disableEntryAnimation
 
-  const progress = item.progress_percent || (item.resume_position_seconds && item.duration_seconds ? (item.resume_position_seconds / item.duration_seconds) * 100 : 0)
-  const isFinished = progress >= 95
+  const progress = getMediaProgressPercent(item)
+  const isFinished = isProgressPastAutoCompleteThreshold(progress)
   const hasProgress = progress > 0 && !isFinished
   const isGroupedHistorySeries = (item.history_group_count || 0) > 1
   const historyLatestLabel = item.history_group_latest_label?.trim()

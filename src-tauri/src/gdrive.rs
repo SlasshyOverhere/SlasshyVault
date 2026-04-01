@@ -1,6 +1,7 @@
 //! Google Drive integration module
 //! Handles OAuth2 authentication and Google Drive API operations
 
+use crate::archive_manager;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ const AUTH_SERVER_URL: &str = "https://streamvault-backend-server.onrender.com";
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
 const AI_CHAT_HISTORY_FILE_NAME: &str = "streamvault_ai_chat_history_v1.json";
+const WATCH_HISTORY_FILE_NAME: &str = "streamvault_watch_history_v1.json";
 
 /// Stored OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,15 +69,36 @@ const VIDEO_MIME_TYPES: &[&str] = &[
     "video/mp2t",
 ];
 
-const ZIP_MIME_TYPES: &[&str] = &["application/zip", "application/x-zip-compressed"];
+const ARCHIVE_MIME_TYPES: &[&str] = &[
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-rar-compressed",
+    "application/vnd.rar",
+    "application/x-tar",
+    "application/gzip",
+];
 
 pub fn is_zip_archive_item(item: &DriveItem) -> bool {
-    ZIP_MIME_TYPES.contains(&item.mime_type.as_str())
-        || item.name.to_ascii_lowercase().ends_with(".zip")
+    archive_manager::detect_archive_format(&item.name, Some(&item.mime_type))
+        == Some(archive_manager::ArchiveFormat::Zip)
+}
+
+pub fn is_supported_archive_item(item: &DriveItem) -> bool {
+    matches!(
+        archive_manager::detect_archive_format(&item.name, Some(&item.mime_type)),
+        Some(archive_manager::ArchiveFormat::Zip | archive_manager::ArchiveFormat::Rar)
+    )
+}
+
+pub fn is_unsupported_archive_item(item: &DriveItem) -> bool {
+    archive_manager::detect_archive_format(&item.name, Some(&item.mime_type))
+        == Some(archive_manager::ArchiveFormat::Tar)
 }
 
 pub fn is_supported_cloud_media_item(item: &DriveItem) -> bool {
-    VIDEO_MIME_TYPES.contains(&item.mime_type.as_str()) || is_zip_archive_item(item)
+    VIDEO_MIME_TYPES.contains(&item.mime_type.as_str())
+        || is_supported_archive_item(item)
+        || is_unsupported_archive_item(item)
 }
 
 /// Response from Drive API files.list
@@ -294,12 +317,12 @@ impl GoogleDriveClient {
 
         let mime_conditions: Vec<String> = VIDEO_MIME_TYPES
             .iter()
-            .chain(ZIP_MIME_TYPES.iter())
+            .chain(ARCHIVE_MIME_TYPES.iter())
             .map(|m| format!("mimeType = '{}'", m))
             .collect();
 
         let query = format!(
-            "'{}' in parents and (({}) or name contains '.zip' or name contains '.ZIP') and trashed = false",
+            "'{}' in parents and (({}) or name contains '.zip' or name contains '.ZIP' or name contains '.rar' or name contains '.RAR' or name contains '.tar' or name contains '.TAR' or name contains '.tgz' or name contains '.TGZ') and trashed = false",
             folder_id,
             mime_conditions.join(" or ")
         );
@@ -465,6 +488,37 @@ impl GoogleDriveClient {
         Ok(Some(text))
     }
 
+    pub async fn load_watch_history_snapshot(&self) -> Result<Option<String>, String> {
+        let file_id = match self.find_app_data_file_id(WATCH_HISTORY_FILE_NAME).await? {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self
+            .http_client
+            .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download watch history snapshot: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Drive API download watch history snapshot error: {}",
+                error_text
+            ));
+        }
+
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read watch history snapshot response: {}", e))?;
+
+        Ok(Some(text))
+    }
+
     pub async fn save_ai_chat_history(&self, history_json: &str) -> Result<(), String> {
         serde_json::from_str::<serde_json::Value>(history_json)
             .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
@@ -498,6 +552,43 @@ impl GoogleDriveClient {
             let error_text = response.text().await.unwrap_or_default();
             return Err(format!(
                 "Drive API upload AI chat history error: {}",
+                error_text
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub async fn save_watch_history_snapshot(&self, history_json: &str) -> Result<(), String> {
+        serde_json::from_str::<serde_json::Value>(history_json)
+            .map_err(|e| format!("Invalid watch history snapshot JSON: {}", e))?;
+
+        let file_id = match self.find_app_data_file_id(WATCH_HISTORY_FILE_NAME).await? {
+            Some(id) => id,
+            None => {
+                self.create_app_data_file(WATCH_HISTORY_FILE_NAME, "application/json")
+                    .await?
+            }
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self
+            .http_client
+            .patch(format!(
+                "{}/files/{}?uploadType=media",
+                DRIVE_UPLOAD_API_BASE, file_id
+            ))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .body(history_json.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload watch history snapshot: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Drive API upload watch history snapshot error: {}",
                 error_text
             ));
         }
