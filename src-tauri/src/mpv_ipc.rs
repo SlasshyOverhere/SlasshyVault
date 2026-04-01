@@ -298,7 +298,10 @@ pub fn launch_mpv_with_tracking(
     let script_arg = format!("--script={}", script_path.to_string_lossy());
     cmd.arg(&script_arg);
 
-    if let Some(title) = display_title.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(title) = display_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         cmd.arg(format!("--force-media-title={}", title));
     }
 
@@ -320,7 +323,10 @@ pub fn launch_mpv_with_tracking(
             }
         } else {
             // Validate alang is alphanumeric and specific separators
-            if trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ',' || c == '_') {
+            if trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ',' || c == '_')
+            {
                 cmd.arg(format!("--alang={}", trimmed));
             } else {
                 println!("[MPV] Security warning: Rejected invalid alang parameter");
@@ -332,7 +338,15 @@ pub fn launch_mpv_with_tracking(
     if let Some(ipc_path) = ipc_server.filter(|value| !value.trim().is_empty()) {
         let path = ipc_path.trim();
         // Allow valid path characters (alphanumeric, slash, backslash, dot, hyphen, underscore, colon for Windows drives/pipes)
-        if path.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '\\' || c == '.' || c == '-' || c == '_' || c == ':') {
+        if path.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || c == '/'
+                || c == '\\'
+                || c == '.'
+                || c == '-'
+                || c == '_'
+                || c == ':'
+        }) {
             cmd.arg(format!("--input-ipc-server={}", path));
         } else {
             println!("[MPV] Security warning: Rejected invalid ipc server path");
