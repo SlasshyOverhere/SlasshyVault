@@ -7793,6 +7793,7 @@ async fn background_check_cloud_changes(
 
 // GitHub PAT for accessing private releases
 const GITHUB_RELEASE_TOKEN: &str = ""; // User will provide their PAT
+const ALLOWED_REPO: &str = "SlasshyOverhere/StreamVault";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateInfo {
@@ -7930,26 +7931,28 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
     println!("[UPDATE] Downloading update from: {}", url);
 
-    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
     let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
-    if parsed_url.scheme() != "https" {
-        return Err("Only HTTPS URLs are allowed".to_string());
+
+    if !is_authorized_update_url(&parsed_url, false) {
+        return Err("Unauthorized update URL".to_string());
     }
 
-    if let Some(host_str) = parsed_url.host_str() {
-        if host_str != "github.com"
-            && host_str != "api.github.com"
-            && host_str != "objects.githubusercontent.com"
-            && !host_str.ends_with(".github.com")
-            && !host_str.ends_with(".githubusercontent.com")
-        {
-            return Err("URL domain not allowed".to_string());
+    // Use a custom redirect policy to ensure redirects don't lead to malicious sites
+    let custom_policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if !is_authorized_update_url(attempt.url(), true) {
+            return attempt.error("Unauthorized redirect URL");
         }
-    } else {
-        return Err("Invalid URL domain".to_string());
-    }
+        if attempt.previous().len() > 5 {
+            return attempt.error("Too many redirects");
+        }
+        attempt.follow()
+    });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(custom_policy)
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
     let mut request = client.get(&url);
 
     // Add auth header if PAT is configured
@@ -8009,6 +8012,29 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
 fn updater_staging_root() -> std::path::PathBuf {
     std::env::temp_dir().join("streamvault-updater")
+}
+
+fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
+    if url.scheme() != "https" {
+        return false;
+    }
+
+    let Some(host) = url.host_str() else { return false };
+    let path = url.path();
+
+    if host == "github.com" {
+        return path.starts_with(&format!("/{}", ALLOWED_REPO));
+    }
+
+    if host == "api.github.com" {
+        return path.starts_with(&format!("/repos/{}", ALLOWED_REPO));
+    }
+
+    if is_redirect && (host == "objects.githubusercontent.com" || host.ends_with(".objects.githubusercontent.com")) {
+        return true;
+    }
+
+    false
 }
 
 fn sanitize_update_filename(parsed_url: &url::Url) -> String {
