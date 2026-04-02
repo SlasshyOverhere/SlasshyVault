@@ -3590,6 +3590,7 @@ fn probe_audio_tracks_with_ffprobe(
     }
 
     let output = command
+        .arg("-i") // Safe way to pass input to ffprobe, immune to option injection
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
@@ -4528,13 +4529,14 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
-        // Add the file path
-        command.arg(&file_path);
-
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (as a global option before the file path)
         if start_position > 0.0 {
-            command.arg(format!(":start-time={:.0}", start_position));
+            command.arg(format!("--start-time={:.0}", start_position));
         }
+
+        // Add the file path
+        command.arg("--"); // Security: Prevent argument injection
+        command.arg(&file_path);
     }
 
     // Launch VLC
