@@ -3589,7 +3589,9 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // Security enhancement: Use -i explicit input flag to prevent argument injection
     let output = command
+        .arg("-i")
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
@@ -4528,10 +4530,15 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
+        // Security enhancement: Use -- separator to prevent argument injection
+        command.arg("--");
+
         // Add the file path
         command.arg(&file_path);
 
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (as an item-specific option after the file)
+        // VLC treats arguments after the file as options for that specific file,
+        // so this does not violate the -- boundary.
         if start_position > 0.0 {
             command.arg(format!(":start-time={:.0}", start_position));
         }
