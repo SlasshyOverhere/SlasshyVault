@@ -3589,6 +3589,7 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // ffprobe does not support `--` to separate arguments.
     let output = command
         .arg(source)
         .output()
@@ -4528,10 +4529,13 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
+        // Security enhancement: Terminate options with -- to prevent argument injection
+        command.arg("--");
+
         // Add the file path
         command.arg(&file_path);
 
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (as an option after the file for item-specific options like :start-time)
         if start_position > 0.0 {
             command.arg(format!(":start-time={:.0}", start_position));
         }

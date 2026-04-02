@@ -361,9 +361,6 @@ pub fn launch_mpv_with_tracking(
         }
     }
 
-    // Add the file/URL to play
-    cmd.arg(&actual_source);
-
     // Options
     cmd.arg("--save-position-on-quit=no");
     cmd.arg("--keep-open=no");
@@ -429,6 +426,12 @@ pub fn launch_mpv_with_tracking(
             }
         }
     }
+
+    // Security enhancement: Terminate options with -- to prevent argument injection
+    cmd.arg("--");
+
+    // Add the file/URL to play
+    cmd.arg(&actual_source);
 
     // Print full command for debugging
     println!("[MPV] Command: {:?}", cmd);
@@ -858,7 +861,6 @@ pub fn launch_mpv_with_sync(
         cmd.arg(format!("--http-header-fields={}", header));
     }
 
-    cmd.arg(file_or_url);
     cmd.arg("--save-position-on-quit=no");
     cmd.arg("--keep-open=no");
 
@@ -867,6 +869,12 @@ pub fn launch_mpv_with_sync(
         cmd.arg("--demuxer-max-back-bytes=100MiB");
         cmd.arg("--cache=yes");
     }
+
+    // Security enhancement: Terminate options with -- to prevent argument injection
+    cmd.arg("--");
+
+    // Add the file/URL to play
+    cmd.arg(file_or_url);
 
     #[cfg(windows)]
     {
