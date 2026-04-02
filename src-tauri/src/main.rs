@@ -3590,6 +3590,7 @@ fn probe_audio_tracks_with_ffprobe(
     }
 
     let output = command
+        .arg("-i")
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
@@ -4527,6 +4528,9 @@ async fn play_with_vlc(
         if !std::path::Path::new(&file_path).exists() {
             return Err(format!("File not found: {}", file_path));
         }
+
+        // Use -- to separate options from file path to prevent argument injection
+        command.arg("--");
 
         // Add the file path
         command.arg(&file_path);
