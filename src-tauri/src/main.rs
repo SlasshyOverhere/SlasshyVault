@@ -4528,10 +4528,11 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
-        // Add the file path
-        command.arg(&file_path);
+        // Security enhancement: Use `--` to prevent argument injection
+        // Add the file path as positional arg
+        command.arg("--").arg(&file_path);
 
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (must be after the file it applies to)
         if start_position > 0.0 {
             command.arg(format!(":start-time={:.0}", start_position));
         }
