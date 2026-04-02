@@ -100,9 +100,17 @@ pub fn start_transcode(
         }
     }
 
+    // Mitigate argument injection for FFmpeg by prefixing local file paths with `file:`
+    // unless it's already a URL/protocol.
+    let safe_file_path = if file_path.contains("://") || file_path.starts_with("file:") {
+        file_path.to_string()
+    } else {
+        format!("file:{}", file_path)
+    };
+
     args.extend(vec![
         "-i".to_string(),
-        file_path.to_string(),
+        safe_file_path,
         // Video: transcode to H.264 baseline for maximum compatibility
         "-c:v".to_string(),
         "libx264".to_string(),
@@ -212,9 +220,17 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
                 }
             }
 
+            // Mitigate argument injection for FFmpeg by prefixing local file paths with `file:`
+            // unless it's already a URL/protocol.
+            let safe_file_path = if file_path.contains("://") || file_path.starts_with("file:") {
+                file_path.to_string()
+            } else {
+                format!("file:{}", file_path)
+            };
+
             args.extend(vec![
                 "-i",
-                file_path,
+                &safe_file_path,
                 "-c:v",
                 "libx264",
                 "-preset",

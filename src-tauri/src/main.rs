@@ -3589,8 +3589,16 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // Mitigate argument injection for FFprobe by prefixing local file paths with `file:`
+    // unless it's already a URL/protocol.
+    let safe_source = if source.contains("://") || source.starts_with("file:") {
+        source.to_string()
+    } else {
+        format!("file:{}", source)
+    };
+
     let output = command
-        .arg(source)
+        .arg(safe_source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
 
@@ -4527,6 +4535,9 @@ async fn play_with_vlc(
         if !std::path::Path::new(&file_path).exists() {
             return Err(format!("File not found: {}", file_path));
         }
+
+        // Mitigate argument injection by separating options from the file path
+        command.arg("--");
 
         // Add the file path
         command.arg(&file_path);
