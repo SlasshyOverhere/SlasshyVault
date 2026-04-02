@@ -3589,7 +3589,9 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // Prevent argument injection by explicitly using -i
     let output = command
+        .arg("-i")
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
@@ -4527,6 +4529,9 @@ async fn play_with_vlc(
         if !std::path::Path::new(&file_path).exists() {
             return Err(format!("File not found: {}", file_path));
         }
+
+        // Prevent argument injection by passing "--" before the input file
+        command.arg("--");
 
         // Add the file path
         command.arg(&file_path);
