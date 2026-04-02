@@ -4529,6 +4529,7 @@ async fn play_with_vlc(
         }
 
         // Add the file path
+        command.arg("--");
         command.arg(&file_path);
 
         // Add start time if resuming (as input option after the file)

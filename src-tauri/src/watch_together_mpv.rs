@@ -650,9 +650,6 @@ pub fn launch_mpv_wt(
         cmd.arg(format!("--http-header-fields={}", header));
     }
 
-    // Media file/URL
-    cmd.arg(file_or_url);
-
     // Standard options
     cmd.arg("--save-position-on-quit=no");
     cmd.arg("--keep-open=no");
@@ -664,6 +661,10 @@ pub fn launch_mpv_wt(
         cmd.arg("--demuxer-max-back-bytes=100MiB");
         cmd.arg("--cache=yes");
     }
+
+    // Media file/URL
+    cmd.arg("--");
+    cmd.arg(file_or_url);
 
     #[cfg(windows)]
     {
