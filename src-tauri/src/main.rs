@@ -3589,8 +3589,16 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // ffprobe does not support `--`. Prefix local files with `file:` to prevent argument injection.
+    let is_url = source.starts_with("http://") || source.starts_with("https://");
+    let safe_source = if is_url {
+        source.to_string()
+    } else {
+        format!("file:{}", source)
+    };
+
     let output = command
-        .arg(source)
+        .arg(&safe_source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
 
@@ -4528,10 +4536,12 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
+        // Use `--` to prevent argument injection from user-provided file paths
         // Add the file path
+        command.arg("--");
         command.arg(&file_path);
 
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (as item-specific input option after the file)
         if start_position > 0.0 {
             command.arg(format!(":start-time={:.0}", start_position));
         }
