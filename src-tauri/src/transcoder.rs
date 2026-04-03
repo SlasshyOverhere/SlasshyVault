@@ -100,9 +100,16 @@ pub fn start_transcode(
         }
     }
 
+    // Prevent argument injection by adding file: prefix if no protocol is present
+    let safe_file_path = if !file_path.contains("://") && !file_path.starts_with("file:") {
+        format!("file:{}", file_path)
+    } else {
+        file_path.to_string()
+    };
+
     args.extend(vec![
         "-i".to_string(),
-        file_path.to_string(),
+        safe_file_path,
         // Video: transcode to H.264 baseline for maximum compatibility
         "-c:v".to_string(),
         "libx264".to_string(),

@@ -3589,8 +3589,15 @@ fn probe_audio_tracks_with_ffprobe(
             .arg(format!("Authorization: Bearer {}\r\n", token));
     }
 
+    // Prevent argument injection by adding file: prefix for local paths if no protocol is present
+    let safe_source = if !source.contains("://") && !source.starts_with("file:") {
+        format!("file:{}", source)
+    } else {
+        source.to_string()
+    };
+
     let output = command
-        .arg(source)
+        .arg(&safe_source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
 
@@ -4528,13 +4535,14 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
-        // Add the file path
-        command.arg(&file_path);
-
-        // Add start time if resuming (as input option after the file)
+        // Add start time if resuming (as a global option, must be added before -- separator)
         if start_position > 0.0 {
-            command.arg(format!(":start-time={:.0}", start_position));
+            command.arg(format!("--start-time={:.0}", start_position));
         }
+
+        // Add the file path, separated by -- to prevent argument injection
+        command.arg("--");
+        command.arg(&file_path);
     }
 
     // Launch VLC
