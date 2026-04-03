@@ -1,6 +1,6 @@
 # Disclaimer
 
-This project is entirely **vibe-coded** as a hobby project. It is provided as-is, may be unstable or incomplete, and is not intended for production use.
+This project is entirely **vibe-coded** as a hobby project. It is provided as-is, may be unstable or incomplete.
 
 ---
 
