@@ -26,7 +26,9 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
     setLoading(true);
     try {
       const data = await searchUsers(value);
-      setSearchResults(data.filter(u => !excludeIds.includes(u.id)));
+      // ⚡ Bolt: Use Set for O(1) lookups instead of O(N*M) Array.includes filtering
+      const excludeSet = new Set(excludeIds);
+      setSearchResults(data.filter(u => !excludeSet.has(u.id)));
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
@@ -70,40 +72,44 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
       </div>
 
       <div className="space-y-2">
-        {results.map((user) => (
-          <div
-            key={user.id}
-            className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/30 border border-white/[0.03] hover:border-white/10 transition-all duration-200"
-          >
-            <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden">
-              {user.avatarUrl ? (
-                <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-zinc-500 bg-gradient-to-br from-zinc-800 to-zinc-900">
-                  <User className="w-5 h-5 opacity-50" />
-                </div>
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-zinc-200 truncate">{user.displayName}</p>
-            </div>
-            <Button
-              size="sm"
-              disabled={pendingRequests.includes(user.id)}
-              onClick={() => handleAddFriend(user.id, user.displayName)}
-              className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg h-8 text-xs font-bold"
+        {results.map((user) => {
+          // ⚡ Bolt: Cache pending status calculation to avoid multiple Array.includes calls in render
+          const isPending = pendingRequests.includes(user.id);
+          return (
+            <div
+              key={user.id}
+              className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/30 border border-white/[0.03] hover:border-white/10 transition-all duration-200"
             >
-              {pendingRequests.includes(user.id) ? (
-                "Sent"
-              ) : (
-                <>
-                  <UserPlus className="w-3.5 h-3.5 mr-1.5" />
-                  Add
-                </>
-              )}
-            </Button>
-          </div>
-        ))}
+              <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden">
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-zinc-500 bg-gradient-to-br from-zinc-800 to-zinc-900">
+                    <User className="w-5 h-5 opacity-50" />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-zinc-200 truncate">{user.displayName}</p>
+              </div>
+              <Button
+                size="sm"
+                disabled={isPending}
+                onClick={() => handleAddFriend(user.id, user.displayName)}
+                className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg h-8 text-xs font-bold"
+              >
+                {isPending ? (
+                  "Sent"
+                ) : (
+                  <>
+                    <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+                    Add
+                  </>
+                )}
+              </Button>
+            </div>
+          );
+        })}
 
         {query.length >= 2 && !loading && results.length === 0 && (
           <div className="text-center py-8 text-zinc-500 text-sm italic">
