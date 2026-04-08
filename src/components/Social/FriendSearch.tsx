@@ -75,6 +75,16 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
 
       <div className="space-y-2">
 <<<<<<< HEAD
+        {results.map((user) => {
+          // ⚡ Bolt: Cache pending status calculation to avoid multiple Array.includes calls in render
+          const isPending = pendingRequests.includes(user.id);
+          return (
+            <div
+              key={user.id}
+              className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/30 border border-white/[0.03] hover:border-white/10 transition-all duration-200"
+            >
+=======
+<<<<<<< HEAD
         {results.map((user) => (
           <div
             key={user.id}
@@ -117,6 +127,7 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
               key={user.id}
               className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/30 border border-white/[0.03] hover:border-white/10 transition-all duration-200"
             >
+>>>>>>> ccc24b0e040b432eed94c364b868ef4a0a6d6bf5
               <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden">
                 {user.avatarUrl ? (
                   <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
@@ -147,7 +158,10 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
             </div>
           );
         })}
+<<<<<<< HEAD
+=======
 >>>>>>> 0cea0afb4e8ebd9471cf847d9b4ec3e924a4b8ea
+>>>>>>> ccc24b0e040b432eed94c364b868ef4a0a6d6bf5
 
         {query.length >= 2 && !loading && results.length === 0 && (
           <div className="text-center py-8 text-zinc-500 text-sm italic">
