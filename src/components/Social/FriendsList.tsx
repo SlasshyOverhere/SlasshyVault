@@ -14,6 +14,7 @@ interface FriendsListProps {
 
 export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile, loading }: FriendsListProps) {
   const onlineSet = useMemo(() => new Set(onlineFriends), [onlineFriends]);
+  // Sort: Online first, then by name
   const sortedFriends = useMemo(() => {
     return [...friends].sort((a, b) => {
       const aOnline = onlineSet.has(a.id);
