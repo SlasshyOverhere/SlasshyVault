@@ -46,9 +46,11 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
   useEffect(() => {
     const unsubOnline = onSocialEvent('friend_online', (data) => {
       setOnlineFriends(prev => {
-        const friend = friends.find(f => f.id === data.userId);
+        const userId = data.userId as string | undefined;
+        if (!userId) return prev;
+        const friend = friends.find(f => f.id === userId);
         const prevIds = new Set(prev.map(f => f.id));
-        if (friend && !prevIds.has(data.userId)) {
+        if (friend && !prevIds.has(userId)) {
           return [...prev, friend];
         }
         return prev;
@@ -56,7 +58,9 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
     });
 
     const unsubOffline = onSocialEvent('friend_offline', (data) => {
-      setOnlineFriends(prev => prev.filter(f => f.id !== data.userId));
+      const userId = data.userId as string | undefined;
+      if (!userId) return;
+      setOnlineFriends(prev => prev.filter(f => f.id !== userId));
     });
 
     const unsubWatching = onSocialEvent('currently_watching', (data) => {
