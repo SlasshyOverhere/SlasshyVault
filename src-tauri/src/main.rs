@@ -4528,13 +4528,16 @@ async fn play_with_vlc(
             return Err(format!("File not found: {}", file_path));
         }
 
+        // Add start time if resuming as a global option before the -- separator
+        if start_position > 0.0 {
+            command.arg(format!("--start-time={:.0}", start_position));
+        }
+
+        // Add the -- separator to prevent argument injection
+        command.arg("--");
+
         // Add the file path
         command.arg(&file_path);
-
-        // Add start time if resuming (as input option after the file)
-        if start_position > 0.0 {
-            command.arg(format!(":start-time={:.0}", start_position));
-        }
     }
 
     // Launch VLC
