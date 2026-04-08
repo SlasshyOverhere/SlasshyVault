@@ -361,9 +361,6 @@ pub fn launch_mpv_with_tracking(
         }
     }
 
-    // Add the file/URL to play
-    cmd.arg(&actual_source);
-
     // Options
     cmd.arg("--save-position-on-quit=no");
     cmd.arg("--keep-open=no");
@@ -429,6 +426,12 @@ pub fn launch_mpv_with_tracking(
             }
         }
     }
+
+    // Security enhancement: Add the -- separator to prevent argument injection
+    cmd.arg("--");
+
+    // Add the file/URL to play
+    cmd.arg(&actual_source);
 
     // Print full command for debugging
     println!("[MPV] Command: {:?}", cmd);

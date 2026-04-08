@@ -47,7 +47,8 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
     const unsubOnline = onSocialEvent('friend_online', (data) => {
       setOnlineFriends(prev => {
         const friend = friends.find(f => f.id === data.userId);
-        if (friend && !prev.some(f => f.id === data.userId)) {
+        const prevIds = new Set(prev.map(f => f.id));
+        if (friend && !prevIds.has(data.userId)) {
           return [...prev, friend];
         }
         return prev;
@@ -130,7 +131,9 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
     setIsSearching(true);
     try {
       const results = await searchUsers(query);
-      setSearchResults(results.filter(r => !friends.some(f => f.id === r.id)));
+      // O(1) lookup using Set instead of Array.some
+      const friendIds = new Set(friends.map(f => f.id));
+      setSearchResults(results.filter(r => !friendIds.has(r.id)));
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
@@ -280,15 +283,19 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                     <p className="text-sm">Search and add friends to get started</p>
                   </div>
                 ) : (
-                  friends.map(friend => (
-                    <FriendItem
-                      key={friend.id}
-                      friend={friend}
-                      isOnline={onlineFriends.some(f => f.id === friend.id)}
-                      onChat={() => onOpenChat(friend)}
-                      onViewProfile={() => onViewProfile(friend.id)}
-                    />
-                  ))
+                  // Optimizing lookups in render path by not using .some() array iteration per-item
+                  (() => {
+                    const onlineSet = new Set(onlineFriends.map(f => f.id));
+                    return friends.map(friend => (
+                      <FriendItem
+                        key={friend.id}
+                        friend={friend}
+                        isOnline={onlineSet.has(friend.id)}
+                        onChat={() => onOpenChat(friend)}
+                        onViewProfile={() => onViewProfile(friend.id)}
+                      />
+                    ));
+                  })()
                 )}
               </div>
             </div>
