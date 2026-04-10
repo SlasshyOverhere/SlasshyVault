@@ -6,7 +6,7 @@ import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, Che
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
-    getTmdbImageUrl, markAsComplete, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback
+    getTmdbImageUrl, markAsComplete, refreshSeriesMetadata, resolveSeriesAudioPreferenceForPlayback, resolveSeriesSubtitlePreferenceForPlayback
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
@@ -665,6 +665,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             episode: MediaItem,
             resume: boolean,
             audioPreference: string | null,
+            subtitlePreference: string | null,
         ) => {
             const loadingState = episode.parent_zip_id
                 ? buildZipPlaybackLoadingState(episode, resume)
@@ -678,7 +679,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
             }
 
             try {
-                await playMedia(episode.id, resume, audioPreference);
+                await playMedia(episode.id, resume, audioPreference, subtitlePreference);
                 if (loadingState) {
                     await waitForMpvPlaybackStart(episode.id);
                     await waitForMinimumZipOverlayVisibility(
@@ -725,6 +726,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                     show.id,
                     episode.season_number,
                 ),
+                resolveSeriesSubtitlePreferenceForPlayback(
+                    show.id,
+                    episode.season_number,
+                ),
             );
             toast({
                 title: "Playing",
@@ -745,6 +750,10 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                     pendingPlayEpisode,
                     pendingResumeTime > 0,
                     resolveSeriesAudioPreferenceForPlayback(
+                        show.id,
+                        pendingPlayEpisode.season_number,
+                    ),
+                    resolveSeriesSubtitlePreferenceForPlayback(
                         show.id,
                         pendingPlayEpisode.season_number,
                     ),

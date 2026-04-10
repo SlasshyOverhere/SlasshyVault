@@ -2318,6 +2318,101 @@ impl Database {
         }
     }
 
+    fn cloud_tvshow_path(folder_id: &str, show_title: &str) -> String {
+        let slug = show_title
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("_");
+        format!("gdrive:{}:{}", folder_id, slug)
+    }
+
+    fn find_cloud_tvshow_by_title_and_folder(
+        &self,
+        title: &str,
+        folder_id: &str,
+    ) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+             FROM media
+             WHERE LOWER(TRIM(title)) = LOWER(TRIM(?))
+               AND media_type = 'tvshow'
+               AND COALESCE(cloud_folder_id, '') = ?
+             ORDER BY id
+             LIMIT 1",
+        )?;
+
+        match stmt.query_row(params![title, folder_id], |row| row.get::<_, i64>(0)) {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn repair_misparented_archive_episodes(&self) -> Result<usize> {
+        let groups = {
+            let mut stmt = self.conn.prepare(
+                "SELECT e.title, COALESCE(e.cloud_folder_id, '') AS folder_id
+                 FROM media e
+                 LEFT JOIN media p ON e.parent_id = p.id
+                 WHERE e.media_type = 'tvepisode'
+                   AND e.parent_zip_id IS NOT NULL
+                   AND COALESCE(e.is_cloud, 0) = 1
+                   AND (
+                       p.id IS NULL
+                       OR p.media_type != 'tvshow'
+                       OR LOWER(TRIM(COALESCE(p.title, ''))) != LOWER(TRIM(e.title))
+                   )
+                 GROUP BY LOWER(TRIM(e.title)), COALESCE(e.cloud_folder_id, '')",
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+
+            rows.filter_map(|row| row.ok()).collect::<Vec<_>>()
+        };
+
+        let mut repaired = 0usize;
+
+        for (title, folder_id) in groups {
+            let show_id =
+                if let Some(existing_id) = self.find_cloud_tvshow_by_title_and_folder(&title, &folder_id)? {
+                    existing_id
+                } else {
+                    let show_path = Self::cloud_tvshow_path(&folder_id, &title);
+                    match self.insert_cloud_tvshow(
+                        &title,
+                        None,
+                        None,
+                        None,
+                        None,
+                        &show_path,
+                        &folder_id,
+                        None,
+                    ) {
+                        Ok(id) => id,
+                        Err(_) => self.find_series_by_folder(&show_path)?.ok_or_else(|| {
+                            rusqlite::Error::QueryReturnedNoRows
+                        })?,
+                    }
+                };
+
+            repaired += self.conn.execute(
+                "UPDATE media
+                 SET parent_id = ?
+                 WHERE media_type = 'tvepisode'
+                   AND parent_zip_id IS NOT NULL
+                   AND LOWER(TRIM(title)) = LOWER(TRIM(?))
+                   AND COALESCE(cloud_folder_id, '') = ?
+                   AND (parent_id IS NULL OR parent_id != ?)",
+                params![show_id, title, folder_id, show_id],
+            )?;
+        }
+
+        Ok(repaired)
+    }
+
     // ==================== CACHED EPISODE METADATA FUNCTIONS ====================
 
     /// Save cached episode metadata from TMDB (for pre-fetching)

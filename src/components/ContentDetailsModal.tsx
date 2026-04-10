@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines } from "lucide-react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
   searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails,
-  getSeriesAudioPreference, setSeriesAudioPreference, getAudioTracks,
+  getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
-  type AudioTrackOption
+  getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
+  type AudioTrackOption, type SubtitleTrackOption
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -28,6 +29,9 @@ const heroArtworkCache = new Map<number, string | null>()
 const runtimeMinutesCache = new Map<number, number | null>()
 const AUTO_AUDIO_VALUE = "__auto__"
 const CUSTOM_AUDIO_VALUE = "__custom__"
+const AUTO_SUBTITLE_VALUE = "__subtitle_auto__"
+const OFF_SUBTITLE_VALUE = "__subtitle_off__"
+const CUSTOM_SUBTITLE_VALUE = "__subtitle_custom__"
 const MANUAL_AUDIO_OPTION = {
   label: "Manual",
   value: CUSTOM_AUDIO_VALUE,
@@ -42,6 +46,26 @@ const resolveAudioPreferenceValue = (
   }
 
   if (selectedValue === CUSTOM_AUDIO_VALUE) {
+    const normalized = customValue.trim()
+    return normalized.length > 0 ? normalized : null
+  }
+
+  return selectedValue
+}
+
+const resolveSubtitlePreferenceValue = (
+  selectedValue: string,
+  customValue: string,
+) => {
+  if (selectedValue === AUTO_SUBTITLE_VALUE) {
+    return null
+  }
+
+  if (selectedValue === OFF_SUBTITLE_VALUE) {
+    return "sid:no"
+  }
+
+  if (selectedValue === CUSTOM_SUBTITLE_VALUE) {
     const normalized = customValue.trim()
     return normalized.length > 0 ? normalized : null
   }
@@ -162,6 +186,12 @@ export function ContentDetailsModal({
   const [detectedAudioTracks, setDetectedAudioTracks] = useState<AudioTrackOption[]>([])
   const [audioTracksLoading, setAudioTracksLoading] = useState(false)
   const [audioTracksStatus, setAudioTracksStatus] = useState<string>("")
+  const [detectedSubtitleTracks, setDetectedSubtitleTracks] = useState<SubtitleTrackOption[]>([])
+  const [subtitleTracksLoading, setSubtitleTracksLoading] = useState(false)
+  const [subtitleTracksStatus, setSubtitleTracksStatus] = useState<string>("")
+  const [selectedSubtitlePreference, setSelectedSubtitlePreference] = useState<string>(AUTO_SUBTITLE_VALUE)
+  const [customSubtitlePreference, setCustomSubtitlePreference] = useState("")
+  const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
 
@@ -253,12 +283,60 @@ export function ContentDetailsModal({
     setCustomAudioPreference("")
   }, [detectedAudioTracks, seriesPreferenceId])
 
+  useEffect(() => {
+    if (!seriesPreferenceId) {
+      setSelectedSubtitlePreference(AUTO_SUBTITLE_VALUE)
+      setCustomSubtitlePreference("")
+      return
+    }
+
+    const storedPreference = getSeriesSubtitlePreference(seriesPreferenceId)
+    const normalizedStored = storedPreference?.trim().toLowerCase()
+
+    if (normalizedStored === "sid:no" || normalizedStored === "no") {
+      setSelectedSubtitlePreference(OFF_SUBTITLE_VALUE)
+      setCustomSubtitlePreference("")
+      return
+    }
+
+    const presetMatch = detectedSubtitleTracks.find((option) => {
+      if (!normalizedStored) return false
+
+      const preferenceParts = normalizedStored
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+
+      return (
+        option.mpv_value?.trim().toLowerCase() === normalizedStored ||
+        option.language_code?.trim().toLowerCase() === normalizedStored ||
+        preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+      )
+    })
+
+    if (presetMatch) {
+      setSelectedSubtitlePreference(presetMatch.mpv_value || AUTO_SUBTITLE_VALUE)
+      setCustomSubtitlePreference("")
+      return
+    }
+
+    if (storedPreference) {
+      setSelectedSubtitlePreference(CUSTOM_SUBTITLE_VALUE)
+      setCustomSubtitlePreference(storedPreference)
+      return
+    }
+
+    setSelectedSubtitlePreference(AUTO_SUBTITLE_VALUE)
+    setCustomSubtitlePreference("")
+  }, [detectedSubtitleTracks, seriesPreferenceId])
+
   // Reset and load episodes
   useEffect(() => {
     if (!open) {
       setEpisodes([])
       setLoadingEpisodes(false)
       setTmdbEpisodesBySeason(new Map())
+      setPlaybackSettingsOpen(false)
       return
     }
 
@@ -435,6 +513,9 @@ export function ContentDetailsModal({
       setDetectedAudioTracks([])
       setAudioTracksLoading(false)
       setAudioTracksStatus("")
+      setDetectedSubtitleTracks([])
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus("")
       return
     }
 
@@ -442,6 +523,9 @@ export function ContentDetailsModal({
       setDetectedAudioTracks([])
       setAudioTracksLoading(false)
       setAudioTracksStatus("")
+      setDetectedSubtitleTracks([])
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus("")
       return
     }
 
@@ -495,6 +579,71 @@ export function ContentDetailsModal({
     }
   }, [filteredEpisodes, item, open, selectedSeason, selectedSeasonHasZipEpisodes])
 
+  useEffect(() => {
+    if (!open || !item || item.media_type !== "tvshow") {
+      setDetectedSubtitleTracks([])
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus("")
+      return
+    }
+
+    if (filteredEpisodes.length === 0) {
+      setDetectedSubtitleTracks([])
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus("")
+      return
+    }
+
+    const cachedTracks = getCachedSeriesSubtitleTracks(item.id)
+    if (cachedTracks) {
+      setDetectedSubtitleTracks(cachedTracks)
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus(
+        selectedSeasonHasZipEpisodes
+          ? "Learned from playback and updates as you watch."
+          : "Detected earlier for this series.",
+      )
+      return
+    }
+
+    if (selectedSeasonHasZipEpisodes) {
+      setDetectedSubtitleTracks([])
+      setSubtitleTracksLoading(false)
+      setSubtitleTracksStatus("Play one ZIP episode once. Later episodes can expand this list.")
+      return
+    }
+
+    let cancelled = false
+
+    const loadSubtitleTracks = async () => {
+      setSubtitleTracksLoading(true)
+      setSubtitleTracksStatus("Detecting subtitle tracks...")
+
+      const sampleEpisode = filteredEpisodes[0]
+      const tracks = await getSubtitleTracks(sampleEpisode.id)
+      if (cancelled) return
+
+      const nextTracks = [...tracks].sort((left, right) =>
+        left.label.localeCompare(right.label),
+      )
+
+      setDetectedSubtitleTracks(nextTracks)
+      setCachedSeriesSubtitleTracks(item.id, nextTracks)
+      setSubtitleTracksStatus(
+        nextTracks.length > 0
+          ? `Detected once from episode ${sampleEpisode.episode_number || 1}.`
+          : "No labeled subtitle tracks were found in the sampled episode.",
+      )
+      setSubtitleTracksLoading(false)
+    }
+
+    void loadSubtitleTracks()
+
+    return () => {
+      cancelled = true
+    }
+  }, [filteredEpisodes, item, open, selectedSeason, selectedSeasonHasZipEpisodes])
+
   if (!activeItem && !item) return null
   const displayItem = item || activeItem
   if (!displayItem) return null
@@ -539,93 +688,156 @@ export function ContentDetailsModal({
     )
   }
 
+  const handleSubtitlePreferenceSelect = (value: string) => {
+    setSelectedSubtitlePreference(value)
+    if (!seriesPreferenceId) return
+
+    setSeriesSubtitlePreference(
+      seriesPreferenceId,
+      resolveSubtitlePreferenceValue(
+        value,
+        value === CUSTOM_SUBTITLE_VALUE ? customSubtitlePreference : "",
+      ),
+    )
+  }
+
+  const handleCustomSubtitlePreferenceChange = (value: string) => {
+    setCustomSubtitlePreference(value)
+    if (!seriesPreferenceId || selectedSubtitlePreference !== CUSTOM_SUBTITLE_VALUE) return
+
+    setSeriesSubtitlePreference(
+      seriesPreferenceId,
+      resolveSubtitlePreferenceValue(CUSTOM_SUBTITLE_VALUE, value),
+    )
+  }
+
   const selectedDetectedAudioTrack = detectedAudioTracks.find(
     (track) => track.mpv_value === selectedAudioPreference,
   )
   const selectedAudioSummary = selectedAudioPreference === CUSTOM_AUDIO_VALUE
     ? (customAudioPreference.trim() || "Manual")
     : selectedDetectedAudioTrack?.label || (selectedAudioPreference === AUTO_AUDIO_VALUE ? "Auto" : null)
+  const selectedDetectedSubtitleTrack = detectedSubtitleTracks.find(
+    (track) => track.mpv_value === selectedSubtitlePreference,
+  )
+  const selectedSubtitleSummary = selectedSubtitlePreference === CUSTOM_SUBTITLE_VALUE
+    ? (customSubtitlePreference.trim() || "Manual")
+    : selectedSubtitlePreference === OFF_SUBTITLE_VALUE
+      ? "Off"
+      : selectedDetectedSubtitleTrack?.label || (selectedSubtitlePreference === AUTO_SUBTITLE_VALUE ? "Auto" : null)
+  const playbackControlStatus = audioTracksLoading || subtitleTracksLoading
+    ? "Reading tracks..."
+    : selectedSeasonHasZipEpisodes
+      ? "Learns more tracks as ZIP episodes are played."
+      : (audioTracksStatus || subtitleTracksStatus || "Ready for this season.")
 
   const audioControls = isShow ? (
-    <div className="w-full max-w-[420px]">
-      <div className="flex flex-col items-start gap-2.5 sm:items-end">
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          <span className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/46">
-            <AudioLines className="h-3.5 w-3.5" />
-            Audio
-          </span>
-
-          {selectedAudioSummary && !audioTracksLoading && (
-            <span className="rounded-full border border-white/12 px-2.5 py-1 text-[10px] font-medium text-white/68">
-              {selectedAudioSummary}
-            </span>
-          )}
-        </div>
-
-        <p className="max-w-[360px] text-[11px] leading-4 text-white/34 sm:text-right">
-          {audioTracksLoading ? "Detecting tracks..." : audioTracksStatus}
-        </p>
-
-        <div className="flex flex-wrap gap-2 sm:flex-nowrap sm:justify-end">
-          <button
-            onClick={() => handleAudioPreferenceSelect(AUTO_AUDIO_VALUE)}
-            className={cn(
-              "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
-              selectedAudioPreference === AUTO_AUDIO_VALUE
-                ? "border-white/70 bg-white text-black"
-                : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
-            )}
-          >
-            Auto
-          </button>
-
-          {detectedAudioTracks.map((track) => (
-            <button
-              key={`${track.stream_index}-${track.mpv_value || track.label}`}
-              onClick={() => track.mpv_value && handleAudioPreferenceSelect(track.mpv_value)}
-              disabled={!track.mpv_value}
-              className={cn(
-                "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
-                selectedAudioPreference === track.mpv_value
-                  ? "border-white/70 bg-white text-black"
-                  : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
-                !track.mpv_value && "cursor-not-allowed opacity-45",
-              )}
-              title={track.detail || track.label}
-            >
-              {track.label}
-            </button>
-          ))}
-
-        <button
-          onClick={() => handleAudioPreferenceSelect(MANUAL_AUDIO_OPTION.value)}
-          className={cn(
-            "whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
-            selectedAudioPreference === CUSTOM_AUDIO_VALUE
-              ? "border-white/70 bg-white text-black"
-              : "border-white/10 text-white/70 hover:border-white/24 hover:bg-white/8 hover:text-white",
-            )}
-          >
-            Manual
-          </button>
-        </div>
-
-        {selectedAudioPreference === CUSTOM_AUDIO_VALUE && (
-          <div className="w-full sm:max-w-[260px]">
-            <Input
-              value={customAudioPreference}
-              onChange={(e) => handleCustomAudioPreferenceChange(e.target.value)}
-              placeholder="Language code, e.g. hi,hin,hindi"
-              className="h-9 rounded-full border-white/12 bg-white/6 px-4 text-sm text-white placeholder:text-white/28"
-            />
-          </div>
-        )}
-
-        {!audioTracksLoading && detectedAudioTracks.length === 0 && !selectedSeasonHasZipEpisodes && (
-          <p className="max-w-[320px] text-[11px] leading-4 text-white/28 sm:text-right">
-            No labeled tracks found. Use Auto or Manual.
+    <div className="w-full overflow-hidden rounded-lg border border-white/12 bg-black/38 shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-2xl">
+      <div className="flex items-center justify-between border-b border-white/10 px-3.5 py-2.5">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-white/48">Playback</p>
+          <p className="mt-1 max-w-[260px] truncate text-[11px] font-medium text-white/36">
+            {playbackControlStatus}
           </p>
-        )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-md border border-white/10 bg-white/8 px-2 py-1 text-[10px] font-semibold text-white/54">
+            Season {selectedSeason}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPlaybackSettingsOpen(false)}
+            className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/8 text-white/58 transition-colors hover:bg-white/14 hover:text-white"
+            aria-label="Close playback settings"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="divide-y divide-white/10">
+        <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
+          <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
+            <AudioLines className="h-4 w-4 text-white/58" />
+            Audio
+          </div>
+          <div className="min-w-0 space-y-2">
+            <div className="relative">
+              <select
+                value={selectedAudioPreference}
+                onChange={(event) => handleAudioPreferenceSelect(event.target.value)}
+                aria-label="Audio track"
+                title={selectedAudioSummary || "Auto"}
+                className="h-10 w-full appearance-none rounded-md border border-white/12 bg-white/[0.07] px-3 pr-9 text-sm font-semibold text-white outline-none transition-colors hover:border-white/24 focus:border-white/45"
+              >
+                <option value={AUTO_AUDIO_VALUE} className="bg-[#101114] text-white">Auto</option>
+                {detectedAudioTracks.map((track) => (
+                  <option
+                    key={`${track.stream_index}-${track.mpv_value || track.label}`}
+                    value={track.mpv_value || ""}
+                    disabled={!track.mpv_value}
+                    className="bg-[#101114] text-white"
+                  >
+                    {track.label}
+                  </option>
+                ))}
+                <option value={MANUAL_AUDIO_OPTION.value} className="bg-[#101114] text-white">Manual</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+            </div>
+
+            {selectedAudioPreference === CUSTOM_AUDIO_VALUE && (
+              <Input
+                value={customAudioPreference}
+                onChange={(e) => handleCustomAudioPreferenceChange(e.target.value)}
+                placeholder="Language code, e.g. hi, hin, hindi"
+                className="h-9 rounded-md border-white/12 bg-white/[0.07] px-3 text-sm text-white placeholder:text-white/32"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
+          <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
+            <Captions className="h-4 w-4 text-white/58" />
+            Subtitles
+          </div>
+          <div className="min-w-0 space-y-2">
+            <div className="relative">
+              <select
+                value={selectedSubtitlePreference}
+                onChange={(event) => handleSubtitlePreferenceSelect(event.target.value)}
+                aria-label="Subtitle track"
+                title={selectedSubtitleSummary || "Auto"}
+                className="h-10 w-full appearance-none rounded-md border border-white/12 bg-white/[0.07] px-3 pr-9 text-sm font-semibold text-white outline-none transition-colors hover:border-white/24 focus:border-white/45"
+              >
+                <option value={AUTO_SUBTITLE_VALUE} className="bg-[#101114] text-white">Auto</option>
+                <option value={OFF_SUBTITLE_VALUE} className="bg-[#101114] text-white">Off</option>
+                {detectedSubtitleTracks.map((track) => (
+                  <option
+                    key={`${track.stream_index}-${track.mpv_value || track.label}`}
+                    value={track.mpv_value || ""}
+                    disabled={!track.mpv_value}
+                    className="bg-[#101114] text-white"
+                  >
+                    {track.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_SUBTITLE_VALUE} className="bg-[#101114] text-white">Manual</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+            </div>
+
+            {selectedSubtitlePreference === CUSTOM_SUBTITLE_VALUE && (
+              <Input
+                value={customSubtitlePreference}
+                onChange={(e) => handleCustomSubtitlePreferenceChange(e.target.value)}
+                placeholder="Language code, e.g. eng or sid:2"
+                className="h-9 rounded-md border-white/12 bg-white/[0.07] px-3 text-sm text-white placeholder:text-white/32"
+              />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   ) : null
@@ -705,12 +917,6 @@ export function ContentDetailsModal({
                   )}
                 </div>
 
-                {audioControls && (
-                  <div className="w-full sm:w-auto sm:min-w-[380px] sm:max-w-[420px] sm:self-start sm:pl-6 sm:pr-12 lg:pl-10 lg:pr-14">
-                    {audioControls}
-                  </div>
-                )}
-                
                 {!isShow && (
                   <div className="shrink-0 mb-2 flex flex-wrap gap-3">
                     {onSecondaryAction && secondaryActionLabel && (
@@ -735,8 +941,8 @@ export function ContentDetailsModal({
 
             {isShow && (
               <div className="flex-1 min-h-0 flex flex-col px-6 pb-6 sm:px-10 sm:pb-8 pt-0">
-                <div className="flex justify-between items-center mb-2 shrink-0">
-                  <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-3 mb-2 shrink-0">
+                  <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
                       <button 
                         key={s} 
@@ -753,12 +959,20 @@ export function ContentDetailsModal({
                     ))}
                   </div>
                   
-                  {filteredEpisodes.length > 3 && (
-                    <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 shadow-glow-sm animate-pulse">
-                      <span>Scroll for next episodes</span>
-                      <ChevronDown className="w-2.5 h-2.5" />
-                    </div>
-                  )}
+                  <div className="ml-auto flex max-w-[380px] shrink-0 flex-col items-end gap-1.5">
+                    <p className="max-w-[360px] text-right text-[10px] font-medium leading-4 text-white/42">
+                      Changing audio or subtitles inside MPV can cause issues. Change them here only. If tracks are missing, play 2 seconds of the first episode and quit; this list will update automatically.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPlaybackSettingsOpen(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20"
+                    >
+                      <span>Audio & Subtitles</span>
+                      <SlidersHorizontal className="w-2.5 h-2.5" />
+                    </button>
+
+                  </div>
                 </div>
                 
                 <div className="flex-1 min-h-0 relative">
@@ -886,6 +1100,20 @@ export function ContentDetailsModal({
               </div>
             )}
           </div>
+
+          {audioControls && playbackSettingsOpen && (
+            <div
+              className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 px-4 backdrop-blur-[3px]"
+              onClick={() => setPlaybackSettingsOpen(false)}
+            >
+              <div
+                className="w-full max-w-[430px]"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {audioControls}
+              </div>
+            </div>
+          )}
         </section>
       </DialogContent>
     </Dialog>

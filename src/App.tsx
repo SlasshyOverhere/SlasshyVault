@@ -51,8 +51,11 @@ import {
   syncWatchHistory,
   UpdateInfo,
   MpvAudioTracksDetectedPayload,
+  MpvSubtitleTracksDetectedPayload,
   mergeCachedSeriesAudioTracks,
+  mergeCachedSeriesSubtitleTracks,
   resolveSeriesAudioPreferenceForPlayback,
+  resolveSeriesSubtitlePreferenceForPlayback,
 } from '@/services/api'
 import {
   Search, Loader2, Play, Film, Tv, Clock,
@@ -208,6 +211,14 @@ function App() {
       unlisten?.()
     }
   }, [refreshWindowState])
+
+  useEffect(() => {
+    document.body.classList.toggle('app-window-maximized', isMaximized)
+
+    return () => {
+      document.body.classList.remove('app-window-maximized')
+    }
+  }, [isMaximized])
 
   useEffect(() => {
     try {
@@ -666,6 +677,7 @@ function App() {
     let unlistenComplete: UnlistenFn | undefined
     let unlistenMpvEnded: UnlistenFn | undefined
     let unlistenMpvAudioTracks: UnlistenFn | undefined
+    let unlistenMpvSubtitleTracks: UnlistenFn | undefined
     let unlistenLibraryUpdated: UnlistenFn | undefined
     let unlistenNotification: UnlistenFn | undefined
     let unlistenCloudIndexingStarted: UnlistenFn | undefined
@@ -801,6 +813,18 @@ function App() {
         mergeCachedSeriesAudioTracks(series_id, nextTracks)
       })
 
+      unlistenMpvSubtitleTracks = await listen<MpvSubtitleTracksDetectedPayload>('mpv-subtitle-tracks-detected', (event) => {
+        const { series_id, tracks } = event.payload
+        if (!series_id || !Array.isArray(tracks)) {
+          return
+        }
+
+        const nextTracks = [...tracks].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        )
+        mergeCachedSeriesSubtitleTracks(series_id, nextTracks)
+      })
+
       unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
         const payload = event.payload || {}
         const type = payload.type || 'updated'
@@ -851,6 +875,7 @@ function App() {
       unlistenComplete?.()
       unlistenMpvEnded?.()
       unlistenMpvAudioTracks?.()
+      unlistenMpvSubtitleTracks?.()
       unlistenLibraryUpdated?.()
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
@@ -999,6 +1024,7 @@ function App() {
     item: MediaItem,
     resume: boolean,
     audioPreference?: string | null,
+    subtitlePreference?: string | null,
   ) => {
     const loadingState = item.parent_zip_id ? buildZipPlaybackLoadingState(item, resume) : null
     let overlayVisibleSince = 0
@@ -1009,7 +1035,7 @@ function App() {
     }
 
     try {
-      await playMedia(item.id, resume, audioPreference)
+      await playMedia(item.id, resume, audioPreference, subtitlePreference)
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
         await waitForMinimumZipOverlayVisibility(overlayVisibleSince)
@@ -1042,6 +1068,7 @@ function App() {
           item,
           false,
           resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+          resolveSeriesSubtitlePreferenceForPlayback(item.parent_id, item.season_number),
         )
         toast({ title: "Playing", description: `Now playing: ${item.title}` })
       }
@@ -1098,6 +1125,7 @@ function App() {
         item,
         resumeTime > 0,
         resolveSeriesAudioPreferenceForPlayback(item.parent_id, item.season_number),
+        resolveSeriesSubtitlePreferenceForPlayback(item.parent_id, item.season_number),
       )
       toast({ title: "Playing", description: `Now playing: ${item.title}` })
       setResumeDialogOpen(false)

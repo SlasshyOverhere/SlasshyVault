@@ -670,7 +670,42 @@ fn find_existing_cloud_tvshow(
     db.get_media_by_id(series_id).ok()
 }
 
+fn find_existing_cloud_tvshow_by_path(
+    db: &database::Database,
+    show_path: &str,
+) -> Option<database::MediaItem> {
+    db.get_media_by_file_path(show_path)
+        .ok()
+        .flatten()
+        .filter(|item| item.media_type == "tvshow")
+}
+
+fn cloud_tvshow_path(folder_id: &str, show_title: &str) -> String {
+    let slug = show_title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_");
+    format!("gdrive:{}:{}", folder_id, slug)
+}
+
 fn auto_merge_duplicate_tvshows(db: &database::Database, source: &str) -> i32 {
+    match db.repair_misparented_archive_episodes() {
+        Ok(count) if count > 0 => {
+            println!(
+                "[REPAIR] Re-parented {} archive episode(s) before merge from '{}'",
+                count, source
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            println!(
+                "[REPAIR] Archive episode parent repair from '{}' failed: {}",
+                source, e
+            );
+        }
+    }
+
     match db.merge_duplicate_tvshows() {
         Ok(count) => {
             if count > 0 {
@@ -890,6 +925,20 @@ async fn gdrive_scan_folder(
                         // Use existing show's folder or the episode's parent
                         (existing_show.id, existing_show.tmdb_id, episode_parent_folder.clone())
                     } else {
+                        let show_path = cloud_tvshow_path(&episode_parent_folder, &show_title);
+                        if let Some(existing_show) =
+                            find_existing_cloud_tvshow_by_path(&db, &show_path)
+                        {
+                            println!(
+                                "[CLOUD] Reusing existing show by path '{}' with ID {}",
+                                show_path, existing_show.id
+                            );
+                            (
+                                existing_show.id,
+                                existing_show.tmdb_id,
+                                episode_parent_folder.clone(),
+                            )
+                        } else {
                         // Search TMDB for the show (only once per show)
                         println!("[CLOUD] Searching TMDB for show: {}", show_title);
                         let tmdb_result = tmdb::search_metadata(
@@ -922,15 +971,30 @@ async fn gdrive_scan_folder(
                             overview.as_deref(),
                             cast_names.as_deref(),
                             poster_path.as_deref(),
-                            &format!("gdrive:{}", episode_parent_folder),
+                            &show_path,
                             &episode_parent_folder,  // Use episode's parent folder, not tracked folder
                             tmdb_id_opt.as_deref(),
                         ) {
                             Ok(show_id) => (show_id, tmdb_id_opt, episode_parent_folder.clone()),
                             Err(e) => {
-                                println!("[CLOUD] Failed to insert show: {}", e);
-                                continue;
+                                if let Some(existing_show) =
+                                    find_existing_cloud_tvshow_by_path(&db, &show_path)
+                                {
+                                    println!(
+                                        "[CLOUD] Insert collided for '{}'; reusing existing show ID {}",
+                                        show_path, existing_show.id
+                                    );
+                                    (
+                                        existing_show.id,
+                                        existing_show.tmdb_id,
+                                        episode_parent_folder.clone(),
+                                    )
+                                } else {
+                                    println!("[CLOUD] Failed to insert show: {}", e);
+                                    continue;
+                                }
                             }
+                        }
                         }
                     };
 
@@ -1375,6 +1439,16 @@ async fn scan_all_cloud_folders(
                                     folder_id_clone.clone(),
                                 )
                             } else {
+                                let show_path = cloud_tvshow_path(&folder_id_clone, &show_title);
+                                if let Some(existing_show) =
+                                    find_existing_cloud_tvshow_by_path(&db, &show_path)
+                                {
+                                    (
+                                        existing_show.id,
+                                        existing_show.tmdb_id,
+                                        folder_id_clone.clone(),
+                                    )
+                                } else {
                                 let tmdb_result = tmdb::search_metadata(
                                     &api_key,
                                     &show_title,
@@ -1409,12 +1483,25 @@ async fn scan_all_cloud_folders(
                                     overview.as_deref(),
                                     cast_names.as_deref(),
                                     poster_path.as_deref(),
-                                    &format!("gdrive:{}", folder_id_clone),
+                                    &show_path,
                                     &folder_id_clone,
                                     tmdb_id_opt.as_deref(),
                                 ) {
                                     Ok(show_id) => (show_id, tmdb_id_opt, folder_id_clone.clone()),
-                                    Err(_) => continue,
+                                    Err(_) => {
+                                        if let Some(existing_show) =
+                                            find_existing_cloud_tvshow_by_path(&db, &show_path)
+                                        {
+                                            (
+                                                existing_show.id,
+                                                existing_show.tmdb_id,
+                                                folder_id_clone.clone(),
+                                            )
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                }
                                 }
                             };
                             tv_show_cache.insert(show_title_lower.clone(), result.clone());
@@ -2073,32 +2160,48 @@ async fn check_cloud_changes(
                         } else {
                             // Create TV show entry without metadata
                             // Use a unique file_path combining folder ID and show title
-                            let show_path = format!(
-                                "gdrive:{}:{}",
-                                folder_id,
-                                show_title.to_lowercase().replace(" ", "_")
-                            );
+                            let show_path = cloud_tvshow_path(&folder_id, &show_title);
                             println!(
                                 "[CLOUD CHANGES]   Creating new TV show '{}' with path '{}'",
                                 show_title, show_path
                             );
-                            match db.insert_cloud_tvshow(
-                                &show_title,
-                                None,
-                                None,
-                                None,
-                                None,
-                                &show_path,
-                                &folder_id,
-                                None,
-                            ) {
-                                Ok(id) => {
-                                    println!("[CLOUD CHANGES]   Created TV show with ID {}", id);
-                                    id
-                                }
-                                Err(e) => {
-                                    println!("[CLOUD CHANGES]   ERROR creating TV show: {}", e);
-                                    continue;
+                            if let Some(existing_show) =
+                                find_existing_cloud_tvshow_by_path(&db, &show_path)
+                            {
+                                println!(
+                                    "[CLOUD CHANGES]   Reusing existing TV show with ID {}",
+                                    existing_show.id
+                                );
+                                existing_show.id
+                            } else {
+                                match db.insert_cloud_tvshow(
+                                    &show_title,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    &show_path,
+                                    &folder_id,
+                                    None,
+                                ) {
+                                    Ok(id) => {
+                                        println!("[CLOUD CHANGES]   Created TV show with ID {}", id);
+                                        id
+                                    }
+                                    Err(e) => {
+                                        if let Some(existing_show) =
+                                            find_existing_cloud_tvshow_by_path(&db, &show_path)
+                                        {
+                                            println!(
+                                                "[CLOUD CHANGES]   Insert collided; reusing TV show with ID {}",
+                                                existing_show.id
+                                            );
+                                            existing_show.id
+                                        } else {
+                                            println!("[CLOUD CHANGES]   ERROR creating TV show: {}", e);
+                                            continue;
+                                        }
+                                    }
                                 }
                             }
                         };
@@ -3155,12 +3258,22 @@ pub struct AudioTrackInfo {
     pub mpv_value: Option<String>,
 }
 
+pub type SubtitleTrackInfo = AudioTrackInfo;
+
 #[derive(Clone, Serialize)]
 struct MpvAudioTracksDetectedPayload {
     media_id: i64,
     series_id: Option<i64>,
     season_number: Option<i32>,
     tracks: Vec<AudioTrackInfo>,
+}
+
+#[derive(Clone, Serialize)]
+struct MpvSubtitleTracksDetectedPayload {
+    media_id: i64,
+    series_id: Option<i64>,
+    season_number: Option<i32>,
+    tracks: Vec<SubtitleTrackInfo>,
 }
 
 #[derive(Deserialize)]
@@ -3180,6 +3293,12 @@ struct AudioProbeSource {
     stream_url: String,
     access_token: Option<String>,
     temp_zip_proxy: Option<zip_stream_proxy::ZipStreamProxyHandle>,
+}
+
+#[derive(Default)]
+struct DetectedMpvTracks {
+    audio_tracks: Vec<AudioTrackInfo>,
+    subtitle_tracks: Vec<SubtitleTrackInfo>,
 }
 
 #[derive(Deserialize)]
@@ -3318,26 +3437,21 @@ fn build_audio_track_info(
         .and_then(infer_language_from_text)
         .or_else(|| title.as_deref().and_then(infer_language_from_text));
 
-    let (language_code, label, mpv_value) = if let Some((code, name, mpv_value)) = inferred {
-        (
-            Some(code.to_string()),
-            name.to_string(),
-            Some(mpv_value.to_string()),
-        )
+    let (language_code, mpv_value) = if let Some((code, _name, mpv_value)) = inferred {
+        (Some(code.to_string()), Some(mpv_value.to_string()))
     } else if let Some(tag) = language_tag.as_deref() {
-        (
-            Some(tag.to_lowercase()),
-            tag.to_uppercase(),
-            Some(tag.to_lowercase()),
-        )
+        (Some(tag.to_lowercase()), Some(tag.to_lowercase()))
     } else {
-        (
-            None,
-            title
-                .clone()
-                .unwrap_or_else(|| format!("Track {}", stream_index + 1)),
-            None,
-        )
+        (None, None)
+    };
+
+    let label = match (language_tag.as_deref(), title.as_deref()) {
+        (Some(language), Some(track_title)) if !track_title.to_lowercase().contains(&language.to_lowercase()) => {
+            format!("{} {}", language, track_title)
+        },
+        (_, Some(track_title)) => track_title.to_string(),
+        (Some(language), None) => language.to_string(),
+        _ => format!("Track {}", stream_index + 1),
     };
 
     let detail = match title {
@@ -3441,6 +3555,88 @@ fn normalize_mpv_audio_track(track: &serde_json::Value) -> Option<AudioTrackInfo
     Some(normalized)
 }
 
+fn normalize_mpv_subtitle_track(track: &serde_json::Value) -> Option<SubtitleTrackInfo> {
+    if track.get("type").and_then(|value| value.as_str()) != Some("sub") {
+        return None;
+    }
+
+    let stream_index = track
+        .get("ff-index")
+        .and_then(|value| value.as_i64())
+        .or_else(|| track.get("id").and_then(|value| value.as_i64()))
+        .unwrap_or(0) as i32;
+    let track_id = track
+        .get("id")
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32);
+    let language_tag = track
+        .get("lang")
+        .or_else(|| track.get("language"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let title = track
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let codec = track
+        .get("codec")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let selected = track
+        .get("selected")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let default_track = track
+        .get("default")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let forced = track
+        .get("forced")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    let mut normalized = build_audio_track_info(stream_index, track_id, language_tag, title);
+    if let Some(id) = track_id.filter(|value| *value > 0) {
+        normalized.mpv_value = Some(format!("sid:{}", id));
+    }
+
+    let mut detail_parts = Vec::new();
+
+    if let Some(detail) = normalized.detail.take() {
+        detail_parts.push(detail);
+    }
+
+    if let Some(codec_name) = codec {
+        let already_listed = detail_parts
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case(&codec_name));
+        if !already_listed {
+            detail_parts.push(codec_name);
+        }
+    }
+
+    if forced {
+        detail_parts.push("Forced".to_string());
+    }
+
+    if default_track {
+        detail_parts.push("Default".to_string());
+    }
+
+    if selected {
+        detail_parts.push("Selected".to_string());
+    }
+
+    normalized.detail = if detail_parts.is_empty() {
+        None
+    } else {
+        Some(detail_parts.join(" • "))
+    };
+
+    Some(normalized)
+}
+
 fn parse_mpv_audio_tracks(value: &serde_json::Value) -> Vec<AudioTrackInfo> {
     let serde_json::Value::Array(items) = value else {
         return Vec::new();
@@ -3463,8 +3659,37 @@ fn parse_mpv_audio_tracks(value: &serde_json::Value) -> Vec<AudioTrackInfo> {
     tracks
 }
 
+fn parse_mpv_subtitle_tracks(value: &serde_json::Value) -> Vec<SubtitleTrackInfo> {
+    let serde_json::Value::Array(items) = value else {
+        return Vec::new();
+    };
+
+    let mut seen = HashSet::new();
+    let mut tracks = Vec::new();
+
+    for track in items.iter().filter_map(normalize_mpv_subtitle_track) {
+        let key = (
+            track.stream_index,
+            track.label.to_lowercase(),
+            track.mpv_value.clone().unwrap_or_default(),
+        );
+        if seen.insert(key) {
+            tracks.push(track);
+        }
+    }
+
+    tracks
+}
+
+fn parse_mpv_tracks(value: &serde_json::Value) -> DetectedMpvTracks {
+    DetectedMpvTracks {
+        audio_tracks: parse_mpv_audio_tracks(value),
+        subtitle_tracks: parse_mpv_subtitle_tracks(value),
+    }
+}
+
 #[cfg(windows)]
-fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrackInfo>, String> {
+fn detect_tracks_from_running_mpv(pipe_name: &str) -> Result<DetectedMpvTracks, String> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
@@ -3523,7 +3748,7 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
             .map_err(|error| format!("Failed to read MPV IPC response: {}", error))?;
 
         if bytes_read == 0 {
-            return Ok(Vec::new());
+            return Ok(DetectedMpvTracks::default());
         }
 
         let message = match serde_json::from_str::<MpvIpcMessage>(line.trim()) {
@@ -3536,7 +3761,7 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
                 writeln!(pipe_file, "{}", read_tracks)
                     .map_err(|error| format!("Failed to refresh MPV track-list: {}", error))?;
             }
-            Some("shutdown") | Some("end-file") => return Ok(Vec::new()),
+            Some("shutdown") | Some("end-file") => return Ok(DetectedMpvTracks::default()),
             _ => {}
         }
 
@@ -3547,8 +3772,8 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
 
         if is_track_update || is_track_response {
             if let Some(data) = message.data.as_ref() {
-                let tracks = parse_mpv_audio_tracks(data);
-                if !tracks.is_empty() {
+                let tracks = parse_mpv_tracks(data);
+                if !tracks.audio_tracks.is_empty() || !tracks.subtitle_tracks.is_empty() {
                     return Ok(tracks);
                 }
             }
@@ -3557,14 +3782,16 @@ fn detect_audio_tracks_from_running_mpv(pipe_name: &str) -> Result<Vec<AudioTrac
 }
 
 #[cfg(not(windows))]
-fn detect_audio_tracks_from_running_mpv(_pipe_name: &str) -> Result<Vec<AudioTrackInfo>, String> {
-    Err("MPV IPC audio detection is currently supported only on Windows".to_string())
+fn detect_tracks_from_running_mpv(_pipe_name: &str) -> Result<DetectedMpvTracks, String> {
+    Err("MPV IPC track detection is currently supported only on Windows".to_string())
 }
 
-fn probe_audio_tracks_with_ffprobe(
+fn probe_tracks_with_ffprobe(
     ffprobe_path: &str,
     source: &str,
     access_token: Option<&str>,
+    stream_selector: &str,
+    error_label: &str,
 ) -> Result<Vec<AudioTrackInfo>, String> {
     config::validate_executable_path(ffprobe_path, "ffprobe")?;
 
@@ -3577,7 +3804,7 @@ fn probe_audio_tracks_with_ffprobe(
         .arg("-analyzeduration")
         .arg("1000000")
         .arg("-select_streams")
-        .arg("a")
+        .arg(stream_selector)
         .arg("-show_entries")
         .arg("stream=index:stream_tags=language,title,handler_name,LANGUAGE")
         .arg("-of")
@@ -3597,7 +3824,8 @@ fn probe_audio_tracks_with_ffprobe(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "ffprobe could not read audio streams: {}",
+            "ffprobe could not read {} streams: {}",
+            error_label,
             stderr.trim()
         ));
     }
@@ -3610,6 +3838,22 @@ fn probe_audio_tracks_with_ffprobe(
         .into_iter()
         .map(normalize_audio_track)
         .collect())
+}
+
+fn probe_audio_tracks_with_ffprobe(
+    ffprobe_path: &str,
+    source: &str,
+    access_token: Option<&str>,
+) -> Result<Vec<AudioTrackInfo>, String> {
+    probe_tracks_with_ffprobe(ffprobe_path, source, access_token, "a", "audio")
+}
+
+fn probe_subtitle_tracks_with_ffprobe(
+    ffprobe_path: &str,
+    source: &str,
+    access_token: Option<&str>,
+) -> Result<Vec<SubtitleTrackInfo>, String> {
+    probe_tracks_with_ffprobe(ffprobe_path, source, access_token, "s", "subtitle")
 }
 
 async fn resolve_audio_probe_source(
@@ -3717,6 +3961,38 @@ async fn get_audio_tracks(
 
     let mut source = resolve_audio_probe_source(&state, &media).await?;
     let result = probe_audio_tracks_with_ffprobe(
+        &ffprobe_path,
+        &source.stream_url,
+        source.access_token.as_deref(),
+    );
+
+    if let Some(proxy) = source.temp_zip_proxy.as_mut() {
+        proxy.stop();
+    }
+
+    result
+}
+
+#[tauri::command]
+async fn get_subtitle_tracks(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<Vec<SubtitleTrackInfo>, String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+    let ffprobe_path = resolve_ffprobe_path(&config).ok_or_else(|| {
+        "FFprobe is not configured. Set FFprobe in Settings > Player to detect subtitle tracks."
+            .to_string()
+    })?;
+    let media = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_media_by_id(media_id).map_err(|e| e.to_string())?
+    };
+
+    let mut source = resolve_audio_probe_source(&state, &media).await?;
+    let result = probe_subtitle_tracks_with_ffprobe(
         &ffprobe_path,
         &source.stream_url,
         source.access_token.as_deref(),
@@ -3915,7 +4191,7 @@ async fn zip_index_episodes(
         let mut tv_show_cache: HashMap<String, (i64, Option<String>, String)> = HashMap::new();
         let mut season_cache: HashMap<(String, i32), Vec<tmdb::TmdbEpisodeInfo>> = HashMap::new();
 
-        index_zip_archive_with_metadata(
+        let indexed = index_zip_archive_with_metadata(
             &db,
             &access_token,
             &drive_item_for_index,
@@ -3925,7 +4201,19 @@ async fn zip_index_episodes(
             &archive_cache_config,
             &mut tv_show_cache,
             &mut season_cache,
-        )
+        )?;
+
+        let repaired = db
+            .repair_misparented_archive_episodes()
+            .map_err(|e| e.to_string())?;
+        if repaired > 0 {
+            println!(
+                "[ZIP] Re-parented {} archive episode(s) after direct ZIP indexing",
+                repaired
+            );
+        }
+
+        Ok::<Vec<IndexedCloudItem>, String>(indexed)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -3955,6 +4243,8 @@ async fn zip_index_episodes(
             indexed_items.len()
         ),
     );
+
+    window.emit("library-updated", ()).ok();
 
     Ok(zip_manager::ZipIndexResult {
         indexed_count: indexed_items.len(),
@@ -4079,6 +4369,7 @@ async fn play_with_mpv(
     media_id: i64,
     resume: bool,
     audio_language: Option<String>,
+    subtitle_language: Option<String>,
 ) -> Result<ApiResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
@@ -4117,6 +4408,14 @@ async fn play_with_mpv(
         media.parent_id
     };
     let audio_language = audio_language.and_then(|value| {
+        let normalized = value.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
+    let subtitle_language = subtitle_language.and_then(|value| {
         let normalized = value.trim().to_string();
         if normalized.is_empty() {
             None
@@ -4366,6 +4665,7 @@ async fn play_with_mpv(
         auth_header.as_deref(),
         cache_settings.as_ref(),
         audio_language.as_deref(),
+        subtitle_language.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
     )?;
 
@@ -4395,27 +4695,36 @@ async fn play_with_mpv(
     let app_handle = window.app_handle();
 
     if let Some(pipe_name) = mpv_audio_probe_pipe {
-        let window_for_audio = window.clone();
-        std::thread::spawn(
-            move || match detect_audio_tracks_from_running_mpv(&pipe_name) {
-                Ok(tracks) if !tracks.is_empty() => {
+        let window_for_tracks = window.clone();
+        std::thread::spawn(move || match detect_tracks_from_running_mpv(&pipe_name) {
+            Ok(tracks) => {
+                if !tracks.audio_tracks.is_empty() {
                     let payload = MpvAudioTracksDetectedPayload {
                         media_id,
                         series_id,
                         season_number,
-                        tracks,
+                        tracks: tracks.audio_tracks,
                     };
-                    let _ = window_for_audio.emit("mpv-audio-tracks-detected", payload);
+                    let _ = window_for_tracks.emit("mpv-audio-tracks-detected", payload);
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    println!(
-                        "[MPV] Audio track detection via playback pipe failed for media {}: {}",
-                        media_id, error
-                    );
+
+                if !tracks.subtitle_tracks.is_empty() {
+                    let payload = MpvSubtitleTracksDetectedPayload {
+                        media_id,
+                        series_id,
+                        season_number,
+                        tracks: tracks.subtitle_tracks,
+                    };
+                    let _ = window_for_tracks.emit("mpv-subtitle-tracks-detected", payload);
                 }
-            },
-        );
+            }
+            Err(error) => {
+                println!(
+                    "[MPV] Track detection via playback pipe failed for media {}: {}",
+                    media_id, error
+                );
+            }
+        });
     }
 
     std::thread::spawn(move || {
@@ -5376,7 +5685,7 @@ async fn refresh_series_metadata(
     println!("[REFRESH] Image cache directory: {}", image_cache_dir);
 
     // Step 1: Find the series ID in our database by TMDB ID
-    let (series_db_id, owned_episodes): (Option<i64>, Vec<(i64, i32, i32)>) = {
+    let (_series_db_id, owned_episodes): (Option<i64>, Vec<(i64, i32, i32)>) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let series_id = db
             .find_series_id_by_tmdb(&tv_id_str)
@@ -6130,11 +6439,41 @@ async fn clear_cloud_cache(state: State<'_, AppState>) -> Result<ApiResponse, St
 /// Helper function to create the main window
 /// Used when showing the app from tray - creates a new window if none exists
 fn create_main_window(app: &AppHandle) -> Result<tauri::Window, tauri::Error> {
-    WindowBuilder::new(app, "main", WindowUrl::App("index.html".into()))
+    let window = WindowBuilder::new(app, "main", WindowUrl::App("index.html".into()))
         .title("StreamVault")
         .inner_size(1200.0, 800.0)
         .resizable(true)
-        .build()
+        .transparent(true)
+        .decorations(false)
+        .build()?;
+
+    apply_window_corner_radius(&window);
+
+    Ok(window)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_window_corner_radius(window: &tauri::Window) {
+    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: u32 = 2;
+
+    if let Ok(hwnd) = window.hwnd() {
+        let preference = DWMWCP_ROUND;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd.0 as _,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &preference as *const _ as *const std::ffi::c_void,
+                std::mem::size_of_val(&preference) as u32,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_window_corner_radius(_window: &tauri::Window) {
 }
 
 fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
@@ -6557,6 +6896,14 @@ fn ensure_cloud_show_with_metadata(
             folder_id.to_string(),
         )
     } else {
+        let show_path = cloud_tvshow_path(folder_id, show_title);
+        if let Some(existing_show) = find_existing_cloud_tvshow_by_path(db, &show_path) {
+            (
+                existing_show.id,
+                existing_show.tmdb_id,
+                folder_id.to_string(),
+            )
+        } else {
         let tmdb_result = tmdb::search_metadata(api_key, show_title, "tv", year, image_cache_dir)
             .ok()
             .flatten();
@@ -6581,13 +6928,19 @@ fn ensure_cloud_show_with_metadata(
                 overview.as_deref(),
                 cast_names.as_deref(),
                 poster_path.as_deref(),
-                &format!("gdrive:{}", folder_id),
+                &show_path,
                 folder_id,
                 tmdb_id_opt.as_deref(),
             )
+            .or_else(|e| {
+                find_existing_cloud_tvshow_by_path(db, &show_path)
+                    .map(|existing_show| existing_show.id)
+                    .ok_or(e)
+            })
             .map_err(|e| e.to_string())?;
 
         (show_id, tmdb_id_opt, folder_id.to_string())
+        }
     };
 
     tv_show_cache.insert(cache_key, result.clone());
@@ -6606,7 +6959,10 @@ fn ensure_cloud_show_without_metadata(
         return Ok(*cached);
     }
 
+    let show_path = cloud_tvshow_path(folder_id, show_title);
     let show_id = if let Some(existing_show) = find_existing_cloud_tvshow(db, show_title, year) {
+        existing_show.id
+    } else if let Some(existing_show) = find_existing_cloud_tvshow_by_path(db, &show_path) {
         existing_show.id
     } else {
         db.insert_cloud_tvshow(
@@ -6615,10 +6971,15 @@ fn ensure_cloud_show_without_metadata(
             None,
             None,
             None,
-            &format!("gdrive:{}:{}", folder_id, cache_key.replace(' ', "_")),
+            &show_path,
             folder_id,
             None,
         )
+        .or_else(|e| {
+            find_existing_cloud_tvshow_by_path(db, &show_path)
+                .map(|existing_show| existing_show.id)
+                .ok_or(e)
+        })
         .map_err(|e| e.to_string())?
     };
 
@@ -7459,23 +7820,33 @@ async fn background_check_cloud_changes(
                         {
                             existing_show.id
                         } else {
-                            let show_path = format!(
-                                "gdrive:{}:{}",
-                                folder_id,
-                                show_title.to_lowercase().replace(" ", "_")
-                            );
-                            match db.insert_cloud_tvshow(
-                                &show_title,
-                                None,
-                                None,
-                                None,
-                                None,
-                                &show_path,
-                                &folder_id,
-                                None,
-                            ) {
-                                Ok(id) => id,
-                                Err(_) => continue,
+                            let show_path = cloud_tvshow_path(&folder_id, &show_title);
+                            if let Some(existing_show) =
+                                find_existing_cloud_tvshow_by_path(&db, &show_path)
+                            {
+                                existing_show.id
+                            } else {
+                                match db.insert_cloud_tvshow(
+                                    &show_title,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    &show_path,
+                                    &folder_id,
+                                    None,
+                                ) {
+                                    Ok(id) => id,
+                                    Err(_) => {
+                                        if let Some(existing_show) =
+                                            find_existing_cloud_tvshow_by_path(&db, &show_path)
+                                        {
+                                            existing_show.id
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                }
                             }
                         };
                         tv_show_cache.insert(show_title_lower, show_id);
@@ -8792,7 +9163,7 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
     })
     .await;
 
-    let (updated, _not_updated, remaining) = match result {
+    let (updated, _not_updated, _remaining) = match result {
         Ok(Ok(values)) => values,
         Ok(Err(err)) => {
             println!("[STARTUP] Metadata enrichment failed: {}", err);
@@ -8946,6 +9317,10 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--flag1", "--flag2"])))
         .manage(state)
         .setup(|app| {
+            if let Some(window) = app.get_window("main") {
+                apply_window_corner_radius(&window);
+            }
+
             // Register deep link handler for OAuth callback
             // The callback page redirects to: streamvault://oauth?code=XXX
             let handle = app.handle();
@@ -8978,6 +9353,19 @@ fn main() {
             println!("[STARTUP] Running duplicate TV show merge...");
             let db_path = database::get_database_path();
             if let Ok(startup_db) = database::Database::new(&db_path) {
+                match startup_db.repair_misparented_archive_episodes() {
+                    Ok(count) if count > 0 => {
+                        println!(
+                            "[STARTUP] Re-parented {} mis-linked archive episode(s)",
+                            count
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => println!(
+                        "[STARTUP] Warning: Failed to repair archive episode parents: {}",
+                        e
+                    ),
+                }
                 if let Err(e) = startup_db.merge_duplicate_tvshows() {
                     println!("[STARTUP] Warning: Failed to merge duplicates: {}", e);
                 }
@@ -9137,6 +9525,7 @@ fn main() {
             get_archive_playback_assessment,
             get_stream_info,
             get_audio_tracks,
+            get_subtitle_tracks,
             zip_analyze,
             zip_index_episodes,
             zip_get_stream_info,

@@ -121,11 +121,20 @@ export interface AudioTrackOption {
   mpv_value?: string | null;
 }
 
+export type SubtitleTrackOption = AudioTrackOption;
+
 export interface MpvAudioTracksDetectedPayload {
   media_id: number;
   series_id?: number | null;
   season_number?: number | null;
   tracks: AudioTrackOption[];
+}
+
+export interface MpvSubtitleTracksDetectedPayload {
+  media_id: number;
+  series_id?: number | null;
+  season_number?: number | null;
+  tracks: SubtitleTrackOption[];
 }
 
 export interface LibraryStats {
@@ -493,6 +502,19 @@ export const getAudioTracks = async (
   }
 };
 
+export const getSubtitleTracks = async (
+  id: number,
+): Promise<SubtitleTrackOption[]> => {
+  try {
+    return await invoke<SubtitleTrackOption[]>("get_subtitle_tracks", {
+      mediaId: id,
+    });
+  } catch (error) {
+    console.error("Failed to get subtitle tracks:", error);
+    return [];
+  }
+};
+
 // Get stream info with automatic transcoding support for incompatible formats
 export const getStreamUrlWithTranscode = async (
   id: number,
@@ -583,12 +605,14 @@ export const playMedia = async (
   id: number,
   resume: boolean,
   audioLanguage?: string | null,
+  subtitleLanguage?: string | null,
 ): Promise<void> => {
   try {
     await invoke("play_with_mpv", {
       mediaId: id,
       resume,
       audioLanguage: audioLanguage?.trim() || null,
+      subtitleLanguage: subtitleLanguage?.trim() || null,
     });
   } catch (error) {
     console.error("Failed to play with MPV:", error);
@@ -703,7 +727,9 @@ export const setPlayerPreference = (preference: PlayerPreference): void => {
 };
 
 const SERIES_AUDIO_PREFERENCE_KEY = "streamvault_series_audio_preferences";
+const SERIES_SUBTITLE_PREFERENCE_KEY = "streamvault_series_subtitle_preferences";
 const AUDIO_TRACK_CACHE_KEY = "streamvault_detected_audio_tracks_v2";
+const SUBTITLE_TRACK_CACHE_KEY = "streamvault_detected_subtitle_tracks_v1";
 
 const readSeriesAudioPreferenceMap = (): Record<string, string> => {
   try {
@@ -716,6 +742,21 @@ const readSeriesAudioPreferenceMap = (): Record<string, string> => {
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (error) {
     console.error("Failed to read series audio preferences:", error);
+    return {};
+  }
+};
+
+const readSeriesSubtitlePreferenceMap = (): Record<string, string> => {
+  try {
+    const stored = localStorage.getItem(SERIES_SUBTITLE_PREFERENCE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read series subtitle preferences:", error);
     return {};
   }
 };
@@ -751,6 +792,37 @@ export const setSeriesAudioPreference = (
   }
 };
 
+export const getSeriesSubtitlePreference = (
+  seriesId: number,
+): string | null => {
+  const stored = readSeriesSubtitlePreferenceMap()[String(seriesId)];
+  const normalized = typeof stored === "string" ? stored.trim() : "";
+  return normalized.length > 0 ? normalized : null;
+};
+
+export const setSeriesSubtitlePreference = (
+  seriesId: number,
+  subtitleLanguage: string | null,
+): void => {
+  try {
+    const preferences = readSeriesSubtitlePreferenceMap();
+    const normalized = subtitleLanguage?.trim() || "";
+
+    if (normalized) {
+      preferences[String(seriesId)] = normalized;
+    } else {
+      delete preferences[String(seriesId)];
+    }
+
+    localStorage.setItem(
+      SERIES_SUBTITLE_PREFERENCE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch (error) {
+    console.error("Failed to save series subtitle preference:", error);
+  }
+};
+
 const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> => {
   try {
     const stored = localStorage.getItem(AUDIO_TRACK_CACHE_KEY);
@@ -762,6 +834,21 @@ const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> => {
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (error) {
     console.error("Failed to read cached audio tracks:", error);
+    return {};
+  }
+};
+
+const readSubtitleTrackCacheMap = (): Record<string, SubtitleTrackOption[]> => {
+  try {
+    const stored = localStorage.getItem(SUBTITLE_TRACK_CACHE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("Failed to read cached subtitle tracks:", error);
     return {};
   }
 };
@@ -791,6 +878,27 @@ export const setCachedSeriesAudioTracks = (
     localStorage.setItem(AUDIO_TRACK_CACHE_KEY, JSON.stringify(cache));
   } catch (error) {
     console.error("Failed to cache detected audio tracks:", error);
+  }
+};
+
+export const getCachedSeriesSubtitleTracks = (
+  seriesId: number,
+): SubtitleTrackOption[] | null => {
+  const cache = readSubtitleTrackCacheMap();
+  const direct = cache[String(seriesId)];
+  return Array.isArray(direct) ? direct : null;
+};
+
+export const setCachedSeriesSubtitleTracks = (
+  seriesId: number,
+  tracks: SubtitleTrackOption[],
+): void => {
+  try {
+    const cache = readSubtitleTrackCacheMap();
+    cache[String(seriesId)] = tracks;
+    localStorage.setItem(SUBTITLE_TRACK_CACHE_KEY, JSON.stringify(cache));
+  } catch (error) {
+    console.error("Failed to cache detected subtitle tracks:", error);
   }
 };
 
@@ -878,6 +986,45 @@ export const mergeCachedSeriesAudioTracks = (
   setCachedSeriesAudioTracks(seriesId, deduped);
 };
 
+export const mergeCachedSeriesSubtitleTracks = (
+  seriesId: number,
+  tracks: SubtitleTrackOption[],
+): void => {
+  const existingTracks = getCachedSeriesSubtitleTracks(seriesId) ?? [];
+  if (existingTracks.length === 0) {
+    setCachedSeriesSubtitleTracks(seriesId, tracks);
+    return;
+  }
+
+  const merged = [...existingTracks];
+
+  for (const incomingTrack of tracks) {
+    const existingIndex = merged.findIndex((cachedTrack) =>
+      audioTracksLikelyMatch(cachedTrack, incomingTrack),
+    );
+
+    if (existingIndex >= 0) {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...incomingTrack,
+      };
+      continue;
+    }
+
+    merged.push(incomingTrack);
+  }
+
+  const deduped = merged.filter((track, index, items) => {
+    const identity = audioTrackCacheIdentity(track);
+    return items.findIndex((candidate) =>
+      audioTrackCacheIdentity(candidate) === identity,
+    ) === index;
+  });
+
+  deduped.sort((left, right) => left.label.localeCompare(right.label));
+  setCachedSeriesSubtitleTracks(seriesId, deduped);
+};
+
 const matchesAudioTrackPreference = (
   track: AudioTrackOption,
   storedPreference: string,
@@ -921,6 +1068,31 @@ export const resolveSeriesAudioPreferenceForPlayback = (
   }
 
   const cachedTracks = getCachedSeriesAudioTracks(seriesId);
+  if (!cachedTracks || cachedTracks.length === 0) {
+    return storedPreference;
+  }
+
+  const matchedTrack = cachedTracks.find((track) =>
+    matchesAudioTrackPreference(track, storedPreference),
+  );
+
+  return matchedTrack?.mpv_value?.trim() || storedPreference;
+};
+
+export const resolveSeriesSubtitlePreferenceForPlayback = (
+  seriesId: number | null | undefined,
+  _seasonNumber?: number | null,
+): string | null => {
+  if (!seriesId) {
+    return null;
+  }
+
+  const storedPreference = getSeriesSubtitlePreference(seriesId);
+  if (!storedPreference) {
+    return null;
+  }
+
+  const cachedTracks = getCachedSeriesSubtitleTracks(seriesId);
   if (!cachedTracks || cachedTracks.length === 0) {
     return storedPreference;
   }

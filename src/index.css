@@ -71,13 +71,28 @@
   #root {
     height: 100%;
     width: 100%;
+    overflow: hidden;
+    background: transparent;
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply text-foreground antialiased;
+    background: transparent;
     font-family: var(--font-sans);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     letter-spacing: -0.01em;
+  }
+
+  body:not(.app-window-maximized),
+  body:not(.app-window-maximized) #root {
+    border-radius: 10px;
+    clip-path: inset(0 round 10px);
+  }
+
+  body.app-window-maximized,
+  body.app-window-maximized #root {
+    border-radius: 0;
+    clip-path: none;
   }
 
   /* Selection */

@@ -231,6 +231,7 @@ pub fn launch_mpv_with_tracking(
     auth_header: Option<&str>,
     cache_settings: Option<&CloudCacheSettings>,
     audio_language: Option<&str>,
+    subtitle_language: Option<&str>,
     ipc_server: Option<&str>,
 ) -> Result<u32, String> {
     crate::config::validate_executable_path(mpv_path, "mpv")?;
@@ -253,6 +254,10 @@ pub fn launch_mpv_with_tracking(
     println!(
         "[MPV] Audio language preference: {}",
         audio_language.unwrap_or("MPV default")
+    );
+    println!(
+        "[MPV] Subtitle language preference: {}",
+        subtitle_language.unwrap_or("MPV default")
     );
     println!(
         "[MPV] Display title: {}",
@@ -330,6 +335,27 @@ pub fn launch_mpv_with_tracking(
                 cmd.arg(format!("--alang={}", trimmed));
             } else {
                 println!("[MPV] Security warning: Rejected invalid alang parameter");
+            }
+        }
+    }
+
+    if let Some(language) = subtitle_language.filter(|value| !value.trim().is_empty()) {
+        let trimmed = language.trim();
+        if let Some(track_id) = trimmed.strip_prefix("sid:") {
+            let id = track_id.trim();
+            if id == "auto" || id == "no" || id.chars().all(|c| c.is_ascii_digit()) {
+                cmd.arg(format!("--sid={}", id));
+            } else {
+                println!("[MPV] Security warning: Rejected invalid sid parameter");
+            }
+        } else {
+            if trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ',' || c == '_')
+            {
+                cmd.arg(format!("--slang={}", trimmed));
+            } else {
+                println!("[MPV] Security warning: Rejected invalid slang parameter");
             }
         }
     }
