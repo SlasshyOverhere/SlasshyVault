@@ -8222,7 +8222,8 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     let mut request = client
         .get(&url)
         .header("User-Agent", "StreamVault-Updater")
-        .header("Accept", "application/vnd.github+json");
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
 
     // Add auth header if PAT is configured
     if !GITHUB_RELEASE_TOKEN.is_empty() {

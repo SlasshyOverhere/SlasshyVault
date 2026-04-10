@@ -415,7 +415,12 @@ function App() {
 
       setUpdateGateStatus('error')
       setUpdateGateMessage(updateDetected ? 'Update required to continue.' : 'Unable to check for updates.')
-      setUpdateGateError(error instanceof Error ? error.message : 'Unknown update error.')
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : typeof error === 'string' 
+          ? error 
+          : String(error ?? 'Unknown update error.')
+      setUpdateGateError(errorMessage)
     } finally {
       if (unlistenProgress) {
         unlistenProgress()
