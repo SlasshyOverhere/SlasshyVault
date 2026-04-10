@@ -67,3 +67,7 @@ path = "src/main.rs"
 name = "wt_tauri_wan_test"
 path = "src/bin/wt_tauri_wan_test.rs"
 required-features = ["wan-test"]
+
+[[bin]]
+name = "test_autoupdate"
+path = "src/bin/test_autoupdate.rs"

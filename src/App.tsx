@@ -407,6 +407,15 @@ function App() {
       await installUpdate(installerPath)
     } catch (error) {
       console.error('[Update] Mandatory update failed:', error)
+      // Log detailed error information for debugging
+      const errorDetails = {
+        type: typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        fullError: JSON.stringify(error, null, 2)
+      }
+      console.error('[Update] Error details:', errorDetails)
+
       if (!updateDetected && !showCheckErrors) {
         setUpdateInfo(null)
         setUpdateGateStatus('idle')
@@ -415,11 +424,22 @@ function App() {
 
       setUpdateGateStatus('error')
       setUpdateGateMessage(updateDetected ? 'Update required to continue.' : 'Unable to check for updates.')
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : typeof error === 'string' 
-          ? error 
-          : String(error ?? 'Unknown update error.')
+
+      // Extract and format the error message
+      let errorMessage = 'Unknown update error.'
+
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'string') {
+        errorMessage = error
+      } else if (error && typeof error === 'object') {
+        // Try to extract message from object
+        errorMessage = (error as any).message ||
+                      (error as any).error ||
+                      JSON.stringify(error)
+      }
+
+      console.log('[Update] Formatted error message:', errorMessage)
       setUpdateGateError(errorMessage)
     } finally {
       if (unlistenProgress) {

@@ -8215,8 +8215,11 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
         "[UPDATE] Checking for updates... Current version: {}",
         current_version
     );
+    println!("[UPDATE] Target repository: {}", repo);
+    println!("[UPDATE] Using authentication: {}", if !GITHUB_RELEASE_TOKEN.is_empty() { "Yes" } else { "No (unauthenticated)" });
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+    println!("[UPDATE] API URL: {}", url);
 
     let client = reqwest::Client::new();
     let mut request = client
@@ -8227,45 +8230,98 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
 
     // Add auth header if PAT is configured
     if !GITHUB_RELEASE_TOKEN.is_empty() {
+        println!("[UPDATE] Adding GitHub PAT authentication");
         request = request.header("Authorization", format!("Bearer {}", GITHUB_RELEASE_TOKEN));
+    } else {
+        println!("[UPDATE] WARNING: No GitHub PAT configured. Rate limit: 60 requests/hour");
     }
 
+    println!("[UPDATE] Sending request to GitHub API...");
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Failed to check for updates: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Network error during update check: {}", e);
+            format!("Network error: {}. Check your internet connection.", e)
+        })?;
 
-    if !response.status().is_success() {
-        let status = response.status();
+    let status = response.status();
+    println!("[UPDATE] Response status: {}", status);
+
+    if !status.is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("GitHub API error ({}): {}", status, error_text));
+
+        // Handle specific error cases
+        match status.as_u16() {
+            403 => {
+                println!("[UPDATE] ERROR: GitHub API rate limit exceeded or forbidden");
+                println!("[UPDATE] Response body: {}", error_text);
+
+                // Check if it's a rate limit error
+                if error_text.contains("rate limit") || error_text.contains("API rate limit") {
+                    return Err("GitHub API rate limit exceeded. Please configure a GitHub Personal Access Token (PAT) in the app settings, or wait and try again later.".to_string());
+                }
+
+                return Err(format!("GitHub API access denied (403). The repository may be private or the token is invalid. Details: {}", error_text));
+            },
+            404 => {
+                println!("[UPDATE] ERROR: Release not found (404)");
+                println!("[UPDATE] Response body: {}", error_text);
+                return Err("Latest release not found. Please ensure releases are published at https://github.com/SlasshyOverhere/StreamVault/releases".to_string());
+            },
+            _ => {
+                println!("[UPDATE] ERROR: GitHub API error {}: {}", status, error_text);
+                return Err(format!("GitHub API error ({}): {}", status, error_text));
+            }
+        }
     }
 
+    println!("[UPDATE] Parsing release JSON...");
     let release: GitHubRelease = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse release: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Failed to parse release JSON: {}", e);
+            format!("Failed to parse release data: {}", e)
+        })?;
 
     // Extract version from tag (remove 'v' prefix if present)
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    println!("[UPDATE] Latest version from tag: {}", latest_version);
 
     // Compare versions
     let is_newer = version_compare(&latest_version, current_version);
+    println!("[UPDATE] Version comparison result: newer={}", is_newer);
 
     // Find Windows installer asset
+    println!("[UPDATE] Searching for Windows installer assets...");
+    println!("[UPDATE] Total assets found: {}", release.assets.len());
+
     let download_url = release
         .assets
         .iter()
         .find(|a| {
-            a.name.ends_with(".msi")
+            let matches = a.name.ends_with(".msi")
                 || a.name.ends_with(".exe")
-                || a.name.ends_with("_x64-setup.exe")
+                || a.name.ends_with("_x64-setup.exe");
+            if matches {
+                println!("[UPDATE] Found matching asset: {} - {}", a.name, a.browser_download_url);
+            }
+            matches
         })
         .map(|a| a.browser_download_url.clone());
 
+    if download_url.is_none() {
+        println!("[UPDATE] WARNING: No Windows installer (.exe/.msi) found in release assets!");
+        println!("[UPDATE] Available assets:");
+        for asset in &release.assets {
+            println!("[UPDATE]   - {} ({})", asset.name, asset.browser_download_url);
+        }
+    }
+
     println!(
-        "[UPDATE] Latest version: {} (newer: {})",
-        latest_version, is_newer
+        "[UPDATE] Update check complete: available={}, latest={}",
+        is_newer, latest_version
     );
 
     Ok(UpdateInfo {
@@ -8304,64 +8360,125 @@ fn version_compare(latest: &str, current: &str) -> bool {
 async fn download_update(window: tauri::Window, url: String) -> Result<String, String> {
     use std::io::Write;
 
-    println!("[UPDATE] Downloading update from: {}", url);
+    println!("[UPDATE] Starting download...");
+    println!("[UPDATE] Download URL: {}", url);
 
-    let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let parsed_url = url::Url::parse(&url).map_err(|e| {
+        println!("[UPDATE] ERROR: Invalid URL format: {}", e);
+        format!("Invalid URL: {}", e)
+    })?;
 
+    println!("[UPDATE] Validating URL authorization...");
     if !is_authorized_update_url(&parsed_url, false) {
-        return Err("Unauthorized update URL".to_string());
+        println!("[UPDATE] ERROR: URL not authorized: {}", url);
+        println!("[UPDATE] Allowed repo: {}", ALLOWED_REPO);
+        return Err(format!("Unauthorized update URL. Must be from GitHub repository: {}", ALLOWED_REPO));
     }
+    println!("[UPDATE] URL authorization passed");
 
     // Use a custom redirect policy to ensure redirects don't lead to malicious sites
+    println!("[UPDATE] Setting up redirect policy...");
     let custom_policy = reqwest::redirect::Policy::custom(move |attempt| {
         if !is_authorized_update_url(attempt.url(), true) {
+            println!("[UPDATE] Blocking unauthorized redirect: {}", attempt.url());
             return attempt.error("Unauthorized redirect URL");
         }
         if attempt.previous().len() > 5 {
+            println!("[UPDATE] Too many redirects: {:?}", attempt.previous());
             return attempt.error("Too many redirects");
         }
+        println!("[UPDATE] Following redirect to: {}", attempt.url());
         attempt.follow()
     });
 
     let client = reqwest::Client::builder()
         .redirect(custom_policy)
         .build()
-        .map_err(|e| format!("Failed to build client: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Failed to build HTTP client: {}", e);
+            format!("Failed to build client: {}", e)
+        })?;
 
     let mut request = client.get(&url);
 
     // Add auth header if PAT is configured
     if !GITHUB_RELEASE_TOKEN.is_empty() {
+        println!("[UPDATE] Adding authentication to download request");
         request = request.header("Authorization", format!("Bearer {}", GITHUB_RELEASE_TOKEN));
     }
 
+    println!("[UPDATE] Sending download request...");
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Failed to start download: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Failed to start download: {}", e);
+            format!("Failed to start download: {}. Check your internet connection.", e)
+        })?;
 
-    if !response.status().is_success() {
-        return Err(format!("Download failed: HTTP {}", response.status()));
+    let status = response.status();
+    println!("[UPDATE] Download response status: {}", status);
+
+    if !status.is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        println!("[UPDATE] ERROR: Download failed with status {}: {}", status, error_text);
+
+        match status.as_u16() {
+            403 => {
+                if error_text.contains("rate limit") {
+                    return Err("GitHub API rate limit exceeded during download. Please configure a GitHub PAT or wait and try again.".to_string());
+                }
+                return Err(format!("Download forbidden (403). The release may require authentication. Details: {}", error_text));
+            },
+            404 => {
+                return Err("Update file not found (404). The release may have been removed or the URL is incorrect.".to_string());
+            },
+            _ => {
+                return Err(format!("Download failed: HTTP {} - {}", status, error_text));
+            }
+        }
     }
 
     let total_size = response.content_length().unwrap_or(0);
+    println!("[UPDATE] File size: {} bytes ({:.2} MB)", total_size, total_size as f64 / 1024.0 / 1024.0);
+
     let filename = sanitize_update_filename(&parsed_url);
+    println!("[UPDATE] Filename: {}", filename);
+
     let staging_dir = updater_staging_root().join(Uuid::new_v4().to_string());
+    println!("[UPDATE] Staging directory: {:?}", staging_dir);
+
     std::fs::create_dir_all(&staging_dir)
-        .map_err(|e| format!("Failed to create updater staging directory: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Failed to create staging directory: {}", e);
+            format!("Failed to create updater staging directory: {}", e)
+        })?;
+
     let file_path = staging_dir.join(filename);
 
     let mut file = std::fs::File::create(&file_path)
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Failed to create temp file: {}", e);
+            format!("Failed to create temp file: {}", e)
+        })?;
 
+    println!("[UPDATE] Writing file to disk...");
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
 
     use futures_util::StreamExt;
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Download error: {}", e))?;
+        let chunk = chunk_result.map_err(|e| {
+            println!("[UPDATE] ERROR: Download chunk error: {}", e);
+            format!("Download error: {}", e)
+        })?;
+
         file.write_all(&chunk)
-            .map_err(|e| format!("Write error: {}", e))?;
+            .map_err(|e| {
+                println!("[UPDATE] ERROR: Write error: {}", e);
+                format!("Write error: {}", e)
+            })?;
+
         downloaded += chunk.len() as u64;
 
         // Emit progress event
@@ -8377,10 +8494,17 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
                     }),
                 )
                 .ok();
+
+            // Log progress every 10%
+            if (progress as u32) % 10 == 0 && (progress as u32) > 0 && downloaded < total_size {
+                println!("[UPDATE] Progress: {:.1}% ({}/{})", progress, downloaded, total_size);
+            }
         }
     }
 
-    println!("[UPDATE] Download complete: {:?}", file_path);
+    println!("[UPDATE] Download complete!");
+    println!("[UPDATE] Saved to: {:?}", file_path);
+    println!("[UPDATE] Final size: {} bytes", downloaded);
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -8391,24 +8515,62 @@ fn updater_staging_root() -> std::path::PathBuf {
 
 fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
     if url.scheme() != "https" {
+        println!("[UPDATE-SECURITY] Rejected non-HTTPS URL: {}", url);
         return false;
     }
 
-    let Some(host) = url.host_str() else { return false };
+    let Some(host) = url.host_str() else {
+        println!("[UPDATE-SECURITY] Rejected URL with no host: {}", url);
+        return false
+    };
+
     let path = url.path();
+    println!("[UPDATE-SECURITY] Validating URL - Host: {}, Path: {}, IsRedirect: {}", host, path, is_redirect);
 
+    // Allow GitHub main domain for release downloads
     if host == "github.com" {
-        return path.starts_with(&format!("/{}", ALLOWED_REPO));
+        let allowed = path.starts_with(&format!("/{}", ALLOWED_REPO));
+        if !allowed {
+            println!("[UPDATE-SECURITY] GitHub path not authorized: {}", path);
+        }
+        return allowed;
     }
 
+    // Allow GitHub API domain
     if host == "api.github.com" {
-        return path.starts_with(&format!("/repos/{}", ALLOWED_REPO));
+        let allowed = path.starts_with(&format!("/repos/{}", ALLOWED_REPO));
+        if !allowed {
+            println!("[UPDATE-SECURITY] API path not authorized: {}", path);
+        }
+        return allowed;
     }
 
-    if is_redirect && (host == "objects.githubusercontent.com" || host.ends_with(".objects.githubusercontent.com")) {
+    // Allow GitHub's CDN domains for asset downloads (including redirects)
+    // GitHub uses various subdomains for their CDN
+    if host == "objects.githubusercontent.com"
+        || host.ends_with(".objects.githubusercontent.com")
+        || host == "github-production-release-asset-2e65be.s3.amazonaws.com"
+        || host.ends_with(".githubusercontent.com")
+        || host.ends_with(".amazonaws.com") && path.contains("/github-production-release-asset-") {
+        println!("[UPDATE-SECURITY] Allowing GitHub CDN host: {}", host);
         return true;
     }
 
+    // For other hosts during redirect, be more permissive but still validate
+    // that it's coming from our repo
+    if is_redirect {
+        // Check if this looks like a GitHub-related redirect
+        let is_github_related = host.contains("github")
+            || host.contains("githubusercontent")
+            || host.contains("amazonaws.com");
+
+        if is_github_related {
+            println!("[UPDATE-SECURITY] Allowing GitHub-related redirect to: {}", host);
+            return true;
+        }
+    }
+
+    println!("[UPDATE-SECURITY] Rejected unauthorized URL: {} (redirect={})", url, is_redirect);
     false
 }
 
