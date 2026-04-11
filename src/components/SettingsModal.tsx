@@ -174,9 +174,15 @@ export function SettingsModal({
       }
     } catch (error) {
       console.error("Failed to check for updates", error);
+      const description =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : String(error);
       toast({
         title: "Error",
-        description: "Failed to check for updates. Please try again later.",
+        description,
         variant: "destructive",
       });
     } finally {
@@ -213,9 +219,15 @@ export function SettingsModal({
       await installUpdate(installerPath);
     } catch (error) {
       console.error("Failed to download/install update", error);
+      const description =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : String(error);
       toast({
         title: "Error",
-        description: "Failed to download update. Please try again.",
+        description,
         variant: "destructive",
       });
     } finally {

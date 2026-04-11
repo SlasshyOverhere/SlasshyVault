@@ -8316,49 +8316,99 @@ struct GitHubAsset {
     size: i64,
 }
 
+const RELEASES_PAGE_URL: &str = "https://github.com/SlasshyOverhere/StreamVault/releases/latest";
+const RELEASES_METADATA_URL: &str =
+    "https://github.com/SlasshyOverhere/StreamVault/releases/latest/download/latest.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct TauriLatestManifest {
+    version: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    pub_date: Option<String>,
+    platforms: std::collections::HashMap<String, TauriLatestPlatform>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct TauriLatestPlatform {
+    url: String,
+    #[allow(dead_code)]
+    signature: String,
+}
+
+fn open_latest_release_page_for_manual_install(context: &str) {
+    println!(
+        "[UPDATE] Opening latest releases page for manual install after failure in {}: {}",
+        context, RELEASES_PAGE_URL
+    );
+    if let Err(e) = open::that_detached(RELEASES_PAGE_URL) {
+        println!(
+            "[UPDATE] Failed to open releases page for manual install fallback: {}",
+            e
+        );
+    }
+}
+
+fn manual_update_error(context: &str, details: impl std::fmt::Display) -> String {
+    open_latest_release_page_for_manual_install(context);
+    format!(
+        "Auto updater issue, please install manually. Opening latest release page. {}",
+        details
+    )
+}
+
 /// Check for updates from GitHub releases
 #[tauri::command]
 async fn check_for_updates() -> Result<UpdateInfo, String> {
     let current_version = env!("CARGO_PKG_VERSION");
-    let repo = "SlasshyOverhere/StreamVault";
 
     println!(
         "[UPDATE] Checking for updates... Current version: {}",
         current_version
     );
-    println!("[UPDATE] Target repository: {}", repo);
-    println!(
-        "[UPDATE] Using authentication: {}",
-        if !GITHUB_RELEASE_TOKEN.is_empty() {
-            "Yes"
-        } else {
-            "No (unauthenticated)"
-        }
-    );
+    println!("[UPDATE] Metadata URL: {}", RELEASES_METADATA_URL);
 
-    let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-    println!("[UPDATE] API URL: {}", url);
+    let parsed_url = url::Url::parse(RELEASES_METADATA_URL).map_err(|e| {
+        manual_update_error(
+            "check_for_updates",
+            format!("Invalid release metadata URL: {}.", e),
+        )
+    })?;
 
-    let client = reqwest::Client::new();
-    let mut request = client
-        .get(&url)
-        .header("User-Agent", "StreamVault-Updater")
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28");
-
-    // Add auth header if PAT is configured
-    if !GITHUB_RELEASE_TOKEN.is_empty() {
-        println!("[UPDATE] Adding GitHub PAT authentication");
-        request = request.header("Authorization", format!("Bearer {}", GITHUB_RELEASE_TOKEN));
-    } else {
-        println!("[UPDATE] WARNING: No GitHub PAT configured. Rate limit: 60 requests/hour");
+    if !is_authorized_update_url(&parsed_url, false) {
+        return Err(manual_update_error(
+            "check_for_updates",
+            format!(
+                "Unauthorized release metadata URL. Must be from GitHub repository: {}.",
+                ALLOWED_REPO
+            ),
+        ));
     }
 
-    println!("[UPDATE] Sending request to GitHub API...");
-    let response = request.send().await.map_err(|e| {
-        println!("[UPDATE] ERROR: Network error during update check: {}", e);
-        format!("Network error: {}. Check your internet connection.", e)
-    })?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| {
+            manual_update_error(
+                "check_for_updates",
+                format!("Failed to build update metadata client: {}.", e),
+            )
+        })?;
+
+    println!("[UPDATE] Fetching release metadata...");
+    let response = client
+        .get(RELEASES_METADATA_URL)
+        .header("User-Agent", "StreamVault-Updater")
+        .send()
+        .await
+        .map_err(|e| {
+            println!("[UPDATE] ERROR: Network error during update check: {}", e);
+            manual_update_error(
+                "check_for_updates",
+                format!("Failed to check for updates: {}.", e),
+            )
+        })?;
 
     let status = response.status();
     println!("[UPDATE] Response status: {}", status);
@@ -8369,74 +8419,71 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
         // Handle specific error cases
         match status.as_u16() {
             403 => {
-                println!("[UPDATE] ERROR: GitHub API rate limit exceeded or forbidden");
+                println!("[UPDATE] ERROR: Release metadata access denied or forbidden");
                 println!("[UPDATE] Response body: {}", error_text);
 
-                // Check if it's a rate limit error
-                if error_text.contains("rate limit") || error_text.contains("API rate limit") {
-                    return Err("GitHub API rate limit exceeded. Please configure a GitHub Personal Access Token (PAT) in the app settings, or wait and try again later.".to_string());
-                }
-
-                return Err(format!("GitHub API access denied (403). The repository may be private or the token is invalid. Details: {}", error_text));
+                return Err(manual_update_error(
+                    "check_for_updates",
+                    format!(
+                        "Release metadata access denied (403). Details: {}",
+                        error_text
+                    ),
+                ));
             }
             404 => {
-                println!("[UPDATE] ERROR: Release not found (404)");
+                println!("[UPDATE] ERROR: Release metadata not found (404)");
                 println!("[UPDATE] Response body: {}", error_text);
-                return Err("Latest release not found. Please ensure releases are published at https://github.com/SlasshyOverhere/StreamVault/releases".to_string());
+                return Err(manual_update_error(
+                    "check_for_updates",
+                    format!(
+                        "Latest release metadata not found at {}.",
+                        RELEASES_METADATA_URL
+                    ),
+                ));
             }
             _ => {
                 println!(
-                    "[UPDATE] ERROR: GitHub API error {}: {}",
+                    "[UPDATE] ERROR: Release metadata error {}: {}",
                     status, error_text
                 );
-                return Err(format!("GitHub API error ({}): {}", status, error_text));
+                return Err(manual_update_error(
+                    "check_for_updates",
+                    format!("Release metadata error ({}): {}", status, error_text),
+                ));
             }
         }
     }
 
-    println!("[UPDATE] Parsing release JSON...");
-    let release: GitHubRelease = response.json().await.map_err(|e| {
-        println!("[UPDATE] ERROR: Failed to parse release JSON: {}", e);
-        format!("Failed to parse release data: {}", e)
+    println!("[UPDATE] Parsing latest.json...");
+    let manifest: TauriLatestManifest = response.json().await.map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to parse latest.json: {}", e);
+        manual_update_error(
+            "check_for_updates",
+            format!("Failed to parse release metadata: {}.", e),
+        )
     })?;
 
-    // Extract version from tag (remove 'v' prefix if present)
-    let latest_version = release.tag_name.trim_start_matches('v').to_string();
-    println!("[UPDATE] Latest version from tag: {}", latest_version);
+    let latest_version = manifest.version.trim_start_matches('v').to_string();
+    println!("[UPDATE] Latest version from metadata: {}", latest_version);
 
-    // Compare versions
     let is_newer = version_compare(&latest_version, current_version);
     println!("[UPDATE] Version comparison result: newer={}", is_newer);
 
-    // Find Windows installer asset
-    println!("[UPDATE] Searching for Windows installer assets...");
-    println!("[UPDATE] Total assets found: {}", release.assets.len());
+    println!(
+        "[UPDATE] Available platforms in metadata: {:?}",
+        manifest.platforms.keys().collect::<Vec<_>>()
+    );
 
-    let download_url = release
-        .assets
-        .iter()
-        .find(|a| {
-            let matches = a.name.ends_with(".msi")
-                || a.name.ends_with(".exe")
-                || a.name.ends_with("_x64-setup.exe");
-            if matches {
-                println!(
-                    "[UPDATE] Found matching asset: {} - {}",
-                    a.name, a.browser_download_url
-                );
-            }
-            matches
-        })
-        .map(|a| a.browser_download_url.clone());
+    let download_url = manifest
+        .platforms
+        .get("windows-x86_64-nsis")
+        .or_else(|| manifest.platforms.get("windows-x86_64"))
+        .map(|platform| platform.url.clone());
 
     if download_url.is_none() {
-        println!("[UPDATE] WARNING: No Windows installer (.exe/.msi) found in release assets!");
-        println!("[UPDATE] Available assets:");
-        for asset in &release.assets {
-            println!(
-                "[UPDATE]   - {} ({})",
-                asset.name, asset.browser_download_url
-            );
+        println!("[UPDATE] WARNING: No Windows updater package found in latest.json");
+        for (platform, value) in &manifest.platforms {
+            println!("[UPDATE]   - {} => {}", platform, value.url);
         }
     }
 
@@ -8449,9 +8496,9 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
         available: is_newer,
         current_version: current_version.to_string(),
         latest_version,
-        release_notes: release.body.unwrap_or_default(),
+        release_notes: manifest.notes,
         download_url,
-        published_at: release.published_at,
+        published_at: manifest.pub_date,
     })
 }
 
@@ -8486,16 +8533,19 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
     let parsed_url = url::Url::parse(&url).map_err(|e| {
         println!("[UPDATE] ERROR: Invalid URL format: {}", e);
-        format!("Invalid URL: {}", e)
+        manual_update_error("download_update", format!("Invalid download URL: {}.", e))
     })?;
 
     println!("[UPDATE] Validating URL authorization...");
     if !is_authorized_update_url(&parsed_url, false) {
         println!("[UPDATE] ERROR: URL not authorized: {}", url);
         println!("[UPDATE] Allowed repo: {}", ALLOWED_REPO);
-        return Err(format!(
-            "Unauthorized update URL. Must be from GitHub repository: {}",
-            ALLOWED_REPO
+        return Err(manual_update_error(
+            "download_update",
+            format!(
+                "Unauthorized update URL. Must be from GitHub repository: {}.",
+                ALLOWED_REPO
+            ),
         ));
     }
     println!("[UPDATE] URL authorization passed");
@@ -8520,7 +8570,10 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
         .build()
         .map_err(|e| {
             println!("[UPDATE] ERROR: Failed to build HTTP client: {}", e);
-            format!("Failed to build client: {}", e)
+            manual_update_error(
+                "download_update",
+                format!("Failed to build download client: {}.", e),
+            )
         })?;
 
     let mut request = client.get(&url);
@@ -8534,9 +8587,9 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     println!("[UPDATE] Sending download request...");
     let response = request.send().await.map_err(|e| {
         println!("[UPDATE] ERROR: Failed to start download: {}", e);
-        format!(
-            "Failed to start download: {}. Check your internet connection.",
-            e
+        manual_update_error(
+            "download_update",
+            format!("Failed to start download: {}.", e),
         )
     })?;
 
@@ -8553,18 +8606,30 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
         match status.as_u16() {
             403 => {
                 if error_text.contains("rate limit") {
-                    return Err("GitHub API rate limit exceeded during download. Please configure a GitHub PAT or wait and try again.".to_string());
+                    return Err(manual_update_error(
+                        "download_update",
+                        "GitHub API rate limit exceeded during download. Please configure a GitHub PAT or wait and try again.",
+                    ));
                 }
-                return Err(format!(
-                    "Download forbidden (403). The release may require authentication. Details: {}",
-                    error_text
+                return Err(manual_update_error(
+                    "download_update",
+                    format!(
+                        "Download forbidden (403). The release may require authentication. Details: {}",
+                        error_text
+                    ),
                 ));
             }
             404 => {
-                return Err("Update file not found (404). The release may have been removed or the URL is incorrect.".to_string());
+                return Err(manual_update_error(
+                    "download_update",
+                    "Update file not found (404). The release may have been removed or the URL is incorrect.",
+                ));
             }
             _ => {
-                return Err(format!("Download failed: HTTP {} - {}", status, error_text));
+                return Err(manual_update_error(
+                    "download_update",
+                    format!("Download failed: HTTP {} - {}", status, error_text),
+                ));
             }
         }
     }
@@ -8584,14 +8649,20 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
     std::fs::create_dir_all(&staging_dir).map_err(|e| {
         println!("[UPDATE] ERROR: Failed to create staging directory: {}", e);
-        format!("Failed to create updater staging directory: {}", e)
+        manual_update_error(
+            "download_update",
+            format!("Failed to create updater staging directory: {}.", e),
+        )
     })?;
 
     let file_path = staging_dir.join(filename);
 
     let mut file = std::fs::File::create(&file_path).map_err(|e| {
         println!("[UPDATE] ERROR: Failed to create temp file: {}", e);
-        format!("Failed to create temp file: {}", e)
+        manual_update_error(
+            "download_update",
+            format!("Failed to create updater file: {}.", e),
+        )
     })?;
 
     println!("[UPDATE] Writing file to disk...");
@@ -8602,12 +8673,12 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| {
             println!("[UPDATE] ERROR: Download chunk error: {}", e);
-            format!("Download error: {}", e)
+            manual_update_error("download_update", format!("Download error: {}.", e))
         })?;
 
         file.write_all(&chunk).map_err(|e| {
             println!("[UPDATE] ERROR: Write error: {}", e);
-            format!("Write error: {}", e)
+            manual_update_error("download_update", format!("Write error: {}.", e))
         })?;
 
         downloaded += chunk.len() as u64;
@@ -8653,69 +8724,30 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
         return false;
     }
 
-    let Some(host) = url.host_str() else {
-        println!("[UPDATE-SECURITY] Rejected URL with no host: {}", url);
-        return false;
-    };
-
-    let path = url.path();
-    println!(
-        "[UPDATE-SECURITY] Validating URL - Host: {}, Path: {}, IsRedirect: {}",
-        host, path, is_redirect
-    );
-
-    // Allow GitHub main domain for release downloads
-    if host == "github.com" {
-        let allowed = path.starts_with(&format!("/{}", ALLOWED_REPO));
-        if !allowed {
-            println!("[UPDATE-SECURITY] GitHub path not authorized: {}", path);
-        }
-        return allowed;
-    }
-
-    // Allow GitHub API domain
-    if host == "api.github.com" {
-        let allowed = path.starts_with(&format!("/repos/{}", ALLOWED_REPO));
-        if !allowed {
-            println!("[UPDATE-SECURITY] API path not authorized: {}", path);
-        }
-        return allowed;
-    }
-
-    // Allow GitHub's CDN domains for asset downloads (including redirects)
-    // GitHub uses various subdomains for their CDN
-    if host == "objects.githubusercontent.com"
-        || host.ends_with(".objects.githubusercontent.com")
-        || host == "github-production-release-asset-2e65be.s3.amazonaws.com"
-        || host.ends_with(".githubusercontent.com")
-        || host.ends_with(".amazonaws.com") && path.contains("/github-production-release-asset-")
-    {
-        println!("[UPDATE-SECURITY] Allowing GitHub CDN host: {}", host);
+    if is_redirect {
+        println!(
+            "[UPDATE-SECURITY] Allowing HTTPS redirect during update download: {}",
+            url
+        );
         return true;
     }
 
-    // For other hosts during redirect, be more permissive but still validate
-    // that it's coming from our repo
-    if is_redirect {
-        // Check if this looks like a GitHub-related redirect
-        let is_github_related = host.contains("github")
-            || host.contains("githubusercontent")
-            || host.contains("amazonaws.com");
+    let host_matches = matches!(url.host_str(), Some("github.com") | Some("www.github.com"));
+    let path_matches = url.path().contains(ALLOWED_REPO);
 
-        if is_github_related {
-            println!(
-                "[UPDATE-SECURITY] Allowing GitHub-related redirect to: {}",
-                host
-            );
-            return true;
-        }
+    if host_matches && path_matches {
+        println!(
+            "[UPDATE-SECURITY] Allowing update URL from approved GitHub repo: {}",
+            url
+        );
+        true
+    } else {
+        println!(
+            "[UPDATE-SECURITY] Rejected update URL because it does not match github.com + {}: {}",
+            ALLOWED_REPO, url
+        );
+        false
     }
-
-    println!(
-        "[UPDATE-SECURITY] Rejected unauthorized URL: {} (redirect={})",
-        url, is_redirect
-    );
-    false
 }
 
 fn sanitize_update_filename(parsed_url: &url::Url) -> String {
@@ -8783,8 +8815,8 @@ fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String
         .unwrap_or_default();
 
     #[cfg(target_os = "windows")]
-    if ext != "exe" && ext != "msi" {
-        return Err("Only .exe or .msi installers are allowed".to_string());
+    if ext != "exe" && ext != "msi" && ext != "zip" {
+        return Err("Only .exe, .msi, or .zip installers are allowed".to_string());
     }
 
     #[cfg(target_os = "macos")]
@@ -8817,12 +8849,87 @@ fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String
     Ok(canonical_path)
 }
 
+#[cfg(target_os = "windows")]
+fn resolve_windows_installer_from_package(
+    package_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let ext = package_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "exe" || ext == "msi" {
+        return Ok(package_path.to_path_buf());
+    }
+
+    if ext != "zip" {
+        return Err(format!(
+            "Unsupported Windows updater package: {}",
+            package_path.display()
+        ));
+    }
+
+    let extract_dir = package_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("extracted");
+    std::fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Failed to create extracted installer directory: {}", e))?;
+
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+        ])
+        .arg(package_path)
+        .arg(&extract_dir)
+        .status()
+        .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
+
+    if !status.success() {
+        return Err(format!(
+            "Failed to extract updater ZIP. PowerShell exit code: {:?}",
+            status.code()
+        ));
+    }
+
+    let mut installer_candidates = Vec::new();
+    for entry in walkdir::WalkDir::new(&extract_dir) {
+        let entry =
+            entry.map_err(|e| format!("Failed while scanning extracted updater ZIP: {}", e))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.into_path();
+        let Some(found_ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let found_ext = found_ext.to_ascii_lowercase();
+        if found_ext == "exe" || found_ext == "msi" {
+            installer_candidates.push(path);
+        }
+    }
+
+    installer_candidates.sort();
+    installer_candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No .exe or .msi installer found inside updater ZIP".to_string())
+}
+
 /// Install update and restart app
 #[tauri::command]
 async fn install_update(installer_path: String) -> Result<(), String> {
     println!("[UPDATE] Validating installer path before launch");
 
-    let safe_path = get_valid_installer_path(&installer_path)?;
+    let safe_path = get_valid_installer_path(&installer_path)
+        .map_err(|e| manual_update_error("install_update", e))?;
+    #[cfg(target_os = "windows")]
+    let safe_path = resolve_windows_installer_from_package(&safe_path)
+        .map_err(|e| manual_update_error("install_update", e))?;
     println!(
         "[UPDATE] Installing update from safe path: {}",
         safe_path.display()
@@ -8830,7 +8937,10 @@ async fn install_update(installer_path: String) -> Result<(), String> {
 
     // Launch the installer securely without tying the child process to this app.
     if let Err(e) = open::that_detached(&safe_path) {
-        return Err(format!("Failed to launch installer: {}", e));
+        return Err(manual_update_error(
+            "install_update",
+            format!("Failed to launch installer: {}.", e),
+        ));
     }
 
     // Exit the app to allow installer to run
