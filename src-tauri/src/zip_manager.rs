@@ -603,7 +603,7 @@ fn fetch_drive_metadata(
 ) -> Result<DriveMetadataResponse, ZipError> {
     client
         .get(format!(
-            "{}/files/{}?fields=id,name,size",
+            "{}/files/{}?fields=id,name,size&supportsAllDrives=true",
             DRIVE_API_BASE, zip_file_id
         ))
         .header(AUTHORIZATION, bearer_value(access_token))
@@ -623,7 +623,7 @@ fn fetch_range(
 ) -> Result<Vec<u8>, ZipError> {
     client
         .get(format!(
-            "{}/files/{}?alt=media",
+            "{}/files/{}?alt=media&supportsAllDrives=true",
             DRIVE_API_BASE, zip_file_id
         ))
         .header(AUTHORIZATION, bearer_value(access_token))
@@ -645,7 +645,7 @@ fn fetch_response_range(
 ) -> Result<reqwest::blocking::Response, ZipError> {
     client
         .get(format!(
-            "{}/files/{}?alt=media",
+            "{}/files/{}?alt=media&supportsAllDrives=true",
             DRIVE_API_BASE, zip_file_id
         ))
         .header(AUTHORIZATION, bearer_value(access_token))
@@ -1070,7 +1070,7 @@ pub fn response_headers_to_vec(response: &reqwest::blocking::Response) -> Vec<(S
 #[cfg(test)]
 mod tests {
     use super::{check_zip_compression_type, content_type_for_name, is_video_path};
-    use crate::zip_parser::ZipEntry;
+    use crate::zip_parser::{ZipCompressionType, ZipEntry};
 
     #[test]
     fn detects_video_extensions() {

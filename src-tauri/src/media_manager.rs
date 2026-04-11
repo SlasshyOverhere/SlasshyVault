@@ -885,9 +885,13 @@ fn try_parse_tv_episode(filename: &str, folder_ctx: &FolderContext) -> Option<Pa
         // Standard SxxExx patterns (most reliable)
         Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})E(?P<episode>\d{1,3})(?:-?E(?P<episode_end>\d{1,3}))?").ok()?,
         Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})\.E(?P<episode>\d{1,3})").ok()?,
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})[.\s_-]+EP?(?P<episode>\d{1,3})(?:-?EP?(?P<episode_end>\d{1,3}))?").ok()?,
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})[.\s_-]+EPISODE[.\s_-]*(?P<episode>\d{1,3})(?:[.\s_-]*-[.\s_-]*EPISODE?[.\s_-]*(?P<episode_end>\d{1,3}))?").ok()?,
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})[.\s_-]+E[.\s_-]*(?P<episode>\d{1,3})(?:[.\s_-]*-[.\s_-]*E[.\s_-]*(?P<episode_end>\d{1,3}))?").ok()?,
 
         // Season/Episode spelled out
         Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+Season\s*(?P<season>\d{1,2})[.\s_-]+Episode\s*(?P<episode>\d{1,3})").ok()?,
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+Season\s*(?P<season>\d{1,2})[.\s_-]+Ep(?:isode)?\.?\s*(?P<episode>\d{1,3})").ok()?,
 
         // 1x01 format
         Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+(?P<season>\d{1,2})x(?P<episode>\d{2,3})").ok()?,
@@ -1446,6 +1450,33 @@ mod tests {
         assert_eq!(parsed.title, "Jeepers Creepers");
         assert_eq!(parsed.year, Some(2001));
         assert_eq!(parsed.media_type, MediaParseType::Movie);
+    }
+
+    #[test]
+    fn test_parse_cloud_tv_episode_with_space_ep_pattern() {
+        let parsed = parse_cloud_filename("Lost S01 EP01 1080p BluRay [English DTS 5.1] x264.mkv");
+        assert_eq!(parsed.title, "Lost");
+        assert_eq!(parsed.media_type, MediaParseType::TvEpisode);
+        assert_eq!(parsed.season, Some(1));
+        assert_eq!(parsed.episode, Some(1));
+    }
+
+    #[test]
+    fn test_parse_cloud_tv_episode_with_space_e_pattern() {
+        let parsed = parse_cloud_filename("Lost S01 E 02 1080p BluRay x264.mkv");
+        assert_eq!(parsed.title, "Lost");
+        assert_eq!(parsed.media_type, MediaParseType::TvEpisode);
+        assert_eq!(parsed.season, Some(1));
+        assert_eq!(parsed.episode, Some(2));
+    }
+
+    #[test]
+    fn test_parse_cloud_tv_episode_with_season_episode_words() {
+        let parsed = parse_cloud_filename("Lost Season 1 Ep 03 1080p BluRay x264.mkv");
+        assert_eq!(parsed.title, "Lost");
+        assert_eq!(parsed.media_type, MediaParseType::TvEpisode);
+        assert_eq!(parsed.season, Some(1));
+        assert_eq!(parsed.episode, Some(3));
     }
 
     #[test]

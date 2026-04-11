@@ -242,7 +242,7 @@ impl GoogleDriveClient {
         let query = format!("'{}' in parents and trashed = false", parent);
 
         let mut url = format!(
-            "{}/files?q={}&fields=files(id,name,mimeType,size,modifiedTime,parents,webContentLink),nextPageToken&pageSize=100&orderBy=name",
+            "{}/files?q={}&fields=files(id,name,mimeType,size,modifiedTime,parents,webContentLink),nextPageToken&pageSize=100&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true",
             DRIVE_API_BASE,
             urlencoding::encode(&query)
         );
@@ -281,7 +281,7 @@ impl GoogleDriveClient {
         );
 
         let url = format!(
-            "{}/files?q={}&fields=files(id,name,mimeType,modifiedTime,parents)&pageSize=100&orderBy=name",
+            "{}/files?q={}&fields=files(id,name,mimeType,modifiedTime,parents)&pageSize=100&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true",
             DRIVE_API_BASE,
             urlencoding::encode(&query)
         );
@@ -332,7 +332,7 @@ impl GoogleDriveClient {
 
         loop {
             let mut url = format!(
-                "{}/files?q={}&fields=files(id,name,mimeType,size,modifiedTime,parents,webContentLink),nextPageToken&pageSize=100",
+                "{}/files?q={}&fields=files(id,name,mimeType,size,modifiedTime,parents,webContentLink),nextPageToken&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true",
                 DRIVE_API_BASE,
                 urlencoding::encode(&query)
             );
@@ -383,7 +383,10 @@ impl GoogleDriveClient {
     /// Get a streaming URL for a file (with auth header)
     pub async fn get_stream_url(&self, file_id: &str) -> Result<(String, String), String> {
         let access_token = self.get_access_token().await?;
-        let url = format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id);
+        let url = format!(
+            "{}/files/{}?alt=media&supportsAllDrives=true",
+            DRIVE_API_BASE, file_id
+        );
         Ok((url, access_token))
     }
 
@@ -466,7 +469,10 @@ impl GoogleDriveClient {
         let access_token = self.get_access_token().await?;
         let response = self
             .http_client
-            .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+            .get(format!(
+                "{}/files/{}?alt=media&supportsAllDrives=true",
+                DRIVE_API_BASE, file_id
+            ))
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -497,7 +503,10 @@ impl GoogleDriveClient {
         let access_token = self.get_access_token().await?;
         let response = self
             .http_client
-            .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+            .get(format!(
+                "{}/files/{}?alt=media&supportsAllDrives=true",
+                DRIVE_API_BASE, file_id
+            ))
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -601,7 +610,7 @@ impl GoogleDriveClient {
         let access_token = self.get_access_token().await?;
 
         let url = format!(
-            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,parents,webContentLink",
+            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,parents,webContentLink&supportsAllDrives=true",
             DRIVE_API_BASE, file_id
         );
 
@@ -628,7 +637,10 @@ impl GoogleDriveClient {
     pub async fn delete_file(&self, file_id: &str) -> Result<(), String> {
         let access_token = self.get_access_token().await?;
 
-        let url = format!("{}/files/{}", DRIVE_API_BASE, file_id);
+        let url = format!(
+            "{}/files/{}?supportsAllDrives=true",
+            DRIVE_API_BASE, file_id
+        );
 
         let response = self
             .http_client
@@ -746,7 +758,7 @@ impl GoogleDriveClient {
         let access_token = self.get_access_token().await?;
 
         let url = format!(
-            "{}/changes?pageToken={}&fields=changes(fileId,removed,file(id,name,mimeType,size,modifiedTime,parents)),newStartPageToken,nextPageToken&pageSize=100&includeRemoved=true&spaces=drive",
+            "{}/changes?pageToken={}&fields=changes(fileId,removed,file(id,name,mimeType,size,modifiedTime,parents)),newStartPageToken,nextPageToken&pageSize=100&includeRemoved=true&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true",
             DRIVE_API_BASE,
             page_token
         );

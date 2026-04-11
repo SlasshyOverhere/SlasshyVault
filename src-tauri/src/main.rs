@@ -1,8 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod config;
 mod archive_manager;
+mod config;
 mod database;
 mod gdrive;
 mod media_manager;
@@ -127,14 +127,13 @@ fn enrich_media_item_archive_assessment(mut media: database::MediaItem) -> datab
 fn enrich_media_items_archive_assessment(
     items: Vec<database::MediaItem>,
 ) -> Vec<database::MediaItem> {
-    items.into_iter()
+    items
+        .into_iter()
         .map(enrich_media_item_archive_assessment)
         .collect()
 }
 
-async fn sync_watch_history_to_drive(
-    state: &AppState,
-) -> Result<WatchHistorySyncStatus, String> {
+async fn sync_watch_history_to_drive(state: &AppState) -> Result<WatchHistorySyncStatus, String> {
     if !state.gdrive_client.is_authenticated() {
         return Ok(WatchHistorySyncStatus {
             synced: false,
@@ -744,6 +743,46 @@ async fn gdrive_scan_folder(
         .await?;
     println!("[CLOUD] Found {} video files", files.len());
 
+    let failed_retry_ids: Vec<String> = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_cloud_index_failures(250)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|item| item.cloud_file_id)
+            .collect()
+    };
+
+    let mut files = files;
+    if !failed_retry_ids.is_empty() {
+        let existing_ids: std::collections::HashSet<String> =
+            files.iter().map(|item| item.id.clone()).collect();
+        let mut retry_loaded = 0usize;
+        for file_id in failed_retry_ids {
+            if existing_ids.contains(&file_id) {
+                continue;
+            }
+            match state.gdrive_client.get_file_metadata(&file_id).await {
+                Ok(item) if gdrive::is_supported_cloud_media_item(&item) => {
+                    files.push(item);
+                    retry_loaded += 1;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    println!(
+                        "[CLOUD] Failed to reload skipped file {} for retry: {}",
+                        file_id, error
+                    );
+                }
+            }
+        }
+        if retry_loaded > 0 {
+            println!(
+                "[CLOUD] Added {} previously skipped file(s) to this manual rescan",
+                retry_loaded
+            );
+        }
+    }
+
     let unsupported_archives: Vec<String> = files
         .iter()
         .filter(|file| is_unsupported_archive_drive_item(file))
@@ -840,6 +879,18 @@ async fn gdrive_scan_folder(
         for file in files {
             // Check if already indexed
             if db.cloud_file_exists(&file.id) {
+                let _ = db.clear_cloud_index_failure(&file.id);
+                skipped_count += 1;
+                continue;
+            }
+
+            // Also skip duplicate file names already present in the DB from prior indexing.
+            if let Ok(Some(_)) = db.get_media_by_file_path(&file.name) {
+                let _ = db.clear_cloud_index_failure(&file.id);
+                println!(
+                    "[CLOUD] Skipping already indexed file_path '{}' for cloud file {}",
+                    file.name, file.id
+                );
                 skipped_count += 1;
                 continue;
             }
@@ -868,9 +919,16 @@ async fn gdrive_scan_folder(
                 ) {
                     Ok(indexed_items) => {
                         if indexed_items.is_empty() {
+                            let _ = db.upsert_cloud_index_failure(
+                                &file.id,
+                                &file.name,
+                                "Archive was scanned but no playable TV episode entries were identified",
+                            );
                             skipped_count += 1;
                             continue;
                         }
+
+                        let _ = db.clear_cloud_index_failure(&file.id);
 
                         for (media_id, title, _, _, season, episode, _, _) in indexed_items {
                             indexed_count += 1;
@@ -890,6 +948,7 @@ async fn gdrive_scan_folder(
                     }
                     Err(error) => {
                         println!("[ARCHIVE] Failed to index '{}': {}", file.name, error);
+                        let _ = db.upsert_cloud_index_failure(&file.id, &file.name, &error);
                         skipped_count += 1;
                         continue;
                     }
@@ -1059,6 +1118,7 @@ async fn gdrive_scan_folder(
                 indexed_count += 1;
                 tv_count += 1;
                 entry_counter += 1;
+                let _ = db.clear_cloud_index_failure(&file.id);
                 println!("[CLOUD] Indexed TV: {} S{:02}E{:02}", show_title, season, episode);
                 println!(
                     "[INDEX] #{} TV episode '{}' (db_id: {}, cloud_file_id: {})",
@@ -1119,6 +1179,7 @@ async fn gdrive_scan_folder(
                 indexed_count += 1;
                 movies_count += 1;
                 entry_counter += 1;
+                let _ = db.clear_cloud_index_failure(&file.id);
                 println!("[CLOUD] Indexed Movie: {}", title);
                 println!(
                     "[INDEX] #{} Movie '{}' (db_id: {}, cloud_file_id: {})",
@@ -1426,12 +1487,23 @@ async fn scan_all_cloud_folders(
                     let show_title = parsed.title.clone();
                     let show_title_lower = show_title.to_lowercase();
 
-                    let (db_show_id, tmdb_id, _show_folder_id) =
-                        if let Some(cached) = tv_show_cache.get(&show_title_lower) {
-                            cached.clone()
+                    let (db_show_id, tmdb_id, _show_folder_id) = if let Some(cached) =
+                        tv_show_cache.get(&show_title_lower)
+                    {
+                        cached.clone()
+                    } else {
+                        let result = if let Some(existing_show) =
+                            find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                        {
+                            (
+                                existing_show.id,
+                                existing_show.tmdb_id,
+                                folder_id_clone.clone(),
+                            )
                         } else {
-                            let result = if let Some(existing_show) =
-                                find_existing_cloud_tvshow(&db, &show_title, parsed.year)
+                            let show_path = cloud_tvshow_path(&folder_id_clone, &show_title);
+                            if let Some(existing_show) =
+                                find_existing_cloud_tvshow_by_path(&db, &show_path)
                             {
                                 (
                                     existing_show.id,
@@ -1439,16 +1511,6 @@ async fn scan_all_cloud_folders(
                                     folder_id_clone.clone(),
                                 )
                             } else {
-                                let show_path = cloud_tvshow_path(&folder_id_clone, &show_title);
-                                if let Some(existing_show) =
-                                    find_existing_cloud_tvshow_by_path(&db, &show_path)
-                                {
-                                    (
-                                        existing_show.id,
-                                        existing_show.tmdb_id,
-                                        folder_id_clone.clone(),
-                                    )
-                                } else {
                                 let tmdb_result = tmdb::search_metadata(
                                     &api_key,
                                     &show_title,
@@ -1502,11 +1564,11 @@ async fn scan_all_cloud_folders(
                                         }
                                     }
                                 }
-                                }
-                            };
-                            tv_show_cache.insert(show_title_lower.clone(), result.clone());
-                            result
+                            }
                         };
+                        tv_show_cache.insert(show_title_lower.clone(), result.clone());
+                        result
+                    };
 
                     let (ep_title, ep_overview, ep_still): (
                         Option<String>,
@@ -1838,9 +1900,10 @@ async fn check_cloud_changes(
                                 let season_part = &rest[..e_pos];
                                 let episode_part = &rest[e_pos + 1..];
                                 // Both season and episode should be numeric
-                                season_part.chars().all(|c| c.is_ascii_digit()) && 
-                                episode_part.chars().all(|c| c.is_ascii_digit()) &&
-                                !season_part.is_empty() && !episode_part.is_empty()
+                                season_part.chars().all(|c| c.is_ascii_digit())
+                                    && episode_part.chars().all(|c| c.is_ascii_digit())
+                                    && !season_part.is_empty()
+                                    && !episode_part.is_empty()
                             } else {
                                 false
                             }
@@ -1858,7 +1921,8 @@ async fn check_cloud_changes(
                     // Extract series name (everything before " S")
                     if let Some(pos) = title.find(" S") {
                         let series_name = &title[..pos];
-                        series_episodes.entry(series_name.to_string())
+                        series_episodes
+                            .entry(series_name.to_string())
                             .or_insert_with(Vec::new)
                             .push(title.clone());
                         continue;
@@ -2056,6 +2120,7 @@ async fn check_cloud_changes(
             for (file_id, file_name, parents) in files_to_index_clone {
                 // Check if already indexed (by cloud_file_id OR by file_path)
                 if db.cloud_file_exists(&file_id) {
+                    let _ = db.clear_cloud_index_failure(&file_id);
                     println!(
                         "[CLOUD CHANGES]   ⊘ Skipping (already indexed by file_id): {}",
                         file_name
@@ -2116,8 +2181,14 @@ async fn check_cloud_changes(
                         ) {
                         Ok(items) => {
                             if items.is_empty() {
+                                let _ = db.upsert_cloud_index_failure(
+                                    &file_id,
+                                    &file_name,
+                                    "Archive was scanned but no playable TV episode entries were identified",
+                                );
                                 skipped_count += 1;
                             } else {
+                                let _ = db.clear_cloud_index_failure(&file_id);
                                 tv_count += items.len();
                                 indexed_items.extend(items);
                             }
@@ -2125,6 +2196,7 @@ async fn check_cloud_changes(
                         }
                         Err(error) => {
                             println!("[ZIP] Failed to index '{}': {}", file_name, error);
+                            let _ = db.upsert_cloud_index_failure(&file_id, &file_name, &error);
                             skipped_count += 1;
                             continue;
                         }
@@ -3446,9 +3518,13 @@ fn build_audio_track_info(
     };
 
     let label = match (language_tag.as_deref(), title.as_deref()) {
-        (Some(language), Some(track_title)) if !track_title.to_lowercase().contains(&language.to_lowercase()) => {
+        (Some(language), Some(track_title))
+            if !track_title
+                .to_lowercase()
+                .contains(&language.to_lowercase()) =>
+        {
             format!("{} {}", language, track_title)
-        },
+        }
         (_, Some(track_title)) => track_title.to_string(),
         (Some(language), None) => language.to_string(),
         _ => format!("Track {}", stream_index + 1),
@@ -4471,7 +4547,9 @@ async fn play_with_mpv(
                 (extracted_path, None, None, false)
             } else {
                 match archive_manager::archive_format_for_media(&media) {
-                    archive_manager::ArchiveFormat::Zip => match zip_compression_method.unwrap_or_default() {
+                    archive_manager::ArchiveFormat::Zip => match zip_compression_method
+                        .unwrap_or_default()
+                    {
                         0 => {
                             let stream_info = archive_manager::build_archive_stream_info(&media)?;
                             let (drive_url, access_token) = state
@@ -4485,7 +4563,10 @@ async fn play_with_mpv(
                                 use_partial_cache_via_proxy,
                             ) = {
                                 let cache_config = build_zip_cache_config(&config);
-                                match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
+                                match zip_manager::inspect_stream_cache_target(
+                                    &media,
+                                    &cache_config,
+                                ) {
                                     Ok(snapshot) => {
                                         let local_cache_path = choose_store_zip_local_cache_for_mpv(
                                             &media,
@@ -6440,7 +6521,7 @@ async fn clear_cloud_cache(state: State<'_, AppState>) -> Result<ApiResponse, St
 /// Used when showing the app from tray - creates a new window if none exists
 fn create_main_window(app: &AppHandle) -> Result<tauri::Window, tauri::Error> {
     let window = WindowBuilder::new(app, "main", WindowUrl::App("index.html".into()))
-        .title("StreamVault")
+        .title(runtime_window_title())
         .inner_size(1200.0, 800.0)
         .resizable(true)
         .transparent(true)
@@ -6450,6 +6531,34 @@ fn create_main_window(app: &AppHandle) -> Result<tauri::Window, tauri::Error> {
     apply_window_corner_radius(&window);
 
     Ok(window)
+}
+
+fn is_dev_runtime() -> bool {
+    cfg!(debug_assertions)
+}
+
+fn runtime_window_title() -> &'static str {
+    if is_dev_runtime() {
+        "StreamVault Dev"
+    } else {
+        "StreamVault"
+    }
+}
+
+fn runtime_app_identifier() -> &'static str {
+    if is_dev_runtime() {
+        "com.streamvault.app.dev"
+    } else {
+        "com.streamvault.app"
+    }
+}
+
+fn runtime_deep_link_scheme() -> &'static str {
+    if is_dev_runtime() {
+        "streamvault-dev"
+    } else {
+        "streamvault"
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -6473,8 +6582,7 @@ fn apply_window_corner_radius(window: &tauri::Window) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn apply_window_corner_radius(_window: &tauri::Window) {
-}
+fn apply_window_corner_radius(_window: &tauri::Window) {}
 
 fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
     let mut notification = SystemNotification::new();
@@ -6486,7 +6594,7 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
 
     #[cfg(target_os = "windows")]
     {
-        notification.app_id("com.streamvault.app");
+        notification.app_id(runtime_app_identifier());
     }
 
     if let Err(e) = notification.show() {
@@ -6505,7 +6613,12 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
 
 /// Format a standardized "added" notification message for a single item.
 /// For TV episodes, includes the S##E## designator.
-fn format_added_notification(title: &str, is_tv: bool, season: Option<i32>, episode: Option<i32>) -> String {
+fn format_added_notification(
+    title: &str,
+    is_tv: bool,
+    season: Option<i32>,
+    episode: Option<i32>,
+) -> String {
     if is_tv {
         format!(
             "{} S{:02}E{:02} added to your library",
@@ -6750,24 +6863,26 @@ async fn build_zip_stream_url(
         .get_stream_url(&stream_info.zip_file_id)
         .await?;
     let proxy_cache_spec = match archive_manager::archive_format_for_media(media) {
-        archive_manager::ArchiveFormat::Zip => match zip_manager::zip_entry_compression_method(media) {
-        Ok(0) => match zip_manager::prepare_stream_cache_target(media, &cache_config) {
-            Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
-                cache_paths,
-                cache_config: cache_config.clone(),
-                start_delay_ms: 4_000,
-                throttle_delay_ms: 250,
-            }),
-            Err(error) => {
-                println!(
-                    "[ZIP CACHE] Falling back to stream-only built-in proxy for '{}': {:?}",
-                    media.title, error
-                );
-                None
+        archive_manager::ArchiveFormat::Zip => {
+            match zip_manager::zip_entry_compression_method(media) {
+                Ok(0) => match zip_manager::prepare_stream_cache_target(media, &cache_config) {
+                    Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
+                        cache_paths,
+                        cache_config: cache_config.clone(),
+                        start_delay_ms: 4_000,
+                        throttle_delay_ms: 250,
+                    }),
+                    Err(error) => {
+                        println!(
+                            "[ZIP CACHE] Falling back to stream-only built-in proxy for '{}': {:?}",
+                            media.title, error
+                        );
+                        None
+                    }
+                },
+                _ => None,
             }
-        },
-        _ => None,
-        },
+        }
         archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => None,
     };
     let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
@@ -6829,10 +6944,7 @@ fn unsupported_archive_reason(file: &gdrive::DriveItem) -> Option<String> {
     )
 }
 
-fn notify_unsupported_archives_window(
-    window: &Window,
-    archive_names: &[String],
-) {
+fn notify_unsupported_archives_window(window: &Window, archive_names: &[String]) {
     if archive_names.is_empty() {
         return;
     }
@@ -6852,10 +6964,7 @@ fn notify_unsupported_archives_window(
     dispatch_notification(window, "Unsupported TAR Archive", &message, "warning");
 }
 
-fn notify_unsupported_archives_handle(
-    app_handle: &AppHandle,
-    archive_names: &[String],
-) {
+fn notify_unsupported_archives_handle(app_handle: &AppHandle, archive_names: &[String]) {
     if archive_names.is_empty() {
         return;
     }
@@ -6904,42 +7013,44 @@ fn ensure_cloud_show_with_metadata(
                 folder_id.to_string(),
             )
         } else {
-        let tmdb_result = tmdb::search_metadata(api_key, show_title, "tv", year, image_cache_dir)
-            .ok()
-            .flatten();
+            let tmdb_result =
+                tmdb::search_metadata(api_key, show_title, "tv", year, image_cache_dir)
+                    .ok()
+                    .flatten();
 
-        let (title, year, overview, cast_names, poster_path, tmdb_id_opt) = match &tmdb_result {
-            Some(meta) => (
-                meta.title.clone(),
-                meta.year,
-                meta.overview.clone(),
-                meta.cast_names.clone(),
-                meta.poster_path.clone(),
-                meta.tmdb_id.clone(),
-            ),
-            None => (show_title.to_string(), None, None, None, None, None),
-        };
+            let (title, year, overview, cast_names, poster_path, tmdb_id_opt) = match &tmdb_result {
+                Some(meta) => (
+                    meta.title.clone(),
+                    meta.year,
+                    meta.overview.clone(),
+                    meta.cast_names.clone(),
+                    meta.poster_path.clone(),
+                    meta.tmdb_id.clone(),
+                ),
+                None => (show_title.to_string(), None, None, None, None, None),
+            };
 
-        let preferred_title = media_manager::prefer_title_with_leading_article(show_title, &title);
-        let show_id = db
-            .insert_cloud_tvshow(
-                &preferred_title,
-                year,
-                overview.as_deref(),
-                cast_names.as_deref(),
-                poster_path.as_deref(),
-                &show_path,
-                folder_id,
-                tmdb_id_opt.as_deref(),
-            )
-            .or_else(|e| {
-                find_existing_cloud_tvshow_by_path(db, &show_path)
-                    .map(|existing_show| existing_show.id)
-                    .ok_or(e)
-            })
-            .map_err(|e| e.to_string())?;
+            let preferred_title =
+                media_manager::prefer_title_with_leading_article(show_title, &title);
+            let show_id = db
+                .insert_cloud_tvshow(
+                    &preferred_title,
+                    year,
+                    overview.as_deref(),
+                    cast_names.as_deref(),
+                    poster_path.as_deref(),
+                    &show_path,
+                    folder_id,
+                    tmdb_id_opt.as_deref(),
+                )
+                .or_else(|e| {
+                    find_existing_cloud_tvshow_by_path(db, &show_path)
+                        .map(|existing_show| existing_show.id)
+                        .ok_or(e)
+                })
+                .map_err(|e| e.to_string())?;
 
-        (show_id, tmdb_id_opt, folder_id.to_string())
+            (show_id, tmdb_id_opt, folder_id.to_string())
         }
     };
 
@@ -6966,14 +7077,7 @@ fn ensure_cloud_show_without_metadata(
         existing_show.id
     } else {
         db.insert_cloud_tvshow(
-            show_title,
-            None,
-            None,
-            None,
-            None,
-            &show_path,
-            folder_id,
-            None,
+            show_title, None, None, None, None, &show_path, folder_id, None,
         )
         .or_else(|e| {
             find_existing_cloud_tvshow_by_path(db, &show_path)
@@ -7232,12 +7336,10 @@ fn emit_ui_notification(window: &tauri::Window, title: &str, message: &str, kind
         recent.insert(notification_key, now);
     }
 
-    if let Err(e) = window
-        .emit(
-            "notification",
-            serde_json::json!({ "type": kind, "title": title, "message": message }),
-        )
-    {
+    if let Err(e) = window.emit(
+        "notification",
+        serde_json::json!({ "type": kind, "title": title, "message": message }),
+    ) {
         eprintln!("[NOTIFY] Failed to emit notification: {}", e);
     }
 }
@@ -7313,10 +7415,9 @@ fn build_mpv_display_title(media: &database::MediaItem) -> String {
     let episode = media
         .episode_number
         .or(inferred_episode_numbers.map(|(_, episode)| episode));
-    let is_episode = matches!(
-        media.media_type.as_str(),
-        "tv" | "tvepisode" | "episode"
-    ) || season.is_some() || episode.is_some();
+    let is_episode = matches!(media.media_type.as_str(), "tv" | "tvepisode" | "episode")
+        || season.is_some()
+        || episode.is_some();
 
     if is_episode {
         let season = season.unwrap_or(1);
@@ -7535,9 +7636,10 @@ async fn background_check_cloud_changes(
                                 let season_part = &rest[..e_pos];
                                 let episode_part = &rest[e_pos + 1..];
                                 // Both season and episode should be numeric
-                                season_part.chars().all(|c| c.is_ascii_digit()) && 
-                                episode_part.chars().all(|c| c.is_ascii_digit()) &&
-                                !season_part.is_empty() && !episode_part.is_empty()
+                                season_part.chars().all(|c| c.is_ascii_digit())
+                                    && episode_part.chars().all(|c| c.is_ascii_digit())
+                                    && !season_part.is_empty()
+                                    && !episode_part.is_empty()
                             } else {
                                 false
                             }
@@ -7555,7 +7657,8 @@ async fn background_check_cloud_changes(
                     // Extract series name (everything before " S")
                     if let Some(pos) = title.find(" S") {
                         let series_name = &title[..pos];
-                        series_episodes.entry(series_name.to_string())
+                        series_episodes
+                            .entry(series_name.to_string())
                             .or_insert_with(Vec::new)
                             .push(title.clone());
                         continue;
@@ -7736,6 +7839,7 @@ async fn background_check_cloud_changes(
 
             for (file_id, file_name, parents) in files_to_index_clone {
                 if db.cloud_file_exists(&file_id) {
+                    let _ = db.clear_cloud_index_failure(&file_id);
                     skipped_count += 1;
                     continue;
                 }
@@ -7786,8 +7890,14 @@ async fn background_check_cloud_changes(
                     ) {
                         Ok(items) => {
                             if items.is_empty() {
+                                let _ = db.upsert_cloud_index_failure(
+                                    &file_id,
+                                    &file_name,
+                                    "Archive was scanned but no playable TV episode entries were identified",
+                                );
                                 skipped_count += 1;
                             } else {
+                                let _ = db.clear_cloud_index_failure(&file_id);
                                 tv_count += items.len();
                                 entry_counter += items.len();
                                 indexed_items.extend(items);
@@ -7796,6 +7906,7 @@ async fn background_check_cloud_changes(
                         }
                         Err(error) => {
                             println!("[ZIP] Failed to index '{}': {}", file_name, error);
+                            let _ = db.upsert_cloud_index_failure(&file_id, &file_name, &error);
                             skipped_count += 1;
                             continue;
                         }
@@ -8216,7 +8327,14 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
         current_version
     );
     println!("[UPDATE] Target repository: {}", repo);
-    println!("[UPDATE] Using authentication: {}", if !GITHUB_RELEASE_TOKEN.is_empty() { "Yes" } else { "No (unauthenticated)" });
+    println!(
+        "[UPDATE] Using authentication: {}",
+        if !GITHUB_RELEASE_TOKEN.is_empty() {
+            "Yes"
+        } else {
+            "No (unauthenticated)"
+        }
+    );
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
     println!("[UPDATE] API URL: {}", url);
@@ -8237,13 +8355,10 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     }
 
     println!("[UPDATE] Sending request to GitHub API...");
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            println!("[UPDATE] ERROR: Network error during update check: {}", e);
-            format!("Network error: {}. Check your internet connection.", e)
-        })?;
+    let response = request.send().await.map_err(|e| {
+        println!("[UPDATE] ERROR: Network error during update check: {}", e);
+        format!("Network error: {}. Check your internet connection.", e)
+    })?;
 
     let status = response.status();
     println!("[UPDATE] Response status: {}", status);
@@ -8263,27 +8378,27 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
                 }
 
                 return Err(format!("GitHub API access denied (403). The repository may be private or the token is invalid. Details: {}", error_text));
-            },
+            }
             404 => {
                 println!("[UPDATE] ERROR: Release not found (404)");
                 println!("[UPDATE] Response body: {}", error_text);
                 return Err("Latest release not found. Please ensure releases are published at https://github.com/SlasshyOverhere/StreamVault/releases".to_string());
-            },
+            }
             _ => {
-                println!("[UPDATE] ERROR: GitHub API error {}: {}", status, error_text);
+                println!(
+                    "[UPDATE] ERROR: GitHub API error {}: {}",
+                    status, error_text
+                );
                 return Err(format!("GitHub API error ({}): {}", status, error_text));
             }
         }
     }
 
     println!("[UPDATE] Parsing release JSON...");
-    let release: GitHubRelease = response
-        .json()
-        .await
-        .map_err(|e| {
-            println!("[UPDATE] ERROR: Failed to parse release JSON: {}", e);
-            format!("Failed to parse release data: {}", e)
-        })?;
+    let release: GitHubRelease = response.json().await.map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to parse release JSON: {}", e);
+        format!("Failed to parse release data: {}", e)
+    })?;
 
     // Extract version from tag (remove 'v' prefix if present)
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
@@ -8305,7 +8420,10 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
                 || a.name.ends_with(".exe")
                 || a.name.ends_with("_x64-setup.exe");
             if matches {
-                println!("[UPDATE] Found matching asset: {} - {}", a.name, a.browser_download_url);
+                println!(
+                    "[UPDATE] Found matching asset: {} - {}",
+                    a.name, a.browser_download_url
+                );
             }
             matches
         })
@@ -8315,7 +8433,10 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
         println!("[UPDATE] WARNING: No Windows installer (.exe/.msi) found in release assets!");
         println!("[UPDATE] Available assets:");
         for asset in &release.assets {
-            println!("[UPDATE]   - {} ({})", asset.name, asset.browser_download_url);
+            println!(
+                "[UPDATE]   - {} ({})",
+                asset.name, asset.browser_download_url
+            );
         }
     }
 
@@ -8372,7 +8493,10 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     if !is_authorized_update_url(&parsed_url, false) {
         println!("[UPDATE] ERROR: URL not authorized: {}", url);
         println!("[UPDATE] Allowed repo: {}", ALLOWED_REPO);
-        return Err(format!("Unauthorized update URL. Must be from GitHub repository: {}", ALLOWED_REPO));
+        return Err(format!(
+            "Unauthorized update URL. Must be from GitHub repository: {}",
+            ALLOWED_REPO
+        ));
     }
     println!("[UPDATE] URL authorization passed");
 
@@ -8408,31 +8532,37 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     }
 
     println!("[UPDATE] Sending download request...");
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            println!("[UPDATE] ERROR: Failed to start download: {}", e);
-            format!("Failed to start download: {}. Check your internet connection.", e)
-        })?;
+    let response = request.send().await.map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to start download: {}", e);
+        format!(
+            "Failed to start download: {}. Check your internet connection.",
+            e
+        )
+    })?;
 
     let status = response.status();
     println!("[UPDATE] Download response status: {}", status);
 
     if !status.is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        println!("[UPDATE] ERROR: Download failed with status {}: {}", status, error_text);
+        println!(
+            "[UPDATE] ERROR: Download failed with status {}: {}",
+            status, error_text
+        );
 
         match status.as_u16() {
             403 => {
                 if error_text.contains("rate limit") {
                     return Err("GitHub API rate limit exceeded during download. Please configure a GitHub PAT or wait and try again.".to_string());
                 }
-                return Err(format!("Download forbidden (403). The release may require authentication. Details: {}", error_text));
-            },
+                return Err(format!(
+                    "Download forbidden (403). The release may require authentication. Details: {}",
+                    error_text
+                ));
+            }
             404 => {
                 return Err("Update file not found (404). The release may have been removed or the URL is incorrect.".to_string());
-            },
+            }
             _ => {
                 return Err(format!("Download failed: HTTP {} - {}", status, error_text));
             }
@@ -8440,7 +8570,11 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    println!("[UPDATE] File size: {} bytes ({:.2} MB)", total_size, total_size as f64 / 1024.0 / 1024.0);
+    println!(
+        "[UPDATE] File size: {} bytes ({:.2} MB)",
+        total_size,
+        total_size as f64 / 1024.0 / 1024.0
+    );
 
     let filename = sanitize_update_filename(&parsed_url);
     println!("[UPDATE] Filename: {}", filename);
@@ -8448,19 +8582,17 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     let staging_dir = updater_staging_root().join(Uuid::new_v4().to_string());
     println!("[UPDATE] Staging directory: {:?}", staging_dir);
 
-    std::fs::create_dir_all(&staging_dir)
-        .map_err(|e| {
-            println!("[UPDATE] ERROR: Failed to create staging directory: {}", e);
-            format!("Failed to create updater staging directory: {}", e)
-        })?;
+    std::fs::create_dir_all(&staging_dir).map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to create staging directory: {}", e);
+        format!("Failed to create updater staging directory: {}", e)
+    })?;
 
     let file_path = staging_dir.join(filename);
 
-    let mut file = std::fs::File::create(&file_path)
-        .map_err(|e| {
-            println!("[UPDATE] ERROR: Failed to create temp file: {}", e);
-            format!("Failed to create temp file: {}", e)
-        })?;
+    let mut file = std::fs::File::create(&file_path).map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to create temp file: {}", e);
+        format!("Failed to create temp file: {}", e)
+    })?;
 
     println!("[UPDATE] Writing file to disk...");
     let mut downloaded: u64 = 0;
@@ -8473,11 +8605,10 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
             format!("Download error: {}", e)
         })?;
 
-        file.write_all(&chunk)
-            .map_err(|e| {
-                println!("[UPDATE] ERROR: Write error: {}", e);
-                format!("Write error: {}", e)
-            })?;
+        file.write_all(&chunk).map_err(|e| {
+            println!("[UPDATE] ERROR: Write error: {}", e);
+            format!("Write error: {}", e)
+        })?;
 
         downloaded += chunk.len() as u64;
 
@@ -8497,7 +8628,10 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 
             // Log progress every 10%
             if (progress as u32) % 10 == 0 && (progress as u32) > 0 && downloaded < total_size {
-                println!("[UPDATE] Progress: {:.1}% ({}/{})", progress, downloaded, total_size);
+                println!(
+                    "[UPDATE] Progress: {:.1}% ({}/{})",
+                    progress, downloaded, total_size
+                );
             }
         }
     }
@@ -8521,11 +8655,14 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
 
     let Some(host) = url.host_str() else {
         println!("[UPDATE-SECURITY] Rejected URL with no host: {}", url);
-        return false
+        return false;
     };
 
     let path = url.path();
-    println!("[UPDATE-SECURITY] Validating URL - Host: {}, Path: {}, IsRedirect: {}", host, path, is_redirect);
+    println!(
+        "[UPDATE-SECURITY] Validating URL - Host: {}, Path: {}, IsRedirect: {}",
+        host, path, is_redirect
+    );
 
     // Allow GitHub main domain for release downloads
     if host == "github.com" {
@@ -8551,7 +8688,8 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
         || host.ends_with(".objects.githubusercontent.com")
         || host == "github-production-release-asset-2e65be.s3.amazonaws.com"
         || host.ends_with(".githubusercontent.com")
-        || host.ends_with(".amazonaws.com") && path.contains("/github-production-release-asset-") {
+        || host.ends_with(".amazonaws.com") && path.contains("/github-production-release-asset-")
+    {
         println!("[UPDATE-SECURITY] Allowing GitHub CDN host: {}", host);
         return true;
     }
@@ -8565,12 +8703,18 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
             || host.contains("amazonaws.com");
 
         if is_github_related {
-            println!("[UPDATE-SECURITY] Allowing GitHub-related redirect to: {}", host);
+            println!(
+                "[UPDATE-SECURITY] Allowing GitHub-related redirect to: {}",
+                host
+            );
             return true;
         }
     }
 
-    println!("[UPDATE-SECURITY] Rejected unauthorized URL: {} (redirect={})", url, is_redirect);
+    println!(
+        "[UPDATE-SECURITY] Rejected unauthorized URL: {} (redirect={})",
+        url, is_redirect
+    );
     false
 }
 
@@ -9353,9 +9497,9 @@ fn main() {
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
     dotenvy::dotenv().ok();
 
-    // Prepare deep link - must be done before building the app
-    // This registers the streamvault:// protocol handler
-    tauri_plugin_deep_link::prepare("com.streamvault.app");
+    // Prepare deep link before building the app.
+    // Dev and production use separate identifiers/schemes so they can run independently.
+    tauri_plugin_deep_link::prepare(runtime_app_identifier());
 
     // Initialize paths
     let db_path = database::get_database_path();
@@ -9398,16 +9542,20 @@ fn main() {
 
     let system_tray = SystemTray::new().with_menu(tray_menu);
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // Another instance tried to start - bring existing window to front
-            println!("[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window");
+    let builder = tauri::Builder::default();
+    let builder = if is_dev_runtime() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Another production instance tried to start - bring existing window to front.
+            println!(
+                "[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window"
+            );
             if let Some(window) = app.get_window("main") {
                 window.show().ok();
                 window.unminimize().ok();
                 window.set_focus().ok();
             } else {
-                // Window was destroyed, create a new one
                 println!("[SINGLE-INSTANCE] Creating new window...");
                 match create_main_window(app) {
                     Ok(window) => {
@@ -9420,6 +9568,9 @@ fn main() {
                 }
             }
         }))
+    };
+
+    builder
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| {
             match event {
@@ -9481,16 +9632,17 @@ fn main() {
         .manage(state)
         .setup(|app| {
             if let Some(window) = app.get_window("main") {
+                window.set_title(runtime_window_title()).ok();
                 apply_window_corner_radius(&window);
             }
 
             // Register deep link handler for OAuth callback
-            // The callback page redirects to: streamvault://oauth?code=XXX
+            // The callback page redirects to the runtime-specific scheme.
             let handle = app.handle();
-            tauri_plugin_deep_link::register("streamvault", move |request| {
+            tauri_plugin_deep_link::register(runtime_deep_link_scheme(), move |request| {
                 println!("[DEEPLINK] Received: {}", request);
 
-                // Parse the deep link URL: streamvault://oauth?code=XXX
+                // Parse the deep link URL and extract the OAuth code.
                 if let Ok(url) = url::Url::parse(&request) {
                     // Look for the authorization code
                     if let Some(code) = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v.to_string()) {

@@ -15,6 +15,8 @@ interface FixMatchModalProps {
 }
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w92"
+const DIRECT_MATCH_INPUT_RE =
+  /(^\d+$)|(^tt\d+$)|(imdb\.com\/title\/tt\d+)|(themoviedb\.org\/(?:movie|tv)\/\d+)/i
 
 const getResultTitle = (result: TmdbSearchResult) => result.title || result.name || "Untitled"
 
@@ -36,10 +38,17 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
   const [isUpdating, setIsUpdating] = useState(false)
   const searchTokenRef = useRef(0)
   const { toast } = useToast()
+  const isDirectMatchInput = useMemo(() => DIRECT_MATCH_INPUT_RE.test(query.trim()), [query])
 
   const runSearch = useCallback(async (searchQuery: string, mediaType: "movie" | "tv") => {
     const trimmedQuery = searchQuery.trim()
     if (!trimmedQuery) {
+      setResults([])
+      setSelectedId(null)
+      return
+    }
+
+    if (DIRECT_MATCH_INPUT_RE.test(trimmedQuery)) {
       setResults([])
       setSelectedId(null)
       return
@@ -107,7 +116,12 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
   }
 
   const handleSave = async () => {
-    if (!item || selectedId === null) {
+    if (!item) {
+      return
+    }
+
+    const matchInput = selectedId !== null ? selectedId.toString() : query.trim()
+    if (!matchInput) {
       toast({ title: "Error", description: "Please select a match first", variant: "destructive" })
       return
     }
@@ -115,7 +129,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     setIsUpdating(true)
     try {
       const type = item.media_type === "movie" ? "movie" : "tv"
-      await fixMatch(item.id, selectedId.toString(), type)
+      await fixMatch(item.id, matchInput, type)
 
       toast({ title: "Success", description: "Metadata updated successfully" })
       onOpenChange(false)
@@ -141,6 +155,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     () => results.find((result) => result.id === selectedId) || null,
     [results, selectedId]
   )
+  const canSave = Boolean(selectedResult || isDirectMatchInput)
 
   const expectedTypeLabel = item?.media_type === "movie" ? "movie" : "show"
 
@@ -156,7 +171,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
         <DialogHeader>
           <DialogTitle>Fix Match</DialogTitle>
           <DialogDescription>
-            Search TMDB for this {expectedTypeLabel}, select the correct result, and update its metadata automatically.
+            Search TMDB for this {expectedTypeLabel}, or paste a TMDB or IMDb URL or ID, and update its metadata automatically.
           </DialogDescription>
         </DialogHeader>
 
@@ -166,7 +181,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search by title..."
+              placeholder="Search by title, or paste TMDB/IMDb URL or ID..."
               disabled={isSearching || isUpdating}
             />
             <Button onClick={handleSearch} disabled={!query.trim() || isSearching || isUpdating}>
@@ -178,11 +193,13 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
           <div className="text-xs text-muted-foreground">
             {isSearching
               ? "Searching TMDB..."
+              : isDirectMatchInput
+                ? "Direct match input detected. Click Update Match to fetch metadata from that TMDB/IMDb link or ID."
               : `Found ${results.length} ${results.length === 1 ? "result" : "results"} for ${expectedTypeLabel}s`}
           </div>
 
           <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-            {!isSearching && results.length === 0 && (
+            {!isSearching && results.length === 0 && !isDirectMatchInput && (
               <div className="rounded-md border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
                 No results found. Try adjusting the search title.
               </div>
@@ -254,7 +271,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isUpdating}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isUpdating || !selectedResult}>
+          <Button onClick={handleSave} disabled={isUpdating || !canSave}>
             {isUpdating ? "Updating..." : "Update Match"}
           </Button>
         </DialogFooter>

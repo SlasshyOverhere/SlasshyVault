@@ -222,6 +222,14 @@ pub struct WatchHistoryEvent {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudIndexFailure {
+    pub cloud_file_id: String,
+    pub file_name: String,
+    pub last_error: String,
+    pub last_attempt: String,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -512,6 +520,16 @@ impl Database {
         )?;
 
         self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS cloud_index_failures (
+                cloud_file_id TEXT PRIMARY KEY,
+                file_name TEXT NOT NULL,
+                last_error TEXT NOT NULL,
+                last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
             "CREATE TABLE IF NOT EXISTS zip_archives (
                 zip_file_id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -562,6 +580,10 @@ impl Database {
 
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_cloud_file_id ON media(cloud_file_id) WHERE cloud_file_id IS NOT NULL",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cloud_index_failures_last_attempt ON cloud_index_failures(last_attempt DESC)",
             [],
         )?;
         self.conn.execute(
@@ -934,7 +956,12 @@ impl Database {
         Ok(())
     }
 
-    pub fn record_watch_event(&self, media_id: i64, current_time: f64, duration: f64) -> Result<()> {
+    pub fn record_watch_event(
+        &self,
+        media_id: i64,
+        current_time: f64,
+        duration: f64,
+    ) -> Result<()> {
         let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -978,7 +1005,8 @@ impl Database {
             ))
         })?;
 
-        let completed = duration > 0.0 && (current_time / duration) > AUTO_MARK_WATCHED_THRESHOLD_RATIO;
+        let completed =
+            duration > 0.0 && (current_time / duration) > AUTO_MARK_WATCHED_THRESHOLD_RATIO;
         let progress_percent = if duration > 0.0 {
             if completed {
                 100.0
@@ -988,7 +1016,11 @@ impl Database {
         } else {
             0.0
         };
-        let resume_position_seconds = if completed { 0.0 } else { current_time.max(0.0) };
+        let resume_position_seconds = if completed {
+            0.0
+        } else {
+            current_time.max(0.0)
+        };
         let duration_seconds = duration.max(0.0);
 
         let existing: Option<(String, String)> = self
@@ -2016,6 +2048,52 @@ impl Database {
             .is_ok()
     }
 
+    pub fn upsert_cloud_index_failure(
+        &self,
+        cloud_file_id: &str,
+        file_name: &str,
+        last_error: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO cloud_index_failures (cloud_file_id, file_name, last_error, last_attempt)
+             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(cloud_file_id) DO UPDATE SET
+                file_name = excluded.file_name,
+                last_error = excluded.last_error,
+                last_attempt = CURRENT_TIMESTAMP",
+            params![cloud_file_id, file_name, last_error],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_cloud_index_failure(&self, cloud_file_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM cloud_index_failures WHERE cloud_file_id = ?",
+            params![cloud_file_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_cloud_index_failures(&self, limit: usize) -> Result<Vec<CloudIndexFailure>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cloud_file_id, file_name, last_error, COALESCE(last_attempt, '')
+             FROM cloud_index_failures
+             ORDER BY last_attempt DESC
+             LIMIT ?",
+        )?;
+
+        let items = stmt.query_map(params![limit as i64], |row| {
+            Ok(CloudIndexFailure {
+                cloud_file_id: row.get(0)?,
+                file_name: row.get(1)?,
+                last_error: row.get(2)?,
+                last_attempt: row.get(3)?,
+            })
+        })?;
+
+        items.collect()
+    }
+
     /// Get cloud media by folder ID
     pub fn get_cloud_media_by_folder(&self, cloud_folder_id: &str) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
@@ -2376,27 +2454,21 @@ impl Database {
         let mut repaired = 0usize;
 
         for (title, folder_id) in groups {
-            let show_id =
-                if let Some(existing_id) = self.find_cloud_tvshow_by_title_and_folder(&title, &folder_id)? {
-                    existing_id
-                } else {
-                    let show_path = Self::cloud_tvshow_path(&folder_id, &title);
-                    match self.insert_cloud_tvshow(
-                        &title,
-                        None,
-                        None,
-                        None,
-                        None,
-                        &show_path,
-                        &folder_id,
-                        None,
-                    ) {
-                        Ok(id) => id,
-                        Err(_) => self.find_series_by_folder(&show_path)?.ok_or_else(|| {
-                            rusqlite::Error::QueryReturnedNoRows
-                        })?,
-                    }
-                };
+            let show_id = if let Some(existing_id) =
+                self.find_cloud_tvshow_by_title_and_folder(&title, &folder_id)?
+            {
+                existing_id
+            } else {
+                let show_path = Self::cloud_tvshow_path(&folder_id, &title);
+                match self.insert_cloud_tvshow(
+                    &title, None, None, None, None, &show_path, &folder_id, None,
+                ) {
+                    Ok(id) => id,
+                    Err(_) => self
+                        .find_series_by_folder(&show_path)?
+                        .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?,
+                }
+            };
 
             repaired += self.conn.execute(
                 "UPDATE media

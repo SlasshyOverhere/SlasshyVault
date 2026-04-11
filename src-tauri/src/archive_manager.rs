@@ -64,7 +64,9 @@ pub fn detect_archive_format(name: &str, mime_type: Option<&str>) -> Option<Arch
     let lower = name.to_ascii_lowercase();
     let mime = mime_type.unwrap_or_default().to_ascii_lowercase();
 
-    if mime == "application/zip" || mime == "application/x-zip-compressed" || lower.ends_with(".zip")
+    if mime == "application/zip"
+        || mime == "application/x-zip-compressed"
+        || lower.ends_with(".zip")
     {
         return Some(ArchiveFormat::Zip);
     }
@@ -133,12 +135,7 @@ pub fn analyze_archive_from_drive(
             })
         }
         ArchiveFormat::Tar => analyze_tar_from_drive(access_token, file_id, filename, mime_type),
-        ArchiveFormat::Rar => analyze_rar_from_drive(
-            access_token,
-            file_id,
-            filename,
-            cache_config,
-        ),
+        ArchiveFormat::Rar => analyze_rar_from_drive(access_token, file_id, filename, cache_config),
     }
 }
 
@@ -148,8 +145,10 @@ pub fn extract_archive_entry_to_cache(
     cache_config: &zip_manager::ZipCacheConfig,
 ) -> Result<String, String> {
     match archive_format_for_media(media) {
-        ArchiveFormat::Zip => zip_manager::extract_zip_entry_to_cache(access_token, media, cache_config)
-            .map_err(|e| e.to_string()),
+        ArchiveFormat::Zip => {
+            zip_manager::extract_zip_entry_to_cache(access_token, media, cache_config)
+                .map_err(|e| e.to_string())
+        }
         ArchiveFormat::Tar => extract_tar_entry_to_cache(access_token, media, cache_config),
         ArchiveFormat::Rar => extract_rar_entry_to_cache(access_token, media, cache_config),
     }
@@ -187,7 +186,8 @@ pub fn build_archive_stream_info(
                 byte_start,
                 byte_end,
                 content_type: zip_manager::content_type_for_name(
-                    media.zip_entry_path
+                    media
+                        .zip_entry_path
                         .as_deref()
                         .or(media.file_path.as_deref())
                         .unwrap_or("video/mp4"),
@@ -355,7 +355,10 @@ impl RarFileMedia for DriveRarMedia {
             }
 
             let response = client
-                .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+                .get(format!(
+                    "{}/files/{}?alt=media&supportsAllDrives=true",
+                    DRIVE_API_BASE, file_id
+                ))
                 .header(AUTHORIZATION, format!("Bearer {}", access_token))
                 .header(RANGE, format!("bytes={}-{}", interval.start, interval.end))
                 .send()
@@ -374,10 +377,16 @@ fn http_error_to_rar_io(error: reqwest::Error) -> rar_stream::RarError {
     rar_stream::RarError::Io(std::io::Error::other(error.to_string()))
 }
 
-fn fetch_drive_media_response(access_token: &str, file_id: &str) -> Result<reqwest::blocking::Response, String> {
+fn fetch_drive_media_response(
+    access_token: &str,
+    file_id: &str,
+) -> Result<reqwest::blocking::Response, String> {
     let client = Client::builder().build().map_err(|e| e.to_string())?;
     client
-        .get(format!("{}/files/{}?alt=media", DRIVE_API_BASE, file_id))
+        .get(format!(
+            "{}/files/{}?alt=media&supportsAllDrives=true",
+            DRIVE_API_BASE, file_id
+        ))
         .header(AUTHORIZATION, format!("Bearer {}", access_token))
         .send()
         .and_then(|response| response.error_for_status())
@@ -387,7 +396,10 @@ fn fetch_drive_media_response(access_token: &str, file_id: &str) -> Result<reqwe
 fn fetch_drive_file_size(access_token: &str, file_id: &str) -> Result<u64, String> {
     let client = Client::builder().build().map_err(|e| e.to_string())?;
     let payload = client
-        .get(format!("{}/files/{}?fields=size", DRIVE_API_BASE, file_id))
+        .get(format!(
+            "{}/files/{}?fields=size&supportsAllDrives=true",
+            DRIVE_API_BASE, file_id
+        ))
         .header(AUTHORIZATION, format!("Bearer {}", access_token))
         .send()
         .and_then(|response| response.error_for_status())
@@ -448,7 +460,8 @@ fn analyze_tar_reader(
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .to_string();
-        let entry_path = zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
+        let entry_path =
+            zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
         if !zip_manager::is_video_path(&entry_path) {
             continue;
         }
@@ -477,7 +490,11 @@ fn analyze_tar_reader(
             } else {
                 0
             },
-            compressed_size: if supports_passthrough { entry.size() } else { 0 },
+            compressed_size: if supports_passthrough {
+                entry.size()
+            } else {
+                0
+            },
             uncompressed_size: entry.size(),
             crc32: "00000000".to_string(),
             compression_method: if supports_passthrough { 0 } else { -2 },
@@ -514,13 +531,8 @@ fn analyze_rar_from_drive(
                 filename, error
             );
 
-            let source_path = download_archive_to_temp(
-                access_token,
-                file_id,
-                filename,
-                cache_config,
-                "analyze",
-            )?;
+            let source_path =
+                download_archive_to_temp(access_token, file_id, filename, cache_config, "analyze")?;
             let result = analyze_rar_from_path(file_id, filename, &source_path);
             let _ = fs::remove_file(source_path);
             result
@@ -534,8 +546,12 @@ fn analyze_rar_from_drive_fast(
     filename: &str,
 ) -> Result<AnalyzedArchive, String> {
     let file_size_bytes = fetch_drive_file_size(access_token, file_id)?;
-    let media: Arc<dyn RarFileMedia> =
-        Arc::new(DriveRarMedia::new(access_token, file_id, filename, file_size_bytes)?);
+    let media: Arc<dyn RarFileMedia> = Arc::new(DriveRarMedia::new(
+        access_token,
+        file_id,
+        filename,
+        file_size_bytes,
+    )?);
     let package = RarFilesPackage::new(vec![media]);
     let runtime = TokioRuntimeBuilder::new_current_thread()
         .enable_all()
@@ -633,7 +649,8 @@ fn analyze_rar_from_path(
         }
 
         let raw_path = header.filename.to_string_lossy().to_string();
-        let entry_path = zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
+        let entry_path =
+            zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
         if !zip_manager::is_video_path(&entry_path) {
             continue;
         }
@@ -720,7 +737,8 @@ fn extract_tar_entry_to_cache(
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .to_string();
-        let sanitized = zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
+        let sanitized =
+            zip_parser::sanitize_zip_entry_path(&raw_path).map_err(|e| e.to_string())?;
         if sanitized != entry_path {
             continue;
         }

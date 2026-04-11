@@ -983,7 +983,7 @@ function App() {
     }
 
     try {
-      const { isGDriveConnected: checkConnected, scanCloudFolder } = await import('@/services/gdrive')
+      const { isGDriveConnected: checkConnected, scanAllCloudFolders } = await import('@/services/gdrive')
       const connected = await checkConnected()
 
       if (!connected) {
@@ -997,9 +997,8 @@ function App() {
       setIsCloudIndexing(true)
       setCloudIndexingStatus('Checking for new files...')
 
-      // Scan the root folder which will recursively scan all subfolders
-      // The backend automatically skips files that are already indexed
-      const result = await scanCloudFolder('root', 'My Drive')
+      // Scan all tracked cloud folders and retry any previously skipped cloud files.
+      const result = await scanAllCloudFolders()
 
       if (result.indexed_count > 0) {
         setCloudIndexingStatus(`✓ Added ${result.indexed_count} new files!`)
