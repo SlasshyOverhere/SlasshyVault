@@ -349,6 +349,7 @@ function App() {
   const [updateGateMessage, setUpdateGateMessage] = useState('Checking for updates...')
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
+  const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
 
   // Check onboarding status and load tab visibility on mount
   useEffect(() => {
@@ -365,33 +366,64 @@ function App() {
     setUnstableEnabledState(isUnstableEnabled())
   }, [])
 
-  const runMandatoryUpdate = useCallback(async (showCheckErrors = false) => {
-    let updateDetected = false
+  const formatUpdateError = (error: unknown) => {
+    if (error instanceof Error) return error.message
+    if (typeof error === 'string') return error
+    if (error && typeof error === 'object') {
+      return (error as any).message || (error as any).error || JSON.stringify(error)
+    }
+    return 'Unknown update error.'
+  }
 
-    setUpdateGateStatus('idle')
+  const checkForAvailableUpdate = useCallback(async (showCheckErrors = false) => {
+    setUpdateGateStatus('checking')
     setUpdateGateMessage('Checking for updates...')
     setUpdateGateError(null)
-    setUpdateProgress(0)
-
-    let unlistenProgress: UnlistenFn | null = null
 
     try {
       const info = await checkForUpdates()
       if (!info.available) {
         setUpdateInfo(null)
+        setIsUpdateNoticeVisible(false)
         setUpdateGateStatus('idle')
         return
       }
 
-      updateDetected = true
       setUpdateInfo(info)
-
-      if (!info.download_url) {
-        throw new Error('Missing update download URL.')
+      setIsUpdateNoticeVisible(true)
+      setUpdateGateStatus('idle')
+      setUpdateGateMessage(`Update available: v${info.latest_version}`)
+    } catch (error) {
+      console.error('[Update] Update check failed:', error)
+      if (showCheckErrors) {
+        setUpdateGateError(formatUpdateError(error))
+        setUpdateGateStatus('error')
+        setUpdateGateMessage('Unable to check for updates.')
+        setIsUpdateNoticeVisible(true)
+      } else {
+        setUpdateGateStatus('idle')
       }
+    }
+  }, [])
 
+  const startUpdateInstall = useCallback(async () => {
+    if (!updateInfo?.download_url) {
+      setUpdateGateStatus('error')
+      setUpdateGateMessage('Update failed.')
+      setUpdateGateError('Missing update download URL.')
+      setIsUpdateNoticeVisible(true)
+      return
+    }
+
+    let unlistenProgress: UnlistenFn | null = null
+
+    setUpdateGateError(null)
+    setUpdateProgress(0)
+    setIsUpdateNoticeVisible(true)
+
+    try {
       setUpdateGateStatus('downloading')
-      setUpdateGateMessage(`Downloading update v${info.latest_version}...`)
+      setUpdateGateMessage(`Downloading update v${updateInfo.latest_version}...`)
 
       unlistenProgress = await listen<{ progress: number }>('update-download-progress', (event) => {
         const value = Math.max(0, Math.min(100, Math.round(event.payload.progress)))
@@ -400,58 +432,28 @@ function App() {
 
       await invoke('plugin:autostart|enable')
 
-      const installerPath = await downloadUpdate(info.download_url)
+      const installerPath = await downloadUpdate(updateInfo.download_url)
 
       setUpdateGateStatus('installing')
       setUpdateGateMessage('Installing update and restarting...')
       await installUpdate(installerPath)
     } catch (error) {
-      console.error('[Update] Mandatory update failed:', error)
-      // Log detailed error information for debugging
-      const errorDetails = {
-        type: typeof error,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        fullError: JSON.stringify(error, null, 2)
-      }
-      console.error('[Update] Error details:', errorDetails)
-
-      if (!updateDetected && !showCheckErrors) {
-        setUpdateInfo(null)
-        setUpdateGateStatus('idle')
-        return
-      }
-
+      console.error('[Update] Update install failed:', error)
       setUpdateGateStatus('error')
-      setUpdateGateMessage(updateDetected ? 'Update required to continue.' : 'Unable to check for updates.')
-
-      // Extract and format the error message
-      let errorMessage = 'Unknown update error.'
-
-      if (error instanceof Error) {
-        errorMessage = error.message
-      } else if (typeof error === 'string') {
-        errorMessage = error
-      } else if (error && typeof error === 'object') {
-        // Try to extract message from object
-        errorMessage = (error as any).message ||
-                      (error as any).error ||
-                      JSON.stringify(error)
-      }
-
-      console.log('[Update] Formatted error message:', errorMessage)
-      setUpdateGateError(errorMessage)
+      setUpdateGateMessage('Auto update failed. You can keep using the app and retry later.')
+      setUpdateGateError(formatUpdateError(error))
+      setIsUpdateNoticeVisible(true)
     } finally {
       if (unlistenProgress) {
         unlistenProgress()
       }
     }
-  }, [])
+  }, [updateInfo])
 
-  // Mandatory update check on app start
+  // Background update check on app start
   useEffect(() => {
-    void runMandatoryUpdate()
-  }, [runMandatoryUpdate])
+    void checkForAvailableUpdate()
+  }, [checkForAvailableUpdate])
 
   // Handle beta toggle
   const handleBetaToggle = (enabled: boolean) => {
@@ -1358,7 +1360,8 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
-  const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing' || updateGateStatus === 'error'
+  const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing'
+  const showUpdateNotice = isUpdateNoticeVisible && (Boolean(updateInfo) || updateGateStatus === 'error')
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
@@ -1399,22 +1402,62 @@ function App() {
                 Installing and restarting...
               </div>
             )}
-
-            {updateGateStatus === 'error' && (
-              <div className="mt-4 space-y-3">
-                {updateGateError && (
-                  <div className="text-xs text-red-300/90 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-                    {updateGateError}
-                  </div>
-                )}
+          </div>
+        </div>
+      )}
+      {showUpdateNotice && !isUpdateGateActive && (
+        <div className="fixed top-12 right-4 z-[260] w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-4 backdrop-blur-xl">
+          <div className="flex items-start gap-3">
+            <div className={`mt-0.5 p-2 rounded-xl ${updateGateStatus === 'error' ? 'bg-red-500/15' : 'bg-white/10'}`}>
+              <Download className={`w-4 h-4 ${updateGateStatus === 'error' ? 'text-red-300' : 'text-neutral-200'}`} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-white">
+                    {updateGateStatus === 'error' ? 'Update Failed' : 'Update Available'}
+                  </h2>
+                  <p className="text-xs text-neutral-400">
+                    {updateInfo?.latest_version ? `v${updateInfo.latest_version}` : 'StreamVault update'}
+                  </p>
+                </div>
                 <button
-                  onClick={() => void runMandatoryUpdate()}
-                  className="w-full py-2.5 px-4 rounded-lg bg-white/10 hover:bg-white/15 text-neutral-200 text-sm font-medium transition-colors border border-white/10"
+                  onClick={() => setIsUpdateNoticeVisible(false)}
+                  className="rounded-md p-1 text-neutral-400 hover:bg-white/10 hover:text-white transition-colors"
+                  aria-label="Close update notification"
                 >
-                  Retry Update
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            )}
+
+              <p className="mt-3 text-sm text-neutral-300">
+                {updateGateStatus === 'error'
+                  ? updateGateMessage
+                  : 'A new version is available. You can update now or dismiss this notice and keep using the app.'}
+              </p>
+
+              {updateGateError && (
+                <div className="mt-3 text-xs text-red-300/90 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 whitespace-pre-wrap break-words">
+                  {updateGateError}
+                </div>
+              )}
+
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  onClick={() => void startUpdateInstall()}
+                  disabled={!updateInfo?.download_url}
+                  className="rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-100 text-sm font-medium transition-colors border border-white/10 px-4 py-2"
+                >
+                  {updateGateStatus === 'error' ? 'Retry Update' : 'Update Now'}
+                </button>
+                <button
+                  onClick={() => setIsUpdateNoticeVisible(false)}
+                  className="rounded-lg text-neutral-400 hover:text-white hover:bg-white/5 text-sm transition-colors px-3 py-2"
+                >
+                  Later
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

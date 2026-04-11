@@ -8877,22 +8877,32 @@ fn resolve_windows_installer_from_package(
     std::fs::create_dir_all(&extract_dir)
         .map_err(|e| format!("Failed to create extracted installer directory: {}", e))?;
 
-    let status = std::process::Command::new("powershell")
+    let output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+            "& { param([string]$zipPath, [string]$destinationPath) Expand-Archive -LiteralPath $zipPath -DestinationPath $destinationPath -Force }",
         ])
         .arg(package_path)
         .arg(&extract_dir)
-        .status()
+        .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            "No extraction error output was captured.".to_string()
+        };
         return Err(format!(
-            "Failed to extract updater ZIP. PowerShell exit code: {:?}",
-            status.code()
+            "Failed to extract updater ZIP. PowerShell exit code: {:?}. {}",
+            output.status.code(),
+            details
         ));
     }
 
