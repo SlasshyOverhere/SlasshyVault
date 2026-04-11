@@ -8455,7 +8455,16 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     }
 
     println!("[UPDATE] Parsing latest.json...");
-    let manifest: TauriLatestManifest = response.json().await.map_err(|e| {
+    let metadata_bytes = response.bytes().await.map_err(|e| {
+        println!("[UPDATE] ERROR: Failed to read latest.json body: {}", e);
+        manual_update_error(
+            "check_for_updates",
+            format!("Failed to read release metadata: {}.", e),
+        )
+    })?;
+    let metadata_text = String::from_utf8_lossy(&metadata_bytes);
+    let metadata_text = metadata_text.trim_start_matches('\u{feff}');
+    let manifest: TauriLatestManifest = serde_json::from_str(metadata_text).map_err(|e| {
         println!("[UPDATE] ERROR: Failed to parse latest.json: {}", e);
         manual_update_error(
             "check_for_updates",
