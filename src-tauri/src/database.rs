@@ -92,6 +92,7 @@ pub struct MediaItem {
     pub zip_uncompressed_size: Option<i64>,
     pub zip_crc32: Option<String>,
     pub zip_compression_method: Option<i64>,
+    pub file_size_bytes: Option<i64>,
     pub archive_playback_can_play: Option<bool>,
     pub archive_playback_mode: Option<String>,
     pub archive_playback_message: Option<String>,
@@ -403,6 +404,12 @@ impl Database {
         if !columns.contains(&"zip_compression_method".to_string()) {
             self.conn.execute(
                 "ALTER TABLE media ADD COLUMN zip_compression_method INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"file_size_bytes".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN file_size_bytes INTEGER DEFAULT NULL",
                 [],
             )?;
         }
@@ -769,7 +776,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method
+                    zip_compression_method, file_size_bytes
              FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
         )?;
 
@@ -832,6 +839,8 @@ impl Database {
     }
 
     pub fn get_watch_history_events(&self, limit: i32) -> Result<Vec<WatchHistoryEvent>> {
+        self.reconcile_legacy_watch_history_events()?;
+
         let mut stmt = self.conn.prepare(
             "SELECT
                 event_id,
@@ -864,6 +873,85 @@ impl Database {
 
         let items = stmt.query_map(params![limit], Self::map_watch_history_event)?;
         items.collect()
+    }
+
+    fn reconcile_legacy_watch_history_events(&self) -> Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                w.event_id,
+                w.ended_at,
+                COALESCE(m.duration_seconds, 0),
+                COALESCE(m.resume_position_seconds, 0),
+                m.last_watched
+             FROM watch_history_events w
+             LEFT JOIN media m ON m.id = w.media_id
+             WHERE w.completed = 0
+               AND COALESCE(w.progress_percent, 0) <= 0
+               AND COALESCE(w.resume_position_seconds, 0) <= 0
+               AND COALESCE(w.duration_seconds, 0) <= 0
+               AND w.media_id IS NOT NULL",
+        )?;
+
+        let candidates = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+
+        let mut repaired = 0usize;
+
+        for candidate in candidates {
+            let (event_id, ended_at, media_duration, media_resume, media_last_watched) = candidate?;
+
+            if media_duration <= 0.0 {
+                continue;
+            }
+
+            let Some(last_watched) = media_last_watched else {
+                continue;
+            };
+
+            if last_watched != ended_at {
+                continue;
+            }
+
+            let completed = media_resume <= 0.0;
+            let progress_percent = if completed {
+                100.0
+            } else {
+                ((media_resume / media_duration) * 100.0).clamp(0.0, 100.0)
+            };
+            let resume_position_seconds = if completed { 0.0 } else { media_resume };
+
+            self.conn.execute(
+                "UPDATE watch_history_events
+                 SET
+                    progress_percent = ?,
+                    resume_position_seconds = ?,
+                    duration_seconds = ?,
+                    completed = ?,
+                    updated_at = CASE
+                        WHEN datetime(updated_at) > datetime('now') THEN updated_at
+                        ELSE datetime('now')
+                    END
+                 WHERE event_id = ?",
+                params![
+                    progress_percent,
+                    resume_position_seconds,
+                    media_duration,
+                    if completed { 1 } else { 0 },
+                    event_id,
+                ],
+            )?;
+
+            repaired += 1;
+        }
+
+        Ok(repaired)
     }
 
     pub fn get_media_by_id(&self, id: i64) -> Result<MediaItem> {
@@ -1903,13 +1991,14 @@ impl Database {
         episode_title: Option<&str>,
         overview: Option<&str>,
         still_path: Option<&str>,
+        file_size_bytes: Option<i64>,
     ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO media (title, file_path, media_type, parent_id, season_number, episode_number,
-                               is_cloud, cloud_file_id, cloud_folder_id, episode_title, overview, still_path)
-             VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                               is_cloud, cloud_file_id, cloud_folder_id, episode_title, overview, still_path, file_size_bytes)
+              VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
             params![title, file_name, parent_id, season, episode, cloud_file_id, cloud_folder_id,
-                   episode_title, overview, still_path],
+                   episode_title, overview, still_path, file_size_bytes],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -3110,6 +3199,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_file_size(&self, media_id: i64, file_size_bytes: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET file_size_bytes = ? WHERE id = ?",
+            params![file_size_bytes, media_id],
+        )?;
+        Ok(())
+    }
+
     // ==================== SOCIAL SYNC FUNCTIONS ====================
 
     /// Get aggregated watch stats from both media and streaming_history tables.
@@ -3332,6 +3429,7 @@ impl Database {
             zip_uncompressed_size: Self::get_optional_named(row, "zip_uncompressed_size"),
             zip_crc32: Self::get_optional_named(row, "zip_crc32"),
             zip_compression_method: Self::get_optional_named(row, "zip_compression_method"),
+            file_size_bytes: Self::get_optional_named(row, "file_size_bytes"),
             archive_playback_can_play: None,
             archive_playback_mode: None,
             archive_playback_message: None,
