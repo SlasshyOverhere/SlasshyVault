@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
-  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails,
+  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails, getMediaInfo, refreshSeriesMetadata,
   getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
   type AudioTrackOption, type SubtitleTrackOption
 } from "@/services/api"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogPortal, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { isMediaMarkedWatched } from "@/utils/playbackProgress"
+import { useToast } from "@/components/ui/use-toast"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -23,6 +24,7 @@ interface ContentDetailsModalProps {
   secondaryActionLabel?: string
   onEpisodeSecondaryAction?: (item: MediaItem) => void | Promise<void>
   episodeSecondaryActionLabel?: string
+  onMetadataRefresh?: (itemId: number) => Promise<MediaItem | null> | MediaItem | null
 }
 
 const heroArtworkCache = new Map<number, string | null>()
@@ -89,6 +91,30 @@ const getZipCompressionLabel = (method?: number): string | null => {
     default:
       return null
   }
+}
+
+const formatEpisodeSize = (bytes?: number | null): string | null => {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  let value = bytes
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`
+}
+
+const getPreferredEpisodeSize = (episode: MediaItem): number | null => {
+  if (episode.parent_zip_id) {
+    return episode.zip_uncompressed_size ?? episode.zip_compressed_size ?? episode.file_size_bytes ?? null
+  }
+
+  return episode.file_size_bytes ?? episode.zip_uncompressed_size ?? episode.zip_compressed_size ?? null
 }
 
 function EpisodeThumbnailImage({
@@ -170,7 +196,9 @@ export function ContentDetailsModal({
   secondaryActionLabel,
   onEpisodeSecondaryAction,
   episodeSecondaryActionLabel,
+  onMetadataRefresh,
 }: ContentDetailsModalProps) {
+  const { toast } = useToast()
   const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null)
   const [posterImageUrl, setPosterImageUrl] = useState<string | null>(null)
   const [runtimeMinutesOverride, setRuntimeMinutesOverride] = useState<number | null>(null)
@@ -192,6 +220,7 @@ export function ContentDetailsModal({
   const [selectedSubtitlePreference, setSelectedSubtitlePreference] = useState<string>(AUTO_SUBTITLE_VALUE)
   const [customSubtitlePreference, setCustomSubtitlePreference] = useState("")
   const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false)
+  const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
 
@@ -233,6 +262,49 @@ export function ContentDetailsModal({
       setActiveItem(item)
     }
   }, [item])
+
+  const handleRefreshMetadata = useCallback(async () => {
+    if (!item || item.media_type !== "tvshow" || !item.tmdb_id || isRefreshingMetadata) return
+
+    const tmdbId = Number.parseInt(item.tmdb_id, 10)
+    if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+      toast({
+        title: "Refresh unavailable",
+        description: "This series does not have a valid TMDB match yet.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsRefreshingMetadata(true)
+    heroArtworkCache.delete(item.id)
+
+    try {
+      const result = await refreshSeriesMetadata(tmdbId, item.title)
+      const refreshedItem =
+        (await Promise.resolve(onMetadataRefresh?.(item.id))) ||
+        (await getMediaInfo(item.id))
+
+      const refreshedEpisodes = await getEpisodes(item.id)
+      setActiveItem(refreshedItem)
+      setEpisodes(refreshedEpisodes)
+      setTmdbEpisodesBySeason(new Map())
+
+      toast({
+        title: "Metadata refreshed",
+        description: result,
+      })
+    } catch (error) {
+      console.error("Failed to refresh metadata in content details modal:", error)
+      toast({
+        title: "Error",
+        description: "Failed to refresh metadata",
+        variant: "destructive",
+      })
+    } finally {
+      setIsRefreshingMetadata(false)
+    }
+  }, [isRefreshingMetadata, item, onMetadataRefresh, toast])
 
   const seriesPreferenceId = useMemo(() => {
     if (!item) return null
@@ -399,7 +471,8 @@ export function ContentDetailsModal({
 
   // Instant artwork reset and load
   useEffect(() => {
-    if (!item) return;
+    const target = activeItem ?? item
+    if (!target) return;
 
     // Reset immediately
     setHeroImageUrl(null)
@@ -408,12 +481,12 @@ export function ContentDetailsModal({
     setDirector(null)
     setCreator(null)
 
-    const cachedHero = heroArtworkCache.get(item.id)
+    const cachedHero = heroArtworkCache.get(target.id)
     if (cachedHero !== undefined) {
       setHeroImageUrl(cachedHero)
     }
 
-    const cachedRuntime = runtimeMinutesCache.get(item.id)
+    const cachedRuntime = runtimeMinutesCache.get(target.id)
     if (cachedRuntime !== undefined) {
       setRuntimeMinutesOverride(cachedRuntime)
     }
@@ -421,22 +494,22 @@ export function ContentDetailsModal({
     let cancelled = false
 
     const loadArtworkAndDetails = async () => {
-      if (!open || !item) return
+      if (!open || !target) return
 
-      const poster = await resolveLocalImage(item.poster_path)
+      const poster = await resolveLocalImage(target.poster_path)
       if (!cancelled) setPosterImageUrl(poster)
 
-      const expectedType = item.media_type === "movie" ? "movie" : "tv"
-      const itemTmdbId = Number.parseInt(item.tmdb_id || "", 10)
+      const expectedType = target.media_type === "movie" ? "movie" : "tv"
+      const itemTmdbId = Number.parseInt(target.tmdb_id || "", 10)
       const hasItemTmdbId = Number.isFinite(itemTmdbId) && itemTmdbId > 0
       
       // Load details based on media type
       if (hasItemTmdbId) {
-        if (item.media_type === "movie") {
+        if (target.media_type === "movie") {
           const movieDetails = await getMovieDetails(itemTmdbId)
           if (!cancelled && movieDetails) {
             if (movieDetails.runtime) {
-              runtimeMinutesCache.set(item.id, movieDetails.runtime)
+              runtimeMinutesCache.set(target.id, movieDetails.runtime)
               setRuntimeMinutesOverride(movieDetails.runtime)
             }
             if (movieDetails.director) {
@@ -445,10 +518,10 @@ export function ContentDetailsModal({
             if (!heroImageUrl && movieDetails.backdrop_path) {
               const backdrop = getTmdbImageUrl(movieDetails.backdrop_path, "original")
               setHeroImageUrl(backdrop)
-              heroArtworkCache.set(item.id, backdrop)
+              heroArtworkCache.set(target.id, backdrop)
             }
           }
-        } else if (item.media_type === "tvshow") {
+        } else if (target.media_type === "tvshow") {
           const showDetails = await getTvDetails(itemTmdbId)
           if (!cancelled && showDetails) {
             if (showDetails.creator) {
@@ -457,42 +530,42 @@ export function ContentDetailsModal({
             if (!heroImageUrl && showDetails.backdrop_path) {
               const backdrop = getTmdbImageUrl(showDetails.backdrop_path, "original")
               setHeroImageUrl(backdrop)
-              heroArtworkCache.set(item.id, backdrop)
+              heroArtworkCache.set(target.id, backdrop)
             }
           }
         }
       }
 
-      if (heroImageUrl === null || heroArtworkCache.get(item.id) === undefined) {
+      if (heroImageUrl === null || heroArtworkCache.get(target.id) === undefined) {
         let nextHero: string | null = null
         try {
-          if (item.media_type === "tvepisode" && item.still_path) {
-            nextHero = await resolveLocalImage(item.still_path)
+          if (target.media_type === "tvepisode" && target.still_path) {
+            nextHero = await resolveLocalImage(target.still_path)
           }
           if (!nextHero) {
-            const response = await searchTmdb(item.title)
+            const response = await searchTmdb(target.title)
             const results = Array.isArray(response?.results) ? response.results : []
-            const exactMatch = results.find(r => String(r.id) === item.tmdb_id && r.media_type === expectedType)
+            const exactMatch = results.find(r => String(r.id) === target.tmdb_id && r.media_type === expectedType)
             const chosen = exactMatch ?? results.find(r => r.media_type === expectedType && !!r.backdrop_path)
             nextHero = getTmdbImageUrl(chosen?.backdrop_path, "original")
           }
         } catch { /* ignore */ }
 
         if (!nextHero) nextHero = poster
-        heroArtworkCache.set(item.id, nextHero)
+        heroArtworkCache.set(target.id, nextHero)
         if (!cancelled) setHeroImageUrl(nextHero)
       }
     }
 
     void loadArtworkAndDetails()
     return () => { cancelled = true }
-  }, [open, item?.id])
+  }, [activeItem, item, open])
 
   const castList = useMemo(() => {
-    const target = item || activeItem
+    const target = activeItem ?? item
     if (!target?.cast_names || typeof target.cast_names !== "string") return []
     return target.cast_names.split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
-  }, [item?.id, activeItem?.id])
+  }, [activeItem, item])
 
   // Memoize seasons calculation to prevent redundant set creation and sorting on every render
   const seasons = useMemo(() => {
@@ -843,8 +916,16 @@ export function ContentDetailsModal({
   ) : null
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[1080px] w-[96vw] max-h-[92vh] h-auto bg-[#090a0d] border-white/10 text-white p-0 overflow-hidden flex flex-col shadow-2xl [&>button]:z-[100] [&>button]:bg-black/50 [&>button]:rounded-full [&>button]:p-1.5 [&>button]:hover:bg-black/80">
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogPortal>
+        <div
+          className="fixed inset-x-0 bottom-0 top-9 z-40 bg-black/52 backdrop-blur-md"
+          onClick={() => onOpenChange(false)}
+        />
+      </DialogPortal>
+      <DialogContent
+        className="max-w-[1080px] w-[96vw] max-h-[92vh] h-auto bg-[#090a0d] border-white/10 text-white p-0 overflow-hidden flex flex-col shadow-2xl [&>button]:z-[100] [&>button]:bg-black/50 [&>button]:rounded-full [&>button]:p-1.5 [&>button]:hover:bg-black/80"
+      >
         <DialogTitle className="sr-only">{displayTitle}</DialogTitle>
         <DialogDescription className="sr-only">Details for {displayTitle}</DialogDescription>
 
@@ -959,19 +1040,29 @@ export function ContentDetailsModal({
                     ))}
                   </div>
                   
-                  <div className="ml-auto flex max-w-[380px] shrink-0 flex-col items-end gap-1.5">
+                  <div className="ml-auto flex max-w-[420px] shrink-0 flex-col items-end gap-1.5">
                     <p className="max-w-[360px] text-right text-[10px] font-medium leading-4 text-white/42">
                       Changing audio or subtitles inside MPV can cause issues. Change them here only. If tracks are missing, play 2 seconds of the first episode and quit; this list will update automatically.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setPlaybackSettingsOpen(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20"
-                    >
-                      <span>Audio & Subtitles</span>
-                      <SlidersHorizontal className="w-2.5 h-2.5" />
-                    </button>
-
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleRefreshMetadata()}
+                        disabled={isRefreshingMetadata || !item?.tmdb_id}
+                        className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <RefreshCw className={cn("w-2.5 h-2.5", isRefreshingMetadata && "animate-spin")} />
+                        <span>{isRefreshingMetadata ? "Refreshing" : "Refresh Metadata"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlaybackSettingsOpen(true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20"
+                      >
+                        <span>Audio & Subtitles</span>
+                        <SlidersHorizontal className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
                 
@@ -994,6 +1085,7 @@ export function ContentDetailsModal({
                           const airDate = tmdbData?.air_date
                           const runtime = tmdbData?.runtime
                           const isWatched = isMediaMarkedWatched(ep)
+                          const episodeSizeLabel = formatEpisodeSize(getPreferredEpisodeSize(ep))
                           const episodeZipCompressionLabel = ep.parent_zip_id
                             ? getZipCompressionLabel(ep.zip_compression_method)
                             : null
@@ -1076,10 +1168,20 @@ export function ContentDetailsModal({
                                   </div>
                                 </div>
                                 
-                                {airDate && (
-                                  <div className="flex items-center gap-2 text-[10px] font-bold text-white/30 uppercase tracking-[0.15em] mb-2">
-                                    <Calendar className="w-3 h-3 opacity-50" />
-                                    {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                                {(airDate || episodeSizeLabel) && (
+                                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/30">
+                                    {airDate && (
+                                      <span className="inline-flex items-center gap-2">
+                                        <Calendar className="w-3 h-3 opacity-50" />
+                                        {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                                      </span>
+                                    )}
+                                    {episodeSizeLabel && (
+                                      <span className="inline-flex items-center gap-2 font-extrabold text-white">
+                                        {airDate && <span className="text-white/18">•</span>}
+                                        <span>{episodeSizeLabel}</span>
+                                      </span>
+                                    )}
                                   </div>
                                 )}
                                 
