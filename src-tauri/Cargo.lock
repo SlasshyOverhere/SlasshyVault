@@ -3259,8 +3259,6 @@ dependencies = [
 [[package]]
 name = "rar-stream"
 version = "5.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8240cf09afde07334d611611723c78a1014c6fbc0aa65014901ae885ec98d2e"
 dependencies = [
  "tokio",
 ]

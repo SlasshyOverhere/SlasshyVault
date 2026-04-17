@@ -1,0 +1,192 @@
+[package]
+name = "rar-stream"
+version = "5.3.2"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/doom-fish/rar-stream"
+documentation = "https://docs.rs/rar-stream"
+readme = "README.md"
+description = "High-performance RAR streaming library with optional async, crypto, NAPI, and WASM support"
+keywords = ["rar", "archive", "streaming", "compression", "encryption"]
+categories = ["compression", "encoding", "parser-implementations"]
+exclude = [
+  "__fixtures__/",
+  "benches/",
+  "examples/",
+  "fuzz/",
+  "scripts/",
+  "test-browser/",
+  ".github/",
+  "*.node",
+  "pkg/",
+  "target/",
+  "node_modules/",
+  "npm/",
+  "test-results/",
+  "pgo-data/",
+  "*.mjs",
+  "*.ts",
+  "*.js",
+  "lib/",
+  "pw",
+  "cliff.toml",
+  "release-plz.toml",
+  "package.json",
+  "package-lock.json",
+  "eslint.config.mjs",
+  "playwright.config.ts",
+  "tsconfig.json",
+  "vitest.config.ts",
+  ".npmignore",
+  ".gitignore",
+]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.docs.rs]
+# Build docs.rs with async + crypto (not napi/wasm — they need native tooling)
+features = ["crypto", "async"]
+# Document all features
+all-features = false
+# Show feature flags in docs
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Async file reading (tokio-based)
+async = ["dep:tokio"]
+# Node.js NAPI bindings
+napi = ["dep:napi", "dep:napi-derive", "dep:napi-build", "async", "parallel"]
+# Browser WASM bindings
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+# Encrypted archive support
+crypto = ["dep:aes", "dep:cbc", "dep:pbkdf2", "dep:sha2", "dep:sha1"]
+# Multi-threaded decompression for RAR5
+parallel = ["dep:rayon", "dep:crossbeam-channel"]
+
+[dependencies]
+# Core: ZERO dependencies!
+
+# Async (optional)
+tokio = { version = "1", features = ["fs", "io-util", "sync"], optional = true }
+
+# NAPI bindings (optional)
+napi = { version = "2", features = ["async", "napi6", "serde-json"], optional = true }
+napi-derive = { version = "2", optional = true }
+
+# WASM bindings (optional)
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+aes = { version = "0.8.4", optional = true }
+cbc = { version = "0.1.2", optional = true }
+pbkdf2 = { version = "0.12.2", optional = true }
+sha2 = { version = "0.10.9", optional = true }
+sha1 = { version = "0.10.6", optional = true }
+rayon = { version = "1.10", optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "macros"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+unrar = "0.5"
+
+[[example]]
+name = "extract"
+required-features = ["async"]
+
+[[bench]]
+name = "decompress"
+harness = false
+
+[[bench]]
+name = "vs_unrar"
+harness = false
+
+[profile.bench]
+lto = "fat"
+codegen-units = 1
+
+[build-dependencies]
+napi-build = { version = "2", optional = true }
+
+# Strict linting configuration
+[lints.rust]
+# Unsafe is used intentionally in hot paths with SAFETY comments
+unsafe_code = "allow"
+# missing_docs disabled - NAPI/WASM bindings generate many internal types
+missing_docs = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Allow some pedantic lints that are too noisy
+module_name_repetitions = "allow"
+too_many_lines = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+similar_names = "allow"
+unreadable_literal = "allow"
+doc_markdown = "allow"
+missing_const_for_fn = "allow"
+items_after_statements = "allow"
+cast_possible_wrap = "allow"
+needless_pass_by_value = "allow"
+return_self_not_must_use = "allow"
+type_complexity = "allow"
+cognitive_complexity = "allow"
+option_if_let_else = "allow"
+if_not_else = "allow"
+use_self = "allow"
+uninlined_format_args = "allow"
+manual_let_else = "allow"
+needless_range_loop = "allow"
+bool_to_int_with_if = "allow"
+unnecessary_wraps = "allow"
+struct_excessive_bools = "allow"
+significant_drop_tightening = "allow"
+needless_pass_by_ref_mut = "allow"
+cast_precision_loss = "allow"
+verbose_bit_mask = "allow"
+useless_let_if_seq = "allow"
+unused_self = "allow"
+redundant_else = "allow"
+match_same_arms = "allow"
+redundant_closure_for_method_calls = "allow"
+no_effect_underscore_binding = "allow"
+needless_late_init = "allow"
+map_unwrap_or = "allow"
+io_other_error = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+branches_sharing_code = "allow"
+# Performance-critical code uses inline(always) and unsafe intentionally
+inline_always = "allow"
+ptr_as_ptr = "allow"
+unnecessary_cast = "allow"
+manual_swap = "allow"
+new_without_default = "allow"
+while_let_loop = "allow"
+semicolon_if_nothing_returned = "allow"
+uninit_vec = "allow"
+not_unsafe_ptr_arg_deref = "allow"
+cast_ptr_alignment = "allow"
+fn_params_excessive_bools = "allow"
+too_long_first_doc_paragraph = "allow"
+
+
+# Maximum optimization for release builds
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
