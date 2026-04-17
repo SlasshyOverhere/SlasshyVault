@@ -80,7 +80,7 @@ import {
   waitForZipLoadingOverlayPaint,
 } from '@/utils/zipPlayback'
 import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
-import { HistoryEventCard } from '@/components/HistoryEventCard'
+import { FullHistoryView } from '@/components/FullHistoryView'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -2355,72 +2355,15 @@ function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="pt-24"
                       >
-                        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                          <div className="space-y-1">
-                            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-white/45">
-                              Watch History
-                            </p>
-                            <h2 className="text-2xl font-semibold tracking-tight text-white">
-                              Your Watch Timeline
-                            </h2>
-                            <p className="text-sm text-white/55">
-                              {historyEvents.length === 0
-                                ? 'Every movie and episode session will be saved here with the exact date and time.'
-                                : `${historyEvents.length} saved ${historyEvents.length === 1 ? 'session' : 'sessions'} across your local library and Google Drive sync.`}
-                            </p>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-3">
-                            <div className="inline-flex h-10 items-center justify-center rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 text-sm font-semibold text-emerald-100">
-                              {isHistorySyncing ? 'Syncing to Google Drive...' : 'Google Drive history sync ready'}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={handleClearHistory}
-                              disabled={historyEvents.length === 0 || isClearingHistory}
-                              className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.08] px-4 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/[0.12] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {isClearingHistory ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <X className="h-4 w-4" />
-                              )}
-                              Clear History
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2.5">
-                          {historyEvents.map((event) => (
-                            <HistoryEventCard
-                              key={event.event_id}
-                              event={event}
-                              onOpen={event.media_id ? handleHistoryEntryOpen : undefined}
-                              onRemove={handleRemoveHistoryEntry}
-                            />
-                          ))}
-                          {historyEvents.length === 0 && (
-                            <div className="col-span-full flex items-center justify-center min-h-[60vh]">
-                              <motion.div
-                                className="empty-state-enhanced flex flex-col items-center text-center"
-                                initial={{ opacity: 0, scale: 0.9 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                              >
-                                <div className="icon-wrapper mb-4">
-                                  <div className="icon-bg">
-                                    <Film className="w-10 h-10 text-muted-foreground" />
-                                  </div>
-                                </div>
-                                <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No watch sessions yet</h3>
-                                <p className="text-muted-foreground max-w-sm text-center mx-auto">
-                                  Start watching a movie or episode and StreamVault will save the exact session time here and sync it to your Google Drive account.
-                                </p>
-                              </motion.div>
-                            </div>
-                          )}
-                        </div>
+                        <FullHistoryView
+                          events={historyEvents}
+                          isHistorySyncing={isHistorySyncing}
+                          isClearingHistory={isClearingHistory}
+                          onClearHistory={handleClearHistory}
+                          onOpenEvent={handleHistoryEntryOpen}
+                          onRemoveEvent={handleRemoveHistoryEntry}
+                        />
                       </motion.div>
                     )}
 
