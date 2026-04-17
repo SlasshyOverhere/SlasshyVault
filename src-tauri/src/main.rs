@@ -1096,6 +1096,7 @@ async fn gdrive_scan_folder(
                     };
 
                 // Insert episode
+                let file_size_bytes = file.size.as_ref().and_then(|s| s.parse::<i64>().ok());
                 let ep_id = match db.insert_cloud_episode(
                     &show_title,
                     &file.name,
@@ -1107,6 +1108,7 @@ async fn gdrive_scan_folder(
                     ep_title.as_deref(),
                     ep_overview.as_deref(),
                     ep_still.as_deref(),
+                    file_size_bytes,
                 ) {
                     Ok(id) => id,
                     Err(e) => {
@@ -1612,6 +1614,8 @@ async fn scan_all_cloud_folders(
                         (None, None, None)
                     };
 
+                    let file_size_bytes = file.size.as_ref().and_then(|s| s.parse::<i64>().ok());
+
                     if db
                         .insert_cloud_episode(
                             &show_title,
@@ -1624,6 +1628,7 @@ async fn scan_all_cloud_folders(
                             ep_title.as_deref(),
                             ep_overview.as_deref(),
                             ep_still.as_deref(),
+                            file_size_bytes,
                         )
                         .is_err()
                     {
@@ -2293,6 +2298,7 @@ async fn check_cloud_changes(
                         None,
                         None,
                         None,
+                        None,
                     ) {
                         Ok(ep_id) => {
                             let display_title =
@@ -2941,12 +2947,14 @@ async fn delete_media_files(
 struct EpisodeDeleteInfo {
     id: i64,
     title: String,
+    episode_title: Option<String>,
     season_number: Option<i32>,
     episode_number: Option<i32>,
     file_path: Option<String>,
     parent_zip_id: Option<String>,
     delete_kind: String,
     archive_episode_count: Option<i32>,
+    file_size_bytes: Option<i64>,
 }
 
 // Get episodes for a TV show for delete selection
@@ -2955,22 +2963,24 @@ async fn get_episodes_for_delete(
     state: State<'_, AppState>,
     series_id: i64,
 ) -> Result<Vec<EpisodeDeleteInfo>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let episodes = db.get_episodes(series_id).map_err(|e| e.to_string())?;
+    let episodes = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_episodes(series_id).map_err(|e| e.to_string())?
+    };
 
-    let mut zip_archive_details: HashMap<String, (String, i32)> = HashMap::new();
+    let mut zip_archive_details: HashMap<String, (String, i32, Option<i64>)> = HashMap::new();
     for episode in &episodes {
         if let Some(zip_file_id) = episode.parent_zip_id.as_deref() {
-            let archive_name = zip_archive_details
+            let archive_info = zip_archive_details
                 .entry(zip_file_id.to_string())
                 .or_insert_with(|| {
-                    let archive_name = db
-                        .get_zip_archive(zip_file_id)
-                        .map(|archive| archive.filename)
-                        .unwrap_or_else(|_| "ZIP archive".to_string());
-                    (archive_name, 0)
+                    state.db.lock()
+                        .ok()
+                        .and_then(|db| db.get_zip_archive(zip_file_id).ok())
+                        .map(|archive| (archive.filename, 0, Some(archive.file_size_bytes)))
+                        .unwrap_or_else(|| ("ZIP archive".to_string(), 0, None))
                 });
-            archive_name.1 += 1;
+            archive_info.1 += 1;
         }
     }
 
@@ -2980,10 +2990,10 @@ async fn get_episodes_for_delete(
     for episode in episodes {
         if let Some(zip_file_id) = episode.parent_zip_id.clone() {
             if seen_zip_archives.insert(zip_file_id.clone()) {
-                let (archive_name, archive_episode_count) = zip_archive_details
+                let (archive_name, archive_episode_count, file_size_bytes) = zip_archive_details
                     .get(&zip_file_id)
                     .cloned()
-                    .unwrap_or_else(|| ("ZIP archive".to_string(), 1));
+                    .unwrap_or_else(|| ("ZIP archive".to_string(), 1, None));
                 let archive_suffix = if archive_episode_count == 1 {
                     "episode"
                 } else {
@@ -2993,6 +3003,7 @@ async fn get_episodes_for_delete(
                 result.push(EpisodeDeleteInfo {
                     id: episode.id,
                     title: archive_name,
+                    episode_title: None,
                     season_number: None,
                     episode_number: None,
                     file_path: Some(format!(
@@ -3002,21 +3013,47 @@ async fn get_episodes_for_delete(
                     parent_zip_id: Some(zip_file_id),
                     delete_kind: "zip_archive".to_string(),
                     archive_episode_count: Some(archive_episode_count),
+                    file_size_bytes,
                 });
             }
 
             continue;
         }
 
+        let file_path = episode.file_path.clone();
+        let file_size_bytes = episode.file_size_bytes.or_else(|| {
+            if !episode.is_cloud.unwrap_or(false) {
+                // Try to get file size from file system for local files
+                file_path.as_ref().and_then(|path| {
+                    match std::fs::metadata(path) {
+                        Ok(metadata) => Some(metadata.len() as i64),
+                        Err(e) => {
+                            eprintln!("[DEBUG] Failed to get file size for {}: {}", path, e);
+                            None
+                        }
+                    }
+                })
+            } else {
+                None
+            }
+        });
+
+        if file_size_bytes.is_none() {
+            eprintln!("[DEBUG] No file size for episode: {} (path: {:?}, is_cloud: {:?}, cloud_file_id: {:?})", 
+                episode.title, episode.file_path, episode.is_cloud, episode.cloud_file_id);
+        }
+
         result.push(EpisodeDeleteInfo {
             id: episode.id,
             title: episode.title,
+            episode_title: episode.episode_title,
             season_number: episode.season_number,
             episode_number: episode.episode_number,
-            file_path: episode.file_path,
+            file_path,
             parent_zip_id: None,
             delete_kind: "episode".to_string(),
             archive_episode_count: None,
+            file_size_bytes,
         });
     }
 
@@ -3294,6 +3331,54 @@ async fn get_media_info(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let item = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
     Ok(enrich_media_item_archive_assessment(item))
+}
+
+#[tauri::command]
+async fn resolve_watch_history_media(
+    state: State<'_, AppState>,
+    event: database::WatchHistoryEvent,
+) -> Result<database::MediaItem, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    if let Some(media_id) = event.media_id {
+        if let Ok(item) = db.get_media_by_id(media_id) {
+            return Ok(enrich_media_item_archive_assessment(item));
+        }
+    }
+
+    if event.media_type == "tvepisode" {
+        let parent = if let Some(parent_id) = event.parent_media_id {
+            db.get_media_by_id(parent_id).ok()
+        } else if let Some(parent_tmdb_id) = event.parent_tmdb_id.as_deref() {
+            db.find_media_by_tmdb(parent_tmdb_id, "tvshow")
+                .map_err(|e| e.to_string())?
+        } else if let Some(parent_title) = event.parent_title.as_deref() {
+            db.find_tvshow_by_title(parent_title)
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+
+        if let (Some(parent), Some(season), Some(episode)) =
+            (parent, event.season_number, event.episode_number)
+        {
+            if let Some(item) = db
+                .find_episode_by_parent_and_numbers(parent.id, season, episode)
+                .map_err(|e| e.to_string())?
+            {
+                return Ok(enrich_media_item_archive_assessment(item));
+            }
+        }
+    } else if let Some(tmdb_id) = event.tmdb_id.as_deref() {
+        if let Some(item) = db
+            .find_media_by_tmdb(tmdb_id, &event.media_type)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(enrich_media_item_archive_assessment(item));
+        }
+    }
+
+    Err("Media item could not be resolved from watch history".to_string())
 }
 
 #[tauri::command]
@@ -7975,6 +8060,7 @@ async fn background_check_cloud_changes(
                         None,
                         None,
                         None,
+                        None,
                     ) {
                         Ok(ep_id) => {
                             indexed_items.push((
@@ -9966,6 +10052,7 @@ fn main() {
             get_scan_status,
             get_resume_info,
             get_media_info,
+            resolve_watch_history_media,
             get_archive_playback_assessment,
             get_stream_info,
             get_audio_tracks,

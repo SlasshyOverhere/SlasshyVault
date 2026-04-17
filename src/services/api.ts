@@ -34,6 +34,7 @@ export interface MediaItem {
   zip_uncompressed_size?: number;
   zip_crc32?: string;
   zip_compression_method?: number;
+  file_size_bytes?: number;
   // Frontend-only history presentation fields
   history_group_count?: number;
   history_group_ids?: number[];
@@ -335,12 +336,14 @@ export interface DeleteResponse {
 export interface EpisodeDeleteInfo {
   id: number;
   title: string;
+  episode_title?: string;
   season_number?: number;
   episode_number?: number;
   file_path?: string;
   parent_zip_id?: string;
   delete_kind?: "episode" | "zip_archive";
   archive_episode_count?: number;
+  file_size_bytes?: number;
 }
 
 // Delete media files permanently from disk
@@ -499,6 +502,15 @@ export const getAudioTracks = async (
   } catch (error) {
     console.error("Failed to get audio tracks:", error);
     return [];
+  }
+};
+
+export const resolveWatchHistoryMedia = async (event: WatchHistoryEvent): Promise<MediaItem> => {
+  try {
+    return await invoke<MediaItem>("resolve_watch_history_media", { event });
+  } catch (error) {
+    console.error("Failed to resolve watch history media:", error);
+    throw error;
   }
 };
 

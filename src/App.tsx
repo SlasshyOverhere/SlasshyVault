@@ -33,6 +33,7 @@ import {
   playMedia,
   getResumeInfo,
   getMediaInfo,
+  resolveWatchHistoryMedia,
   ResumeInfo,
   getCachedImageUrl,
   hasCompletedOnboarding,
@@ -1209,28 +1210,66 @@ function App() {
       console.warn('[FixMatch] Failed to emit library-updated event:', error)
     }
 
-    if (!selectedShow) return
+    if (selectedShow) {
+      const shouldRefreshSelectedShow =
+        view === 'episodes'
+        || !fixedItem
+        || selectedShow.id === fixedItem.id
+        || selectedShow.id === (fixedItem.parent_id || -1)
 
-    const shouldRefreshSelectedShow =
-      view === 'episodes'
-      || !fixedItem
-      || selectedShow.id === fixedItem.id
-      || selectedShow.id === (fixedItem.parent_id || -1)
-
-    if (!shouldRefreshSelectedShow) return
-
-    try {
-      const refreshedShow = await getMediaInfo(selectedShow.id)
-      setSelectedShow(refreshedShow)
-    } catch (error) {
-      console.warn('[FixMatch] Failed to refresh selected show metadata:', error)
+      if (shouldRefreshSelectedShow) {
+        try {
+          const refreshedShow = await getMediaInfo(selectedShow.id)
+          setSelectedShow(refreshedShow)
+        } catch (error) {
+          console.warn('[FixMatch] Failed to refresh selected show metadata:', error)
+        }
+      }
     }
-  }, [itemToFix, fetchData, loadLibraryStats, loadContinueWatching, selectedShow, view])
+
+    if (contentDetailsItem) {
+      const shouldRefreshContentDetails =
+        !fixedItem
+        || contentDetailsItem.id === fixedItem.id
+        || contentDetailsItem.id === (fixedItem.parent_id || -1)
+
+      if (shouldRefreshContentDetails) {
+        try {
+          const refreshedItem = await getMediaInfo(contentDetailsItem.id)
+          setContentDetailsItem(refreshedItem)
+        } catch (error) {
+          console.warn('[FixMatch] Failed to refresh content details item:', error)
+        }
+      }
+    }
+  }, [contentDetailsItem, itemToFix, fetchData, loadLibraryStats, loadContinueWatching, selectedShow, view])
+
+  const handleContentDetailsMetadataRefresh = useCallback(async (itemId: number) => {
+    try {
+      const refreshedItem = await getMediaInfo(itemId)
+      setContentDetailsItem(refreshedItem)
+
+      if (selectedShow?.id === itemId) {
+        setSelectedShow(refreshedItem)
+      }
+
+      await Promise.allSettled([
+        fetchData(),
+        loadLibraryStats(),
+        loadContinueWatching(),
+        loadHistoryEvents(),
+      ])
+
+      return refreshedItem
+    } catch (error) {
+      console.warn('[ContentDetails] Failed to refresh item after metadata update:', error)
+      return null
+    }
+  }, [fetchData, loadContinueWatching, loadHistoryEvents, loadLibraryStats, selectedShow])
 
   const handleHistoryEntryOpen = useCallback(async (event: WatchHistoryEvent) => {
-    if (!event.media_id) return
     try {
-      const media = await getMediaInfo(event.media_id)
+      const media = await resolveWatchHistoryMedia(event)
       await handleItemClick(media)
     } catch (error) {
       console.warn('[History] Failed to open history item:', error)
@@ -2598,6 +2637,7 @@ function App() {
             onPrimaryAction={handleDetailsPrimaryAction}
             onEpisodeSecondaryAction={handleDetailsMarkWatched}
             episodeSecondaryActionLabel="Mark as watched"
+            onMetadataRefresh={handleContentDetailsMetadataRefresh}
           />
 
           {resumeDialogData && (

@@ -2485,6 +2485,61 @@ impl Database {
         }
     }
 
+    pub fn find_media_by_tmdb(
+        &self,
+        tmdb_id: &str,
+        media_type: &str,
+    ) -> Result<Option<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes
+             FROM media
+             WHERE tmdb_id = ? AND media_type = ?
+             LIMIT 1",
+        )?;
+
+        match stmt.query_row(params![tmdb_id, media_type], Self::map_media_item) {
+            Ok(item) => Ok(Some(item)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn find_episode_by_parent_and_numbers(
+        &self,
+        parent_id: i64,
+        season_number: i32,
+        episode_number: i32,
+    ) -> Result<Option<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes
+             FROM media
+             WHERE parent_id = ?
+               AND media_type = 'tvepisode'
+               AND COALESCE(season_number, 0) = ?
+               AND COALESCE(episode_number, 0) = ?
+             LIMIT 1",
+        )?;
+
+        match stmt.query_row(
+            params![parent_id, season_number, episode_number],
+            Self::map_media_item,
+        ) {
+            Ok(item) => Ok(Some(item)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     fn cloud_tvshow_path(folder_id: &str, show_title: &str) -> String {
         let slug = show_title
             .to_lowercase()
