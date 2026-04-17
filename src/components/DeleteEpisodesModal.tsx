@@ -14,6 +14,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EpisodeDeleteInfo, getEpisodesForDelete, deleteMediaFiles, deleteSeriesCloudFolder } from "@/services/api";
 
+const formatFileSize = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes < 0) return "Unknown size";
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+};
+
 interface DeleteEpisodesModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -165,8 +174,8 @@ export function DeleteEpisodesModal({
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl bg-background/95 backdrop-blur-xl border-white/10">
-                <DialogHeader>
+            <DialogContent className="max-w-2xl bg-background/95 backdrop-blur-xl border-white/10 flex h-[min(90vh,720px)] flex-col p-0 gap-0">
+                <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
                     <DialogTitle className="flex items-center gap-2 text-xl">
                         <Trash2 className="w-5 h-5 text-red-500" />
                         {allZipArchiveTargets ? "Delete ZIP Archives" : hasZipArchiveTargets ? "Delete Items" : "Delete Episodes"} - {seriesTitle}
@@ -186,11 +195,11 @@ export function DeleteEpisodesModal({
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="flex items-center justify-between py-2 border-b border-white/10">
+                <div className="flex items-center justify-between gap-3 border-y border-white/10 px-6 py-3 shrink-0">
                     <span className="text-sm text-muted-foreground">
                         {selectedIds.size} of {episodes.length} selected
                     </span>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
                         {episodes.length > 0 && (
                             <Button
                                 variant="outline"
@@ -233,109 +242,117 @@ export function DeleteEpisodesModal({
                     </div>
                 </div>
 
-                <ScrollArea className="h-[400px] pr-4">
-                    {isLoading ? (
-                        <div className="flex items-center justify-center h-full">
-                            <Loader2 className="w-8 h-8 animate-spin text-white" />
-                        </div>
-                    ) : error && episodes.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-center">
-                            <AlertTriangle className="w-12 h-12 text-red-500 mb-2" />
-                            <p className="text-red-400">{error}</p>
-                        </div>
-                    ) : episodes.length === 0 ? (
-                        <div className="flex items-center justify-center h-full text-muted-foreground">
-                            No episodes found for this series.
-                        </div>
-                    ) : hasZipArchiveTargets ? (
-                        <div className="space-y-3">
-                            <AnimatePresence>
-                                {episodes.map((ep) => (
-                                    <motion.div
-                                        key={ep.id}
-                                        initial={{ opacity: 0, x: -10 }}
-                                        animate={{ opacity: 1, x: 0 }}
-                                        exit={{ opacity: 0, x: 10 }}
-                                        className={`flex items-center gap-3 p-4 rounded-lg border transition-all cursor-pointer ${
-                                            selectedIds.has(ep.id)
-                                                ? "border-red-500/50 bg-red-500/10"
-                                                : "border-white/10 hover:border-white/20 hover:bg-white/5"
-                                        }`}
-                                        onClick={() => toggleEpisode(ep.id)}
-                                    >
-                                        <Checkbox
-                                            checked={selectedIds.has(ep.id)}
-                                            onCheckedChange={() => toggleEpisode(ep.id)}
-                                            className={selectedIds.has(ep.id) ? "border-red-500 data-[state=checked]:bg-red-500" : ""}
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-medium truncate">{ep.title}</div>
-                                            {ep.delete_kind === "zip_archive" ? (
-                                                <>
-                                                    <div className="text-xs text-amber-400/90 uppercase tracking-[0.14em] mt-1">
-                                                        ZIP Archive
-                                                        {ep.archive_episode_count ? ` · ${ep.archive_episode_count} indexed episode${ep.archive_episode_count !== 1 ? "s" : ""}` : ""}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground mt-1">
-                                                        {ep.file_path || "Deletes the archive file from Google Drive."}
-                                                    </div>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <div className="text-xs text-white/60 uppercase tracking-[0.14em] mt-1">
-                                                        Season {ep.season_number ?? 0} · Episode {ep.episode_number ?? 0}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground mt-1 truncate">
-                                                        {ep.file_path || "No file path"}
-                                                    </div>
-                                                </>
+                <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
+                    <ScrollArea className="h-full min-h-0 pr-4">
+                        {isLoading ? (
+                            <div className="flex h-full min-h-[240px] items-center justify-center">
+                                <Loader2 className="w-8 h-8 animate-spin text-white" />
+                            </div>
+                        ) : error && episodes.length === 0 ? (
+                            <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center">
+                                <AlertTriangle className="w-12 h-12 text-red-500 mb-2" />
+                                <p className="text-red-400">{error}</p>
+                            </div>
+                        ) : episodes.length === 0 ? (
+                            <div className="flex h-full min-h-[240px] items-center justify-center text-muted-foreground">
+                                No episodes found for this series.
+                            </div>
+                        ) : hasZipArchiveTargets ? (
+                            <div className="space-y-3">
+                                <AnimatePresence>
+                                    {episodes.map((ep) => (
+                                        <motion.div
+                                            key={ep.id}
+                                            initial={{ opacity: 0, x: -10 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: 10 }}
+                                            className={`flex items-center gap-3 rounded-lg border p-4 transition-all cursor-pointer ${
+                                                selectedIds.has(ep.id)
+                                                    ? "border-red-500/50 bg-red-500/10"
+                                                    : "border-white/10 hover:border-white/20 hover:bg-white/5"
+                                            }`}
+                                            onClick={() => toggleEpisode(ep.id)}
+                                        >
+                                            <Checkbox
+                                                checked={selectedIds.has(ep.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onCheckedChange={() => toggleEpisode(ep.id)}
+                                                className={selectedIds.has(ep.id) ? "border-red-500 data-[state=checked]:bg-red-500" : ""}
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-medium break-words">{ep.title}</div>
+                                                {ep.delete_kind === "zip_archive" ? (
+                                                    <>
+                                                        <div className="mt-1 text-xs uppercase tracking-[0.14em] text-amber-400/90">
+                                                            ZIP Archive
+                                                            {ep.archive_episode_count ? ` · ${ep.archive_episode_count} indexed episode${ep.archive_episode_count !== 1 ? "s" : ""}` : ""}
+                                                            {ep.file_size_bytes != null ? ` · ${formatFileSize(ep.file_size_bytes)}` : ""}
+                                                        </div>
+                                                        <div className="mt-1 break-all text-xs text-muted-foreground">
+                                                            {ep.file_path || "Deletes the archive file from Google Drive."}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <div className="mt-1 text-xs uppercase tracking-[0.14em] text-white/60">
+                                                            Season {ep.season_number ?? 0} · Episode {ep.episode_number ?? 0}
+                                                            {ep.file_size_bytes != null ? ` · ${formatFileSize(ep.file_size_bytes)}` : ""}
+                                                        </div>
+                                                        <div className="mt-1 break-all text-xs text-muted-foreground">
+                                                            {ep.file_path || "No file path"}
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                            {selectedIds.has(ep.id) && (
+                                                <motion.div
+                                                    initial={{ scale: 0 }}
+                                                    animate={{ scale: 1 }}
+                                                    className="text-red-500"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </motion.div>
                                             )}
-                                        </div>
-                                        {selectedIds.has(ep.id) && (
-                                            <motion.div
-                                                initial={{ scale: 0 }}
-                                                animate={{ scale: 1 }}
-                                                className="text-red-500"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
-                                            </motion.div>
-                                        )}
-                                    </motion.div>
-                                ))}
-                            </AnimatePresence>
-                        </div>
-                    ) : (
-                        <div className="space-y-4">
-                            {sortedSeasons.map((season) => (
-                                <div key={season} className="space-y-2">
-                                    <h3 className="text-sm font-semibold text-white/80 sticky top-0 bg-background/90 backdrop-blur-sm py-1">
-                                        Season {season}
-                                    </h3>
-                                    <AnimatePresence>
-                                        {sortedEpisodesBySeason[season]
-                                            .map((ep) => (
+                                        </motion.div>
+                                    ))}
+                                </AnimatePresence>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {sortedSeasons.map((season) => (
+                                    <div key={season} className="space-y-2">
+                                        <h3 className="sticky top-0 bg-background/90 py-1 text-sm font-semibold text-white/80 backdrop-blur-sm">
+                                            Season {season}
+                                        </h3>
+                                        <AnimatePresence>
+                                            {sortedEpisodesBySeason[season].map((ep) => (
                                                 <motion.div
                                                     key={ep.id}
                                                     initial={{ opacity: 0, x: -10 }}
                                                     animate={{ opacity: 1, x: 0 }}
                                                     exit={{ opacity: 0, x: 10 }}
-                                                    className={`flex items-center gap-3 p-3 rounded-lg border transition-all cursor-pointer ${selectedIds.has(ep.id)
+                                                    className={`flex items-center gap-3 rounded-lg border p-3 transition-all cursor-pointer ${
+                                                        selectedIds.has(ep.id)
                                                             ? "border-red-500/50 bg-red-500/10"
                                                             : "border-white/10 hover:border-white/20 hover:bg-white/5"
-                                                        }`}
+                                                    }`}
                                                     onClick={() => toggleEpisode(ep.id)}
                                                 >
                                                     <Checkbox
                                                         checked={selectedIds.has(ep.id)}
+                                                        onClick={(event) => event.stopPropagation()}
                                                         onCheckedChange={() => toggleEpisode(ep.id)}
                                                         className={selectedIds.has(ep.id) ? "border-red-500 data-[state=checked]:bg-red-500" : ""}
                                                     />
                                                     <div className="flex-1 min-w-0">
-                                                        <div className="font-medium truncate">
-                                                            E{String(ep.episode_number ?? 0).padStart(2, "0")} - {ep.title}
+                                                        <div className="font-medium break-words">
+                                                            E{String(ep.episode_number ?? 0).padStart(2, "0")} - {ep.episode_title || ep.title}
                                                         </div>
-                                                        <div className="text-xs text-muted-foreground truncate">
+                                                        <div className="break-all text-xs text-muted-foreground">
                                                             {ep.file_path || "No file path"}
+                                                            {ep.file_size_bytes != null && (
+                                                                <span> · {formatFileSize(ep.file_size_bytes)}</span>
+                                                            )}
                                                         </div>
                                                     </div>
                                                     {selectedIds.has(ep.id) && (
@@ -349,21 +366,22 @@ export function DeleteEpisodesModal({
                                                     )}
                                                 </motion.div>
                                             ))}
-                                    </AnimatePresence>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </ScrollArea>
+                                        </AnimatePresence>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </ScrollArea>
+                </div>
 
                 {error && episodes.length > 0 && (
-                    <div className="text-red-400 text-sm flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2 px-6 pb-3 text-sm text-red-400">
                         <AlertTriangle className="w-4 h-4" />
                         {error}
                     </div>
                 )}
 
-                <DialogFooter className="gap-2">
+                <DialogFooter className="shrink-0 gap-2 border-t border-white/10 px-6 py-4">
                     <Button
                         variant="outline"
                         onClick={onClose}
