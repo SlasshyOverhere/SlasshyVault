@@ -1,8 +1,3 @@
-# Disclaimer
-
-This project is entirely **vibe-coded** as a hobby project. 
-
----
 
 # StreamVault
 
@@ -147,6 +142,13 @@ Pull requests are welcome.
 2. Create a branch
 3. Make your changes
 4. Open a pull request
+
+# Disclaimer
+
+This project is entirely **vibe-coded** as a hobby project. 
+
+---
+
 
 ## License
 
