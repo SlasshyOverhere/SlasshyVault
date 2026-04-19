@@ -41,6 +41,18 @@ export interface MediaItem {
   history_group_latest_label?: string;
 }
 
+export interface MediaTechnicalDetails {
+  width?: number;
+  height?: number;
+  fps?: number;
+  resolutionLabel?: string;
+  container?: string;
+  extension?: string;
+  videoCodec?: string;
+  fileSizeBytes?: number;
+  sampleFromEpisode?: boolean;
+}
+
 export interface WatchHistoryEvent {
   event_id: string;
   media_id?: number | null;
@@ -478,6 +490,19 @@ export const getMediaInfo = async (id: number): Promise<MediaItem> => {
   } catch (error) {
     console.error("Failed to get media info:", error);
     throw error;
+  }
+};
+
+export const getMediaTechnicalDetails = async (
+  id: number,
+): Promise<MediaTechnicalDetails | null> => {
+  try {
+    return await invoke<MediaTechnicalDetails>("get_media_technical_details", {
+      mediaId: id,
+    });
+  } catch (error) {
+    console.error("Failed to get media technical details:", error);
+    return null;
   }
 };
 

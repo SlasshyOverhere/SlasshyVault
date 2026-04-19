@@ -6,7 +6,8 @@ import {
   getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
-  type AudioTrackOption, type SubtitleTrackOption
+  getMediaTechnicalDetails,
+  type AudioTrackOption, type SubtitleTrackOption, type MediaTechnicalDetails
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogPortal, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -31,6 +32,8 @@ const heroArtworkCache = new Map<number, string | null>()
 const runtimeMinutesCache = new Map<number, number | null>()
 const movieDetailsCache = new Map<number, TmdbMovieDetails | null>()
 const tvDetailsCache = new Map<number, TmdbShowDetails | null>()
+const technicalDetailsCache = new Map<number, MediaTechnicalDetails | null>()
+const tvSeasonEpisodesCache = new Map<number, Map<number, Map<number, TmdbEpisodeInfo>>>()
 const AUTO_AUDIO_VALUE = "__auto__"
 const CUSTOM_AUDIO_VALUE = "__custom__"
 const AUTO_SUBTITLE_VALUE = "__subtitle_auto__"
@@ -109,6 +112,55 @@ const formatEpisodeSize = (bytes?: number | null): string | null => {
 
   const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2
   return `${value.toFixed(decimals)} ${units[unitIndex]}`
+}
+
+const formatFps = (fps?: number | null): string | null => {
+  if (fps == null || !Number.isFinite(fps) || fps <= 0) return null
+  const rounded = fps >= 100 ? fps.toFixed(0) : fps >= 10 ? fps.toFixed(3) : fps.toFixed(2)
+  return `${rounded.replace(/\.?0+$/, "")} fps`
+}
+
+const parseMediaHints = (value?: string | null): Partial<MediaTechnicalDetails> => {
+  if (!value) return {}
+
+  const text = value.toLowerCase()
+  const resolutionMatch = text.match(/(?:^|[^0-9])(2160p|1440p|1080p|720p|480p)(?:[^0-9]|$)/i)
+  const fpsMatch = text.match(/(\d{2,3}(?:\.\d+)?)\s*fps/i)
+  const extensionMatch = value.match(/\.([a-z0-9]{2,5})(?:$|\s)/i)
+
+  return {
+    resolutionLabel: resolutionMatch?.[1]?.toLowerCase() ?? undefined,
+    fps: fpsMatch ? Number.parseFloat(fpsMatch[1]) : undefined,
+    extension: extensionMatch?.[1]?.toUpperCase() ?? undefined,
+    container: extensionMatch?.[1]?.toUpperCase() ?? undefined,
+  }
+}
+
+const getExtensionLabel = (path?: string | null): string | null => {
+  if (!path) return null
+  const lastDot = path.lastIndexOf(".")
+  if (lastDot < 0 || lastDot === path.length - 1) return null
+  return path.slice(lastDot + 1).toUpperCase()
+}
+
+const buildDisplayMediaParts = (
+  item: Pick<MediaItem, "title" | "file_path" | "zip_entry_path" | "file_size_bytes" | "zip_uncompressed_size" | "zip_compressed_size" | "parent_zip_id">,
+  details?: MediaTechnicalDetails | null,
+  includeSize: boolean = true,
+): string[] => {
+  const hinted = parseMediaHints(item.title || item.file_path || item.zip_entry_path)
+  const size = details?.fileSizeBytes ?? (
+    item.parent_zip_id
+      ? item.zip_uncompressed_size ?? item.zip_compressed_size ?? item.file_size_bytes ?? null
+      : item.file_size_bytes ?? item.zip_uncompressed_size ?? item.zip_compressed_size ?? null
+  )
+
+  return [
+    details?.resolutionLabel ?? hinted.resolutionLabel ?? null,
+    formatFps(details?.fps ?? hinted.fps),
+    details?.container ?? hinted.container ?? getExtensionLabel(item.zip_entry_path || item.file_path),
+    includeSize ? formatEpisodeSize(size) : null,
+  ].filter(Boolean) as string[]
 }
 
 const getPreferredEpisodeSize = (episode: MediaItem): number | null => {
@@ -206,6 +258,7 @@ export function ContentDetailsModal({
   const [runtimeMinutesOverride, setRuntimeMinutesOverride] = useState<number | null>(null)
   const [director, setDirector] = useState<string | null>(null)
   const [creator, setCreator] = useState<string | null>(null)
+  const [technicalDetails, setTechnicalDetails] = useState<MediaTechnicalDetails | null>(null)
 
   const [episodes, setEpisodes] = useState<MediaItem[]>([])
   const [loadingEpisodes, setLoadingEpisodes] = useState(false)
@@ -447,17 +500,32 @@ export function ContentDetailsModal({
   useEffect(() => {
     if (!open || !item || !item.tmdb_id || item.media_type !== "tvshow") return
 
+    const tmdbId = parseInt(item.tmdb_id!)
+    const cachedShowSeasons = tvSeasonEpisodesCache.get(tmdbId)
+    const cachedSeason = cachedShowSeasons?.get(selectedSeason)
+    if (cachedSeason) {
+      setTmdbEpisodesBySeason(prev => {
+        if (prev.get(selectedSeason) === cachedSeason) return prev
+        const next = new Map(prev)
+        next.set(selectedSeason, cachedSeason)
+        return next
+      })
+      return
+    }
+
     if (tmdbEpisodesBySeason.get(selectedSeason)) return
 
     const loadTmdbMetadata = async () => {
       try {
-        const tmdbId = parseInt(item.tmdb_id!)
         const data = await getTvSeasonEpisodes(tmdbId, selectedSeason)
         if (data) {
           const episodeMap = new Map<number, TmdbEpisodeInfo>()
           data.episodes.forEach(ep => {
             episodeMap.set(ep.episode_number, ep)
           })
+          const nextShowSeasons = new Map(tvSeasonEpisodesCache.get(tmdbId) ?? new Map())
+          nextShowSeasons.set(selectedSeason, episodeMap)
+          tvSeasonEpisodesCache.set(tmdbId, nextShowSeasons)
           setTmdbEpisodesBySeason(prev => {
             const next = new Map(prev)
             next.set(selectedSeason, episodeMap)
@@ -483,6 +551,7 @@ export function ContentDetailsModal({
     setRuntimeMinutesOverride(null)
     setDirector(null)
     setCreator(null)
+    setTechnicalDetails(null)
 
     const cachedHero = heroArtworkCache.get(target.id)
     if (cachedHero !== undefined) {
@@ -499,45 +568,51 @@ export function ContentDetailsModal({
     const loadArtworkAndDetails = async () => {
       if (!open || !target) return
 
-      const poster = await resolveLocalImage(target.poster_path)
-      if (!cancelled) setPosterImageUrl(poster)
-
       const expectedType = target.media_type === "movie" ? "movie" : "tv"
       const itemTmdbId = Number.parseInt(target.tmdb_id || "", 10)
       const hasItemTmdbId = Number.isFinite(itemTmdbId) && itemTmdbId > 0
       let nextHero = cachedHero ?? null
-      
-      // Load details based on media type
-      if (hasItemTmdbId) {
+
+      const posterPromise = resolveLocalImage(target.poster_path)
+      const detailsPromise = hasItemTmdbId
+        ? target.media_type === "movie"
+          ? (movieDetailsCache.has(itemTmdbId)
+              ? Promise.resolve(movieDetailsCache.get(itemTmdbId) ?? null)
+              : getMovieDetails(itemTmdbId).then((details) => {
+                  movieDetailsCache.set(itemTmdbId, details)
+                  return details
+                }))
+          : (tvDetailsCache.has(itemTmdbId)
+              ? Promise.resolve(tvDetailsCache.get(itemTmdbId) ?? null)
+              : getTvDetails(itemTmdbId).then((details) => {
+                  tvDetailsCache.set(itemTmdbId, details)
+                  return details
+                }))
+        : Promise.resolve(null)
+
+      const [poster, details] = await Promise.all([posterPromise, detailsPromise])
+      if (!cancelled) setPosterImageUrl(poster)
+
+      if (!cancelled && details) {
         if (target.media_type === "movie") {
-          const movieDetails = movieDetailsCache.has(itemTmdbId)
-            ? movieDetailsCache.get(itemTmdbId) ?? null
-            : await getMovieDetails(itemTmdbId)
-          movieDetailsCache.set(itemTmdbId, movieDetails)
-          if (!cancelled && movieDetails) {
-            if (movieDetails.runtime) {
-              runtimeMinutesCache.set(target.id, movieDetails.runtime)
-              setRuntimeMinutesOverride(movieDetails.runtime)
-            }
-            if (movieDetails.director) {
-              setDirector(movieDetails.director)
-            }
-            if (!nextHero && movieDetails.backdrop_path) {
-              nextHero = await resolveLocalImage(movieDetails.backdrop_path)
-            }
+          const movieDetails = details as TmdbMovieDetails
+          if (movieDetails.runtime) {
+            runtimeMinutesCache.set(target.id, movieDetails.runtime)
+            setRuntimeMinutesOverride(movieDetails.runtime)
+          }
+          if (movieDetails.director) {
+            setDirector(movieDetails.director)
+          }
+          if (!nextHero && movieDetails.backdrop_path) {
+            nextHero = await resolveLocalImage(movieDetails.backdrop_path)
           }
         } else if (target.media_type === "tvshow") {
-          const showDetails = tvDetailsCache.has(itemTmdbId)
-            ? tvDetailsCache.get(itemTmdbId) ?? null
-            : await getTvDetails(itemTmdbId)
-          tvDetailsCache.set(itemTmdbId, showDetails)
-          if (!cancelled && showDetails) {
-            if (showDetails.creator) {
-              setCreator(showDetails.creator)
-            }
-            if (!nextHero && showDetails.backdrop_path) {
-              nextHero = await resolveLocalImage(showDetails.backdrop_path)
-            }
+          const showDetails = details as TmdbShowDetails
+          if (showDetails.creator) {
+            setCreator(showDetails.creator)
+          }
+          if (!nextHero && showDetails.backdrop_path) {
+            nextHero = await resolveLocalImage(showDetails.backdrop_path)
           }
         }
       }
@@ -547,7 +622,7 @@ export function ContentDetailsModal({
           if (target.media_type === "tvepisode" && target.still_path) {
             nextHero = await resolveLocalImage(target.still_path)
           }
-          if (!nextHero) {
+          if (!nextHero && !hasItemTmdbId) {
             const response = await searchTmdb(target.title)
             const results = Array.isArray(response?.results) ? response.results : []
             const exactMatch = results.find(r => String(r.id) === target.tmdb_id && r.media_type === expectedType)
@@ -585,6 +660,72 @@ export function ContentDetailsModal({
   const selectedSeasonHasZipEpisodes = useMemo(() => (
     filteredEpisodes.some((episode) => !!episode.parent_zip_id)
   ), [filteredEpisodes])
+
+  useEffect(() => {
+    const targetItem = activeItem ?? item
+
+    if (!open || !targetItem) {
+      setTechnicalDetails(null)
+      return
+    }
+
+    const technicalMediaId =
+      targetItem.media_type === "tvshow"
+        ? filteredEpisodes[0]?.id ?? null
+        : targetItem.id
+
+    if (!technicalMediaId) {
+      setTechnicalDetails(null)
+      return
+    }
+
+    const probeTarget =
+      targetItem.media_type === "tvshow"
+        ? filteredEpisodes[0] ?? null
+        : targetItem
+
+    const hinted = parseMediaHints(
+      probeTarget?.title || probeTarget?.file_path || probeTarget?.zip_entry_path,
+    )
+    if (Object.keys(hinted).length > 0) {
+      setTechnicalDetails((current) => ({
+        ...(current ?? {}),
+        ...hinted,
+        sampleFromEpisode: targetItem.media_type === "tvshow" ? true : current?.sampleFromEpisode,
+      }))
+    }
+
+    const cached = technicalDetailsCache.get(technicalMediaId)
+    if (cached !== undefined) {
+      setTechnicalDetails(
+        targetItem.media_type === "tvshow" && cached
+          ? { ...cached, sampleFromEpisode: true }
+          : cached,
+      )
+      return
+    }
+
+    let cancelled = false
+
+    const loadTechnicalDetails = async () => {
+      const details = await getMediaTechnicalDetails(technicalMediaId)
+      technicalDetailsCache.set(technicalMediaId, details)
+
+      if (!cancelled) {
+        setTechnicalDetails(
+          targetItem.media_type === "tvshow" && details
+            ? { ...details, sampleFromEpisode: true }
+            : details,
+        )
+      }
+    }
+
+    void loadTechnicalDetails()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeItem, filteredEpisodes, item, open])
 
   useEffect(() => {
     if (!open || !item || item.media_type !== "tvshow") {
@@ -738,6 +879,13 @@ export function ContentDetailsModal({
   const zipCompressionLabel = displayItem.parent_zip_id
     ? getZipCompressionLabel(displayItem.zip_compression_method)
     : null
+  const showSampleMediaItem = isShow
+    ? filteredEpisodes[0] ?? episodes[0] ?? null
+    : null
+  const mediaFormatParts = buildDisplayMediaParts(
+    showSampleMediaItem ?? displayItem,
+    technicalDetails,
+  )
 
   const displayTitle = isEpisode && displayItem.season_number && displayItem.episode_number
     ? `S${String(displayItem.season_number).padStart(2, "0")}E${String(displayItem.episode_number).padStart(2, "0")} · ${displayItem.title}`
@@ -984,6 +1132,11 @@ export function ContentDetailsModal({
                         ZIP: {zipCompressionLabel}
                       </span>
                     )}
+                    {mediaFormatParts.length > 0 && !isShow && (
+                      <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
+                        {technicalDetails?.sampleFromEpisode ? "Sample:" : "Media:"} {mediaFormatParts.join(" · ")}
+                      </span>
+                    )}
                     {(director || creator) && (
                       <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
                         <User className="w-4 h-4 text-white/60" />
@@ -1094,6 +1247,11 @@ export function ContentDetailsModal({
                           const episodeZipCompressionLabel = ep.parent_zip_id
                             ? getZipCompressionLabel(ep.zip_compression_method)
                             : null
+                          const episodeMediaParts = buildDisplayMediaParts(
+                            ep,
+                            selectedSeasonHasZipEpisodes ? technicalDetails : null,
+                            false,
+                          )
                           
                           return (
                             <div 
@@ -1173,7 +1331,7 @@ export function ContentDetailsModal({
                                   </div>
                                 </div>
                                 
-                                {(airDate || episodeSizeLabel) && (
+                                {(airDate || episodeSizeLabel || episodeMediaParts.length > 0) && (
                                   <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/30">
                                     {airDate && (
                                       <span className="inline-flex items-center gap-2">
@@ -1181,9 +1339,15 @@ export function ContentDetailsModal({
                                         {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                                       </span>
                                     )}
+                                    {episodeMediaParts.length > 0 && (
+                                      <span className="inline-flex items-center gap-2 font-extrabold text-white/72">
+                                        {airDate && <span className="text-white/18">•</span>}
+                                        <span>{episodeMediaParts.join(" · ")}</span>
+                                      </span>
+                                    )}
                                     {episodeSizeLabel && (
                                       <span className="inline-flex items-center gap-2 font-extrabold text-white">
-                                        {airDate && <span className="text-white/18">•</span>}
+                                        {(airDate || episodeMediaParts.length > 0) && <span className="text-white/18">•</span>}
                                         <span>{episodeSizeLabel}</span>
                                       </span>
                                     )}

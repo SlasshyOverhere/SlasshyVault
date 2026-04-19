@@ -3490,6 +3490,20 @@ struct AudioProbeSource {
     temp_zip_proxy: Option<zip_stream_proxy::ZipStreamProxyHandle>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaTechnicalDetails {
+    width: Option<i32>,
+    height: Option<i32>,
+    fps: Option<f64>,
+    resolution_label: Option<String>,
+    container: Option<String>,
+    extension: Option<String>,
+    video_codec: Option<String>,
+    file_size_bytes: Option<i64>,
+    sample_from_episode: Option<bool>,
+}
+
 #[derive(Default)]
 struct DetectedMpvTracks {
     audio_tracks: Vec<AudioTrackInfo>,
@@ -4056,6 +4070,151 @@ fn probe_subtitle_tracks_with_ffprobe(
     probe_tracks_with_ffprobe(ffprobe_path, source, access_token, "s", "subtitle")
 }
 
+fn parse_ffprobe_frame_rate(value: Option<&str>) -> Option<f64> {
+    let raw = value?.trim();
+    if raw.is_empty() || raw == "0/0" {
+        return None;
+    }
+
+    if let Some((num, den)) = raw.split_once('/') {
+        let numerator = num.trim().parse::<f64>().ok()?;
+        let denominator = den.trim().parse::<f64>().ok()?;
+        if denominator <= 0.0 {
+            return None;
+        }
+        let fps = numerator / denominator;
+        return if fps.is_finite() && fps > 0.0 {
+            Some(fps)
+        } else {
+            None
+        };
+    }
+
+    let fps = raw.parse::<f64>().ok()?;
+    if fps.is_finite() && fps > 0.0 {
+        Some(fps)
+    } else {
+        None
+    }
+}
+
+fn normalize_container_name(value: Option<&str>, extension: Option<&str>) -> Option<String> {
+    let raw = value
+        .map(str::trim)
+        .filter(|current| !current.is_empty())
+        .map(str::to_string)
+        .or_else(|| extension.map(str::to_string))?;
+
+    let normalized = match raw.to_lowercase().as_str() {
+        "matroska" => "MKV".to_string(),
+        "mov,mp4,m4a,3gp,3g2,mj2" => "MP4".to_string(),
+        "mov" => "MOV".to_string(),
+        "avi" => "AVI".to_string(),
+        "webm" => "WEBM".to_string(),
+        "mpegts" => "TS".to_string(),
+        other => other
+            .split(',')
+            .next()
+            .map(str::trim)
+            .unwrap_or(other)
+            .to_uppercase(),
+    };
+
+    Some(normalized)
+}
+
+fn resolution_label_from_dimensions(width: Option<i32>, height: Option<i32>) -> Option<String> {
+    let height = height?;
+    let width = width.unwrap_or_default();
+
+    let label = if width >= 3800 || height >= 2100 {
+        "2160p"
+    } else if width >= 2500 || height >= 1400 {
+        "1440p"
+    } else if width >= 1800 || height >= 1000 {
+        "1080p"
+    } else if width >= 1200 || height >= 700 {
+        "720p"
+    } else if height > 0 {
+        return Some(format!("{}p", height));
+    } else {
+        return None;
+    };
+
+    Some(label.to_string())
+}
+
+fn probe_media_technical_details_with_ffprobe(
+    ffprobe_path: &str,
+    source: &str,
+    access_token: Option<&str>,
+    extension: Option<&str>,
+    file_size_bytes: Option<i64>,
+) -> Result<MediaTechnicalDetails, String> {
+    config::validate_executable_path(ffprobe_path, "ffprobe")?;
+
+    let mut command = std::process::Command::new(ffprobe_path);
+    config::apply_hidden_process_flags(&mut command);
+    command
+        .arg("-v")
+        .arg("error")
+        .arg("-select_streams")
+        .arg("v:0")
+        .arg("-show_entries")
+        .arg("stream=width,height,avg_frame_rate,r_frame_rate,codec_name:format=format_name")
+        .arg("-of")
+        .arg("json");
+
+    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        command
+            .arg("-headers")
+            .arg(format!("Authorization: Bearer {}\r\n", token));
+    }
+
+    let output = command
+        .arg(source)
+        .output()
+        .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffprobe could not read video metadata: {}", stderr.trim()));
+    }
+
+    let parsed: FfprobeVideoProbeOutput = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Failed to parse ffprobe video output: {}", error))?;
+    let stream = parsed.streams.into_iter().next();
+    let width = stream.as_ref().and_then(|current| current.width);
+    let height = stream.as_ref().and_then(|current| current.height);
+    let fps = parse_ffprobe_frame_rate(
+        stream
+            .as_ref()
+            .and_then(|current| current.avg_frame_rate.as_deref())
+            .or_else(|| {
+                stream
+                    .as_ref()
+                    .and_then(|current| current.r_frame_rate.as_deref())
+            }),
+    );
+    let video_codec = stream.and_then(|current| current.codec_name);
+    let container = normalize_container_name(
+        parsed.format.as_ref().and_then(|current| current.format_name.as_deref()),
+        extension,
+    );
+
+    Ok(MediaTechnicalDetails {
+        width,
+        height,
+        fps,
+        resolution_label: resolution_label_from_dimensions(width, height),
+        container,
+        extension: extension.map(|current| current.to_uppercase()),
+        video_codec,
+        file_size_bytes,
+        sample_from_episode: None,
+    })
+}
+
 async fn resolve_audio_probe_source(
     state: &AppState,
     media: &database::MediaItem,
@@ -4138,6 +4297,75 @@ async fn resolve_audio_probe_source(
         stream_url: file_path,
         access_token: None,
         temp_zip_proxy: None,
+    })
+}
+
+fn infer_extension_for_media(media: &database::MediaItem) -> Option<String> {
+    media.zip_entry_path
+        .as_deref()
+        .or(media.file_path.as_deref())
+        .and_then(|path| std::path::Path::new(path).extension().and_then(|ext| ext.to_str()))
+        .map(|ext| ext.trim().trim_start_matches('.').to_string())
+        .filter(|ext| !ext.is_empty())
+}
+
+#[tauri::command]
+async fn get_media_technical_details(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<MediaTechnicalDetails, String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+    let ffprobe_path = resolve_ffprobe_path(&config);
+
+    let media = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_media_by_id(media_id).map_err(|e| e.to_string())?
+    };
+
+    let extension = infer_extension_for_media(&media);
+    let file_size_bytes = media.file_size_bytes.or_else(|| {
+        media.file_path.as_ref().and_then(|path| {
+            if media.is_cloud.unwrap_or(false) || !std::path::Path::new(path).exists() {
+                None
+            } else {
+                std::fs::metadata(path).ok().map(|metadata| metadata.len() as i64)
+            }
+        })
+    });
+
+    if let Some(ffprobe_path) = ffprobe_path {
+        if let Ok(mut source) = resolve_audio_probe_source(&state, &media).await {
+            let result = probe_media_technical_details_with_ffprobe(
+                &ffprobe_path,
+                &source.stream_url,
+                source.access_token.as_deref(),
+                extension.as_deref(),
+                file_size_bytes,
+            );
+
+            if let Some(proxy) = source.temp_zip_proxy.as_mut() {
+                proxy.stop();
+            }
+
+            if let Ok(details) = result {
+                return Ok(details);
+            }
+        }
+    }
+
+    Ok(MediaTechnicalDetails {
+        width: None,
+        height: None,
+        fps: None,
+        resolution_label: None,
+        container: normalize_container_name(None, extension.as_deref()),
+        extension: extension.map(|current| current.to_uppercase()),
+        video_codec: None,
+        file_size_bytes,
+        sample_from_episode: None,
     })
 }
 
@@ -10113,6 +10341,7 @@ fn main() {
             get_stream_info,
             get_audio_tracks,
             get_subtitle_tracks,
+            get_media_technical_details,
             zip_analyze,
             zip_index_episodes,
             zip_get_stream_info,
