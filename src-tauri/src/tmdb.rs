@@ -1412,16 +1412,19 @@ pub fn cache_image_organized(
     let (subfolder, filename) = match image_type {
         ImageType::SeriesBanner => {
             let subfolder = slug.clone();
-            let filename = format!("{}_{}_banner.jpg", slug, source_tag);
+            let filename = format!("{}_{}_banner_hq.jpg", slug, source_tag);
             (Some(subfolder), filename)
         }
         ImageType::EpisodeBanner { season, episode } => {
             let subfolder = slug.clone();
-            let filename = format!("{}_s{}e{}_{}_banner.jpg", slug, season, episode, source_tag);
+            let filename = format!(
+                "{}_s{}e{}_{}_banner_hq.jpg",
+                slug, season, episode, source_tag
+            );
             (Some(subfolder), filename)
         }
         ImageType::MovieBanner => {
-            let filename = format!("{}_{}_banner.jpg", slug, source_tag);
+            let filename = format!("{}_{}_banner_hq.jpg", slug, source_tag);
             (None, filename)
         }
     };
@@ -1451,7 +1454,7 @@ pub fn cache_image_organized(
     }
 
     // Try different sizes with retry logic
-    let sizes = ["w500", "w342"];
+    let sizes = ["original", "w1280", "w780"];
 
     for size in &sizes {
         let image_url = format!("https://image.tmdb.org/t/p/{}{}", size, image_path);
