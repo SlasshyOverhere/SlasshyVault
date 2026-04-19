@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
-  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, getTvDetails, getMediaInfo, refreshSeriesMetadata,
+  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
   getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
@@ -29,6 +29,8 @@ interface ContentDetailsModalProps {
 
 const heroArtworkCache = new Map<number, string | null>()
 const runtimeMinutesCache = new Map<number, number | null>()
+const movieDetailsCache = new Map<number, TmdbMovieDetails | null>()
+const tvDetailsCache = new Map<number, TmdbShowDetails | null>()
 const AUTO_AUDIO_VALUE = "__auto__"
 const CUSTOM_AUDIO_VALUE = "__custom__"
 const AUTO_SUBTITLE_VALUE = "__subtitle_auto__"
@@ -278,6 +280,7 @@ export function ContentDetailsModal({
 
     setIsRefreshingMetadata(true)
     heroArtworkCache.delete(item.id)
+    tvDetailsCache.delete(tmdbId)
 
     try {
       const result = await refreshSeriesMetadata(tmdbId, item.title)
@@ -502,11 +505,15 @@ export function ContentDetailsModal({
       const expectedType = target.media_type === "movie" ? "movie" : "tv"
       const itemTmdbId = Number.parseInt(target.tmdb_id || "", 10)
       const hasItemTmdbId = Number.isFinite(itemTmdbId) && itemTmdbId > 0
+      let nextHero = cachedHero ?? null
       
       // Load details based on media type
       if (hasItemTmdbId) {
         if (target.media_type === "movie") {
-          const movieDetails = await getMovieDetails(itemTmdbId)
+          const movieDetails = movieDetailsCache.has(itemTmdbId)
+            ? movieDetailsCache.get(itemTmdbId) ?? null
+            : await getMovieDetails(itemTmdbId)
+          movieDetailsCache.set(itemTmdbId, movieDetails)
           if (!cancelled && movieDetails) {
             if (movieDetails.runtime) {
               runtimeMinutesCache.set(target.id, movieDetails.runtime)
@@ -515,29 +522,27 @@ export function ContentDetailsModal({
             if (movieDetails.director) {
               setDirector(movieDetails.director)
             }
-            if (!heroImageUrl && movieDetails.backdrop_path) {
-              const backdrop = getTmdbImageUrl(movieDetails.backdrop_path, "original")
-              setHeroImageUrl(backdrop)
-              heroArtworkCache.set(target.id, backdrop)
+            if (!nextHero && movieDetails.backdrop_path) {
+              nextHero = await resolveLocalImage(movieDetails.backdrop_path)
             }
           }
         } else if (target.media_type === "tvshow") {
-          const showDetails = await getTvDetails(itemTmdbId)
+          const showDetails = tvDetailsCache.has(itemTmdbId)
+            ? tvDetailsCache.get(itemTmdbId) ?? null
+            : await getTvDetails(itemTmdbId)
+          tvDetailsCache.set(itemTmdbId, showDetails)
           if (!cancelled && showDetails) {
             if (showDetails.creator) {
               setCreator(showDetails.creator)
             }
-            if (!heroImageUrl && showDetails.backdrop_path) {
-              const backdrop = getTmdbImageUrl(showDetails.backdrop_path, "original")
-              setHeroImageUrl(backdrop)
-              heroArtworkCache.set(target.id, backdrop)
+            if (!nextHero && showDetails.backdrop_path) {
+              nextHero = await resolveLocalImage(showDetails.backdrop_path)
             }
           }
         }
       }
 
-      if (heroImageUrl === null || heroArtworkCache.get(target.id) === undefined) {
-        let nextHero: string | null = null
+      if (!nextHero) {
         try {
           if (target.media_type === "tvepisode" && target.still_path) {
             nextHero = await resolveLocalImage(target.still_path)
@@ -550,11 +555,11 @@ export function ContentDetailsModal({
             nextHero = getTmdbImageUrl(chosen?.backdrop_path, "original")
           }
         } catch { /* ignore */ }
-
-        if (!nextHero) nextHero = poster
-        heroArtworkCache.set(target.id, nextHero)
-        if (!cancelled) setHeroImageUrl(nextHero)
       }
+
+      if (!nextHero) nextHero = poster
+      heroArtworkCache.set(target.id, nextHero)
+      if (!cancelled) setHeroImageUrl(nextHero)
     }
 
     void loadArtworkAndDetails()

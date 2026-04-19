@@ -5559,6 +5559,7 @@ async fn get_movie_details(
         let config = state.config.lock().map_err(|e| e.to_string())?;
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
+    let image_cache_dir = database::get_image_cache_dir();
 
     let url = build_tmdb_api_url(
         &format!("/movie/{}", movie_id),
@@ -5594,6 +5595,11 @@ async fn get_movie_details(
         }
 
         let raw: RawMovieDetails = response.json().map_err(|e| e.to_string())?;
+        let title = raw
+            .title
+            .clone()
+            .or(raw.original_title.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
 
         let director = raw
             .credits
@@ -5602,14 +5608,29 @@ async fn get_movie_details(
             .and_then(|crew| crew.iter().find(|m| m.job == "Director"))
             .map(|m| m.name.clone());
 
+        let poster_path = raw.poster_path.as_ref().and_then(|path| {
+            tmdb::cache_image_organized(
+                path,
+                &image_cache_dir,
+                &title,
+                tmdb::ImageType::MovieBanner,
+            )
+        });
+
+        let backdrop_path = raw.backdrop_path.as_ref().and_then(|path| {
+            tmdb::cache_image_organized(
+                path,
+                &image_cache_dir,
+                &title,
+                tmdb::ImageType::MovieBanner,
+            )
+        });
+
         Ok(MovieDetails {
             id: raw.id,
-            title: raw
-                .title
-                .or(raw.original_title)
-                .unwrap_or_else(|| "Unknown".to_string()),
-            poster_path: raw.poster_path,
-            backdrop_path: raw.backdrop_path,
+            title,
+            poster_path,
+            backdrop_path,
             overview: raw.overview,
             release_date: raw.release_date,
             runtime: raw.runtime,
@@ -5629,6 +5650,7 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
         let config = state.config.lock().map_err(|e| e.to_string())?;
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
+    let image_cache_dir = database::get_image_cache_dir();
 
     let url = build_tmdb_api_url(&format!("/tv/{}", tv_id), &credential, "");
 
@@ -5663,12 +5685,31 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
         }
 
         let raw: RawTvShow = response.json().map_err(|e| e.to_string())?;
+        let title = raw.name.clone().unwrap_or_else(|| "Unknown".to_string());
 
         let creator = raw
             .created_by
             .as_ref()
             .and_then(|c| c.first())
             .map(|c| c.name.clone());
+
+        let poster_path = raw.poster_path.as_ref().and_then(|path| {
+            tmdb::cache_image_organized(
+                path,
+                &image_cache_dir,
+                &title,
+                tmdb::ImageType::SeriesBanner,
+            )
+        });
+
+        let backdrop_path = raw.backdrop_path.as_ref().and_then(|path| {
+            tmdb::cache_image_organized(
+                path,
+                &image_cache_dir,
+                &title,
+                tmdb::ImageType::SeriesBanner,
+            )
+        });
 
         let seasons: Vec<TvSeasonInfo> = raw
             .seasons
@@ -5682,16 +5723,23 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
                     .unwrap_or_else(|| format!("Season {}", s.season_number)),
                 episode_count: s.episode_count,
                 overview: s.overview,
-                poster_path: s.poster_path,
+                poster_path: s.poster_path.and_then(|path| {
+                    tmdb::cache_image_organized(
+                        &path,
+                        &image_cache_dir,
+                        &title,
+                        tmdb::ImageType::SeriesBanner,
+                    )
+                }),
                 air_date: s.air_date,
             })
             .collect();
 
         Ok(TvShowDetails {
             id: raw.id,
-            name: raw.name.unwrap_or_else(|| "Unknown".to_string()),
-            poster_path: raw.poster_path,
-            backdrop_path: raw.backdrop_path,
+            name: title,
+            poster_path,
+            backdrop_path,
             overview: raw.overview,
             number_of_seasons: raw.number_of_seasons.unwrap_or(0),
             seasons,
