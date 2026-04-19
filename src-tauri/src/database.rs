@@ -962,7 +962,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method
+                    zip_compression_method, file_size_bytes
              FROM media WHERE id = ?",
         )?;
 

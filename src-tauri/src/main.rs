@@ -3021,7 +3021,7 @@ async fn get_episodes_for_delete(
         }
 
         let file_path = episode.file_path.clone();
-        let file_size_bytes = episode.file_size_bytes.or_else(|| {
+        let mut file_size_bytes = episode.file_size_bytes.or_else(|| {
             if !episode.is_cloud.unwrap_or(false) {
                 // Try to get file size from file system for local files
                 file_path.as_ref().and_then(|path| {
