@@ -6619,6 +6619,28 @@ fn create_main_window(app: &AppHandle) -> Result<tauri::Window, tauri::Error> {
     Ok(window)
 }
 
+fn restore_or_create_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_window("main") {
+        window.unminimize().ok();
+        window.show().ok();
+        window.set_focus().ok();
+        return;
+    }
+
+    println!("[WINDOW] Main window missing, creating a new one...");
+    match create_main_window(app) {
+        Ok(window) => {
+            window.unminimize().ok();
+            window.show().ok();
+            window.set_focus().ok();
+            println!("[WINDOW] Main window created");
+        }
+        Err(e) => {
+            println!("[WINDOW] Failed to create main window: {}", e);
+        }
+    }
+}
+
 fn is_dev_runtime() -> bool {
     cfg!(debug_assertions)
 }
@@ -9769,22 +9791,7 @@ fn main() {
             println!(
                 "[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window"
             );
-            if let Some(window) = app.get_window("main") {
-                window.show().ok();
-                window.unminimize().ok();
-                window.set_focus().ok();
-            } else {
-                println!("[SINGLE-INSTANCE] Creating new window...");
-                match create_main_window(app) {
-                    Ok(window) => {
-                        window.set_focus().ok();
-                        println!("[SINGLE-INSTANCE] New window created");
-                    }
-                    Err(e) => {
-                        println!("[SINGLE-INSTANCE] Failed to create window: {}", e);
-                    }
-                }
-            }
+            restore_or_create_main_window(app);
         }))
     };
 
@@ -9793,49 +9800,12 @@ fn main() {
         .on_system_tray_event(|app, event| {
             match event {
                 SystemTrayEvent::LeftClick { .. } => {
-                    // Show window on left click - create if destroyed
-                    match app.get_window("main") {
-                        Some(window) => {
-                            window.show().ok();
-                            window.set_focus().ok();
-                        }
-                        None => {
-                            // Window was destroyed, create a new one
-                            println!("[TRAY] Creating new window...");
-                            match create_main_window(app) {
-                                Ok(window) => {
-                                    window.set_focus().ok();
-                                    println!("[TRAY] New window created");
-                                }
-                                Err(e) => {
-                                    println!("[TRAY] Failed to create window: {}", e);
-                                }
-                            }
-                        }
-                    }
+                    restore_or_create_main_window(app);
                 }
                 SystemTrayEvent::MenuItemClick { id, .. } => {
                     match id.as_str() {
                         "show" => {
-                            match app.get_window("main") {
-                                Some(window) => {
-                                    window.show().ok();
-                                    window.set_focus().ok();
-                                }
-                                None => {
-                                    // Window was destroyed, create a new one
-                                    println!("[TRAY] Creating new window...");
-                                    match create_main_window(app) {
-                                        Ok(window) => {
-                                            window.set_focus().ok();
-                                            println!("[TRAY] New window created");
-                                        }
-                                        Err(e) => {
-                                            println!("[TRAY] Failed to create window: {}", e);
-                                        }
-                                    }
-                                }
-                            }
+                            restore_or_create_main_window(app);
                         }
                         "quit" => {
                             std::process::exit(0);
@@ -9874,10 +9844,7 @@ fn main() {
                         }
 
                         // Bring the app to front
-                        if let Some(window) = handle.get_window("main") {
-                            window.show().ok();
-                            window.set_focus().ok();
-                        }
+                        restore_or_create_main_window(&handle);
                     }
                 }
             }).ok();
