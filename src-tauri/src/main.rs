@@ -3039,6 +3039,23 @@ async fn get_episodes_for_delete(
         });
 
         if file_size_bytes.is_none() {
+            if let Some(cloud_file_id) = episode.cloud_file_id.as_deref() {
+                if let Ok(metadata) = state.gdrive_client.get_file_metadata(cloud_file_id).await {
+                    file_size_bytes = metadata
+                        .size
+                        .as_deref()
+                        .and_then(|value| value.parse::<i64>().ok());
+
+                    if let Some(size) = file_size_bytes {
+                        if let Ok(db) = state.db.lock() {
+                            let _ = db.update_file_size(episode.id, size);
+                        }
+                    }
+                }
+            }
+        }
+
+        if file_size_bytes.is_none() {
             eprintln!("[DEBUG] No file size for episode: {} (path: {:?}, is_cloud: {:?}, cloud_file_id: {:?})", 
                 episode.title, episode.file_path, episode.is_cloud, episode.cloud_file_id);
         }
@@ -3437,6 +3454,27 @@ struct MpvSubtitleTracksDetectedPayload {
 struct FfprobeStreamsOutput {
     #[serde(default)]
     streams: Vec<FfprobeAudioStream>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeVideoProbeOutput {
+    #[serde(default)]
+    streams: Vec<FfprobeVideoStream>,
+    format: Option<FfprobeFormatInfo>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeVideoStream {
+    width: Option<i32>,
+    height: Option<i32>,
+    avg_frame_rate: Option<String>,
+    r_frame_rate: Option<String>,
+    codec_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeFormatInfo {
+    format_name: Option<String>,
 }
 
 #[derive(Deserialize)]
