@@ -34,7 +34,10 @@ pub fn find_mpv_executable() -> Option<String> {
     println!("[MPV] Searching for mpv.exe on the system...");
 
     // First, check if mpv is in PATH (fastest check)
-    if let Ok(output) = Command::new("where").arg("mpv.exe").output() {
+    let mut where_cmd = Command::new("where");
+    where_cmd.arg("mpv.exe");
+    apply_hidden_process_flags(&mut where_cmd);
+    if let Ok(output) = where_cmd.output() {
         if output.status.success() {
             if let Ok(path) = String::from_utf8(output.stdout) {
                 let path = path.lines().next().unwrap_or("").trim();
@@ -77,6 +80,14 @@ pub fn find_mpv_executable() -> Option<String> {
 
     println!("[MPV] mpv.exe not found on the system");
     None
+}
+
+pub fn apply_hidden_process_flags(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
 }
 
 /// Expand wildcard patterns and check if mpv exists

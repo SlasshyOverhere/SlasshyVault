@@ -137,7 +137,9 @@ pub fn start_transcode(
 
     println!("[TRANSCODE] Starting FFmpeg with args: {:?}", args);
 
-    let ffmpeg_process = Command::new(ffmpeg_path)
+    let mut ffmpeg_cmd = Command::new(ffmpeg_path);
+    crate::config::apply_hidden_process_flags(&mut ffmpeg_cmd);
+    let ffmpeg_process = ffmpeg_cmd
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -242,7 +244,9 @@ fn run_transcode_server(port: u16, ffmpeg_path: &str, file_path: &str, start_tim
                 "pipe:1",
             ]);
 
-            match Command::new(ffmpeg_path)
+            let mut ffmpeg_cmd = Command::new(ffmpeg_path);
+            crate::config::apply_hidden_process_flags(&mut ffmpeg_cmd);
+            match ffmpeg_cmd
                 .args(&args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())

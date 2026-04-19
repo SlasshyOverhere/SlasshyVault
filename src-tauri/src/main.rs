@@ -3502,10 +3502,10 @@ fn resolve_ffprobe_path(config: &config::Config) -> Option<String> {
         }
     }
 
-    if let Ok(output) = std::process::Command::new("where")
-        .arg("ffprobe.exe")
-        .output()
-    {
+    let mut where_cmd = std::process::Command::new("where");
+    where_cmd.arg("ffprobe.exe");
+    config::apply_hidden_process_flags(&mut where_cmd);
+    if let Ok(output) = where_cmd.output() {
         if output.status.success() {
             if let Ok(paths) = String::from_utf8(output.stdout) {
                 if let Some(path) = paths.lines().map(str::trim).find(|value| !value.is_empty()) {
@@ -3957,6 +3957,7 @@ fn probe_tracks_with_ffprobe(
     config::validate_executable_path(ffprobe_path, "ffprobe")?;
 
     let mut command = std::process::Command::new(ffprobe_path);
+    config::apply_hidden_process_flags(&mut command);
     command
         .arg("-v")
         .arg("error")
@@ -8972,7 +8973,9 @@ fn resolve_windows_installer_from_package(
     std::fs::create_dir_all(&extract_dir)
         .map_err(|e| format!("Failed to create extracted installer directory: {}", e))?;
 
-    let output = std::process::Command::new("powershell")
+    let mut extract_cmd = std::process::Command::new("powershell");
+    config::apply_hidden_process_flags(&mut extract_cmd);
+    let output = extract_cmd
         .args([
             "-NoProfile",
             "-NonInteractive",
