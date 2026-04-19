@@ -141,7 +141,15 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
       position.left = Math.max(padding, Math.min(position.left, window.innerWidth - tooltipWidth - padding))
 
       setTooltipPosition(position)
+      return
     }
+
+    setTargetRect(null)
+    setTooltipPosition({
+      top: Math.max(20, window.innerHeight / 2 - 130),
+      left: Math.max(20, window.innerWidth / 2 - 170),
+      arrowPosition: 'top',
+    })
   }, [currentStep, isActive])
 
   // Update position on step change and window resize

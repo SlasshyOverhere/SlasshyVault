@@ -95,6 +95,7 @@ export function Sidebar({
 
   return (
     <motion.aside
+      data-tour="sidebar"
       className={cn(
         "h-screen flex flex-col relative z-50",
         "bg-[#0D0D0D]/80 backdrop-blur-2xl",
@@ -117,6 +118,7 @@ export function Sidebar({
               return (
                 <button
                   key={item.id}
+                  data-tour={`nav-${item.id}`}
                   onClick={() => {
                     if (item.id === "ai" && item.paused) {
                       onAiChatClick?.()
@@ -220,6 +222,7 @@ export function Sidebar({
           <div className={cn("space-y-3", isCollapsed ? "flex flex-col items-center" : "")}>
             {onCloudScan && !isCollapsed ? (
               <button
+                data-tour="scan-library-btn"
                 onClick={onCloudScan}
                 disabled={isCloudIndexing || isScanning}
                 className={cn(
@@ -274,6 +277,7 @@ export function Sidebar({
           <div className="space-y-1.5">
             <div className="group relative">
               <button
+                data-tour="settings-btn"
                 onClick={onOpenSettings}
                 title="Open settings"
                 className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
@@ -311,6 +315,7 @@ export function Sidebar({
         ) : (
           <div className="grid grid-cols-2 gap-2">
             <button
+              data-tour="settings-btn"
               onClick={onOpenSettings}
               title="Open settings"
               className="group h-11 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"

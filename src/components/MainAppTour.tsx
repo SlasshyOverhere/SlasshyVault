@@ -9,17 +9,14 @@ interface MainAppTourProps {
 
 export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTourProps) {
   const allSteps: TourStep[] = [
-    // Sidebar Overview
     {
       id: 'sidebar-intro',
       target: '[data-tour="sidebar"]',
       title: 'Your Navigation Hub',
-      description: 'This sidebar is your main navigation. Let me show you what each section does and how to get the most out of StreamVault.',
+      description: 'This sidebar is your main navigation. It gives you quick access to Home, Google Drive, History, and the main app controls.',
       position: 'right',
       highlight: false,
     },
-
-    // Home Tab
     {
       id: 'nav-home',
       target: '[data-tour="nav-home"]',
@@ -28,18 +25,6 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       position: 'right',
       action: () => setView('home'),
     },
-
-    // Local Tab
-    {
-      id: 'nav-local',
-      target: '[data-tour="nav-local"]',
-      title: 'Local Library',
-      description: 'Browse all your local movies and TV shows here. Use the sub-tabs to switch between Movies and TV Shows. Search, filter, and switch between grid/list views.',
-      position: 'right',
-      action: () => setView('local'),
-    },
-
-    // Google Drive Tab
     {
       id: 'nav-cloud',
       target: '[data-tour="nav-cloud"]',
@@ -48,8 +33,6 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       position: 'right',
       action: () => setView('cloud'),
     },
-
-    // History Tab
     {
       id: 'nav-history',
       target: '[data-tour="nav-history"]',
@@ -58,8 +41,6 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       position: 'right',
       action: () => setView('history'),
     },
-
-    // Scan/Update Library Button
     {
       id: 'scan-library',
       target: '[data-tour="scan-library-btn"]',
@@ -67,8 +48,6 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       description: 'Click this to scan your media folders for new content. StreamVault will automatically fetch posters, descriptions, and organize everything.',
       position: 'right',
     },
-
-    // Settings Button
     {
       id: 'settings-btn',
       target: '[data-tour="settings-btn"]',
@@ -76,27 +55,22 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       description: 'Configure your media folders, TMDB API key, Google Drive, player settings, and more. This is where you set up StreamVault to work with your library.',
       position: 'right',
     },
-
-    // Context Menu Info (shown on local view)
     {
-      id: 'context-menu-info',
-      target: '[data-tour="nav-local"]',
-      title: 'Right-Click for More Options!',
-      description: 'Right-click on any movie or TV show card to access quick actions: Play, Fix Match (correct wrong metadata), Remove from History, or Delete from Drive.',
+      id: 'cloud-view-tip',
+      target: '[data-tour="nav-cloud"]',
+      title: 'Movies and TV in One Place',
+      description: 'Inside Google Drive, use the floating controls to switch between Movies and TV Shows, search quickly, and change the card layout.',
       position: 'right',
-      action: () => setView('local'),
+      action: () => setView('cloud'),
     },
-
-    // Fix Match Explanation
     {
       id: 'fix-match-info',
-      target: '[data-tour="nav-local"]',
+      target: '[data-tour="nav-cloud"]',
       title: 'Wrong Poster or Title?',
-      description: 'If a movie/show has the wrong artwork or info, right-click and select "Fix Match". You can search TMDB and pick the correct match to update all metadata.',
+      description: 'If a movie or show has the wrong artwork or metadata, open its menu and use "Fix Match" to pick the correct TMDB result.',
       position: 'right',
+      action: () => setView('cloud'),
     },
-
-    // Refresh Metadata Explanation
     {
       id: 'refresh-info',
       target: '[data-tour="scan-library-btn"]',
@@ -104,22 +78,10 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       description: 'To refresh all metadata, click "Update Library". This rescans your folders and updates any missing or outdated posters and information.',
       position: 'right',
     },
-
-    // Sub-tabs Tip
-    {
-      id: 'subtabs-tip',
-      target: '[data-tour="nav-local"]',
-      title: 'Movies & TV Sub-tabs',
-      description: 'When viewing Local or Google Drive, use the floating tabs at the top to switch between Movies and TV Shows quickly!',
-      position: 'right',
-      action: () => setView('local'),
-    },
-
-    // Final Step
     {
       id: 'tour-complete',
       target: '[data-tour="nav-home"]',
-      title: 'You\'re Ready! 🎉',
+      title: 'You\'re Ready!',
       description: 'That\'s the basics! Now head to Settings to add your TMDB API key and media folders. Enjoy your personalized media center!',
       position: 'right',
       action: () => setView('home'),
