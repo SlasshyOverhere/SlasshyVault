@@ -10060,6 +10060,18 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
 }
 
 fn main() {
+    // Initialize single-instance plugin as early as possible for production builds.
+    // This catches second instances BEFORE they attempt to open the database (which would cause a crash/panic).
+    // We skip this in dev mode to allow production and dev instances to run independently without conflict.
+    let single_instance_plugin = if !is_dev_runtime() {
+        Some(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            println!("[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window");
+            restore_or_create_main_window(app);
+        }))
+    } else {
+        None
+    };
+
     // Load .env file from project root (for development)
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
     dotenvy::dotenv().ok();
@@ -10110,16 +10122,10 @@ fn main() {
     let system_tray = SystemTray::new().with_menu(tray_menu);
 
     let builder = tauri::Builder::default();
-    let builder = if is_dev_runtime() {
-        builder
+    let builder = if let Some(plugin) = single_instance_plugin {
+        builder.plugin(plugin)
     } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // Another production instance tried to start - bring existing window to front.
-            println!(
-                "[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window"
-            );
-            restore_or_create_main_window(app);
-        }))
+        builder
     };
 
     builder
