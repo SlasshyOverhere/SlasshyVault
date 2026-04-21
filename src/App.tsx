@@ -62,7 +62,7 @@ import {
 import {
   Search, Loader2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
-  TrendingUp, BarChart3, Calendar, Sparkles, PlayCircle, X, Cloud, RefreshCw, Minus, Bot, Download,
+  TrendingUp, BarChart3, Calendar, Sparkles, X, Cloud, RefreshCw, Minus, Download,
   Maximize2, Minimize2, Archive
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -156,27 +156,6 @@ const LoadingFallback = () => (
     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
   </div>
 )
-
-// Lightweight poster thumbnail for the Newly Added row
-function NewlyAddedPoster({ item }: { item: MediaItem }) {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    if (item.poster_path) {
-      getCachedImageUrl(item.poster_path.replace('image_cache/', '')).then(u => {
-        if (!cancelled && u) setUrl(u)
-      })
-    }
-    return () => { cancelled = true }
-  }, [item.poster_path])
-  return url ? (
-    <img src={url} alt={item.title} className="w-full h-full object-cover" />
-  ) : (
-    <div className="w-full h-full bg-white/5 flex items-center justify-center text-[10px] text-muted-foreground">
-      {item.title.slice(0, 2)}
-    </div>
-  )
-}
 
 function App() {
   // Search and View state
@@ -364,7 +343,6 @@ function App() {
 
   // Authentication state
   const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout } = useAuth()
-  const [gdriveInfo, setGdriveInfo] = useState<any>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
 
   useEffect(() => {
@@ -375,14 +353,6 @@ function App() {
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
   }
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      import('@/services/gdrive').then(m => m.getGDriveAccountInfo()).then(setGdriveInfo)
-    } else {
-      setGdriveInfo(null)
-    }
-  }, [isAuthenticated])
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)

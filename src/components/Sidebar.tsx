@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot, ChevronLeft, ChevronRight, Film
+  Home, RotateCw, Cloud, Users, Sparkles, Bot
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -43,7 +43,7 @@ export function Sidebar({
   aiChatPaused = false,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
-  const [isManualCollapsed, setIsManualCollapsed] = useState(() => {
+  const [isManualCollapsed] = useState(() => {
     const saved = window.localStorage.getItem("sidebar-collapsed");
     return saved === null ? true : saved === "1";
   });
@@ -107,8 +107,6 @@ export function Sidebar({
   useEffect(() => {
     window.localStorage.setItem("sidebar-collapsed", isManualCollapsed ? "1" : "0");
   }, [isManualCollapsed]);
-
-  const canToggleCollapse = !isForcedCollapsed;
 
   const menuItems = [
     { id: "home", label: "Home", icon: Home },

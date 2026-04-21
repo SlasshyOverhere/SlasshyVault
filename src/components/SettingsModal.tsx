@@ -32,7 +32,6 @@ import {
   getConfig,
   saveConfig,
   clearAllAppData,
-  cleanupMissingMetadata,
   TabVisibility,
   checkForUpdates,
   downloadUpdate,
@@ -115,7 +114,6 @@ export function SettingsModal({
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [cleaningUp, setCleaningUp] = useState(false);
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("general");
   const [appVersion, setAppVersion] = useState<string>("");
@@ -339,29 +337,6 @@ export function SettingsModal({
       });
     } finally {
       setResetting(false);
-    }
-  };
-
-  const handleCleanupMissing = async () => {
-    setCleaningUp(true);
-    try {
-      const result = await cleanupMissingMetadata();
-      toast({
-        title: "Cleanup Complete",
-        description: result.message,
-      });
-      if (result.removed_count > 0) {
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error("Failed to cleanup missing metadata", error);
-      toast({
-        title: "Error",
-        description: "Failed to cleanup missing metadata",
-        variant: "destructive",
-      });
-    } finally {
-      setCleaningUp(false);
     }
   };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
