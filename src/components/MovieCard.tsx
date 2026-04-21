@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot } from "lucide-react"
+import { Play, MoreHorizontal, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
@@ -20,6 +20,7 @@ export interface MovieCardProps {
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
   onAskAI?: (item: MediaItem) => void
+  showNewBadge?: boolean
   disableEntryAnimation?: boolean
   aspectRatio?: "portrait" | "square"
   className?: string
@@ -47,6 +48,7 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     prev.onDelete !== next.onDelete ||
     prev.onWatchTogether !== next.onWatchTogether ||
     prev.onAskAI !== next.onAskAI ||
+    prev.showNewBadge !== next.showNewBadge ||
     prev.disableEntryAnimation !== next.disableEntryAnimation
   ) {
     return false
@@ -90,6 +92,7 @@ function MovieCardBase({
   onDelete,
   onWatchTogether,
   onAskAI,
+  showNewBadge = false,
   disableEntryAnimation = false,
   aspectRatio = "portrait",
   className,
@@ -441,6 +444,18 @@ function MovieCardBase({
               {/* Top Badges */}
               <div className="absolute top-3 left-3 right-3 flex items-start justify-between z-20">
                 <div className="flex max-w-[calc(100%-3rem)] flex-wrap items-center gap-2">
+                  {/* NEW Badge */}
+                  {showNewBadge && (
+                    <motion.div
+                      initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
+                      animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
+                      exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/25 backdrop-blur-xl border border-amber-400/40 text-xs font-bold text-amber-300 shadow-xl"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>NEW</span>
+                    </motion.div>
+                  )}
                   {/* Progress or Finished Badge */}
                   {hasProgress && (
                     <motion.div
@@ -476,7 +491,7 @@ function MovieCardBase({
                   )}
                 </div>
 
-                {/* Options button on hover */}
+                {/* Options button on hover - REMOVED 3-DOT AS PER USER REQUEST */}
                 <motion.div
                   initial={enableMotionEffects ? { opacity: 0, scale: 0.5 } : false}
                   animate={enableMotionEffects
@@ -514,15 +529,6 @@ function MovieCardBase({
                       <Bot className="w-4 h-4" />
                     </button>
                   )}
-
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onFixMatch(item) }}
-                    className="p-2 rounded-xl bg-black/50 backdrop-blur-xl border border-white/10 text-white/80 hover:text-white hover:bg-black/70 hover:border-white/20 transition-all shadow-xl"
-                    title="More actions"
-                    aria-label={`More actions for ${item.title}`}
-                  >
-                    <MoreHorizontal className="w-4 h-4" />
-                  </button>
                 </motion.div>
               </div>
 
@@ -809,10 +815,6 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
         <div className="relative flex-1 p-5 flex flex-col justify-between z-10 min-w-0">
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-white bg-white/15 px-2 py-1 rounded-md border border-white/25">
-                <Play className="w-2.5 h-2.5 fill-white" />
-                Resume
-              </span>
               {item.media_type === 'tvshow' && (
                 <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wide">
                   TV Series

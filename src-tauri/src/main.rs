@@ -221,6 +221,19 @@ async fn get_library_filtered(
 
 // Get episodes for a TV show
 #[tauri::command]
+async fn get_recently_added(
+    state: State<'_, AppState>,
+    limit: Option<i32>,
+    is_cloud: Option<bool>,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let items = db
+        .get_recently_added(limit.unwrap_or(10), is_cloud)
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
+#[tauri::command]
 async fn get_episodes(
     state: State<'_, AppState>,
     series_id: i64,
@@ -10301,6 +10314,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_recently_added,
             get_library,
             get_library_filtered,
             get_library_stats,

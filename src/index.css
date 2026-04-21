@@ -72,12 +72,12 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
-    background: transparent;
+    background: #000;
   }
 
   body {
     @apply text-foreground antialiased;
-    background: transparent;
+    background: #000;
     font-family: var(--font-sans);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     letter-spacing: -0.01em;

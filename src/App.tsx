@@ -23,6 +23,7 @@ import {
   getLibraryStats,
   getWatchHistory,
   getWatchHistoryEvents,
+  getRecentlyAdded,
   removeFromWatchHistory,
   removeWatchHistoryEntry,
   clearAllWatchHistory,
@@ -156,7 +157,30 @@ const LoadingFallback = () => (
   </div>
 )
 
+// Lightweight poster thumbnail for the Newly Added row
+function NewlyAddedPoster({ item }: { item: MediaItem }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (item.poster_path) {
+      getCachedImageUrl(item.poster_path.replace('image_cache/', '')).then(u => {
+        if (!cancelled && u) setUrl(u)
+      })
+    }
+    return () => { cancelled = true }
+  }, [item.poster_path])
+  return url ? (
+    <img src={url} alt={item.title} className="w-full h-full object-cover" />
+  ) : (
+    <div className="w-full h-full bg-white/5 flex items-center justify-center text-[10px] text-muted-foreground">
+      {item.title.slice(0, 2)}
+    </div>
+  )
+}
+
 function App() {
+  // Search and View state
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
   const [historyEvents, setHistoryEvents] = useState<WatchHistoryEvent[]>([])
@@ -243,6 +267,7 @@ function App() {
   const [isHomeSearching, setIsHomeSearching] = useState(false)
 
   // Continue watching
+  const [recentlyAdded, setRecentlyAdded] = useState<MediaItem[]>([])
   const [continueWatching, setContinueWatching] = useState<MediaItem[]>([])
 
   // Library stats
@@ -339,6 +364,25 @@ function App() {
 
   // Authentication state
   const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout } = useAuth()
+  const [gdriveInfo, setGdriveInfo] = useState<any>(null)
+  const [currentTime, setCurrentTime] = useState(new Date())
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+  }
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      import('@/services/gdrive').then(m => m.getGDriveAccountInfo()).then(setGdriveInfo)
+    } else {
+      setGdriveInfo(null)
+    }
+  }, [isAuthenticated])
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
@@ -546,6 +590,26 @@ function App() {
   }
 
   // Listen for Tauri events - depends on view to properly refresh data
+  // Global shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // CTRL+F or CMD+F to search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        if (view !== 'home') {
+          setView('home')
+          // Small delay to allow view transition before focusing
+          setTimeout(() => searchInputRef.current?.focus(), 150)
+        } else {
+          searchInputRef.current?.focus()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [view])
+
   useEffect(() => {
     document.documentElement.classList.add('dark')
 
@@ -574,6 +638,16 @@ function App() {
   }, [])
 
   // Load continue watching
+  const loadRecentlyAdded = useCallback(async () => {
+    try {
+      const isCloud = view === 'cloud' ? true : (view === 'home' ? undefined : false)
+      const items = await getRecentlyAdded(10, isCloud)
+      setRecentlyAdded(items)
+    } catch (error) {
+      console.error('Failed to load recently added', error)
+    }
+  }, [view])
+
   const loadContinueWatching = useCallback(async () => {
     try {
       const history = await getWatchHistory()
@@ -673,9 +747,10 @@ function App() {
 
   // Load initial data
   useEffect(() => {
-    loadContinueWatching()
+    loadContinueWatching(),
+        loadRecentlyAdded()
     loadLibraryStats()
-  }, [tabVisibility, loadContinueWatching, loadLibraryStats])
+  }, [tabVisibility, loadContinueWatching, loadRecentlyAdded, loadLibraryStats])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -688,7 +763,8 @@ function App() {
     const syncAndRefresh = async () => {
       await runWatchHistorySync()
       if (cancelled) return
-      await loadContinueWatching()
+      await loadContinueWatching(),
+        loadRecentlyAdded()
       if (cancelled) return
       await loadHistoryEvents()
     }
@@ -698,7 +774,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [isAuthenticated, loadContinueWatching, loadHistoryEvents, runWatchHistorySync])
+  }, [isAuthenticated, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync])
 
   useEffect(() => {
     let unlistenProgress: UnlistenFn | undefined
@@ -772,7 +848,8 @@ function App() {
           await loadHistoryEvents()
         }
         await loadLibraryStats()
-        await loadContinueWatching()
+        await loadContinueWatching(),
+        loadRecentlyAdded()
 
         toast({ title: "Scan Complete", description: "Library has been updated." })
       })
@@ -825,7 +902,8 @@ function App() {
         } else if (view === 'history') {
           await loadHistoryEvents()
         }
-        await loadContinueWatching()
+        await loadContinueWatching(),
+        loadRecentlyAdded()
         await runWatchHistorySync()
       })
 
@@ -884,7 +962,8 @@ function App() {
           }
         }
         await loadLibraryStats()
-        await loadContinueWatching()
+        await loadContinueWatching(),
+        loadRecentlyAdded()
       })
 
       unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
@@ -909,7 +988,7 @@ function App() {
       unlistenCloudIndexingStarted?.()
       unlistenZipProcessing?.()
     }
-  }, [view, selectedShow, fetchData, loadContinueWatching, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, toast])
+  }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, toast])
 
   useEffect(() => {
     if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai') {
@@ -1134,6 +1213,7 @@ function App() {
       })
       await Promise.all([
         loadContinueWatching(),
+        loadRecentlyAdded(),
         loadHistoryEvents(),
         runWatchHistorySync(),
         fetchData(),
@@ -1141,7 +1221,7 @@ function App() {
     } catch {
       toast({ title: "Error", description: "Failed to mark as watched", variant: "destructive" })
     }
-  }, [fetchData, loadContinueWatching, loadHistoryEvents, runWatchHistorySync, toast])
+  }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync, toast])
 
   const handleResumeChoice = async (resume: boolean) => {
     if (!resumeDialogData) return
@@ -1196,6 +1276,7 @@ function App() {
       fetchData(),
       loadLibraryStats(),
       loadContinueWatching(),
+        loadRecentlyAdded(),
     ])
 
     // Emit update event so current view can hot-refresh in-place without manual reload.
@@ -1242,7 +1323,7 @@ function App() {
         }
       }
     }
-  }, [contentDetailsItem, itemToFix, fetchData, loadLibraryStats, loadContinueWatching, selectedShow, view])
+  }, [contentDetailsItem, itemToFix, fetchData, loadLibraryStats, loadContinueWatching, loadRecentlyAdded, selectedShow, view])
 
   const handleContentDetailsMetadataRefresh = useCallback(async (itemId: number) => {
     try {
@@ -1257,6 +1338,7 @@ function App() {
         fetchData(),
         loadLibraryStats(),
         loadContinueWatching(),
+        loadRecentlyAdded(),
         loadHistoryEvents(),
       ])
 
@@ -1265,7 +1347,7 @@ function App() {
       console.warn('[ContentDetails] Failed to refresh item after metadata update:', error)
       return null
     }
-  }, [fetchData, loadContinueWatching, loadHistoryEvents, loadLibraryStats, selectedShow])
+  }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, selectedShow])
 
   const handleHistoryEntryOpen = useCallback(async (event: WatchHistoryEvent) => {
     try {
@@ -1292,12 +1374,13 @@ function App() {
         description: `"${event.parent_title || event.title}" removed from watch history.`,
       })
       await loadHistoryEvents()
-      await loadContinueWatching()
+      await loadContinueWatching(),
+        loadRecentlyAdded()
       await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
-  }, [toast, loadContinueWatching, loadHistoryEvents, runWatchHistorySync])
+  }, [toast, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync])
 
   const handleClearHistory = useCallback(async () => {
     if (historyEvents.length === 0 || isClearingHistory) return
@@ -1310,14 +1393,15 @@ function App() {
         description: `Removed ${historyEvents.length} watch history ${historyEvents.length === 1 ? 'entry' : 'entries'}.`,
       })
       await loadHistoryEvents()
-      await loadContinueWatching()
+      await loadContinueWatching(),
+        loadRecentlyAdded()
       await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
     } finally {
       setIsClearingHistory(false)
     }
-  }, [historyEvents.length, isClearingHistory, loadContinueWatching, toast, loadHistoryEvents, runWatchHistorySync])
+  }, [historyEvents.length, isClearingHistory, loadContinueWatching, loadRecentlyAdded, toast, loadHistoryEvents, runWatchHistorySync])
 
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
@@ -1357,7 +1441,8 @@ function App() {
       toast({ title: "Marked Complete", description: `${markCompleteData.title} marked as watched` })
       // Emit event so EpisodeBrowser and other components can refresh
       await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
-      await loadContinueWatching()
+      await loadContinueWatching(),
+        loadRecentlyAdded()
       await loadHistoryEvents()
       await runWatchHistorySync()
       // Refresh library items to update progress display on cards
@@ -1521,7 +1606,7 @@ function App() {
           <ZipPlaybackLoadingOverlay loadingState={zipPlaybackLoading} />
 
           {/* Custom Title Bar */}
-          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black/45 backdrop-blur-2xl">
+          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black">
             <div className="relative h-full w-full flex items-center justify-between">
               <div className="absolute top-0 left-0 right-0 h-1.5" />
               <div
@@ -1672,7 +1757,7 @@ function App() {
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
-          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden">
+          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[72px] pr-[72px]">
             {/* Floating Scan Progress Indicator */}
             <AnimatePresence>
               {isScanning && scanProgress && (
@@ -1890,272 +1975,256 @@ function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="min-h-[calc(100vh-80px)] flex flex-col"
+                        className="h-[calc(100vh-80px)] flex flex-col overflow-hidden relative"
                       >
-                        {/* Logo at Top Center */}
+                        {/* Background Decorative Layer */}
+                        <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
+                        <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
 
+                        <div className="relative flex-1 flex flex-col min-h-0">
+                          {/* 1. Centered Clock Header */}
+                          <motion.header
+                            initial={{ opacity: 0, y: -20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="pt-16 pb-8 flex flex-col items-center justify-center flex-shrink-0"
+                          >
+                            <h1 className="text-6xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
+                              {formatTime(currentTime)}
+                            </h1>
+                          </motion.header>
 
-                        {/* Hero Search Section - Stays visible */}
-                        <div className="flex-1 flex items-center justify-center py-6">
-                          <div className="w-full max-w-xl text-center">
-                            <motion.div
-                              animate={{
-                                opacity: homeSearchQuery ? 0.7 : 1,
-                                scale: homeSearchQuery ? 0.95 : 1,
-                                y: homeSearchQuery ? -10 : 0
-                              }}
-                            >
-                              <h2 className="text-3xl font-bold tracking-tight text-white mb-2">
-                                <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-white/70">
-                                  Discover your next
-                                </span>
-                                {' '}
-                                <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-gray-300 to-gray-400">
-                                  favorite story
-                                </span>
-                              </h2>
-
-                              <p className="text-sm text-muted-foreground mb-4">
-                                Search across your library
-                              </p>
-                            </motion.div>
-
-                            <div className="relative max-w-md mx-auto group">
-                              <div className="relative flex items-center bg-card/80 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg p-1.5 transition-all group-focus-within:border-white/50 group-focus-within:bg-card">
-                                <Search className="w-5 h-5 text-muted-foreground ml-3" />
+                          {/* 2. Centered Sleek Search Bar */}
+                          <div className="flex justify-center px-6 pb-12 flex-shrink-0">
+                            <div className="relative group w-full max-w-xl">
+                              <div className="relative flex items-center bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 rounded-full transition-all duration-500 group-focus-within:border-white/40 group-focus-within:bg-white/[0.08] group-focus-within:shadow-glow-sm overflow-hidden">
+                                <Search className="w-5 h-5 text-white/30 ml-6 group-focus-within:text-white/60 transition-colors" />
                                 <input
+                                  ref={searchInputRef}
                                   type="text"
-                                  className="w-full bg-transparent border-none text-base px-3 py-2.5 focus:outline-none text-white placeholder:text-muted-foreground font-medium"
-                                  placeholder="Search movies, TV shows..."
+                                  className="flex-1 bg-transparent border-none text-base px-4 py-4 focus:outline-none text-white placeholder:text-white/20 font-medium tracking-tight"
+                                  placeholder="Search in your library..."
                                   value={homeSearchQuery}
                                   onChange={(e) => setHomeSearchQuery(e.target.value)}
-                                  autoFocus
                                 />
                                 {homeSearchQuery && (
                                   <button
                                     onClick={() => setHomeSearchQuery('')}
-                                    className="p-1.5 hover:bg-white/10 rounded-full transition-colors mr-2"
+                                    className="p-2 hover:bg-white/10 rounded-full transition-colors mr-3"
                                   >
-                                    <X className="w-4 h-4 text-muted-foreground" />
+                                    <X className="w-4 h-4 text-white/40" />
                                   </button>
                                 )}
-                                {isHomeSearching && (
-                                  <div className="mr-3">
-                                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                                {!homeSearchQuery && (
+                                  <div className="mr-6 flex items-center gap-2 opacity-20 group-focus-within:opacity-0 transition-opacity">
+                                    <span className="text-[10px] font-bold text-white tracking-[0.2em]">CTRL F</span>
                                   </div>
                                 )}
                               </div>
                             </div>
-
-                            {/* Quick Actions */}
-                            <motion.div
-                              animate={{ opacity: homeSearchQuery ? 0 : 1, height: homeSearchQuery ? 0 : 'auto' }}
-                              className="flex items-center justify-center gap-3 mt-5 overflow-hidden"
-                            >
-                              {tabVisibility.showCloud && (
-                                <button
-                                  onClick={() => setView('cloud')}
-                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                                >
-                                  <Cloud className="w-4 h-4 text-gray-400" />
-                                  <span>Google Drive</span>
-                                </button>
-                              )}
-                              {unstableEnabled && (
-                                <button
-                                  onClick={handleAiChatPaused}
-                                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 text-sm font-medium transition-all hover:scale-105"
-                                >
-                                  <Bot className="w-4 h-4 text-amber-300" />
-                                  <span>AI Chat</span>
-                                  <span className="rounded-full border border-amber-400/35 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-300">
-                                    Paused
-                                  </span>
-                                </button>
-                              )}
-                            </motion.div>
                           </div>
-                        </div>
 
-                        {/* Bottom Sections - Continue Watching and Library Stats */}
-                        <div className="space-y-4 pb-4 mt-auto">
-                          {homeSearchQuery ? (
-                            <section className="pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                              <div className="section-header-compact">
-                                <div className="flex items-center gap-2">
-                                  <div className="p-1.5 rounded-lg bg-white/10">
-                                    <Search className="w-4 h-4 text-white" />
+                          {/* 3. Main Content Sections - FIXED HEIGHT / NO SCROLL */}
+                          <div className="flex-1 flex flex-col justify-between px-6 pb-8 min-h-0">
+                            {homeSearchQuery ? (
+                              <section className="flex-1 min-h-0 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="flex items-center gap-3 mb-4">
+                                  <div className="p-2 rounded-xl bg-white/10">
+                                    <Search className="w-5 h-5 text-white" />
                                   </div>
                                   <div>
-                                    <h3 className="text-sm font-semibold text-foreground">
-                                      {isHomeSearching ? 'Searching Library...' : `Search Results (${homeSearchResults.length})`}
+                                    <h3 className="text-xl font-bold text-white tracking-tight">
+                                      {isHomeSearching ? 'Searching...' : `Search Results (${homeSearchResults.length})`}
                                     </h3>
+                                    <p className="text-xs text-muted-foreground">Showing matches from your library</p>
                                   </div>
                                 </div>
-                              </div>
 
-                              {homeSearchResults.length > 0 ? (
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                  {homeSearchResults.slice(0, 10).map((item, index) => (
-                                    <MovieCard
-                                      key={item.id}
-                                      item={item}
-                                      index={index}
-                                      onClick={handleItemClick}
-                                      onFixMatch={handleFixMatch}
-                                      onDelete={handleDelete}
-                                      onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
-                                    />
-                                  ))}
-                                </div>
-                              ) : !isHomeSearching && (
-                                <div className="text-center py-10 bg-white/5 rounded-2xl border border-white/5">
-                                  <p className="text-sm text-muted-foreground">No matches found in your library</p>
-                                </div>
-                              )}
-                            </section>
-                          ) : (
-                            <>
-                              {/* Continue Watching - Middle Bottom */}
-                              {continueWatching.length > 0 && (
-                                <motion.section
-                                  initial={{ opacity: 0, y: 15 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: 0.1 }}
-                                >
-                                  <div className="section-header-compact">
-                                    <div className="flex items-center gap-2">
-                                      <div className="p-1.5 rounded-lg bg-white/10">
-                                        <PlayCircle className="w-4 h-4 text-white" />
-                                      </div>
-                                      <div>
-                                        <h3 className="text-sm font-semibold text-foreground">Continue Watching</h3>
-                                        <p className="text-[10px] text-muted-foreground">Pick up where you left off</p>
-                                      </div>
-                                    </div>
-                                    <button
-                                      onClick={() => setView('history')}
-                                      className="btn-ghost text-xs flex items-center gap-1 group py-1 px-2"
-                                    >
-                                      View All
-                                      <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-1" />
-                                    </button>
-                                  </div>
-                                  <div className="flex gap-3 pb-3">
-                                    {continueWatching.slice(0, 3).map((item, index) => (
-                                      <ContinueCard
+                                {homeSearchResults.length > 0 ? (
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-5 overflow-y-auto max-h-full pb-4 no-scrollbar">
+                                    {homeSearchResults.slice(0, 16).map((item, index) => (
+                                      <MovieCard
                                         key={item.id}
                                         item={item}
                                         index={index}
                                         onClick={handleItemClick}
+                                        onFixMatch={handleFixMatch}
+                                        onDelete={handleDelete}
+                                        onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                                       />
                                     ))}
                                   </div>
-                                </motion.section>
-                              )}
-
-                              {/* Library Stats - Bottom */}
-                              {tabVisibility.showCloud && (
-                                <motion.section
-                                  initial={{ opacity: 0, y: 15 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: 0.2 }}
-                                >
-                                  <div className="section-header-compact">
-                                    <div className="flex items-center gap-2">
-                                      <div className="p-1.5 rounded-lg bg-white/10">
-                                        <BarChart3 className="w-4 h-4 text-white" />
+                                ) : !isHomeSearching && (
+                                  <div className="text-center py-12 glass-light rounded-3xl border border-white/5 shadow-2xl">
+                                    <div className="mb-4 inline-flex p-4 rounded-full bg-white/5">
+                                      <Search className="w-8 h-8 text-muted-foreground/40" />
+                                    </div>
+                                    <h4 className="text-lg font-bold text-white mb-2">No matches found</h4>
+                                    <p className="text-sm text-muted-foreground max-w-xs mx-auto">We couldn't find anything matching "{homeSearchQuery}" in your collection.</p>
+                                  </div>
+                                )}
+                              </section>
+                            ) : (
+                              <div className="flex-1 flex flex-col justify-around gap-4 min-h-0">
+                                {/* Continue Watching - Horizontal Cards */}
+                                {continueWatching.length > 0 && (
+                                  <motion.section
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.1 }}
+                                    className="flex-shrink-0"
+                                  >
+                                    <div className="flex items-center justify-between mb-5 px-1">
+                                      <div className="flex items-center gap-4">
+                                        <div className="w-1 h-4 bg-white/20 rounded-full" />
+                                        <h3 className="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">Continue Watching</h3>
                                       </div>
-                                      <div>
-                                        <h3 className="text-sm font-semibold text-foreground">Your Library</h3>
-                                        <p className="text-[10px] text-muted-foreground">At a glance</p>
+                                      <button
+                                        onClick={() => setView('history')}
+                                        className="text-[10px] font-bold text-white/20 hover:text-white uppercase tracking-widest transition-colors flex items-center gap-2 group"
+                                      >
+                                        View All
+                                        <ChevronRight className="w-3 h-3 opacity-50 group-hover:translate-x-1 transition-transform" />
+                                      </button>
+                                    </div>
+                                    <div className="flex gap-4 pb-1 overflow-x-auto no-scrollbar">
+                                      {continueWatching.slice(0, 3).map((item, index) => (
+                                        <ContinueCard
+                                          key={item.id}
+                                          item={item}
+                                          index={index}
+                                          onClick={handleItemClick}
+                                        />
+                                      ))}
+                                    </div>
+                                  </motion.section>
+                                )}
+
+                                {/* Newly Added - Single Row Grid */}
+                                {recentlyAdded.length > 0 && (
+                                  <motion.section
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.2 }}
+                                    className="min-h-0 overflow-hidden"
+                                  >
+                                    <div className="flex items-center mb-5 px-1">
+                                      <div className="flex items-center gap-4">
+                                        <div className="w-1 h-4 bg-white/20 rounded-full" />
+                                        <h3 className="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">Newly Added</h3>
                                       </div>
                                     </div>
-                                  </div>
-                                  <div className="grid grid-cols-3 gap-3">
-                                    {/* Movies Card */}
-                                    <motion.div
-                                      onClick={() => {
-                                        setView('cloud'); setCloudSubTab('movies');
-                                      }}
-                                      className="stat-card-compact group cursor-pointer"
-                                      whileHover={{ scale: 1.02 }}
-                                      whileTap={{ scale: 0.98 }}
-                                    >
-                                      <div className="flex items-center justify-between mb-2">
-                                        <div className="p-1.5 rounded-lg bg-white/10">
-                                          <Film className="w-4 h-4 text-white" />
-                                        </div>
-                                        <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                                      </div>
-                                      <div className="text-2xl font-bold text-foreground">{libraryStats.movies}</div>
-                                      <div className="text-[10px] text-muted-foreground">Movies</div>
-                                    </motion.div>
+                                    <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-5">
+                                      {/* One row of larger items */}
+                                      {recentlyAdded.slice(0, 8).map((item, index) => (
+                                        <motion.div
+                                          key={item.id}
+                                          initial={{ opacity: 0, scale: 0.9 }}
+                                          animate={{ opacity: 1, scale: 1 }}
+                                          transition={{ delay: index * 0.04 }}
+                                          className="aspect-[2/3]"
+                                        >
+                                          <MovieCard
+                                            item={item}
+                                            index={index}
+                                            onClick={handleItemClick}
+                                            onFixMatch={handleFixMatch}
+                                            onDelete={handleDelete}
+                                            onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                                            showNewBadge={false}
+                                            className="h-full"
+                                          />
+                                        </motion.div>
+                                      ))}
+                                    </div>
+                                  </motion.section>
+                                )}
 
-                                    {/* TV Shows Card */}
-                                    <motion.div
-                                      onClick={() => {
-                                        setView('cloud'); setCloudSubTab('tv');
-                                      }}
-                                      className="stat-card-compact group cursor-pointer"
-                                      whileHover={{ scale: 1.02 }}
-                                      whileTap={{ scale: 0.98 }}
-                                    >
-                                      <div className="flex items-center justify-between mb-2">
-                                        <div className="p-1.5 rounded-lg bg-white/10">
-                                          <Tv className="w-4 h-4 text-white" />
-                                        </div>
-                                        <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                                      </div>
-                                      <div className="text-2xl font-bold text-foreground">{libraryStats.shows}</div>
-                                      <div className="text-[10px] text-muted-foreground">TV Shows</div>
-                                    </motion.div>
-
-                                    {/* In Progress Card */}
-                                    <motion.div
-                                      onClick={() => setView('history')}
-                                      className="stat-card-compact group cursor-pointer"
-                                      whileHover={{ scale: 1.02 }}
-                                      whileTap={{ scale: 0.98 }}
-                                    >
-                                      <div className="flex items-center justify-between mb-2">
-                                        <div className="p-1.5 rounded-lg bg-white/10">
-                                          <Clock className="w-4 h-4 text-gray-400" />
-                                        </div>
-                                        <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                                      </div>
-                                      <div className="text-2xl font-bold text-foreground">{continueWatching.length}</div>
-                                      <div className="text-[10px] text-muted-foreground">Watching</div>
-                                    </motion.div>
-                                  </div>
-                                </motion.section>
-                              )}
-
-                              {/* Empty state - only when nothing to show */}
-                              {continueWatching.length === 0 && libraryStats.movies === 0 && libraryStats.shows === 0 && (
-                                <motion.div
-                                  className="flex flex-col items-center text-center py-6"
-                                  initial={{ opacity: 0, scale: 0.9 }}
-                                  animate={{ opacity: 1, scale: 1 }}
-                                >
-                                  <div className="p-3 rounded-xl bg-white/5 mb-3">
-                                    <Film className="w-8 h-8 text-muted-foreground" />
-                                  </div>
-                                  <h3 className="text-base font-semibold text-foreground mb-1">Your library is empty</h3>
-                                  <p className="text-xs text-muted-foreground max-w-xs mb-4">
-                                    Connect Google Drive to discover your movies and TV shows
-                                  </p>
-                                  <button
-                                    onClick={() => setSettingsOpen(true)}
-                                    className="btn-primary-compact inline-flex items-center gap-1.5"
+                                {/* 4. Statistics Dashboard Widgets - Ultra Compact Bottom */}
+                                {tabVisibility.showCloud && (libraryStats.movies > 0 || libraryStats.shows > 0) && (
+                                  <motion.section
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.3 }}
+                                    className="grid grid-cols-1 sm:grid-cols-3 gap-6 flex-shrink-0"
                                   >
-                                    <Sparkles className="w-3.5 h-3.5" />
-                                    Get Started
-                                  </button>
-                                </motion.div>
-                              )}
-                            </>
-                          )}
+                                    <button
+                                      onClick={() => { setView('cloud'); setCloudSubTab('movies'); }}
+                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                    >
+                                      <Film className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
+                                      <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl font-black text-white">{libraryStats.movies}</span>
+                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Movies</span>
+                                      </div>
+                                    </button>
+
+                                    <button
+                                      onClick={() => { setView('cloud'); setCloudSubTab('tv'); }}
+                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                    >
+                                      <Tv className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
+                                      <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl font-black text-white">{libraryStats.shows}</span>
+                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Shows</span>
+                                      </div>
+                                    </button>
+
+                                    <button
+                                      onClick={() => setView('history')}
+                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                    >
+                                      <TrendingUp className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
+                                      <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl font-black text-white">{continueWatching.length}</span>
+                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Watching</span>
+                                      </div>
+                                    </button>
+                                  </motion.section>
+                                )}
+
+                                {/* Empty state - Fixed scale */}
+                                {continueWatching.length === 0 && libraryStats.movies === 0 && libraryStats.shows === 0 && (
+                                  <motion.div
+                                    className="empty-state glass py-12 rounded-[40px] shadow-2xl border border-white/5 flex-1 flex flex-col justify-center"
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                  >
+                                    <div className="empty-state-icon mb-10 relative flex justify-center">
+                                      {/* Animated rings matching Cloud View indexing aesthetic */}
+                                      <motion.div
+                                        className="absolute rounded-full border-2 border-white/10"
+                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
+                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut" }}
+                                        style={{ width: 100, height: 100 }}
+                                      />
+                                      <motion.div
+                                        className="absolute rounded-full border-2 border-white/10"
+                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
+                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut", delay: 0.8 }}
+                                        style={{ width: 100, height: 100 }}
+                                      />
+                                      <div className="p-8 rounded-[32px] bg-white/5 border border-white/10 backdrop-blur-3xl relative z-10">
+                                        <Film className="w-16 h-16 text-white/40" />
+                                      </div>
+                                    </div>
+                                    <h3 className="text-3xl font-black text-white tracking-tighter mb-3">Your library is waiting</h3>
+                                    <p className="text-base text-white/30 max-w-sm mb-10 leading-relaxed font-medium mx-auto">
+                                      Connect your Google Drive account to transform this space into your ultimate private cinema.
+                                    </p>
+                                    <div className="flex justify-center">
+                                      <button
+                                        onClick={() => setSettingsOpen(true)}
+                                        className="btn-primary-compact py-4 px-10 rounded-2xl inline-flex items-center gap-3 text-base font-bold shadow-glow-sm hover:shadow-glow transition-all"
+                                      >
+                                        <Sparkles className="w-5 h-5 text-black" />
+                                        <span>Start Your Collection</span>
+                                      </button>
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </motion.div>
                     )}

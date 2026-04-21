@@ -211,6 +211,23 @@ export const getLibraryFiltered = async (
   }
 };
 
+// Get recently added items
+export const getRecentlyAdded = async (
+  limit: number = 10,
+  isCloud?: boolean
+): Promise<MediaItem[]> => {
+  try {
+    const items = await invoke<MediaItem[]>("get_recently_added", {
+      limit,
+      isCloud: isCloud ?? null,
+    });
+    return items;
+  } catch (error) {
+    console.error("Failed to get recently added items:", error);
+    return [];
+  }
+};
+
 export const getLibraryStats = async (
   isCloud?: boolean,
 ): Promise<LibraryStats> => {
