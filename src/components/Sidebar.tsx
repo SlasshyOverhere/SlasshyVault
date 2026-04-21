@@ -43,10 +43,6 @@ export function Sidebar({
   aiChatPaused = false,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
-  const [isManualCollapsed] = useState(() => {
-    const saved = window.localStorage.getItem("sidebar-collapsed");
-    return saved === null ? true : saved === "1";
-  });
   const [isHovered, setIsHovered] = useState(false);
   const [gdriveConnected, setGdriveConnected] = useState(false);
   const [gdriveInfo, setGdriveInfo] = useState<DriveAccountInfo | null>(null);
@@ -75,7 +71,7 @@ export function Sidebar({
   }, []);
 
   const isForcedCollapsed = windowWidth < 800;
-  const isCollapsed = (isForcedCollapsed || isManualCollapsed) && !isHovered;
+  const isCollapsed = !isHovered;
   const sidebarWidth = isCollapsed ? (isForcedCollapsed ? 68 : 72) : (windowWidth < 1100 ? 240 : 280);
 
   // Fetch Google Drive info
