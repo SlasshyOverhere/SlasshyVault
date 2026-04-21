@@ -451,7 +451,7 @@ export function SettingsModal({
     { id: "general", label: "General", icon: <Settings className="w-4 h-4" /> },
     {
       id: "updates",
-      label: "Updates & Security",
+      label: "Updates",
       icon: <Shield className="w-4 h-4" />,
     },
     {
@@ -462,7 +462,7 @@ export function SettingsModal({
     { id: "api", label: "API Keys", icon: <Key className="w-4 h-4" /> },
     {
       id: "danger",
-      label: "Advanced",
+      label: "Factory Reset",
       icon: <AlertTriangle className="w-4 h-4" />,
     },
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
@@ -1382,46 +1382,13 @@ export function SettingsModal({
                     >
                       <div>
                         <h3 className="text-lg font-semibold text-foreground mb-1">
-                          Advanced Settings
+                          Factory Reset
                         </h3>
                         <p className="text-sm text-muted-foreground">
                           Danger zone - proceed with caution
                         </p>
                       </div>
 
-                      {/* Cleanup Missing Metadata */}
-                      <div className="p-4 rounded-xl border border-gray-500/30 bg-gray-500/5 space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-gray-500/20">
-                            <Trash2 className="w-5 h-5 text-gray-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium text-gray-400">
-                              Clean Up Missing Titles
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Remove orphaned metadata and posters
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          This will remove database entries and cached posters
-                          for movies and TV shows that no longer exist on disk.
-                          Useful for cleaning up after deleting files
-                          externally.
-                        </p>
-                        <Button
-                          variant="outline"
-                          onClick={handleCleanupMissing}
-                          className="w-full border-gray-500/30 hover:bg-gray-500/10"
-                          disabled={cleaningUp}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          {cleaningUp
-                            ? "Cleaning up..."
-                            : "Clean Up Missing Titles"}
-                        </Button>
-                      </div>
 
                       {/* Reset App */}
                       <div className="p-4 rounded-xl border border-destructive/30 bg-destructive/5 space-y-4">
