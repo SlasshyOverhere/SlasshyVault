@@ -282,7 +282,7 @@ export function Sidebar({
                 "w-full transition-all duration-300 relative overflow-hidden group/storage",
                 isCollapsed 
                   ? "h-11 w-11 rounded-full bg-white/[0.03] border border-white/[0.08] shadow-[0_0_15px_rgba(255,255,255,0.02)]" 
-                  : "h-[74px] rounded-2xl bg-white/[0.03] border border-white/[0.06] px-4 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
+                  : "h-[88px] rounded-2xl bg-white/[0.03] border border-white/[0.06] px-4 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
               )}>
                 {/* Glossy Sheen Overlay */}
                 <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
@@ -314,6 +314,12 @@ export function Sidebar({
                         {/* Shimmer Effect */}
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
                       </div>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-[9px] font-black text-white/30 uppercase tracking-wider">
+                        {formatStorageSize(gdriveInfo.storage_used)} / {formatStorageSize(gdriveInfo.storage_limit)}
+                      </span>
                     </div>
                   </div>
                 </div>
