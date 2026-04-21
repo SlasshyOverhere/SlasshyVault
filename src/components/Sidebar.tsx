@@ -100,9 +100,6 @@ export function Sidebar({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  useEffect(() => {
-    window.localStorage.setItem("sidebar-collapsed", isManualCollapsed ? "1" : "0");
-  }, [isManualCollapsed]);
 
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
