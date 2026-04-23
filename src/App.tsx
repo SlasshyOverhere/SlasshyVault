@@ -1727,7 +1727,7 @@ function App() {
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
-          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[72px] pr-[72px]">
+          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[72px]">
             {/* Floating Scan Progress Indicator */}
             <AnimatePresence>
               {isScanning && scanProgress && (
