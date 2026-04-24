@@ -104,7 +104,7 @@ export function Sidebar({
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
-    { id: "reminders", label: "Reminders", icon: Clapperboard },
+    { id: "reminders", label: "Watchlist", icon: Clapperboard },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);

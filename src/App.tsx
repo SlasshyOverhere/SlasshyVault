@@ -844,6 +844,7 @@ function App() {
     let unlistenCloudIndexingStarted: UnlistenFn | undefined
     let unlistenZipProcessing: UnlistenFn | undefined
     let unlistenReminderFired: UnlistenFn | undefined
+    let unlistenWatchlistReminderFired: UnlistenFn | undefined
 
     const setupListeners = async () => {
       unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
@@ -872,6 +873,26 @@ function App() {
           description: `It's time for ${reminder.title}!`,
         })
         emit('refresh-reminders')
+      })
+
+      unlistenWatchlistReminderFired = await listen<any>('watchlist-reminder-fired', (event) => {
+        const item = event.payload
+        const isSpam = item.notification_mode === 'spam'
+        const title = isSpam ? 'Spam Reminder' : 'Watchlist Reminder'
+        const message = isSpam
+          ? `${item.title} is still waiting in your watchlist.`
+          : `${item.title} is on your watchlist.`
+
+        pushNotification({
+          category: 'reminder',
+          title,
+          message,
+        })
+        toast({
+          title,
+          description: message,
+        })
+        emit('refresh-watchlist')
       })
 
       unlistenZipProcessing = await listen<ZipProcessingStatusPayload>('zip-processing-status', (event) => {
@@ -1065,6 +1086,7 @@ function App() {
       unlistenCloudIndexingStarted?.()
       unlistenZipProcessing?.()
       unlistenReminderFired?.()
+      unlistenWatchlistReminderFired?.()
     }
   }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, pushNotification, toast])
 

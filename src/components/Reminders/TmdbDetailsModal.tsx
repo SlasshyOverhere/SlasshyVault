@@ -35,6 +35,13 @@ interface TmdbDetailsModalProps {
     trackingMode?: 'single' | 'tv_season',
     trackingSeasonNumber?: number | null
   }) => void
+  onAddToWatchlist: (data: {
+    tmdbId: string,
+    mediaType: 'movie' | 'tv',
+    title: string,
+    posterPath?: string | null,
+    releaseDate?: string | null,
+  }) => void
 }
 
 export function TmdbDetailsModal({
@@ -42,7 +49,8 @@ export function TmdbDetailsModal({
   onOpenChange,
   tmdbId,
   mediaType,
-  onSetReminder
+  onSetReminder,
+  onAddToWatchlist
 }: TmdbDetailsModalProps) {
   const [loading, setLoading] = useState(true)
   const [movieDetails, setMovieDetails] = useState<TmdbMovieDetails | null>(null)
@@ -170,6 +178,14 @@ export function TmdbDetailsModal({
         : null
     }
   }
+
+  const watchlistPayload = () => ({
+    tmdbId: String(tmdbId),
+    mediaType,
+    title: title || '',
+    posterPath,
+    releaseDate: mediaType === 'movie' ? movieDetails?.release_date : tvDetails?.first_air_date,
+  })
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
@@ -270,11 +286,20 @@ export function TmdbDetailsModal({
                    className="flex flex-wrap items-center gap-4"
                 >
                   <Button 
+                    onClick={() => title && onAddToWatchlist(watchlistPayload())}
+                    variant="outline"
+                    className="border-white/15 bg-black/30 text-white hover:bg-white hover:text-black font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8"
+                  >
+                    <LayoutGrid className="w-4 h-4 mr-2" />
+                    Add To Watchlist
+                  </Button>
+
+                  <Button 
                     onClick={() => title && onSetReminder(reminderPayload())}
                     className="bg-white text-black hover:bg-neutral-200 font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8 shadow-[0_20px_50px_rgba(255,255,255,0.1)] active:scale-95 transition-all"
                   >
                     <Bell className="w-4 h-4 mr-2" />
-                    {mediaType === 'tv' && nextEpisode ? 'Pin Next Episode' : 'Set Notification'}
+                    Add to Reminder
                   </Button>
                   
                   {mediaType === 'movie' && movieDetails?.release_date && isFutureReleaseTarget(movieDetails.release_date) && (

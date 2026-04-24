@@ -93,12 +93,66 @@ struct WatchHistorySnapshot {
     events: Vec<database::WatchHistoryEvent>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct WatchlistSnapshot {
+    version: i32,
+    exported_at: String,
+    items: Vec<database::WatchlistItem>,
+}
+
 #[derive(Debug, Serialize)]
 struct WatchHistorySyncStatus {
     synced: bool,
     merged_remote_events: usize,
     uploaded_events: usize,
     skipped_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WatchlistSyncStatus {
+    synced: bool,
+    merged_remote_items: usize,
+    uploaded_items: usize,
+    skipped_reason: Option<String>,
+}
+
+fn watchlist_merge_key(item: &database::WatchlistItem) -> String {
+    format!("{}::{}", item.media_type, item.tmdb_id)
+}
+
+fn merge_watchlist_items(
+    local_items: Vec<database::WatchlistItem>,
+    remote_items: Vec<database::WatchlistItem>,
+) -> (Vec<database::WatchlistItem>, usize) {
+    let mut merged: HashMap<String, database::WatchlistItem> = HashMap::new();
+    let mut remote_wins = 0usize;
+
+    for item in local_items {
+        merged.insert(watchlist_merge_key(&item), item);
+    }
+
+    for remote in remote_items {
+        let key = watchlist_merge_key(&remote);
+        match merged.get(&key) {
+            Some(local) if local.updated_at >= remote.updated_at => {}
+            Some(_) => {
+                remote_wins += 1;
+                merged.insert(key, remote);
+            }
+            None => {
+                remote_wins += 1;
+                merged.insert(key, remote);
+            }
+        }
+    }
+
+    let mut items: Vec<_> = merged.into_values().collect();
+    items.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+    (items, remote_wins)
 }
 
 // Scan event payloads
@@ -177,6 +231,57 @@ async fn sync_watch_history_to_drive(state: &AppState) -> Result<WatchHistorySyn
         synced: true,
         merged_remote_events,
         uploaded_events: events.len(),
+        skipped_reason: None,
+    })
+}
+
+async fn sync_watchlist_to_drive(state: &AppState) -> Result<WatchlistSyncStatus, String> {
+    if !state.gdrive_client.is_authenticated() {
+        return Ok(WatchlistSyncStatus {
+            synced: false,
+            merged_remote_items: 0,
+            uploaded_items: 0,
+            skipped_reason: Some("Google Drive is not connected".to_string()),
+        });
+    }
+
+    let local_items = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_watchlist_items(true).map_err(|e| e.to_string())?
+    };
+
+    let remote_items = if let Some(remote_json) = state.gdrive_client.load_watchlist_snapshot().await? {
+        let remote_snapshot: WatchlistSnapshot = serde_json::from_str(&remote_json)
+            .map_err(|e| format!("Failed to parse remote watchlist snapshot: {}", e))?;
+        remote_snapshot.items
+    } else {
+        Vec::new()
+    };
+
+    let (merged_items, merged_remote_items) = merge_watchlist_items(local_items, remote_items);
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.replace_watchlist_items(&merged_items)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let snapshot = WatchlistSnapshot {
+        version: 1,
+        exported_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        items: merged_items.clone(),
+    };
+    let snapshot_json = serde_json::to_string(&snapshot)
+        .map_err(|e| format!("Failed to serialize watchlist snapshot: {}", e))?;
+    state
+        .gdrive_client
+        .save_watchlist_snapshot(&snapshot_json)
+        .await?;
+
+    Ok(WatchlistSyncStatus {
+        synced: true,
+        merged_remote_items,
+        uploaded_items: merged_items.len(),
         skipped_reason: None,
     })
 }
@@ -337,6 +442,11 @@ async fn clear_all_watch_history(state: State<'_, AppState>) -> Result<ApiRespon
 #[tauri::command]
 async fn sync_watch_history(state: State<'_, AppState>) -> Result<WatchHistorySyncStatus, String> {
     sync_watch_history_to_drive(&state).await
+}
+
+#[tauri::command]
+async fn sync_watchlist(state: State<'_, AppState>) -> Result<WatchlistSyncStatus, String> {
+    sync_watchlist_to_drive(&state).await
 }
 
 // ==================== STREAMING HISTORY COMMANDS ====================
@@ -6354,6 +6464,22 @@ struct MovieReminderInput {
     is_active: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchlistItemInput {
+    tmdb_id: String,
+    media_type: String,
+    title: String,
+    poster_path: Option<String>,
+    release_date: Option<String>,
+    notes: Option<String>,
+    is_active: Option<bool>,
+    notification_enabled: Option<bool>,
+    notification_mode: Option<String>,
+    notification_interval_minutes: Option<i32>,
+    notify_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TmdbReleaseSchedule {
@@ -6782,6 +6908,49 @@ fn validate_tracking_mode(input: &MovieReminderInput) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_watchlist_notification_mode(input: &WatchlistItemInput) -> Result<String, String> {
+    let mode = input
+        .notification_mode
+        .as_deref()
+        .unwrap_or("single")
+        .trim()
+        .to_ascii_lowercase();
+
+    match mode.as_str() {
+        "single" | "spam" => Ok(mode),
+        _ => Err("notification_mode must be single or spam".to_string()),
+    }
+}
+
+fn validate_watchlist_input(input: &WatchlistItemInput) -> Result<(), String> {
+    if input.tmdb_id.trim().is_empty() {
+        return Err("TMDB id is required".to_string());
+    }
+    if input.title.trim().is_empty() {
+        return Err("Title is required".to_string());
+    }
+    match input.media_type.trim() {
+        "movie" | "tv" => {}
+        _ => return Err("media_type must be movie or tv".to_string()),
+    }
+
+    let notification_enabled = input.notification_enabled.unwrap_or(false);
+    let mode = normalize_watchlist_notification_mode(input)?;
+
+    if notification_enabled && input.notify_at.is_none() {
+        return Err("notify_at is required when notifications are enabled".to_string());
+    }
+
+    if mode == "spam" {
+        let interval = input.notification_interval_minutes.unwrap_or(0);
+        if interval <= 0 {
+            return Err("Spam reminders require a positive notification interval".to_string());
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn create_movie_reminder(
     state: State<'_, AppState>,
@@ -6837,6 +7006,102 @@ async fn set_movie_reminder_active(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.set_movie_reminder_active(id, is_active)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_watchlist_items(
+    state: State<'_, AppState>,
+    include_inactive: Option<bool>,
+) -> Result<Vec<database::WatchlistItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_watchlist_items(include_inactive.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_or_update_watchlist_item(
+    state: State<'_, AppState>,
+    item: WatchlistItemInput,
+) -> Result<database::WatchlistItem, String> {
+    validate_watchlist_input(&item)?;
+    let mode = normalize_watchlist_notification_mode(&item)?;
+    let notify_at_utc = item
+        .notify_at
+        .as_deref()
+        .map(parse_reminder_datetime_to_utc)
+        .transpose()?;
+
+    let created = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.create_or_update_watchlist_item(database::NewWatchlistItem {
+            tmdb_id: item.tmdb_id.trim(),
+            media_type: item.media_type.trim(),
+            title: item.title.trim(),
+            poster_path: item.poster_path.as_deref(),
+            release_date: item.release_date.as_deref(),
+            notes: item.notes.as_deref(),
+            is_active: item.is_active.unwrap_or(true),
+            notification_enabled: item.notification_enabled.unwrap_or(false),
+            notification_mode: &mode,
+            notification_interval_minutes: item.notification_interval_minutes,
+            notify_at: notify_at_utc.as_deref(),
+        })
+        .map_err(|e| e.to_string())?
+    };
+
+    let _ = sync_watchlist_to_drive(&state).await;
+    Ok(created)
+}
+
+#[tauri::command]
+async fn update_watchlist_item(
+    state: State<'_, AppState>,
+    id: i64,
+    item: WatchlistItemInput,
+) -> Result<database::WatchlistItem, String> {
+    validate_watchlist_input(&item)?;
+    let mode = normalize_watchlist_notification_mode(&item)?;
+    let notify_at_utc = item
+        .notify_at
+        .as_deref()
+        .map(parse_reminder_datetime_to_utc)
+        .transpose()?;
+
+    let updated = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_watchlist_item(
+            id,
+            database::NewWatchlistItem {
+                tmdb_id: item.tmdb_id.trim(),
+                media_type: item.media_type.trim(),
+                title: item.title.trim(),
+                poster_path: item.poster_path.as_deref(),
+                release_date: item.release_date.as_deref(),
+                notes: item.notes.as_deref(),
+                is_active: item.is_active.unwrap_or(true),
+                notification_enabled: item.notification_enabled.unwrap_or(false),
+                notification_mode: &mode,
+                notification_interval_minutes: item.notification_interval_minutes,
+                notify_at: notify_at_utc.as_deref(),
+            },
+        )
+        .map_err(|e| e.to_string())?
+    };
+
+    let _ = sync_watchlist_to_drive(&state).await;
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn delete_watchlist_item(state: State<'_, AppState>, id: i64) -> Result<ApiResponse, String> {
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.delete_watchlist_item(id).map_err(|e| e.to_string())?;
+    }
+    let _ = sync_watchlist_to_drive(&state).await;
+    Ok(ApiResponse {
+        message: "Watchlist item deleted".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -7966,29 +8231,46 @@ fn apply_window_corner_radius(window: &tauri::Window) {
 fn apply_window_corner_radius(_window: &tauri::Window) {}
 
 fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let windows_app_id = app_handle.config().tauri.bundle.identifier.clone();
+
+        let tauri_result = TauriNotification::new(&windows_app_id)
+            .title(summary)
+            .body(body)
+            .show();
+
+        if let Err(err) = tauri_result {
+            println!("[NOTIFY] tauri notification failed: {}", err);
+        }
+
+        let mut notification = SystemNotification::new();
+        notification
+            .summary(summary)
+            .body(body)
+            .appname("StreamVault")
+            .app_id(&windows_app_id)
+            .timeout(notify_rust::Timeout::Milliseconds(5000));
+
+        if let Err(err) = notification.show() {
+            println!("[NOTIFY] notify-rust failed: {}", err);
+        }
+
+        return;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let mut notification = SystemNotification::new();
     notification
         .summary(summary)
         .body(body)
         .appname("StreamVault")
-        .timeout(notify_rust::Timeout::Milliseconds(3000));
+        .timeout(notify_rust::Timeout::Milliseconds(5000));
 
-    #[cfg(target_os = "windows")]
-    {
-        notification.app_id(runtime_app_identifier());
+    if let Err(err) = notification.show() {
+        println!("[NOTIFY] notify-rust failed: {}", err);
     }
-
-    if let Err(e) = notification.show() {
-        println!("[NOTIFY] notify-rust failed: {}", e);
-
-        let tauri_notification =
-            TauriNotification::new(&app_handle.config().tauri.bundle.identifier)
-                .title(summary)
-                .body(body);
-
-        if let Err(err) = tauri_notification.show() {
-            println!("[NOTIFY] tauri notification failed: {}", err);
-        }
     }
 }
 
@@ -8027,6 +8309,90 @@ fn format_reminder_notification_body(reminder: &database::MovieReminder) -> Stri
 
 fn should_continue_tv_reminder(reminder: &database::MovieReminder) -> bool {
     reminder.media_type == "tv" && reminder.tracking_mode == "tv_season"
+}
+
+fn format_watchlist_notification_body(item: &database::WatchlistItem) -> String {
+    if item.notification_mode == "spam" {
+        format!("{} is still waiting in your watchlist.", item.title)
+    } else {
+        format!("{} is on your watchlist.", item.title)
+    }
+}
+
+async fn run_watchlist_scheduler(app_handle: AppHandle) {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+
+    loop {
+        interval.tick().await;
+
+        let notifications_enabled = {
+            let state = app_handle.state::<AppState>();
+            let result = match state.config.lock() {
+                Ok(config) => config.notifications_enabled,
+                Err(error) => {
+                    println!("[WATCHLIST] Failed to lock config: {}", error);
+                    false
+                }
+            };
+            result
+        };
+
+        if !notifications_enabled {
+            continue;
+        }
+
+        let now_utc = Utc::now().to_rfc3339();
+        let due_items = {
+            let state = app_handle.state::<AppState>();
+            let result = match state.db.lock() {
+                Ok(db) => db.get_due_watchlist_notifications(&now_utc),
+                Err(error) => {
+                    println!("[WATCHLIST] Failed to lock database: {}", error);
+                    continue;
+                }
+            };
+            result
+        };
+
+        let due_items = match due_items {
+            Ok(items) => items,
+            Err(error) => {
+                println!("[WATCHLIST] Failed to load due notifications: {}", error);
+                continue;
+            }
+        };
+
+        for item in due_items {
+            send_system_notification(
+                &app_handle,
+                "StreamVault watchlist",
+                &format_watchlist_notification_body(&item),
+            );
+            let _ = app_handle.emit_all("watchlist-reminder-fired", item.clone());
+
+            let state = app_handle.state::<AppState>();
+            if let Ok(db) = state.db.lock() {
+                let result = if item.notification_mode == "spam" {
+                    let minutes = item.notification_interval_minutes.unwrap_or(30).max(1) as i64;
+                    let next_notify_at = (Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
+                    db.advance_watchlist_notification(item.id, &next_notify_at, &now_utc)
+                } else {
+                    db.disable_watchlist_notification(item.id, &now_utc)
+                };
+
+                if let Err(error) = result {
+                    println!(
+                        "[WATCHLIST] Failed to advance notification {}: {}",
+                        item.id, error
+                    );
+                } else {
+                    let _ = app_handle.emit_all("refresh-watchlist", ());
+                }
+            }
+
+            let _ = sync_watchlist_to_drive(&state).await;
+        }
+    }
 }
 
 async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
@@ -11356,6 +11722,32 @@ fn main() {
                 run_movie_reminder_scheduler(app_handle_for_reminders).await;
             });
 
+            let app_handle_for_watchlist = app.handle();
+            tauri::async_runtime::spawn(async move {
+                run_watchlist_scheduler(app_handle_for_watchlist).await;
+            });
+
+            let app_handle_for_watchlist_sync = app.handle();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle_for_watchlist_sync.state::<AppState>();
+                match sync_watchlist_to_drive(&state).await {
+                    Ok(status) => {
+                        if status.synced {
+                            println!(
+                                "[WATCHLIST] Startup sync complete: merged_remote_items={}, uploaded_items={}",
+                                status.merged_remote_items, status.uploaded_items
+                            );
+                            let _ = app_handle_for_watchlist_sync.emit_all("refresh-watchlist", ());
+                        } else if let Some(reason) = status.skipped_reason {
+                            println!("[WATCHLIST] Startup sync skipped: {}", reason);
+                        }
+                    }
+                    Err(error) => {
+                        println!("[WATCHLIST] Startup sync failed: {}", error);
+                    }
+                }
+            });
+
             Ok(())
         })
         .on_page_load(|window, payload| {
@@ -11515,6 +11907,11 @@ fn main() {
             get_movie_reminders,
             delete_movie_reminder,
             set_movie_reminder_active,
+            get_watchlist_items,
+            create_or_update_watchlist_item,
+            update_watchlist_item,
+            delete_watchlist_item,
+            sync_watchlist,
             merge_duplicate_shows,
             // Videasy player commands
             open_videasy_player,

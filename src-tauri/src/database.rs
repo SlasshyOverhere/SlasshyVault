@@ -256,6 +256,25 @@ pub struct MovieReminder {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistItem {
+    pub id: i64,
+    pub tmdb_id: String,
+    pub media_type: String,
+    pub title: String,
+    pub poster_path: Option<String>,
+    pub release_date: Option<String>,
+    pub notes: Option<String>,
+    pub is_active: bool,
+    pub notification_enabled: bool,
+    pub notification_mode: String,
+    pub notification_interval_minutes: Option<i32>,
+    pub notify_at: Option<String>,
+    pub last_notified_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewMovieReminder<'a> {
     pub tmdb_id: &'a str,
@@ -271,6 +290,21 @@ pub struct NewMovieReminder<'a> {
     pub tracking_season_number: Option<i32>,
     pub notes: Option<&'a str>,
     pub is_active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewWatchlistItem<'a> {
+    pub tmdb_id: &'a str,
+    pub media_type: &'a str,
+    pub title: &'a str,
+    pub poster_path: Option<&'a str>,
+    pub release_date: Option<&'a str>,
+    pub notes: Option<&'a str>,
+    pub is_active: bool,
+    pub notification_enabled: bool,
+    pub notification_mode: &'a str,
+    pub notification_interval_minutes: Option<i32>,
+    pub notify_at: Option<&'a str>,
 }
 
 impl Database {
@@ -606,6 +640,59 @@ impl Database {
         self.conn
             .execute(
                 "ALTER TABLE movie_reminders ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'single'",
+                [],
+            )
+            .ok();
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS watchlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tmdb_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                release_date TEXT,
+                notes TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                notification_enabled INTEGER NOT NULL DEFAULT 0,
+                notification_mode TEXT NOT NULL DEFAULT 'single',
+                notification_interval_minutes INTEGER,
+                notify_at TEXT,
+                last_notified_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tmdb_id, media_type)
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_watchlist_due
+             ON watchlist_items(notification_enabled, notify_at)",
+            [],
+        )?;
+
+        self.conn
+            .execute(
+                "ALTER TABLE watchlist_items ADD COLUMN notification_mode TEXT NOT NULL DEFAULT 'single'",
+                [],
+            )
+            .ok();
+        self.conn
+            .execute(
+                "ALTER TABLE watchlist_items ADD COLUMN notification_interval_minutes INTEGER",
+                [],
+            )
+            .ok();
+        self.conn
+            .execute(
+                "ALTER TABLE watchlist_items ADD COLUMN notify_at TEXT",
+                [],
+            )
+            .ok();
+        self.conn
+            .execute(
+                "ALTER TABLE watchlist_items ADD COLUMN last_notified_at TEXT",
                 [],
             )
             .ok();
@@ -2635,6 +2722,197 @@ impl Database {
         Ok(())
     }
 
+    pub fn get_watchlist_item(&self, id: i64) -> Result<WatchlistItem> {
+        self.conn.query_row(
+            "SELECT id, tmdb_id, media_type, title, poster_path, release_date, notes,
+                    is_active, notification_enabled, notification_mode,
+                    notification_interval_minutes, notify_at, last_notified_at,
+                    created_at, updated_at
+             FROM watchlist_items
+             WHERE id = ?",
+            params![id],
+            Self::map_watchlist_item,
+        )
+    }
+
+    pub fn get_watchlist_items(&self, include_inactive: bool) -> Result<Vec<WatchlistItem>> {
+        let sql = if include_inactive {
+            "SELECT id, tmdb_id, media_type, title, poster_path, release_date, notes,
+                    is_active, notification_enabled, notification_mode,
+                    notification_interval_minutes, notify_at, last_notified_at,
+                    created_at, updated_at
+             FROM watchlist_items
+             ORDER BY updated_at DESC, created_at DESC"
+        } else {
+            "SELECT id, tmdb_id, media_type, title, poster_path, release_date, notes,
+                    is_active, notification_enabled, notification_mode,
+                    notification_interval_minutes, notify_at, last_notified_at,
+                    created_at, updated_at
+             FROM watchlist_items
+             WHERE is_active = 1
+             ORDER BY updated_at DESC, created_at DESC"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], Self::map_watchlist_item)?;
+        rows.collect()
+    }
+
+    pub fn create_or_update_watchlist_item(
+        &self,
+        item: NewWatchlistItem<'_>,
+    ) -> Result<WatchlistItem> {
+        self.conn.execute(
+            "INSERT INTO watchlist_items (
+                tmdb_id, media_type, title, poster_path, release_date, notes, is_active,
+                notification_enabled, notification_mode, notification_interval_minutes, notify_at,
+                updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(tmdb_id, media_type) DO UPDATE SET
+                title = excluded.title,
+                poster_path = excluded.poster_path,
+                release_date = excluded.release_date,
+                notes = excluded.notes,
+                is_active = excluded.is_active,
+                notification_enabled = excluded.notification_enabled,
+                notification_mode = excluded.notification_mode,
+                notification_interval_minutes = excluded.notification_interval_minutes,
+                notify_at = excluded.notify_at,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                item.tmdb_id,
+                item.media_type,
+                item.title,
+                item.poster_path,
+                item.release_date,
+                item.notes,
+                if item.is_active { 1 } else { 0 },
+                if item.notification_enabled { 1 } else { 0 },
+                item.notification_mode,
+                item.notification_interval_minutes,
+                item.notify_at,
+            ],
+        )?;
+
+        self.conn.query_row(
+            "SELECT id, tmdb_id, media_type, title, poster_path, release_date, notes,
+                    is_active, notification_enabled, notification_mode,
+                    notification_interval_minutes, notify_at, last_notified_at,
+                    created_at, updated_at
+             FROM watchlist_items
+             WHERE tmdb_id = ? AND media_type = ?",
+            params![item.tmdb_id, item.media_type],
+            Self::map_watchlist_item,
+        )
+    }
+
+    pub fn update_watchlist_item(&self, id: i64, item: NewWatchlistItem<'_>) -> Result<WatchlistItem> {
+        self.conn.execute(
+            "UPDATE watchlist_items
+             SET tmdb_id = ?, media_type = ?, title = ?, poster_path = ?, release_date = ?,
+                 notes = ?, is_active = ?, notification_enabled = ?, notification_mode = ?,
+                 notification_interval_minutes = ?, notify_at = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![
+                item.tmdb_id,
+                item.media_type,
+                item.title,
+                item.poster_path,
+                item.release_date,
+                item.notes,
+                if item.is_active { 1 } else { 0 },
+                if item.notification_enabled { 1 } else { 0 },
+                item.notification_mode,
+                item.notification_interval_minutes,
+                item.notify_at,
+                id,
+            ],
+        )?;
+        self.get_watchlist_item(id)
+    }
+
+    pub fn delete_watchlist_item(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM watchlist_items WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    pub fn get_due_watchlist_notifications(&self, now_utc: &str) -> Result<Vec<WatchlistItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, tmdb_id, media_type, title, poster_path, release_date, notes,
+                    is_active, notification_enabled, notification_mode,
+                    notification_interval_minutes, notify_at, last_notified_at,
+                    created_at, updated_at
+             FROM watchlist_items
+             WHERE is_active = 1
+               AND notification_enabled = 1
+               AND notify_at IS NOT NULL
+               AND notify_at <= ?
+             ORDER BY notify_at ASC",
+        )?;
+
+        let rows = stmt.query_map(params![now_utc], Self::map_watchlist_item)?;
+        rows.collect()
+    }
+
+    pub fn disable_watchlist_notification(&self, id: i64, notified_at: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE watchlist_items
+             SET notification_enabled = 0, last_notified_at = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![notified_at, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn advance_watchlist_notification(
+        &self,
+        id: i64,
+        next_notify_at: &str,
+        notified_at: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE watchlist_items
+             SET notify_at = ?, last_notified_at = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![next_notify_at, notified_at, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn replace_watchlist_items(&self, items: &[WatchlistItem]) -> Result<()> {
+        self.conn.execute("DELETE FROM watchlist_items", [])?;
+
+        for item in items {
+            self.conn.execute(
+                "INSERT INTO watchlist_items (
+                    id, tmdb_id, media_type, title, poster_path, release_date, notes, is_active,
+                    notification_enabled, notification_mode, notification_interval_minutes,
+                    notify_at, last_notified_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    item.id,
+                    item.tmdb_id,
+                    item.media_type,
+                    item.title,
+                    item.poster_path,
+                    item.release_date,
+                    item.notes,
+                    if item.is_active { 1 } else { 0 },
+                    if item.notification_enabled { 1 } else { 0 },
+                    item.notification_mode,
+                    item.notification_interval_minutes,
+                    item.notify_at,
+                    item.last_notified_at,
+                    item.created_at,
+                    item.updated_at,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Get movie/TV entries that still need enriched metadata for hover cards.
     pub fn get_media_needing_metadata_enrichment(
         &self,
@@ -3825,6 +4103,26 @@ impl Database {
             notified_at: row.get(14)?,
             created_at: row.get(15)?,
             updated_at: row.get(16)?,
+        })
+    }
+
+    fn map_watchlist_item(row: &rusqlite::Row) -> rusqlite::Result<WatchlistItem> {
+        Ok(WatchlistItem {
+            id: row.get(0)?,
+            tmdb_id: row.get(1)?,
+            media_type: row.get(2)?,
+            title: row.get(3)?,
+            poster_path: row.get(4)?,
+            release_date: row.get(5)?,
+            notes: row.get(6)?,
+            is_active: row.get::<_, i64>(7)? != 0,
+            notification_enabled: row.get::<_, i64>(8)? != 0,
+            notification_mode: row.get(9)?,
+            notification_interval_minutes: row.get(10)?,
+            notify_at: row.get(11)?,
+            last_notified_at: row.get(12)?,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
         })
     }
 

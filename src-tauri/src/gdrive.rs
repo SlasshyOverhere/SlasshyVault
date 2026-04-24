@@ -22,6 +22,7 @@ const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
 const AI_CHAT_HISTORY_FILE_NAME: &str = "streamvault_ai_chat_history_v1.json";
 const WATCH_HISTORY_FILE_NAME: &str = "streamvault_watch_history_v1.json";
+const WATCHLIST_FILE_NAME: &str = "streamvault_watchlist_v1.json";
 
 /// Stored OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -598,6 +599,77 @@ impl GoogleDriveClient {
             let error_text = response.text().await.unwrap_or_default();
             return Err(format!(
                 "Drive API upload watch history snapshot error: {}",
+                error_text
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub async fn load_watchlist_snapshot(&self) -> Result<Option<String>, String> {
+        let file_id = match self.find_app_data_file_id(WATCHLIST_FILE_NAME).await? {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self
+            .http_client
+            .get(format!(
+                "{}/files/{}?alt=media&supportsAllDrives=true",
+                DRIVE_API_BASE, file_id
+            ))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download watchlist snapshot: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Drive API download watchlist snapshot error: {}",
+                error_text
+            ));
+        }
+
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read watchlist snapshot response: {}", e))?;
+
+        Ok(Some(text))
+    }
+
+    pub async fn save_watchlist_snapshot(&self, watchlist_json: &str) -> Result<(), String> {
+        serde_json::from_str::<serde_json::Value>(watchlist_json)
+            .map_err(|e| format!("Invalid watchlist snapshot JSON: {}", e))?;
+
+        let file_id = match self.find_app_data_file_id(WATCHLIST_FILE_NAME).await? {
+            Some(id) => id,
+            None => {
+                self.create_app_data_file(WATCHLIST_FILE_NAME, "application/json")
+                    .await?
+            }
+        };
+
+        let access_token = self.get_access_token().await?;
+        let response = self
+            .http_client
+            .patch(format!(
+                "{}/files/{}?uploadType=media",
+                DRIVE_UPLOAD_API_BASE, file_id
+            ))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .body(watchlist_json.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload watchlist snapshot: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Drive API upload watchlist snapshot error: {}",
                 error_text
             ));
         }

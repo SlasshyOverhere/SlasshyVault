@@ -1331,6 +1331,45 @@ export interface TmdbReleaseSchedule {
   editable: boolean;
 }
 
+export interface WatchlistItem {
+  id: number;
+  tmdb_id: string;
+  media_type: "movie" | "tv";
+  title: string;
+  poster_path?: string | null;
+  release_date?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  notification_enabled: boolean;
+  notification_mode: "single" | "spam" | string;
+  notification_interval_minutes?: number | null;
+  notify_at?: string | null;
+  last_notified_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistItemInput {
+  tmdbId: string;
+  mediaType: "movie" | "tv";
+  title: string;
+  posterPath?: string | null;
+  releaseDate?: string | null;
+  notes?: string | null;
+  isActive?: boolean;
+  notificationEnabled?: boolean;
+  notificationMode?: "single" | "spam" | string;
+  notificationIntervalMinutes?: number | null;
+  notifyAt?: string | null;
+}
+
+export interface WatchlistSyncStatus {
+  synced: boolean;
+  merged_remote_items: number;
+  uploaded_items: number;
+  skipped_reason?: string | null;
+}
+
 export const getMovieDetails = async (
   movieId: number,
 ): Promise<TmdbMovieDetails | null> => {
@@ -1413,6 +1452,54 @@ export const setMovieReminderActive = async (
     id,
     isActive,
   });
+};
+
+const toWatchlistBackendInput = (item: WatchlistItemInput) => ({
+  tmdbId: item.tmdbId,
+  mediaType: item.mediaType,
+  title: item.title,
+  posterPath: item.posterPath ?? null,
+  releaseDate: item.releaseDate ?? null,
+  notes: item.notes ?? null,
+  isActive: item.isActive ?? true,
+  notificationEnabled: item.notificationEnabled ?? false,
+  notificationMode: item.notificationMode ?? "single",
+  notificationIntervalMinutes: item.notificationIntervalMinutes ?? null,
+  notifyAt: item.notifyAt ?? null,
+});
+
+export const getWatchlistItems = async (
+  includeInactive = false,
+): Promise<WatchlistItem[]> => {
+  return await invoke<WatchlistItem[]>("get_watchlist_items", {
+    includeInactive,
+  });
+};
+
+export const createOrUpdateWatchlistItem = async (
+  item: WatchlistItemInput,
+): Promise<WatchlistItem> => {
+  return await invoke<WatchlistItem>("create_or_update_watchlist_item", {
+    item: toWatchlistBackendInput(item),
+  });
+};
+
+export const updateWatchlistItem = async (
+  id: number,
+  item: WatchlistItemInput,
+): Promise<WatchlistItem> => {
+  return await invoke<WatchlistItem>("update_watchlist_item", {
+    id,
+    item: toWatchlistBackendInput(item),
+  });
+};
+
+export const deleteWatchlistItem = async (id: number): Promise<void> => {
+  await invoke("delete_watchlist_item", { id });
+};
+
+export const syncWatchlist = async (): Promise<WatchlistSyncStatus> => {
+  return await invoke<WatchlistSyncStatus>("sync_watchlist");
 };
 
 // Get TV show details including seasons from TMDB
