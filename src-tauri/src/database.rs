@@ -235,6 +235,44 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovieReminder {
+    pub id: i64,
+    pub tmdb_id: String,
+    pub media_type: String,
+    pub title: String,
+    pub poster_path: Option<String>,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub release_date: Option<String>,
+    pub reminder_at: String,
+    pub source: String,
+    pub tracking_mode: String,
+    pub tracking_season_number: Option<i32>,
+    pub notes: Option<String>,
+    pub is_active: bool,
+    pub notified_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMovieReminder<'a> {
+    pub tmdb_id: &'a str,
+    pub media_type: &'a str,
+    pub title: &'a str,
+    pub poster_path: Option<&'a str>,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub release_date: Option<&'a str>,
+    pub reminder_at: &'a str,
+    pub source: &'a str,
+    pub tracking_mode: &'a str,
+    pub tracking_season_number: Option<i32>,
+    pub notes: Option<&'a str>,
+    pub is_active: bool,
+}
+
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -537,6 +575,48 @@ impl Database {
         )?;
 
         self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS movie_reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tmdb_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                season_number INTEGER,
+                episode_number INTEGER,
+                release_date TEXT,
+                reminder_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                tracking_mode TEXT NOT NULL DEFAULT 'single',
+                tracking_season_number INTEGER,
+                notes TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                notified_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_movie_reminders_due
+             ON movie_reminders(is_active, reminder_at)",
+            [],
+        )?;
+
+        self.conn
+            .execute(
+                "ALTER TABLE movie_reminders ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'single'",
+                [],
+            )
+            .ok();
+        self.conn
+            .execute(
+                "ALTER TABLE movie_reminders ADD COLUMN tracking_season_number INTEGER",
+                [],
+            )
+            .ok();
+
+        self.conn.execute(
             "CREATE TABLE IF NOT EXISTS zip_archives (
                 zip_file_id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -768,11 +848,7 @@ impl Database {
             .collect()
     }
 
-    pub fn get_recently_added(
-        &self,
-        limit: i32,
-        is_cloud: Option<bool>,
-    ) -> Result<Vec<MediaItem>> {
+    pub fn get_recently_added(&self, limit: i32, is_cloud: Option<bool>) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
@@ -2382,6 +2458,183 @@ impl Database {
         self.set_setting("gdrive_changes_token", token)
     }
 
+    // ==================== MOVIE / TV REMINDERS ====================
+
+    pub fn create_movie_reminder(&self, reminder: NewMovieReminder<'_>) -> Result<MovieReminder> {
+        self.conn.execute(
+            "INSERT INTO movie_reminders (
+                tmdb_id, media_type, title, poster_path, season_number, episode_number,
+                release_date, reminder_at, source, tracking_mode, tracking_season_number,
+                notes, is_active, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            params![
+                reminder.tmdb_id,
+                reminder.media_type,
+                reminder.title,
+                reminder.poster_path,
+                reminder.season_number,
+                reminder.episode_number,
+                reminder.release_date,
+                reminder.reminder_at,
+                reminder.source,
+                reminder.tracking_mode,
+                reminder.tracking_season_number,
+                reminder.notes,
+                if reminder.is_active { 1 } else { 0 },
+            ],
+        )?;
+
+        let id = self.conn.last_insert_rowid();
+        self.get_movie_reminder(id)
+    }
+
+    pub fn update_movie_reminder(
+        &self,
+        id: i64,
+        reminder: NewMovieReminder<'_>,
+    ) -> Result<MovieReminder> {
+        self.conn.execute(
+            "UPDATE movie_reminders
+             SET tmdb_id = ?, media_type = ?, title = ?, poster_path = ?,
+                 season_number = ?, episode_number = ?, release_date = ?,
+                 reminder_at = ?, source = ?, tracking_mode = ?, tracking_season_number = ?,
+                 notes = ?, is_active = ?,
+                 notified_at = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![
+                reminder.tmdb_id,
+                reminder.media_type,
+                reminder.title,
+                reminder.poster_path,
+                reminder.season_number,
+                reminder.episode_number,
+                reminder.release_date,
+                reminder.reminder_at,
+                reminder.source,
+                reminder.tracking_mode,
+                reminder.tracking_season_number,
+                reminder.notes,
+                if reminder.is_active { 1 } else { 0 },
+                id,
+            ],
+        )?;
+
+        self.get_movie_reminder(id)
+    }
+
+    pub fn get_movie_reminder(&self, id: i64) -> Result<MovieReminder> {
+        self.conn.query_row(
+            "SELECT id, tmdb_id, media_type, title, poster_path, season_number, episode_number,
+                    release_date, reminder_at, source, tracking_mode, tracking_season_number,
+                    notes, is_active, notified_at,
+                    created_at, updated_at
+             FROM movie_reminders WHERE id = ?",
+            params![id],
+            Self::map_movie_reminder,
+        )
+    }
+
+    pub fn get_movie_reminders(&self, include_inactive: bool) -> Result<Vec<MovieReminder>> {
+        let sql = if include_inactive {
+            "SELECT id, tmdb_id, media_type, title, poster_path, season_number, episode_number,
+                    release_date, reminder_at, source, tracking_mode, tracking_season_number,
+                    notes, is_active, notified_at,
+                    created_at, updated_at
+             FROM movie_reminders
+             ORDER BY reminder_at ASC"
+        } else {
+            "SELECT id, tmdb_id, media_type, title, poster_path, season_number, episode_number,
+                    release_date, reminder_at, source, tracking_mode, tracking_season_number,
+                    notes, is_active, notified_at,
+                    created_at, updated_at
+             FROM movie_reminders
+             WHERE is_active = 1
+             ORDER BY reminder_at ASC"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], Self::map_movie_reminder)?;
+        rows.collect()
+    }
+
+    pub fn delete_movie_reminder(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM movie_reminders WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    pub fn set_movie_reminder_active(&self, id: i64, is_active: bool) -> Result<MovieReminder> {
+        self.conn.execute(
+            "UPDATE movie_reminders
+             SET is_active = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![if is_active { 1 } else { 0 }, id],
+        )?;
+        self.get_movie_reminder(id)
+    }
+
+    pub fn get_due_movie_reminders(&self, now_utc: &str) -> Result<Vec<MovieReminder>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, tmdb_id, media_type, title, poster_path, season_number, episode_number,
+                    release_date, reminder_at, source, tracking_mode, tracking_season_number,
+                    notes, is_active, notified_at,
+                    created_at, updated_at
+             FROM movie_reminders
+             WHERE is_active = 1
+               AND reminder_at <= ?
+             ORDER BY reminder_at ASC",
+        )?;
+
+        let rows = stmt.query_map(params![now_utc], Self::map_movie_reminder)?;
+        rows.collect()
+    }
+
+    pub fn mark_movie_reminder_notified(&self, id: i64, notified_at: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE movie_reminders
+             SET notified_at = ?, is_active = 0, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![notified_at, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn advance_movie_reminder(
+        &self,
+        id: i64,
+        title: &str,
+        poster_path: Option<&str>,
+        season_number: Option<i32>,
+        episode_number: Option<i32>,
+        release_date: Option<&str>,
+        reminder_at: &str,
+        source: &str,
+        tracking_season_number: Option<i32>,
+        notified_at: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE movie_reminders
+             SET title = ?, poster_path = ?, season_number = ?, episode_number = ?,
+                 release_date = ?, reminder_at = ?, source = ?,
+                 tracking_season_number = ?, notified_at = ?, is_active = 1,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            params![
+                title,
+                poster_path,
+                season_number,
+                episode_number,
+                release_date,
+                reminder_at,
+                source,
+                tracking_season_number,
+                notified_at,
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Get movie/TV entries that still need enriched metadata for hover cards.
     pub fn get_media_needing_metadata_enrichment(
         &self,
@@ -2522,11 +2775,7 @@ impl Database {
         }
     }
 
-    pub fn find_media_by_tmdb(
-        &self,
-        tmdb_id: &str,
-        media_type: &str,
-    ) -> Result<Option<MediaItem>> {
+    pub fn find_media_by_tmdb(&self, tmdb_id: &str, media_type: &str) -> Result<Option<MediaItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
@@ -3554,6 +3803,28 @@ impl Database {
             started_at: row.get(20)?,
             ended_at: row.get(21)?,
             updated_at: row.get(22)?,
+        })
+    }
+
+    fn map_movie_reminder(row: &rusqlite::Row) -> rusqlite::Result<MovieReminder> {
+        Ok(MovieReminder {
+            id: row.get(0)?,
+            tmdb_id: row.get(1)?,
+            media_type: row.get(2)?,
+            title: row.get(3)?,
+            poster_path: row.get(4)?,
+            season_number: row.get(5)?,
+            episode_number: row.get(6)?,
+            release_date: row.get(7)?,
+            reminder_at: row.get(8)?,
+            source: row.get(9)?,
+            tracking_mode: row.get(10)?,
+            tracking_season_number: row.get(11)?,
+            notes: row.get(12)?,
+            is_active: row.get::<_, i64>(13)? != 0,
+            notified_at: row.get(14)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
         })
     }
 

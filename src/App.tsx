@@ -15,6 +15,8 @@ import {
   LoginScreen,
   ContentDetailsModal,
   ZipPlaybackLoadingOverlay,
+  NotificationCenter,
+  RemindersView,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -62,7 +64,7 @@ import {
 import {
   Search, Loader2, Play, Film, Tv, Clock,
   ChevronRight, LayoutGrid, List,
-  TrendingUp, BarChart3, Calendar, Sparkles, X, Cloud, RefreshCw, Minus, Download,
+  TrendingUp, BarChart3, Calendar, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
   Maximize2, Minimize2, Archive
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -141,6 +143,51 @@ interface ZipProcessingPopupState {
   archiveName?: string | null
   episodesIndexed?: number | null
   message: string
+}
+
+type NotificationCategory = 'movie_add' | 'show_add' | 'reminder' | 'other'
+type NotificationFilter = 'all' | NotificationCategory
+
+interface AppNotificationItem {
+  id: string
+  category: NotificationCategory
+  title: string
+  message: string
+  createdAt: string
+  read: boolean
+}
+
+const NOTIFICATION_CENTER_STORAGE_KEY = 'streamvault.notification-center.v1'
+const MAX_NOTIFICATION_CENTER_ITEMS = 200
+const TV_EPISODE_NOTIFICATION_PATTERN = /\bS\d{1,2}E\d{1,3}\b/i
+
+const loadStoredNotifications = (): AppNotificationItem[] => {
+  try {
+    const raw = localStorage.getItem(NOTIFICATION_CENTER_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+
+    return parsed.filter((item): item is AppNotificationItem =>
+      item
+      && typeof item.id === 'string'
+      && typeof item.category === 'string'
+      && typeof item.title === 'string'
+      && typeof item.message === 'string'
+      && typeof item.createdAt === 'string'
+      && typeof item.read === 'boolean'
+    )
+  } catch {
+    return []
+  }
+}
+
+const classifyNotificationCategory = (title: string, message: string): NotificationCategory => {
+  if (title.toLowerCase().includes('reminder')) return 'reminder'
+  if (message.includes('added to your library')) {
+    return TV_EPISODE_NOTIFICATION_PATTERN.test(message) ? 'show_add' : 'movie_add'
+  }
+  return 'other'
 }
 
 type ViewMode = 'grid' | 'list'
@@ -344,6 +391,9 @@ function App() {
   // Authentication state
   const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout } = useAuth()
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
+  const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all')
+  const [notifications, setNotifications] = useState<AppNotificationItem[]>(() => loadStoredNotifications())
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -353,6 +403,43 @@ function App() {
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
   }
+
+  const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
+    setNotifications((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: input.createdAt ?? new Date().toISOString(),
+        read: false,
+        ...input,
+      },
+      ...current,
+    ].slice(0, MAX_NOTIFICATION_CENTER_ITEMS))
+  }, [])
+
+  const clearNotifications = useCallback(() => {
+    setNotifications([])
+  }, [])
+
+  const unreadNotificationCount = useMemo(
+    () => notifications.filter((item) => !item.read).length,
+    [notifications],
+  )
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
+    } catch {
+      // ignore storage errors
+    }
+  }, [notifications])
+
+  useEffect(() => {
+    if (!notificationCenterOpen) return
+
+    setNotifications((current) => current.map((item) => (
+      item.read ? item : { ...item, read: true }
+    )))
+  }, [notificationCenterOpen])
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
@@ -756,6 +843,7 @@ function App() {
     let unlistenNotification: UnlistenFn | undefined
     let unlistenCloudIndexingStarted: UnlistenFn | undefined
     let unlistenZipProcessing: UnlistenFn | undefined
+    let unlistenReminderFired: UnlistenFn | undefined
 
     const setupListeners = async () => {
       unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
@@ -770,6 +858,20 @@ function App() {
       unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', (event) => {
         setIsCloudIndexing(true)
         console.log(`[Cloud] Indexing started: ${event.payload.count} files`)
+      })
+
+      unlistenReminderFired = await listen<any>('movie-reminder-fired', (event) => {
+        const reminder = event.payload
+        pushNotification({
+          category: 'reminder',
+          title: 'Reminder',
+          message: `It's time for ${reminder.title}!`,
+        })
+        toast({
+          title: 'Reminder',
+          description: `It's time for ${reminder.title}!`,
+        })
+        emit('refresh-reminders')
       })
 
       unlistenZipProcessing = await listen<ZipProcessingStatusPayload>('zip-processing-status', (event) => {
@@ -938,6 +1040,11 @@ function App() {
 
       unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
         const { type, title, message } = event.payload
+        pushNotification({
+          category: classifyNotificationCategory(title, message),
+          title,
+          message,
+        })
         toast({
           title,
           description: message,
@@ -957,11 +1064,12 @@ function App() {
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
       unlistenZipProcessing?.()
+      unlistenReminderFired?.()
     }
-  }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, toast])
+  }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, pushNotification, toast])
 
   useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai') {
+    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai' && view !== 'reminders') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
@@ -1727,7 +1835,7 @@ function App() {
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
-          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[72px]">
+          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[70px]">
             {/* Floating Scan Progress Indicator */}
             <AnimatePresence>
               {isScanning && scanProgress && (
@@ -1912,31 +2020,43 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-) : view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED ? (
+) : (view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED) || view === 'reminders' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
                   <AnimatePresence mode="wait">
-                    <motion.div
-                      key="ai"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="h-full"
-                    >
-                      <Suspense fallback={<LoadingFallback />}>
-                        <AIChatView
-                          launchItem={aiLaunchRequest?.item || null}
-                          launchNonce={aiLaunchRequest?.nonce || 0}
-                          onLaunchHandled={() => setAiLaunchRequest(null)}
-                        />
-                      </Suspense>
-                    </motion.div>
+                    {view === 'ai' ? (
+                      <motion.div
+                        key="ai"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="h-full"
+                      >
+                        <Suspense fallback={<LoadingFallback />}>
+                          <AIChatView
+                            launchItem={aiLaunchRequest?.item || null}
+                            launchNonce={aiLaunchRequest?.nonce || 0}
+                            onLaunchHandled={() => setAiLaunchRequest(null)}
+                          />
+                        </Suspense>
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="reminders"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="h-full"
+                      >
+                        <RemindersView />
+                      </motion.div>
+                    )}
                   </AnimatePresence>
                 </div>
               </div>
             ) : (
               <ScrollArea className="flex-1">
-                <div className={`content-container ${view === 'social' ? 'h-full min-h-0' : ''}`}>
+                <div className={`content-container ${view === 'home' ? '!px-0 !py-0' : ''} ${view === 'social' ? 'h-full min-h-0' : ''}`}>
                   <AnimatePresence mode="wait">
                     {/* Home View */}
                     {view === 'home' && (
@@ -1950,6 +2070,20 @@ function App() {
                         {/* Background Decorative Layer */}
                         <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
                         <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
+                        <div className="absolute right-6 top-10 z-20">
+                          <button
+                            type="button"
+                            onClick={() => setNotificationCenterOpen(true)}
+                            className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white/65 shadow-elevation-1 transition-all hover:bg-white/[0.08] hover:text-white"
+                          >
+                            <Bell className="w-5 h-5 transition-transform duration-300 group-hover:scale-110" />
+                            {unreadNotificationCount > 0 && (
+                              <div className="absolute -right-1 -top-1 flex min-w-[1.35rem] items-center justify-center rounded-full bg-white px-1.5 py-1 text-[9px] font-black leading-none text-black shadow-lg">
+                                {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                              </div>
+                            )}
+                          </button>
+                        </div>
 
                         <div className="relative flex-1 flex flex-col min-h-0">
                           {/* 1. Centered Clock Header */}
@@ -1994,7 +2128,7 @@ function App() {
                           </div>
 
                           {/* 3. Main Content Sections - FIXED HEIGHT / NO SCROLL */}
-                          <div className="flex-1 flex flex-col justify-between px-6 pb-8 min-h-0">
+                          <div className="flex-1 flex flex-col justify-between px-0 pb-8 min-h-0">
                             {homeSearchQuery ? (
                               <section className="flex-1 min-h-0 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
                                 <div className="flex items-center gap-3 mb-4">
@@ -2179,7 +2313,7 @@ function App() {
                                     </div>
                                     <h3 className="text-3xl font-black text-white tracking-tighter mb-3">Your library is waiting</h3>
                                     <p className="text-base text-white/30 max-w-sm mb-10 leading-relaxed font-medium mx-auto">
-                                      Connect your Google Drive account to transform this space into your ultimate private cinema.
+                                      Connect your Google Drive account to transform this space into your ultimate private library.
                                     </p>
                                     <div className="flex justify-center">
                                       <button
@@ -2392,24 +2526,7 @@ function App() {
                       </motion.div>
                     )}
 
-                    {/* AI Chat View */}
-                {view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED && (
-                      <motion.div
-                        key="ai"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="h-full"
-                      >
-                        <Suspense fallback={<LoadingFallback />}>
-                          <AIChatView
-                            launchItem={aiLaunchRequest?.item || null}
-                            launchNonce={aiLaunchRequest?.nonce || 0}
-                            onLaunchHandled={() => setAiLaunchRequest(null)}
-                          />
-                        </Suspense>
-                      </motion.div>
-                    )}
+
 
                     {/* Social View - Only visible when beta is enabled */}
                     {view === 'social' && betaEnabled && (
@@ -2425,6 +2542,8 @@ function App() {
                         </Suspense>
                       </motion.div>
                     )}
+
+
 
                     {/* History View */}
                     {view === 'history' && (
@@ -2751,6 +2870,15 @@ function App() {
               onLeave={handleWtLeave}
             />
           )}
+
+          <NotificationCenter
+            open={notificationCenterOpen}
+            onOpenChange={setNotificationCenterOpen}
+            items={notifications}
+            activeFilter={notificationFilter}
+            onFilterChange={setNotificationFilter}
+            onClearAll={clearNotifications}
+          />
 
           <Toaster />
         </>

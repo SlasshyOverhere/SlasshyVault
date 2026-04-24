@@ -16,8 +16,9 @@ mod zip_manager;
 mod zip_parser;
 mod zip_stream_proxy;
 
-use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -2987,7 +2988,9 @@ async fn get_episodes_for_delete(
             let archive_info = zip_archive_details
                 .entry(zip_file_id.to_string())
                 .or_insert_with(|| {
-                    state.db.lock()
+                    state
+                        .db
+                        .lock()
                         .ok()
                         .and_then(|db| db.get_zip_archive(zip_file_id).ok())
                         .map(|archive| (archive.filename, 0, Some(archive.file_size_bytes)))
@@ -3037,15 +3040,15 @@ async fn get_episodes_for_delete(
         let mut file_size_bytes = episode.file_size_bytes.or_else(|| {
             if !episode.is_cloud.unwrap_or(false) {
                 // Try to get file size from file system for local files
-                file_path.as_ref().and_then(|path| {
-                    match std::fs::metadata(path) {
+                file_path
+                    .as_ref()
+                    .and_then(|path| match std::fs::metadata(path) {
                         Ok(metadata) => Some(metadata.len() as i64),
                         Err(e) => {
                             eprintln!("[DEBUG] Failed to get file size for {}: {}", path, e);
                             None
                         }
-                    }
-                })
+                    })
             } else {
                 None
             }
@@ -3315,12 +3318,14 @@ async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String
 // Save configuration
 #[tauri::command]
 async fn save_config(
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     new_config: config::Config,
 ) -> Result<ApiResponse, String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     *config = new_config.clone();
     config::save_config(&new_config).map_err(|e| e.to_string())?;
+    apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
     })
@@ -4191,7 +4196,10 @@ fn probe_media_technical_details_with_ffprobe(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffprobe could not read video metadata: {}", stderr.trim()));
+        return Err(format!(
+            "ffprobe could not read video metadata: {}",
+            stderr.trim()
+        ));
     }
 
     let parsed: FfprobeVideoProbeOutput = serde_json::from_slice(&output.stdout)
@@ -4211,7 +4219,10 @@ fn probe_media_technical_details_with_ffprobe(
     );
     let video_codec = stream.and_then(|current| current.codec_name);
     let container = normalize_container_name(
-        parsed.format.as_ref().and_then(|current| current.format_name.as_deref()),
+        parsed
+            .format
+            .as_ref()
+            .and_then(|current| current.format_name.as_deref()),
         extension,
     );
 
@@ -4314,10 +4325,15 @@ async fn resolve_audio_probe_source(
 }
 
 fn infer_extension_for_media(media: &database::MediaItem) -> Option<String> {
-    media.zip_entry_path
+    media
+        .zip_entry_path
         .as_deref()
         .or(media.file_path.as_deref())
-        .and_then(|path| std::path::Path::new(path).extension().and_then(|ext| ext.to_str()))
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+        })
         .map(|ext| ext.trim().trim_start_matches('.').to_string())
         .filter(|ext| !ext.is_empty())
 }
@@ -4344,7 +4360,9 @@ async fn get_media_technical_details(
             if media.is_cloud.unwrap_or(false) || !std::path::Path::new(path).exists() {
                 None
             } else {
-                std::fs::metadata(path).ok().map(|metadata| metadata.len() as i64)
+                std::fs::metadata(path)
+                    .ok()
+                    .map(|metadata| metadata.len() as i64)
             }
         })
     });
@@ -5777,6 +5795,18 @@ struct TmdbSearchResponse {
 }
 
 #[derive(serde::Serialize)]
+struct TmdbTrendingItem {
+    id: i64,
+    title: String,
+    media_type: String,
+}
+
+#[derive(serde::Serialize)]
+struct TmdbTrendingResponse {
+    results: Vec<TmdbTrendingItem>,
+}
+
+#[derive(serde::Serialize)]
 struct MovieDetails {
     id: i64,
     title: String,
@@ -5801,6 +5831,7 @@ struct TvSeasonInfo {
 
 #[derive(serde::Serialize)]
 struct TvEpisodeInfo {
+    season_number: Option<i32>,
     episode_number: i32,
     name: String,
     overview: Option<String>,
@@ -5817,9 +5848,14 @@ struct TvShowDetails {
     poster_path: Option<String>,
     backdrop_path: Option<String>,
     overview: Option<String>,
+    first_air_date: Option<String>,
+    status: Option<String>,
+    number_of_episodes: Option<i32>,
     number_of_seasons: i32,
     seasons: Vec<TvSeasonInfo>,
     creator: Option<String>,
+    last_episode_to_air: Option<TvEpisodeInfo>,
+    next_episode_to_air: Option<TvEpisodeInfo>,
 }
 
 #[derive(serde::Serialize)]
@@ -5838,7 +5874,6 @@ async fn get_movie_details(
         let config = state.config.lock().map_err(|e| e.to_string())?;
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
-    let image_cache_dir = database::get_image_cache_dir();
 
     let url = build_tmdb_api_url(
         &format!("/movie/{}", movie_id),
@@ -5887,29 +5922,11 @@ async fn get_movie_details(
             .and_then(|crew| crew.iter().find(|m| m.job == "Director"))
             .map(|m| m.name.clone());
 
-        let poster_path = raw.poster_path.as_ref().and_then(|path| {
-            tmdb::cache_image_organized(
-                path,
-                &image_cache_dir,
-                &title,
-                tmdb::ImageType::MovieBanner,
-            )
-        });
-
-        let backdrop_path = raw.backdrop_path.as_ref().and_then(|path| {
-            tmdb::cache_image_organized(
-                path,
-                &image_cache_dir,
-                &title,
-                tmdb::ImageType::MovieBanner,
-            )
-        });
-
         Ok(MovieDetails {
             id: raw.id,
             title,
-            poster_path,
-            backdrop_path,
+            poster_path: raw.poster_path,
+            backdrop_path: raw.backdrop_path,
             overview: raw.overview,
             release_date: raw.release_date,
             runtime: raw.runtime,
@@ -5929,7 +5946,6 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
         let config = state.config.lock().map_err(|e| e.to_string())?;
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
-    let image_cache_dir = database::get_image_cache_dir();
 
     let url = build_tmdb_api_url(&format!("/tv/{}", tv_id), &credential, "");
 
@@ -5958,9 +5974,26 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
             poster_path: Option<String>,
             backdrop_path: Option<String>,
             overview: Option<String>,
+            first_air_date: Option<String>,
+            status: Option<String>,
+            number_of_episodes: Option<i32>,
             number_of_seasons: Option<i32>,
             seasons: Option<Vec<RawSeason>>,
             created_by: Option<Vec<TmdbCreator>>,
+            last_episode_to_air: Option<RawAirEpisode>,
+            next_episode_to_air: Option<RawAirEpisode>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawAirEpisode {
+            season_number: Option<i32>,
+            episode_number: i32,
+            name: Option<String>,
+            overview: Option<String>,
+            still_path: Option<String>,
+            air_date: Option<String>,
+            runtime: Option<i32>,
+            vote_average: Option<f64>,
         }
 
         let raw: RawTvShow = response.json().map_err(|e| e.to_string())?;
@@ -5971,24 +6004,6 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
             .as_ref()
             .and_then(|c| c.first())
             .map(|c| c.name.clone());
-
-        let poster_path = raw.poster_path.as_ref().and_then(|path| {
-            tmdb::cache_image_organized(
-                path,
-                &image_cache_dir,
-                &title,
-                tmdb::ImageType::SeriesBanner,
-            )
-        });
-
-        let backdrop_path = raw.backdrop_path.as_ref().and_then(|path| {
-            tmdb::cache_image_organized(
-                path,
-                &image_cache_dir,
-                &title,
-                tmdb::ImageType::SeriesBanner,
-            )
-        });
 
         let seasons: Vec<TvSeasonInfo> = raw
             .seasons
@@ -6002,27 +6017,38 @@ async fn get_tv_details(state: State<'_, AppState>, tv_id: i64) -> Result<TvShow
                     .unwrap_or_else(|| format!("Season {}", s.season_number)),
                 episode_count: s.episode_count,
                 overview: s.overview,
-                poster_path: s.poster_path.and_then(|path| {
-                    tmdb::cache_image_organized(
-                        &path,
-                        &image_cache_dir,
-                        &title,
-                        tmdb::ImageType::SeriesBanner,
-                    )
-                }),
+                poster_path: s.poster_path,
                 air_date: s.air_date,
             })
             .collect();
 
+        let map_air_episode = |episode: RawAirEpisode| TvEpisodeInfo {
+            season_number: episode.season_number,
+            episode_number: episode.episode_number,
+            name: episode
+                .name
+                .unwrap_or_else(|| format!("Episode {}", episode.episode_number)),
+            overview: episode.overview,
+            still_path: episode.still_path,
+            air_date: episode.air_date,
+            runtime: episode.runtime,
+            vote_average: episode.vote_average,
+        };
+
         Ok(TvShowDetails {
             id: raw.id,
             name: title,
-            poster_path,
-            backdrop_path,
+            poster_path: raw.poster_path,
+            backdrop_path: raw.backdrop_path,
             overview: raw.overview,
+            first_air_date: raw.first_air_date,
+            status: raw.status,
+            number_of_episodes: raw.number_of_episodes,
             number_of_seasons: raw.number_of_seasons.unwrap_or(0),
             seasons,
             creator,
+            last_episode_to_air: raw.last_episode_to_air.map(map_air_episode),
+            next_episode_to_air: raw.next_episode_to_air.map(map_air_episode),
         })
     })
     .await
@@ -6063,6 +6089,7 @@ async fn get_tv_season_episodes(
                         });
 
                         TvEpisodeInfo {
+                            season_number: Some(season_number),
                             episode_number: e.episode_number,
                             name: e
                                 .episode_title
@@ -6107,6 +6134,7 @@ async fn get_tv_season_episodes(
 
         #[derive(serde::Deserialize)]
         struct RawEpisode {
+            season_number: Option<i32>,
             episode_number: i32,
             name: Option<String>,
             overview: Option<String>,
@@ -6130,6 +6158,7 @@ async fn get_tv_season_episodes(
             .unwrap_or_default()
             .into_iter()
             .map(|e| TvEpisodeInfo {
+                season_number: e.season_number.or(Some(raw.season_number)),
                 episode_number: e.episode_number,
                 name: e
                     .name
@@ -6307,6 +6336,892 @@ async fn refresh_series_metadata(
     Ok(result)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MovieReminderInput {
+    tmdb_id: String,
+    media_type: String,
+    title: String,
+    poster_path: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    release_date: Option<String>,
+    reminder_at: String,
+    source: Option<String>,
+    tracking_mode: Option<String>,
+    tracking_season_number: Option<i32>,
+    notes: Option<String>,
+    is_active: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TmdbReleaseSchedule {
+    tmdb_id: i64,
+    media_type: String,
+    title: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    release_date: Option<String>,
+    suggested_reminder_at: Option<String>,
+    source: String,
+    precision: String,
+    editable: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReminderScheduleTarget {
+    title: String,
+    poster_path: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    release_date: Option<String>,
+    reminder_at: String,
+    source: String,
+    tracking_season_number: Option<i32>,
+}
+
+fn parse_reminder_datetime_to_utc(value: &str) -> Result<String, String> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed.with_timezone(&Utc).to_rfc3339());
+    }
+
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+        let local = Local
+            .from_local_datetime(&parsed)
+            .single()
+            .ok_or_else(|| "Reminder time is ambiguous in the local timezone".to_string())?;
+        return Ok(local.with_timezone(&Utc).to_rfc3339());
+    }
+
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        let local = Local
+            .from_local_datetime(&parsed)
+            .single()
+            .ok_or_else(|| "Reminder time is ambiguous in the local timezone".to_string())?;
+        return Ok(local.with_timezone(&Utc).to_rfc3339());
+    }
+
+    Err("Reminder time must be an ISO/RFC3339 datetime".to_string())
+}
+
+fn suggested_reminder_at_from_release_date(release_date: Option<&str>) -> Option<String> {
+    let date = NaiveDate::parse_from_str(release_date?, "%Y-%m-%d").ok()?;
+    let local = Local
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+        .single()?;
+    Some(local.with_timezone(&Utc).to_rfc3339())
+}
+
+fn is_release_date_in_future(release_date: Option<&str>) -> bool {
+    suggested_reminder_at_from_release_date(release_date)
+        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+        .map(|target| target.with_timezone(&Utc) > Utc::now())
+        .unwrap_or(false)
+}
+
+fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .user_agent("StreamVault/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client.get(url).send().map_err(|e| e.to_string())?;
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!("TVmaze returned HTTP {}", response.status()));
+    }
+
+    response
+        .json::<T>()
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn tvmaze_lookup_show_id_by_imdb(imdb_id: &str) -> Option<i64> {
+    if imdb_id.trim().is_empty() {
+        return None;
+    }
+
+    #[derive(Deserialize)]
+    struct TvmazeShow {
+        id: i64,
+    }
+
+    let url = format!("https://api.tvmaze.com/lookup/shows?imdb={}", imdb_id.trim());
+    tvmaze_get_json::<TvmazeShow>(&url).ok().flatten().map(|show| show.id)
+}
+
+fn apply_streaming_provider_heuristics(provider_name: Option<&str>, release_date_str: Option<&str>) -> Option<String> {
+    let provider = provider_name?.trim().to_ascii_lowercase();
+    let date = NaiveDate::parse_from_str(release_date_str?, "%Y-%m-%d").ok()?;
+    
+    let tz_pt: chrono_tz::Tz = "America/Los_Angeles".parse().unwrap();
+    let tz_et: chrono_tz::Tz = "America/New_York".parse().unwrap();
+    
+    if provider.contains("netflix") || provider.contains("disney") {
+        let pt_midnight = date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(tz_pt).single()?;
+        return Some(pt_midnight.with_timezone(&Utc).to_rfc3339());
+    } else if provider.contains("hulu") || provider.contains("apple") {
+        let et_midnight = date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(tz_et).single()?;
+        return Some(et_midnight.with_timezone(&Utc).to_rfc3339());
+    } else if provider.contains("amazon") || provider.contains("prime") {
+        return Some(date.and_hms_opt(0, 0, 0).unwrap().and_utc().to_rfc3339());
+    } else if provider.contains("max") || provider.contains("hbo") {
+        let et_9pm = date.and_hms_opt(21, 0, 0).unwrap().and_local_timezone(tz_et).single()?;
+        return Some(et_9pm.with_timezone(&Utc).to_rfc3339());
+    } else if provider.contains("crunchyroll") {
+        return Some(date.and_hms_opt(12, 0, 0).unwrap().and_utc().to_rfc3339());
+    }
+    None
+}
+
+fn tmdb_exact_episode_reminder_at_heuristics(tmdb_id: i64, release_date_str: Option<&str>, credential: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ProviderInfo {
+        provider_name: Option<String>,
+    }
+    
+    #[derive(Deserialize)]
+    struct CountryProviders {
+        flatrate: Option<Vec<ProviderInfo>>,
+        free: Option<Vec<ProviderInfo>>,
+    }
+
+    #[derive(Deserialize)]
+    struct WatchProvidersResult {
+        results: std::collections::HashMap<String, CountryProviders>,
+    }
+
+    let url = build_tmdb_api_url(&format!("/tv/{}/watch/providers", tmdb_id), credential, "");
+    let raw: WatchProvidersResult = http_get_with_retry_auth(&url, credential, 2)
+        .ok()?
+        .json()
+        .ok()?;
+
+    let mut found_provider = None;
+    for (_, providers) in &raw.results {
+        if let Some(flatrate) = &providers.flatrate {
+            for provider in flatrate {
+                if let Some(name) = &provider.provider_name {
+                    let name_lower = name.to_ascii_lowercase();
+                    if name_lower.contains("netflix") || 
+                       name_lower.contains("disney") || 
+                       name_lower.contains("hulu") || 
+                       name_lower.contains("apple") || 
+                       name_lower.contains("amazon") || 
+                       name_lower.contains("prime") || 
+                       name_lower.contains("max") || 
+                       name_lower.contains("hbo") || 
+                       name_lower.contains("crunchyroll") {
+                        found_provider = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if found_provider.is_some() {
+            break;
+        }
+    }
+
+    apply_streaming_provider_heuristics(found_provider.as_deref(), release_date_str)
+}
+
+fn tvmaze_exact_episode_reminder_at(show_id: i64, season: i32, episode: i32) -> Option<String> {
+    #[derive(Deserialize)]
+    struct TvmazeCountry {
+        code: Option<String>,
+        timezone: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct TvmazeChannel {
+        name: Option<String>,
+        country: Option<TvmazeCountry>,
+    }
+
+    #[derive(Deserialize)]
+    struct TvmazeSchedule {
+        days: Option<Vec<String>>,
+        time: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct TvmazeShow {
+        schedule: Option<TvmazeSchedule>,
+        network: Option<TvmazeChannel>,
+        #[serde(rename = "webChannel")]
+        web_channel: Option<TvmazeChannel>,
+    }
+
+    #[derive(Deserialize)]
+    struct TvmazeEpisode {
+        airdate: Option<String>,
+        airtime: Option<String>,
+        airstamp: Option<String>,
+    }
+
+    let show_url = format!("https://api.tvmaze.com/shows/{}", show_id);
+    let show = tvmaze_get_json::<TvmazeShow>(&show_url).ok().flatten();
+
+    let episode_url = format!(
+        "https://api.tvmaze.com/shows/{}/episodebynumber?season={}&number={}",
+        show_id, season, episode
+    );
+    let episode = tvmaze_get_json::<TvmazeEpisode>(&episode_url).ok().flatten()?;
+
+    let provider_name = show.as_ref().and_then(|show| {
+        show.network
+            .as_ref()
+            .and_then(|network| network.name.as_deref())
+            .or_else(|| show.web_channel.as_ref().and_then(|channel| channel.name.as_deref()))
+    });
+
+    if let Some(heuristic_time) = apply_streaming_provider_heuristics(provider_name, episode.airdate.as_deref()) {
+        return Some(heuristic_time);
+    }
+
+    let parsed_airstamp = episode
+        .airstamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+
+    if let Some(parsed_airstamp) = parsed_airstamp {
+        let utc_time = parsed_airstamp.with_timezone(&Utc).time();
+        
+        let is_noon_utc = utc_time.hour() == 12 && utc_time.minute() == 0 && utc_time.second() == 0;
+        let is_midnight_utc = utc_time.hour() == 0 && utc_time.minute() == 0 && utc_time.second() == 0;
+        
+        let timezone_name = show
+            .as_ref()
+            .and_then(|show| {
+                show.network
+                    .as_ref()
+                    .and_then(|network| network.country.as_ref())
+                    .and_then(|country| country.timezone.as_deref())
+                    .or_else(|| {
+                        show.web_channel
+                            .as_ref()
+                            .and_then(|channel| channel.country.as_ref())
+                            .and_then(|country| country.timezone.as_deref())
+                    })
+            });
+            
+        let is_global_or_unknown = timezone_name.map_or(true, |tz| tz.trim().is_empty() || tz.eq_ignore_ascii_case("global"));
+
+        if !((is_noon_utc || is_midnight_utc) && is_global_or_unknown) {
+            return Some(parsed_airstamp.with_timezone(&Utc).to_rfc3339());
+        }
+    }
+
+    let airtime = episode
+        .airtime
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            show.as_ref()
+                .and_then(|show| show.schedule.as_ref())
+                .and_then(|schedule| schedule.time.as_deref())
+                .filter(|value| !value.trim().is_empty())
+        });
+        
+    let timezone_name = show
+        .as_ref()
+        .and_then(|show| {
+            show.network
+                .as_ref()
+                .and_then(|network| network.country.as_ref())
+                .and_then(|country| country.timezone.as_deref())
+                .or_else(|| {
+                    show.web_channel
+                        .as_ref()
+                        .and_then(|channel| channel.country.as_ref())
+                        .and_then(|country| country.timezone.as_deref())
+                })
+        })
+        .filter(|value| !value.trim().is_empty() && !value.eq_ignore_ascii_case("global"));
+
+    if let (Some(airdate), Some(airtime), Some(timezone_name)) =
+        (episode.airdate.as_deref(), airtime, timezone_name)
+    {
+        if let (Ok(date), Ok(time), Ok(timezone)) = (
+            NaiveDate::parse_from_str(airdate, "%Y-%m-%d"),
+            NaiveTime::parse_from_str(airtime, "%H:%M"),
+            timezone_name.parse::<chrono_tz::Tz>(),
+        ) {
+            let local_dt = date.and_time(time);
+            let zoned = match timezone.from_local_datetime(&local_dt) {
+                LocalResult::Single(value) => Some(value),
+                LocalResult::Ambiguous(earliest, _) => Some(earliest),
+                LocalResult::None => None,
+            };
+
+            if let Some(zoned) = zoned {
+                return Some(zoned.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+    }
+
+    if let Some(airdate) = episode.airdate.as_deref() {
+        if let Ok(date) = NaiveDate::parse_from_str(airdate, "%Y-%m-%d") {
+            if let Some(local_midnight) = Local
+                .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+                .single()
+            {
+                return Some(local_midnight.with_timezone(&Utc).to_rfc3339());
+            }
+        }
+    }
+
+    None
+}
+
+fn tmdb_imdb_id_for_show(tmdb_id: i64, credential: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct RawExternalIds {
+        imdb_id: Option<String>,
+    }
+
+    let url = build_tmdb_api_url(&format!("/tv/{}/external_ids", tmdb_id), credential, "");
+    let raw: RawExternalIds = http_get_with_retry_auth(&url, credential, 2)
+        .ok()?
+        .json()
+        .ok()?;
+    raw.imdb_id.filter(|value| !value.trim().is_empty())
+}
+
+fn enrich_tv_schedule_with_tvmaze(
+    schedule: &mut TmdbReleaseSchedule,
+    credential: &str,
+    tmdb_id: i64,
+) {
+    if schedule.media_type != "tv" {
+        return;
+    }
+
+    let (Some(season), Some(episode)) = (schedule.season_number, schedule.episode_number) else {
+        return;
+    };
+
+    if let Some(tmdb_time) = tmdb_exact_episode_reminder_at_heuristics(tmdb_id, schedule.release_date.as_deref(), credential) {
+        schedule.suggested_reminder_at = Some(tmdb_time);
+        schedule.source = "tmdb-heuristics".to_string();
+        schedule.precision = "datetime".to_string();
+        return;
+    }
+
+    let Some(imdb_id) = tmdb_imdb_id_for_show(tmdb_id, credential) else {
+        return;
+    };
+    let Some(tvmaze_show_id) = tvmaze_lookup_show_id_by_imdb(&imdb_id) else {
+        return;
+    };
+    let Some(reminder_at) = tvmaze_exact_episode_reminder_at(tvmaze_show_id, season, episode) else {
+        return;
+    };
+
+    schedule.suggested_reminder_at = Some(reminder_at);
+    schedule.source = "tvmaze".to_string();
+    schedule.precision = "datetime".to_string();
+}
+
+fn reminder_input_to_new<'a>(
+    input: &'a MovieReminderInput,
+    reminder_at_utc: &'a str,
+) -> database::NewMovieReminder<'a> {
+    database::NewMovieReminder {
+        tmdb_id: input.tmdb_id.trim(),
+        media_type: input.media_type.trim(),
+        title: input.title.trim(),
+        poster_path: input.poster_path.as_deref(),
+        season_number: input.season_number,
+        episode_number: input.episode_number,
+        release_date: input.release_date.as_deref(),
+        reminder_at: reminder_at_utc,
+        source: input.source.as_deref().unwrap_or("manual"),
+        tracking_mode: input.tracking_mode.as_deref().unwrap_or("single"),
+        tracking_season_number: input.tracking_season_number,
+        notes: input.notes.as_deref(),
+        is_active: input.is_active.unwrap_or(true),
+    }
+}
+
+fn validate_reminder_input(input: &MovieReminderInput) -> Result<(), String> {
+    if input.tmdb_id.trim().is_empty() {
+        return Err("TMDB id is required".to_string());
+    }
+    if input.title.trim().is_empty() {
+        return Err("Title is required".to_string());
+    }
+    match input.media_type.trim() {
+        "movie" | "tv" => Ok(()),
+        _ => Err("media_type must be movie or tv".to_string()),
+    }
+}
+
+fn normalize_tracking_mode(input: &MovieReminderInput) -> Result<String, String> {
+    let trimmed = input.tracking_mode.as_deref().unwrap_or("single").trim();
+    match trimmed {
+        "single" | "tv_season" => Ok(trimmed.to_string()),
+        _ => Err("tracking_mode must be single or tv_season".to_string()),
+    }
+}
+
+fn validate_tracking_mode(input: &MovieReminderInput) -> Result<(), String> {
+    let tracking_mode = normalize_tracking_mode(input)?;
+    if input.media_type.trim() == "movie" && tracking_mode != "single" {
+        return Err("Movies only support single reminders".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_movie_reminder(
+    state: State<'_, AppState>,
+    reminder: MovieReminderInput,
+) -> Result<database::MovieReminder, String> {
+    validate_reminder_input(&reminder)?;
+    validate_tracking_mode(&reminder)?;
+    let reminder_at_utc = parse_reminder_datetime_to_utc(&reminder.reminder_at)?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.create_movie_reminder(reminder_input_to_new(&reminder, &reminder_at_utc))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_movie_reminder(
+    state: State<'_, AppState>,
+    id: i64,
+    reminder: MovieReminderInput,
+) -> Result<database::MovieReminder, String> {
+    validate_reminder_input(&reminder)?;
+    validate_tracking_mode(&reminder)?;
+    let reminder_at_utc = parse_reminder_datetime_to_utc(&reminder.reminder_at)?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_movie_reminder(id, reminder_input_to_new(&reminder, &reminder_at_utc))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_movie_reminders(
+    state: State<'_, AppState>,
+    include_inactive: Option<bool>,
+) -> Result<Vec<database::MovieReminder>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_movie_reminders(include_inactive.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_movie_reminder(state: State<'_, AppState>, id: i64) -> Result<ApiResponse, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.delete_movie_reminder(id).map_err(|e| e.to_string())?;
+    Ok(ApiResponse {
+        message: "Reminder deleted".to_string(),
+    })
+}
+
+#[tauri::command]
+async fn set_movie_reminder_active(
+    state: State<'_, AppState>,
+    id: i64,
+    is_active: bool,
+) -> Result<database::MovieReminder, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.set_movie_reminder_active(id, is_active)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_tmdb_release_schedule(
+    state: State<'_, AppState>,
+    tmdb_id: i64,
+    media_type: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+) -> Result<TmdbReleaseSchedule, String> {
+    let credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let media_type = media_type.trim().to_string();
+    if media_type != "movie" && media_type != "tv" {
+        return Err("media_type must be movie or tv".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || -> Result<TmdbReleaseSchedule, String> {
+        if media_type == "movie" {
+            #[derive(Deserialize)]
+            struct RawMovie {
+                title: Option<String>,
+                original_title: Option<String>,
+                release_date: Option<String>,
+            }
+
+            let url = build_tmdb_api_url(&format!("/movie/{}", tmdb_id), &credential, "");
+            let raw: RawMovie = http_get_with_retry_auth(&url, &credential, 3)?
+                .json()
+                .map_err(|e| e.to_string())?;
+            let release_date = raw.release_date.filter(|value| !value.trim().is_empty());
+            let suggested = suggested_reminder_at_from_release_date(release_date.as_deref());
+
+            return Ok(TmdbReleaseSchedule {
+                tmdb_id,
+                media_type,
+                title: raw
+                    .title
+                    .or(raw.original_title)
+                    .unwrap_or_else(|| "Unknown movie".to_string()),
+                season_number: None,
+                episode_number: None,
+                release_date,
+                suggested_reminder_at: suggested,
+                source: "tmdb".to_string(),
+                precision: "date".to_string(),
+                editable: true,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct RawTv {
+            name: Option<String>,
+            original_name: Option<String>,
+            first_air_date: Option<String>,
+            next_episode_to_air: Option<RawAirEpisode>,
+        }
+
+        #[derive(Clone, Deserialize)]
+        struct RawAirEpisode {
+            name: Option<String>,
+            air_date: Option<String>,
+            season_number: Option<i32>,
+            episode_number: i32,
+        }
+
+        #[derive(Deserialize)]
+        struct RawSeasonSchedule {
+            episodes: Option<Vec<RawAirEpisode>>,
+        }
+
+        let url = build_tmdb_api_url(&format!("/tv/{}", tmdb_id), &credential, "");
+        let raw: RawTv = http_get_with_retry_auth(&url, &credential, 3)?
+            .json()
+            .map_err(|e| e.to_string())?;
+        let show_title = raw
+            .name
+            .or(raw.original_name)
+            .unwrap_or_else(|| "Unknown show".to_string());
+
+        let build_episode_schedule = |episode: RawAirEpisode, show_title: &str| {
+            let release_date = episode.air_date.clone().filter(|value| !value.trim().is_empty());
+            let suggested = suggested_reminder_at_from_release_date(release_date.as_deref());
+            let episode_title = episode
+                .name
+                .filter(|name| !name.trim().is_empty() && name.to_lowercase() != format!("episode {}", episode.episode_number))
+                .map(|name| format!("{} - {}", show_title, name))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} - S{:02}E{:02}",
+                        show_title,
+                        episode.season_number.unwrap_or_default(),
+                        episode.episode_number
+                    )
+                });
+
+            let mut schedule = TmdbReleaseSchedule {
+                tmdb_id,
+                media_type: media_type.clone(),
+                title: episode_title,
+                season_number: episode.season_number,
+                episode_number: Some(episode.episode_number),
+                release_date,
+                suggested_reminder_at: suggested,
+                source: "tmdb".to_string(),
+                precision: "date".to_string(),
+                editable: true,
+            };
+            enrich_tv_schedule_with_tvmaze(&mut schedule, &credential, tmdb_id);
+            schedule
+        };
+
+        if let (Some(season), Some(episode)) = (season_number, episode_number) {
+            if let Some(next) = &raw.next_episode_to_air {
+                if next.season_number == Some(season) && next.episode_number == episode {
+                    return Ok(build_episode_schedule(next.clone(), &show_title));
+                }
+            }
+
+            let season_url = build_tmdb_api_url(
+                &format!("/tv/{}/season/{}", tmdb_id, season),
+                &credential,
+                "",
+            );
+            let raw_season: RawSeasonSchedule = http_get_with_retry_auth(&season_url, &credential, 3)?
+                .json()
+                .map_err(|e| e.to_string())?;
+            
+            let mut episode_info = raw_season
+                .episodes
+                .unwrap_or_default()
+                .into_iter()
+                .find(|item| item.episode_number == episode)
+                .ok_or_else(|| "Episode not found on TMDB".to_string())?;
+            
+            episode_info.season_number = Some(season);
+            return Ok(build_episode_schedule(episode_info, &show_title));
+        }
+
+        if let Some(next_episode) = raw.next_episode_to_air {
+            if is_release_date_in_future(next_episode.air_date.as_deref()) {
+                return Ok(build_episode_schedule(next_episode, &show_title));
+            }
+
+            if let Some(season) = next_episode.season_number {
+                let season_url = build_tmdb_api_url(
+                    &format!("/tv/{}/season/{}", tmdb_id, season),
+                    &credential,
+                    "",
+                );
+
+                if let Ok(response) = http_get_with_retry_auth(&season_url, &credential, 3) {
+                    if let Ok(raw_season) = response.json::<RawSeasonSchedule>() {
+                        if let Some(future_episode) = raw_season
+                            .episodes
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|episode| {
+                                episode.episode_number > next_episode.episode_number
+                                    && is_release_date_in_future(episode.air_date.as_deref())
+                            })
+                            .min_by_key(|episode| episode.air_date.clone())
+                        {
+                            return Ok(build_episode_schedule(future_episode, &show_title));
+                        }
+                    }
+                }
+            }
+
+            return Ok(build_episode_schedule(next_episode, &show_title));
+        }
+
+        let release_date = raw.first_air_date.filter(|value| !value.trim().is_empty());
+        let suggested = suggested_reminder_at_from_release_date(release_date.as_deref());
+
+        Ok(TmdbReleaseSchedule {
+            tmdb_id,
+            media_type,
+            title: show_title,
+            season_number: None,
+            episode_number: None,
+            release_date,
+            suggested_reminder_at: suggested,
+            source: "tmdb".to_string(),
+            precision: "date".to_string(),
+            editable: true,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn resolve_next_tv_season_reminder_target(
+    reminder: &database::MovieReminder,
+    credential: &str,
+    now_utc: &DateTime<Utc>,
+) -> Result<Option<ReminderScheduleTarget>, String> {
+    #[derive(Clone, Deserialize)]
+    struct RawAirEpisode {
+        name: Option<String>,
+        air_date: Option<String>,
+        season_number: Option<i32>,
+        episode_number: i32,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct RawSeason {
+        season_number: i32,
+        episode_count: i32,
+        air_date: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct RawTv {
+        name: Option<String>,
+        original_name: Option<String>,
+        poster_path: Option<String>,
+        first_air_date: Option<String>,
+        next_episode_to_air: Option<RawAirEpisode>,
+        seasons: Option<Vec<RawSeason>>,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct RawSeasonEpisode {
+        episode_number: i32,
+        name: Option<String>,
+        air_date: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct RawSeasonDetails {
+        episodes: Option<Vec<RawSeasonEpisode>>,
+    }
+
+    let tmdb_id_num = reminder
+        .tmdb_id
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| "Invalid TMDB id on reminder".to_string())?;
+    let show_url = build_tmdb_api_url(&format!("/tv/{}", tmdb_id_num), credential, "");
+    let raw: RawTv = http_get_with_retry_auth(&show_url, credential, 3)?
+        .json()
+        .map_err(|e| e.to_string())?;
+
+    let show_title = raw
+        .name
+        .or(raw.original_name)
+        .unwrap_or_else(|| reminder.title.clone());
+    let poster_path = reminder.poster_path.clone().or(raw.poster_path);
+    let tvmaze_show_id = tmdb_imdb_id_for_show(tmdb_id_num, credential)
+        .and_then(|imdb_id| tvmaze_lookup_show_id_by_imdb(&imdb_id));
+    let tracking_season = reminder
+        .tracking_season_number
+        .or(reminder.season_number)
+        .or_else(|| raw.next_episode_to_air.as_ref().and_then(|episode| episode.season_number));
+
+    let build_target =
+        |episode: RawAirEpisode, explicit_tracking_season: Option<i32>| -> Option<ReminderScheduleTarget> {
+            let release_date = episode.air_date.clone().filter(|value| !value.trim().is_empty());
+            let suggested = suggested_reminder_at_from_release_date(release_date.as_deref())?;
+            let (reminder_at, source) = if let Some(tmdb_time) = tmdb_exact_episode_reminder_at_heuristics(tmdb_id_num, release_date.as_deref(), credential) {
+                (tmdb_time, "tmdb-heuristics".to_string())
+            } else if let (Some(show_id), Some(season)) =
+                (tvmaze_show_id, episode.season_number)
+            {
+                match tvmaze_exact_episode_reminder_at(show_id, season, episode.episode_number) {
+                    Some(exact_time) => (exact_time, "tvmaze".to_string()),
+                    None => (suggested, "tmdb".to_string()),
+                }
+            } else {
+                (suggested, "tmdb".to_string())
+            };
+            let episode_label = episode
+                .name
+                .as_ref()
+                .filter(|name| !name.trim().is_empty() && name.to_lowercase() != format!("episode {}", episode.episode_number))
+                .map(|name| format!("{} - {}", show_title, name))
+                .unwrap_or_else(|| match episode.season_number {
+                    Some(season) => format!("{} - S{:02}E{:02}", show_title, season, episode.episode_number),
+                    None => format!("{} - Episode {}", show_title, episode.episode_number),
+                });
+
+            Some(ReminderScheduleTarget {
+                title: episode_label,
+                poster_path: poster_path.clone(),
+                season_number: episode.season_number,
+                episode_number: Some(episode.episode_number),
+                release_date,
+                reminder_at,
+                source,
+                tracking_season_number: explicit_tracking_season.or(episode.season_number),
+            })
+        };
+
+    if tracking_season.is_none() {
+        if let Some(next_episode) = raw.next_episode_to_air.clone() {
+            if is_release_date_in_future(next_episode.air_date.as_deref()) {
+                return Ok(build_target(next_episode.clone(), next_episode.season_number));
+            }
+        }
+
+        if is_release_date_in_future(raw.first_air_date.as_deref()) {
+            let reminder_at = suggested_reminder_at_from_release_date(raw.first_air_date.as_deref())
+                .ok_or_else(|| "Unable to derive premiere reminder time".to_string())?;
+            return Ok(Some(ReminderScheduleTarget {
+                title: show_title,
+                poster_path,
+                season_number: None,
+                episode_number: None,
+                release_date: raw.first_air_date,
+                reminder_at,
+                source: "tmdb".to_string(),
+                tracking_season_number: None,
+            }));
+        }
+    }
+
+    let Some(tracking_season) = tracking_season else {
+        return Ok(None);
+    };
+
+    if let Some(next_episode) = raw.next_episode_to_air.clone() {
+        if next_episode.season_number == Some(tracking_season)
+            && is_release_date_in_future(next_episode.air_date.as_deref())
+        {
+            return Ok(build_target(next_episode, Some(tracking_season)));
+        }
+        if let Some(next_season) = next_episode.season_number {
+            if next_season > tracking_season {
+                return Ok(None);
+            }
+        }
+    }
+
+    let season_url = build_tmdb_api_url(
+        &format!("/tv/{}/season/{}", tmdb_id_num, tracking_season),
+        credential,
+        "",
+    );
+    let raw_season: RawSeasonDetails = http_get_with_retry_auth(&season_url, credential, 3)?
+        .json()
+        .map_err(|e| e.to_string())?;
+
+    let next_future = raw_season
+        .episodes
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|episode| {
+            let air_date = episode.air_date.clone()?;
+            let target = suggested_reminder_at_from_release_date(Some(&air_date))?;
+            let parsed = DateTime::parse_from_rfc3339(&target).ok()?.with_timezone(&Utc);
+            if parsed <= *now_utc {
+                return None;
+            }
+
+            Some((air_date.clone(), RawAirEpisode {
+                name: episode.name,
+                air_date: Some(air_date),
+                season_number: Some(tracking_season),
+                episode_number: episode.episode_number,
+            }))
+        })
+        .min_by_key(|(air_date, _)| air_date.clone())
+        .map(|(_, episode)| episode);
+
+    if let Some(next_episode) = next_future {
+        return Ok(build_target(next_episode, Some(tracking_season)));
+    }
+
+    let has_same_season_metadata = raw
+        .seasons
+        .unwrap_or_default()
+        .into_iter()
+        .any(|season| season.season_number == tracking_season && season.episode_count > 0);
+
+    if has_same_season_metadata {
+        return Ok(None);
+    }
+
+    Ok(None)
+}
+
 // Search TMDB for streaming - returns raw search results
 #[tauri::command]
 async fn search_tmdb(
@@ -6359,6 +7274,37 @@ async fn search_tmdb(
         total_results: results.len(),
         results,
     })
+}
+
+#[tauri::command]
+async fn get_tmdb_trending(state: State<'_, AppState>) -> Result<TmdbTrendingResponse, String> {
+    println!("[TMDB_TRENDING] Fetching trending movie and TV suggestions");
+
+    let credential = {
+        let config = state.config.lock().map_err(|e| {
+            println!("[TMDB_TRENDING] Failed to lock config: {}", e);
+            e.to_string()
+        })?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let raw_results =
+        tokio::task::spawn_blocking(move || -> Result<Vec<tmdb::TmdbTrendingListItem>, String> {
+            tmdb::trending_suggestions_raw(&credential, 3).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let results = raw_results
+        .into_iter()
+        .map(|item| TmdbTrendingItem {
+            id: item.id,
+            title: item.title,
+            media_type: item.media_type,
+        })
+        .collect();
+
+    Ok(TmdbTrendingResponse { results })
 }
 
 // Videasy localStorage progress format
@@ -7042,6 +7988,172 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
 
         if let Err(err) = tauri_notification.show() {
             println!("[NOTIFY] tauri notification failed: {}", err);
+        }
+    }
+}
+
+fn apply_autostart_for_notifications(app_handle: &AppHandle, enabled: bool) {
+    let result = if enabled {
+        app_handle.autolaunch().enable()
+    } else {
+        app_handle.autolaunch().disable()
+    };
+
+    if let Err(error) = result {
+        println!(
+            "[AUTOSTART] Failed to {} autostart: {}",
+            if enabled { "enable" } else { "disable" },
+            error
+        );
+    }
+}
+
+fn format_reminder_notification_body(reminder: &database::MovieReminder) -> String {
+    match (
+        reminder.media_type.as_str(),
+        reminder.season_number,
+        reminder.episode_number,
+    ) {
+        ("tv", Some(season), Some(episode)) => {
+            format!(
+                "{} S{:02}E{:02} is ready to watch.",
+                reminder.title, season, episode
+            )
+        }
+        ("tv", _, _) => format!("{} is on your watch reminder list.", reminder.title),
+        _ => format!("{} is ready to watch.", reminder.title),
+    }
+}
+
+fn should_continue_tv_reminder(reminder: &database::MovieReminder) -> bool {
+    reminder.media_type == "tv" && reminder.tracking_mode == "tv_season"
+}
+
+async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+
+    loop {
+        interval.tick().await;
+
+        let notifications_enabled = {
+            let state = app_handle.state::<AppState>();
+            let result = match state.config.lock() {
+                Ok(config) => config.notifications_enabled,
+                Err(error) => {
+                    println!("[REMINDERS] Failed to lock config: {}", error);
+                    false
+                }
+            };
+            result
+        };
+
+        if !notifications_enabled {
+            continue;
+        }
+
+        let now_utc = Utc::now().to_rfc3339();
+        let due_reminders = {
+            let state = app_handle.state::<AppState>();
+            let result = match state.db.lock() {
+                Ok(db) => db.get_due_movie_reminders(&now_utc),
+                Err(error) => {
+                    println!("[REMINDERS] Failed to lock database: {}", error);
+                    continue;
+                }
+            };
+            result
+        };
+
+        let due_reminders = match due_reminders {
+            Ok(items) => items,
+            Err(error) => {
+                println!("[REMINDERS] Failed to load due reminders: {}", error);
+                continue;
+            }
+        };
+
+        for reminder in due_reminders {
+            let body = format_reminder_notification_body(&reminder);
+            send_system_notification(&app_handle, "StreamVault reminder", &body);
+            let _ = app_handle.emit_all("movie-reminder-fired", reminder.clone());
+
+            if should_continue_tv_reminder(&reminder) {
+                let credential = {
+                    let state = app_handle.state::<AppState>();
+                    let resolved = match state.config.lock() {
+                        Ok(config) => {
+                            tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+                        }
+                        Err(error) => {
+                            println!("[REMINDERS] Failed to lock config for reminder {}: {}", reminder.id, error);
+                            String::new()
+                        }
+                    };
+                    resolved
+                };
+
+                let now_dt = Utc::now();
+                let next_target = if credential.is_empty() {
+                    Err("Missing TMDB credential".to_string())
+                } else {
+                    tokio::task::spawn_blocking({
+                        let reminder = reminder.clone();
+                        let credential = credential.clone();
+                        move || resolve_next_tv_season_reminder_target(&reminder, &credential, &now_dt)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|result| result)
+                };
+
+                match next_target {
+                    Ok(Some(next_target)) => {
+                        let state = app_handle.state::<AppState>();
+                        if let Ok(db) = state.db.lock() {
+                            if let Err(error) = db.advance_movie_reminder(
+                                reminder.id,
+                                &next_target.title,
+                                next_target.poster_path.as_deref(),
+                                next_target.season_number,
+                                next_target.episode_number,
+                                next_target.release_date.as_deref(),
+                                &next_target.reminder_at,
+                                &next_target.source,
+                                next_target.tracking_season_number,
+                                &now_utc,
+                            ) {
+                                println!(
+                                    "[REMINDERS] Failed to advance reminder {}: {}",
+                                    reminder.id, error
+                                );
+                            } else {
+                                let _ = app_handle.emit_all("refresh-reminders", ());
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        println!(
+                            "[REMINDERS] Failed to resolve next TV reminder target for {}: {}",
+                            reminder.id, error
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            let state = app_handle.state::<AppState>();
+            if let Ok(db) = state.db.lock() {
+                if let Err(error) = db.mark_movie_reminder_notified(reminder.id, &now_utc) {
+                    println!(
+                        "[REMINDERS] Failed to mark reminder {} notified: {}",
+                        reminder.id, error
+                    );
+                } else {
+                    let _ = app_handle.emit_all("refresh-reminders", ());
+                }
+            };
         }
     }
 }
@@ -7788,9 +8900,9 @@ fn should_show_in_app_notification(window: &tauri::Window) -> bool {
 }
 
 fn dispatch_notification(window: &tauri::Window, title: &str, message: &str, kind: &str) {
-    if should_show_in_app_notification(window) {
-        emit_ui_notification(window, title, message, kind);
-    } else {
+    emit_ui_notification(window, title, message, kind);
+
+    if !should_show_in_app_notification(window) {
         send_system_notification(&window.app_handle(), title, message);
     }
 }
@@ -10065,7 +11177,9 @@ fn main() {
     // We skip this in dev mode to allow production and dev instances to run independently without conflict.
     let single_instance_plugin = if !is_dev_runtime() {
         Some(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            println!("[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window");
+            println!(
+                "[SINGLE-INSTANCE] Another instance attempted to start, focusing existing window"
+            );
             restore_or_create_main_window(app);
         }))
     } else {
@@ -10127,6 +11241,7 @@ fn main() {
     } else {
         builder
     };
+    let notifications_enabled_on_startup = config.notifications_enabled;
 
     builder
         .system_tray(system_tray)
@@ -10151,11 +11266,13 @@ fn main() {
         })
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--flag1", "--flag2"])))
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             if let Some(window) = app.get_window("main") {
                 window.set_title(runtime_window_title()).ok();
                 apply_window_corner_radius(&window);
             }
+
+            apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
 
             // Register deep link handler for OAuth callback
             // The callback page redirects to the runtime-specific scheme.
@@ -10232,6 +11349,11 @@ fn main() {
             let app_handle_for_metadata_enrichment = app.handle();
             tauri::async_runtime::spawn(async move {
                 run_startup_metadata_enrichment(app_handle_for_metadata_enrichment).await;
+            });
+
+            let app_handle_for_reminders = app.handle();
+            tauri::async_runtime::spawn(async move {
+                run_movie_reminder_scheduler(app_handle_for_reminders).await;
             });
 
             Ok(())
@@ -10382,10 +11504,17 @@ fn main() {
             stop_transcode_stream,
             get_stream_info_with_transcode,
             search_tmdb,
+            get_tmdb_trending,
             get_movie_details,
             get_tv_details,
             get_tv_season_episodes,
             refresh_series_metadata,
+            get_tmdb_release_schedule,
+            create_movie_reminder,
+            update_movie_reminder,
+            get_movie_reminders,
+            delete_movie_reminder,
+            set_movie_reminder_active,
             merge_duplicate_shows,
             // Videasy player commands
             open_videasy_player,

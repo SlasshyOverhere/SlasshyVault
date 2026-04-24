@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot
+  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -70,9 +70,8 @@ export function Sidebar({
     };
   }, []);
 
-  const isForcedCollapsed = windowWidth < 800;
   const isCollapsed = !isHovered;
-  const sidebarWidth = isCollapsed ? (isForcedCollapsed ? 68 : 72) : (windowWidth < 1100 ? 240 : 280);
+  const sidebarWidth = isCollapsed ? 64 : (windowWidth < 1100 ? 232 : 264);
 
   // Fetch Google Drive info
   useEffect(() => {
@@ -105,6 +104,7 @@ export function Sidebar({
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
+    { id: "reminders", label: "Reminders", icon: Clapperboard },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);
@@ -133,9 +133,9 @@ export function Sidebar({
       {/* Glossy Overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
 
-      <div className={cn("flex-1 px-4 pt-14 pb-3 flex flex-col", isCollapsed ? "px-2 pt-12" : "")}>
-        {/* Navigation Items (Middle) */}
-        <div className="flex-1 flex items-center">
+      <div className={cn("flex-1 px-3 pt-14 pb-3 flex flex-col", isCollapsed ? "px-1.5 pt-12" : "")}>
+        {/* Navigation Items */}
+        <div className="flex-1 flex items-start pt-12">
           <nav className="w-full space-y-2 overflow-visible">
             {menuItems.map((item) => {
               const isActive = currentView === item.id;
@@ -152,7 +152,7 @@ export function Sidebar({
                     setView(item.id)
                   }}
                   className={cn(
-                    "group relative w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition-colors duration-300",
+                    "group relative w-full flex items-center gap-3 px-3.5 py-3 rounded-xl transition-colors duration-300",
                     isActive
                       ? "bg-white/[0.08] text-white shadow-[0_0_20px_rgba(255,255,255,0.05)] border border-white/10"
                       : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.03]",

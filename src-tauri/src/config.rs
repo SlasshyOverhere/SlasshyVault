@@ -246,6 +246,8 @@ pub struct Config {
     pub zip_cache_max_gb: u32,
     #[serde(default = "default_zip_cache_expiry_days")]
     pub zip_cache_expiry_days: u32,
+    #[serde(default = "default_notifications_enabled")]
+    pub notifications_enabled: bool,
 }
 
 fn default_cloud_cache_max_mb() -> u32 {
@@ -272,6 +274,10 @@ fn default_zip_cache_expiry_days() -> u32 {
     7
 }
 
+fn default_notifications_enabled() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -289,6 +295,7 @@ impl Default for Config {
             zip_cache_dir: None,
             zip_cache_max_gb: 20,
             zip_cache_expiry_days: 7,
+            notifications_enabled: true,
         }
     }
 }

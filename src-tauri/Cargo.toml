@@ -28,6 +28,7 @@ walkdir = "2.4"
 rayon = "1.10"
 dashmap = "5.5"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 dirs = "5.0"
 percent-encoding = "2.3"
 rand = "0.8"

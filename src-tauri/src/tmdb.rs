@@ -83,6 +83,13 @@ pub struct TmdbSearchListItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TmdbTrendingListItem {
+    pub id: i64,
+    pub title: String,
+    pub media_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmdbSeasonInfo {
     pub season_number: i32,
     pub name: String,
@@ -702,6 +709,66 @@ pub fn search_multi_raw(
         .collect();
 
     Ok(results)
+}
+
+/// Fetch top trending movies and TV shows for lightweight UI suggestions.
+pub fn trending_suggestions_raw(
+    api_key: &str,
+    per_type_limit: usize,
+) -> Result<Vec<TmdbTrendingListItem>, Box<dyn std::error::Error + Send + Sync>> {
+    #[derive(Debug, Deserialize)]
+    struct RawTrendingResult {
+        results: Vec<RawTrendingItem>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RawTrendingItem {
+        id: i64,
+        title: Option<String>,
+        name: Option<String>,
+    }
+
+    let client = build_client()?;
+    let mut suggestions = Vec::new();
+
+    for media_type in ["movie", "tv"] {
+        let url = build_tmdb_url(
+            &format!("/trending/{}/day", media_type),
+            api_key,
+            "language=en-US",
+        );
+        let response = tmdb_request(&client, &url, api_key)?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "TMDB trending {} API error: {}",
+                media_type,
+                response.status()
+            )
+            .into());
+        }
+
+        let raw: RawTrendingResult = response.json()?;
+        suggestions.extend(
+            raw.results
+                .into_iter()
+                .filter_map(|item| {
+                    let title = item.title.or(item.name)?.trim().to_string();
+                    if title.is_empty() {
+                        return None;
+                    }
+
+                    Some(TmdbTrendingListItem {
+                        id: item.id,
+                        title,
+                        media_type: media_type.to_string(),
+                    })
+                })
+                .take(per_type_limit),
+        );
+    }
+
+    Ok(suggestions)
 }
 
 /// Check if a search result title is a reasonable match for the query

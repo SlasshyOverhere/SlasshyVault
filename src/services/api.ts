@@ -103,6 +103,7 @@ export interface Config {
   zip_cache_dir?: string;
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
+  notifications_enabled?: boolean;
 }
 
 export interface ResumeInfo {
@@ -173,6 +174,16 @@ export interface TmdbSearchResult {
 export interface TmdbSearchResponse {
   results: TmdbSearchResult[];
   total_results: number;
+}
+
+export interface TmdbTrendingItem {
+  id: number;
+  title: string;
+  media_type: "movie" | "tv";
+}
+
+export interface TmdbTrendingResponse {
+  results: TmdbTrendingItem[];
 }
 
 // Get library items (movies or TV shows)
@@ -726,6 +737,15 @@ export const searchTmdb = async (
   }
 };
 
+export const getTmdbTrending = async (): Promise<TmdbTrendingResponse> => {
+  try {
+    return await invoke<TmdbTrendingResponse>("get_tmdb_trending");
+  } catch (error) {
+    console.error("Failed to fetch TMDB trending:", error);
+    throw error;
+  }
+};
+
 // Get cached image URL (converts local path to asset protocol URL)
 export const getCachedImageUrl = (
   imageName: string,
@@ -1201,6 +1221,7 @@ export const getActiveMpvSessions = async (): Promise<MpvSession[]> => {
 
 // Episode info from TMDB with rich metadata
 export interface TmdbEpisodeInfo {
+  season_number?: number | null;
   episode_number: number;
   name: string;
   overview?: string;
@@ -1227,6 +1248,12 @@ export interface TmdbShowDetails {
   poster_path?: string;
   backdrop_path?: string;
   overview?: string;
+  first_air_date?: string;
+  status?: string;
+  vote_average?: number;
+  networks?: { id?: number; name: string }[];
+  genres?: { id: number; name: string }[];
+  number_of_episodes?: number;
   number_of_seasons: number;
   seasons: {
     season_number: number;
@@ -1237,6 +1264,8 @@ export interface TmdbShowDetails {
     air_date?: string;
   }[];
   creator?: string;
+  last_episode_to_air?: TmdbEpisodeInfo | null;
+  next_episode_to_air?: TmdbEpisodeInfo | null;
 }
 
 export interface TmdbMovieDetails {
@@ -1246,8 +1275,60 @@ export interface TmdbMovieDetails {
   backdrop_path?: string;
   overview?: string;
   release_date?: string;
+  status?: string;
+  vote_average?: number;
+  genres?: { id: number; name: string }[];
   runtime?: number;
   director?: string;
+}
+
+export interface MovieReminder {
+  id: number;
+  tmdb_id: string;
+  media_type: "movie" | "tv";
+  title: string;
+  poster_path?: string | null;
+  season_number?: number | null;
+  episode_number?: number | null;
+  release_date?: string | null;
+  reminder_at: string;
+  source: "tmdb" | "manual" | string;
+  tracking_mode?: "single" | "tv_season" | string;
+  tracking_season_number?: number | null;
+  notes?: string | null;
+  is_active: boolean;
+  notified_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MovieReminderInput {
+  tmdbId: string;
+  mediaType: "movie" | "tv";
+  title: string;
+  posterPath?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  releaseDate?: string | null;
+  reminderAt: string;
+  source?: "tmdb" | "manual" | string;
+  trackingMode?: "single" | "tv_season" | string;
+  trackingSeasonNumber?: number | null;
+  notes?: string | null;
+  isActive?: boolean;
+}
+
+export interface TmdbReleaseSchedule {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  releaseDate?: string | null;
+  suggestedReminderAt?: string | null;
+  source: "tmdb" | string;
+  precision: "date" | "datetime" | string;
+  editable: boolean;
 }
 
 export const getMovieDetails = async (
@@ -1262,6 +1343,76 @@ export const getMovieDetails = async (
     console.error("Failed to get movie details:", error);
     return null;
   }
+};
+
+export const getTmdbReleaseSchedule = async (
+  tmdbId: number,
+  mediaType: "movie" | "tv",
+  seasonNumber?: number | null,
+  episodeNumber?: number | null,
+): Promise<TmdbReleaseSchedule> => {
+  return await invoke<TmdbReleaseSchedule>("get_tmdb_release_schedule", {
+    tmdbId,
+    mediaType,
+    seasonNumber: seasonNumber ?? null,
+    episodeNumber: episodeNumber ?? null,
+  });
+};
+
+const toReminderBackendInput = (reminder: MovieReminderInput) => ({
+  tmdbId: reminder.tmdbId,
+  mediaType: reminder.mediaType,
+  title: reminder.title,
+  posterPath: reminder.posterPath ?? null,
+  seasonNumber: reminder.seasonNumber ?? null,
+  episodeNumber: reminder.episodeNumber ?? null,
+  releaseDate: reminder.releaseDate ?? null,
+  reminderAt: reminder.reminderAt,
+  source: reminder.source ?? "manual",
+  trackingMode: reminder.trackingMode ?? "single",
+  trackingSeasonNumber: reminder.trackingSeasonNumber ?? null,
+  notes: reminder.notes ?? null,
+  isActive: reminder.isActive ?? true,
+});
+
+export const getMovieReminders = async (
+  includeInactive = false,
+): Promise<MovieReminder[]> => {
+  return await invoke<MovieReminder[]>("get_movie_reminders", {
+    includeInactive,
+  });
+};
+
+export const createMovieReminder = async (
+  reminder: MovieReminderInput,
+): Promise<MovieReminder> => {
+  return await invoke<MovieReminder>("create_movie_reminder", {
+    reminder: toReminderBackendInput(reminder),
+  });
+};
+
+export const updateMovieReminder = async (
+  id: number,
+  reminder: MovieReminderInput,
+): Promise<MovieReminder> => {
+  return await invoke<MovieReminder>("update_movie_reminder", {
+    id,
+    reminder: toReminderBackendInput(reminder),
+  });
+};
+
+export const deleteMovieReminder = async (id: number): Promise<void> => {
+  await invoke("delete_movie_reminder", { id });
+};
+
+export const setMovieReminderActive = async (
+  id: number,
+  isActive: boolean,
+): Promise<MovieReminder> => {
+  return await invoke<MovieReminder>("set_movie_reminder_active", {
+    id,
+    isActive,
+  });
 };
 
 // Get TV show details including seasons from TMDB
