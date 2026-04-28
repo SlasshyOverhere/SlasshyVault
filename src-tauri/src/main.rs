@@ -73,6 +73,7 @@ pub struct AppState {
     pub social_auth_client: social_auth::SocialAuthClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
+    pub wt_proxy: Mutex<Option<zip_stream_proxy::ZipStreamProxyHandle>>,
 }
 
 // API Response types
@@ -5057,10 +5058,8 @@ async fn play_with_mpv(
                     {
                         0 => {
                             let stream_info = archive_manager::build_archive_stream_info(&media)?;
-                            let (drive_url, access_token) = state
-                                .gdrive_client
-                                .get_stream_url(&stream_info.zip_file_id)
-                                .await?;
+                            let drive_url =
+                                state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
                             let (
                                 cache_spec,
                                 local_cache_path,
@@ -5104,7 +5103,7 @@ async fn play_with_mpv(
                             let proxy =
                                 zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
                                     drive_url,
-                                    access_token,
+                                    state.gdrive_client.clone(),
                                     &stream_info,
                                     cache_spec,
                                 ))?;
@@ -5178,16 +5177,49 @@ async fn play_with_mpv(
                     "[MPV] Cloud file detected, getting stream URL for file ID: {}",
                     cloud_file_id
                 );
-                let (stream_url, access_token) =
-                    state.gdrive_client.get_stream_url(cloud_file_id).await?;
+                let cached_file_size =
+                    media.file_size_bytes.and_then(|value| u64::try_from(value).ok());
+                let content_name = media
+                    .file_path
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(media.title.as_str());
+                let metadata = if cached_file_size.is_some() {
+                    None
+                } else {
+                    Some(state.gdrive_client.get_file_metadata(cloud_file_id).await?)
+                };
+                let file_size = cached_file_size
+                    .or_else(|| {
+                        metadata
+                            .as_ref()
+                            .and_then(|value| value.size.as_deref())
+                            .and_then(|value| value.parse::<u64>().ok())
+                    })
+                    .ok_or_else(|| "Cloud file size not available for MPV proxy".to_string())?;
+                if file_size == 0 {
+                    return Err("Cloud file is empty and cannot be streamed".to_string());
+                }
+                let drive_url = state.gdrive_client.build_stream_url(cloud_file_id);
+                let proxy =
+                    zip_stream_proxy::start_proxy(zip_stream_proxy::build_file_proxy_spec(
+                        drive_url,
+                        state.gdrive_client.clone(),
+                        file_size,
+                        metadata
+                            .as_ref()
+                            .map(|value| value.mime_type.clone())
+                            .unwrap_or_else(|| zip_manager::content_type_for_name(content_name)),
+                    ))?;
+                let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
                 println!(
-                    "[MPV] Got cloud stream URL, token length: {}",
-                    access_token.len()
+                    "[MPV] Using authenticated localhost proxy for cloud playback (size={} bytes, inferred_name='{}')",
+                    file_size, content_name
                 );
                 (
                     stream_url,
-                    Some(format!("Authorization: Bearer {}", access_token)),
                     None,
+                    Some(proxy),
                     true,
                 )
             } else {
@@ -8783,10 +8815,7 @@ async fn build_zip_stream_url(
     stop_zip_stream_proxy(state, media_id);
 
     let stream_info = archive_manager::build_archive_stream_info(media)?;
-    let (drive_url, access_token) = state
-        .gdrive_client
-        .get_stream_url(&stream_info.zip_file_id)
-        .await?;
+    let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
     let proxy_cache_spec = match archive_manager::archive_format_for_media(media) {
         archive_manager::ArchiveFormat::Zip => {
             match zip_manager::zip_entry_compression_method(media) {
@@ -8812,7 +8841,7 @@ async fn build_zip_stream_url(
     };
     let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
         drive_url,
-        access_token,
+        state.gdrive_client.clone(),
         &stream_info,
         proxy_cache_spec,
     ))?;
@@ -8835,14 +8864,11 @@ async fn build_temporary_zip_stream_url(
     media: &database::MediaItem,
 ) -> Result<(String, zip_stream_proxy::ZipStreamProxyHandle), String> {
     let stream_info = archive_manager::build_archive_stream_info(media)?;
-    let (drive_url, access_token) = state
-        .gdrive_client
-        .get_stream_url(&stream_info.zip_file_id)
-        .await?;
+    let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
 
     let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
         drive_url,
-        access_token,
+        state.gdrive_client.clone(),
         &stream_info,
         None,
     ))?;
@@ -11207,7 +11233,14 @@ async fn wt_launch_mpv(
     start_position: f64,
 ) -> Result<u32, String> {
     // Get media info and config
-    let (file_path, mpv_path, is_cloud, cloud_file_id, display_title) = {
+    let (
+        file_path,
+        mpv_path,
+        is_cloud,
+        cloud_file_id,
+        file_size_bytes,
+        display_title,
+    ) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
         let config = state.config.lock().map_err(|e| e.to_string())?;
@@ -11218,35 +11251,53 @@ async fn wt_launch_mpv(
             mpv,
             media.is_cloud.unwrap_or(false),
             media.cloud_file_id,
+            media.file_size_bytes,
             display_title,
         )
     };
 
-    let file_or_url = if is_cloud {
+    let (file_or_url, wt_proxy) = if is_cloud {
         if let Some(file_id) = cloud_file_id {
-            let (url, _token) = state
+            let metadata = state
                 .gdrive_client
-                .get_stream_url(&file_id)
+                .get_file_metadata(&file_id)
                 .await
-                .map_err(|e| format!("Failed to get cloud streaming URL: {}", e))?;
-            url
+                .map_err(|e| format!("Failed to get cloud streaming metadata: {}", e))?;
+            let file_size = metadata
+                .size
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok())
+                .or_else(|| file_size_bytes.and_then(|value| u64::try_from(value).ok()))
+                .ok_or_else(|| {
+                    "Cloud file size not available for Watch Together MPV proxy".to_string()
+                })?;
+            if file_size == 0 {
+                return Err("Cloud file is empty and cannot be streamed".to_string());
+            }
+
+            let drive_url = state.gdrive_client.build_stream_url(&file_id);
+            let proxy =
+                zip_stream_proxy::start_proxy(zip_stream_proxy::build_file_proxy_spec(
+                    drive_url,
+                    state.gdrive_client.clone(),
+                    file_size,
+                    metadata.mime_type.clone(),
+                ))?;
+            (zip_stream_proxy::localhost_stream_url(proxy.port), Some(proxy))
         } else {
             return Err("Cloud file has no file ID".to_string());
         }
     } else {
-        file_path.ok_or("No file path for local media")?
+        (file_path.ok_or("No file path for local media")?, None)
     };
 
-    let auth_header: Option<String> = if is_cloud {
-        state
-            .gdrive_client
-            .get_access_token()
-            .await
-            .ok()
-            .map(|t| format!("Authorization: Bearer {}", t))
-    } else {
-        None
-    };
+    {
+        let mut existing_proxy = state.wt_proxy.lock().map_err(|e| e.to_string())?;
+        if let Some(mut proxy) = existing_proxy.take() {
+            proxy.stop();
+        }
+        *existing_proxy = wt_proxy;
+    }
 
     // Determine if host
     let is_host = {
@@ -11263,7 +11314,7 @@ async fn wt_launch_mpv(
         Some(&display_title),
         &session_id,
         start_position,
-        auth_header.as_deref(),
+        None,
         is_host,
     )?;
 
@@ -11323,6 +11374,13 @@ async fn wt_launch_mpv(
                             // Clear the controller
                             let mut ctrl = wt_ctrl.lock().await;
                             *ctrl = None;
+                            let app_handle = window_clone.app_handle();
+                            let state: tauri::State<'_, AppState> = app_handle.state();
+                            if let Ok(mut proxy_slot) = state.wt_proxy.lock() {
+                                if let Some(mut proxy) = proxy_slot.take() {
+                                    proxy.stop();
+                                }
+                            }
                             break;
                         }
                         watch_together_mpv::MpvSyncEvent::PositionUpdate { .. } => {
@@ -11601,6 +11659,7 @@ fn main() {
             watch_together::WatchTogetherManager::new(),
         )),
         wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
+        wt_proxy: Mutex::new(None),
     };
 
     // Create system tray menu

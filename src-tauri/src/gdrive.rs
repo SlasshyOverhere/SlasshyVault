@@ -131,6 +131,7 @@ pub struct DriveChange {
 }
 
 /// Google Drive client state
+#[derive(Debug, Clone)]
 pub struct GoogleDriveClient {
     tokens: Arc<Mutex<Option<GoogleTokens>>>,
     http_client: reqwest::Client,
@@ -384,11 +385,15 @@ impl GoogleDriveClient {
     /// Get a streaming URL for a file (with auth header)
     pub async fn get_stream_url(&self, file_id: &str) -> Result<(String, String), String> {
         let access_token = self.get_access_token().await?;
-        let url = format!(
+        let url = self.build_stream_url(file_id);
+        Ok((url, access_token))
+    }
+
+    pub fn build_stream_url(&self, file_id: &str) -> String {
+        format!(
             "{}/files/{}?alt=media&supportsAllDrives=true",
             DRIVE_API_BASE, file_id
-        );
-        Ok((url, access_token))
+        )
     }
 
     async fn find_app_data_file_id(&self, file_name: &str) -> Result<Option<String>, String> {

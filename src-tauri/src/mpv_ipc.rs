@@ -393,6 +393,10 @@ pub fn launch_mpv_with_tracking(
 
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
+        cmd.arg("--keep-open=yes");
+        cmd.arg("--cache-pause-wait=10");
+        cmd.arg("--network-timeout=30");
+
         // Check if disk caching is enabled - use stream-record for persistent caching
         if let Some(cache) = cache_settings {
             if cache.enabled && !cache.cache_dir.is_empty() {
@@ -415,6 +419,7 @@ pub fn launch_mpv_with_tracking(
 
                     // Also enable memory cache for smooth playback while recording
                     cmd.arg("--cache=yes");
+                    cmd.arg("--cache-secs=15");
                     let cache_bytes = (cache.max_size_mb as u64) * 1024 * 1024;
                     cmd.arg(format!("--demuxer-max-bytes={}", cache_bytes));
                     cmd.arg(format!("--demuxer-max-back-bytes={}", cache_bytes / 4));
@@ -431,11 +436,12 @@ pub fn launch_mpv_with_tracking(
                 if is_local_zip_proxy {
                     cmd.arg("--demuxer-max-bytes=256MiB");
                     cmd.arg("--demuxer-max-back-bytes=128MiB");
-                    cmd.arg("--cache-secs=60");
+                    cmd.arg("--cache-secs=15");
                     println!("[MPV] Using expanded cache profile for local ZIP proxy");
                 } else {
                     cmd.arg("--demuxer-max-bytes=500MiB");
                     cmd.arg("--demuxer-max-back-bytes=100MiB");
+                    cmd.arg("--cache-secs=10");
                 }
             }
         } else {
@@ -444,11 +450,12 @@ pub fn launch_mpv_with_tracking(
             if is_local_zip_proxy {
                 cmd.arg("--demuxer-max-bytes=256MiB");
                 cmd.arg("--demuxer-max-back-bytes=128MiB");
-                cmd.arg("--cache-secs=60");
+                cmd.arg("--cache-secs=15");
                 println!("[MPV] Using expanded cache profile for local ZIP proxy");
             } else {
                 cmd.arg("--demuxer-max-bytes=500MiB");
                 cmd.arg("--demuxer-max-back-bytes=100MiB");
+                cmd.arg("--cache-secs=10");
             }
         }
     }

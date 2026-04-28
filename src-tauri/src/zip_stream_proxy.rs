@@ -1,3 +1,4 @@
+use crate::gdrive;
 use crate::zip_manager;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, RANGE};
@@ -8,8 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
+use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime};
 
 const STORE_CACHE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -22,9 +24,14 @@ pub struct ProxyCacheSpec {
 }
 
 #[derive(Debug, Clone)]
+pub enum ProxyAuth {
+    GoogleDrive(gdrive::GoogleDriveClient),
+}
+
+#[derive(Debug, Clone)]
 pub struct ProxyStreamSpec {
     pub drive_url: String,
-    pub access_token: String,
+    pub auth: ProxyAuth,
     pub byte_start: u64,
     pub byte_end: u64,
     pub content_type: String,
@@ -82,6 +89,13 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
     let spec_for_server = spec.clone();
 
     let join_handle = thread::spawn(move || {
+        let auth_runtime = match build_auth_runtime(&spec_for_server.auth) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                println!("[ZIP PROXY] Failed to build auth runtime: {}", error);
+                return;
+            }
+        };
         let client = match Client::builder().timeout(Duration::from_secs(60)).build() {
             Ok(client) => client,
             Err(error) => {
@@ -105,7 +119,7 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
                 }
             };
 
-            if let Err(error) = handle_request(request, &client, &spec_for_server) {
+            if let Err(error) = handle_request(request, &client, &spec_for_server, &auth_runtime) {
                 println!("[ZIP PROXY] Request failed: {}", error);
             }
         }
@@ -133,7 +147,9 @@ fn handle_request(
     request: tiny_http::Request,
     client: &Client,
     spec: &ProxyStreamSpec,
+    auth_runtime: &Option<TokioRuntime>,
 ) -> Result<(), String> {
+    let started_at = Instant::now();
     if request.url() != "/stream" {
         request
             .respond(Response::from_string("Not Found").with_status_code(StatusCode(404)))
@@ -178,18 +194,38 @@ fn handle_request(
         relative_end,
         episode_length,
         body_length,
+        requested_range.is_some(),
     )?;
 
-    if let Some(cache_spec) = spec.cache_spec.as_ref() {
-        if matches!(request.method(), Method::Head) {
-            let response = headers.into_iter().fold(
-                Response::empty(StatusCode(response_status)),
-                |response, header| response.with_header(header),
-            );
-            request.respond(response).map_err(|e| e.to_string())?;
-            return Ok(());
-        }
+    println!(
+        "[ZIP PROXY] {} {} range={:?} resolved={}..{} len={} cache={} started",
+        match request.method() {
+            Method::Get => "GET",
+            Method::Head => "HEAD",
+            _ => "OTHER",
+        },
+        request.url(),
+        requested_range,
+        relative_start,
+        relative_end,
+        body_length,
+        spec.cache_spec.is_some()
+    );
 
+    if matches!(request.method(), Method::Head) {
+        let response = headers.into_iter().fold(
+            Response::empty(StatusCode(response_status)),
+            |response, header| response.with_header(header),
+        );
+        request.respond(response).map_err(|e| e.to_string())?;
+        println!(
+            "[ZIP PROXY] HEAD completed in {} ms",
+            started_at.elapsed().as_millis()
+        );
+        return Ok(());
+    }
+
+    if let Some(cache_spec) = spec.cache_spec.as_ref() {
         if let Some((cache_path, cached_prefix_len)) = cached_source_info(cache_spec) {
             if cached_prefix_len > relative_start {
                 let mut file = File::open(&cache_path).map_err(|error| {
@@ -225,14 +261,23 @@ fn handle_request(
                     request
                         .respond(response.boxed())
                         .map_err(|e| e.to_string())?;
+                    println!(
+                        "[ZIP PROXY] Served fully from cache in {} ms",
+                        started_at.elapsed().as_millis()
+                    );
                     return Ok(());
                 }
 
                 let upstream_start = spec.byte_start + relative_start + local_available_len;
                 let upstream_end = spec.byte_start + relative_end;
+                let access_token = resolve_access_token(spec, auth_runtime)?;
+                println!(
+                    "[ZIP PROXY] Partial cache hit {} bytes, upstream {}..{}",
+                    local_available_len, upstream_start, upstream_end
+                );
                 let upstream = client
                     .get(&spec.drive_url)
-                    .header(AUTHORIZATION, format!("Bearer {}", spec.access_token))
+                    .header(AUTHORIZATION, format!("Bearer {}", access_token))
                     .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
                     .send()
                     .and_then(|response| response.error_for_status())
@@ -252,6 +297,10 @@ fn handle_request(
                 request
                     .respond(response.boxed())
                     .map_err(|e| e.to_string())?;
+                println!(
+                    "[ZIP PROXY] Served hybrid cache/upstream in {} ms",
+                    started_at.elapsed().as_millis()
+                );
                 return Ok(());
             }
         }
@@ -259,9 +308,14 @@ fn handle_request(
 
     let upstream_start = spec.byte_start + relative_start;
     let upstream_end = spec.byte_start + relative_end;
+    let access_token = resolve_access_token(spec, auth_runtime)?;
+    println!(
+        "[ZIP PROXY] Forwarding upstream request {}..{}",
+        upstream_start, upstream_end
+    );
     let upstream = client
         .get(&spec.drive_url)
-        .header(AUTHORIZATION, format!("Bearer {}", spec.access_token))
+        .header(AUTHORIZATION, format!("Bearer {}", access_token))
         .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
         .send()
         .and_then(|response| response.error_for_status())
@@ -282,7 +336,12 @@ fn handle_request(
             None,
         )
         .with_chunked_threshold(usize::MAX);
-        request.respond(response.boxed()).map_err(|e| e.to_string())
+        request.respond(response.boxed()).map_err(|e| e.to_string())?;
+        println!(
+            "[ZIP PROXY] Streamed upstream response in {} ms",
+            started_at.elapsed().as_millis()
+        );
+        Ok(())
     }
 }
 
@@ -347,17 +406,23 @@ fn build_response_headers(
     relative_end: u64,
     total_length: u64,
     body_length: usize,
+    is_partial: bool,
 ) -> Result<Vec<Header>, String> {
-    Ok(vec![
+    let mut headers = vec![
         make_header("Content-Type", content_type)?,
-        make_header(
-            "Content-Range",
-            &format!("bytes {}-{}/{}", relative_start, relative_end, total_length),
-        )?,
         make_header("Content-Length", &body_length.to_string())?,
         make_header("Accept-Ranges", "bytes")?,
         make_header("Connection", "keep-alive")?,
-    ])
+    ];
+
+    if is_partial {
+        headers.push(make_header(
+            "Content-Range",
+            &format!("bytes {}-{}/{}", relative_start, relative_end, total_length),
+        )?);
+    }
+
+    Ok(headers)
 }
 
 fn select_cached_source(cache_spec: &ProxyCacheSpec, relative_end: u64) -> Option<PathBuf> {
@@ -444,6 +509,14 @@ fn background_cache_store(
         return;
     }
 
+    let auth_runtime = match build_auth_runtime(&spec.auth) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            println!("[ZIP CACHE] Failed to build auth runtime: {}", error);
+            return;
+        }
+    };
+
     let client = match Client::builder().timeout(Duration::from_secs(300)).build() {
         Ok(client) => client,
         Err(error) => {
@@ -477,9 +550,17 @@ fn background_cache_store(
         let upstream_start = spec.byte_start + downloaded;
         let upstream_end = spec.byte_start + chunk_end;
 
+        let access_token = match resolve_access_token(spec, &auth_runtime) {
+            Ok(token) => token,
+            Err(error) => {
+                println!("[ZIP CACHE] Failed to refresh access token: {}", error);
+                break;
+            }
+        };
+
         let mut response = match client
             .get(&spec.drive_url)
-            .header(AUTHORIZATION, format!("Bearer {}", spec.access_token))
+            .header(AUTHORIZATION, format!("Bearer {}", access_token))
             .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
             .send()
             .and_then(|response| response.error_for_status())
@@ -537,16 +618,54 @@ pub fn localhost_stream_url(port: u16) -> String {
 
 pub fn build_proxy_spec(
     drive_url: String,
-    access_token: String,
+    gdrive_client: gdrive::GoogleDriveClient,
     stream_info: &zip_manager::ZipStreamInfo,
     cache_spec: Option<ProxyCacheSpec>,
 ) -> ProxyStreamSpec {
     ProxyStreamSpec {
         drive_url,
-        access_token,
+        auth: ProxyAuth::GoogleDrive(gdrive_client),
         byte_start: stream_info.byte_start,
         byte_end: stream_info.byte_end,
         content_type: stream_info.content_type.clone(),
         cache_spec,
+    }
+}
+
+pub fn build_file_proxy_spec(
+    drive_url: String,
+    gdrive_client: gdrive::GoogleDriveClient,
+    file_size: u64,
+    content_type: String,
+) -> ProxyStreamSpec {
+    ProxyStreamSpec {
+        drive_url,
+        auth: ProxyAuth::GoogleDrive(gdrive_client),
+        byte_start: 0,
+        byte_end: file_size.saturating_sub(1),
+        content_type,
+        cache_spec: None,
+    }
+}
+
+fn build_auth_runtime(auth: &ProxyAuth) -> Result<Option<TokioRuntime>, String> {
+    match auth {
+        ProxyAuth::GoogleDrive(_) => TokioRuntimeBuilder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(Some)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn resolve_access_token(
+    spec: &ProxyStreamSpec,
+    auth_runtime: &Option<TokioRuntime>,
+) -> Result<String, String> {
+    match &spec.auth {
+        ProxyAuth::GoogleDrive(client) => auth_runtime
+            .as_ref()
+            .ok_or_else(|| "Missing auth runtime for Google Drive proxy".to_string())?
+            .block_on(client.get_access_token()),
     }
 }
