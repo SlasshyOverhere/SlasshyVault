@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/tauri'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getConfig,
@@ -34,6 +35,8 @@ export function useAuth() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [nickname, setNickname] = useState<string | null>(null)
+  const [nicknameLoaded, setNicknameLoaded] = useState(false)
   const isMountedRef = useRef(true)
   const initialScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
@@ -225,6 +228,8 @@ export function useAuth() {
       disconnectSocial()
       if (isMountedRef.current) {
         setIsAuthenticated(false)
+        setNickname(null)
+        setNicknameLoaded(false)
         toast({
           title: "Signed Out",
           description: "You have been signed out successfully"
@@ -235,11 +240,44 @@ export function useAuth() {
     }
   }
 
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setNickname(null)
+      setNicknameLoaded(false)
+      return
+    }
+
+    setNicknameLoaded(false)
+    invoke<string | null>('get_nickname')
+      .then((value) => {
+        setNickname(value && value.trim() ? value.trim() : null)
+      })
+      .catch((error) => {
+        console.error('[Auth] Failed to load nickname:', error)
+        setNickname(null)
+      })
+      .finally(() => {
+        if (isMountedRef.current) {
+          setNicknameLoaded(true)
+        }
+      })
+  }, [isAuthenticated])
+
+  const updateNickname = async (newNickname: string) => {
+    const trimmedNickname = newNickname.trim()
+    await invoke('set_nickname', { nickname: trimmedNickname })
+    setNickname(trimmedNickname)
+    setNicknameLoaded(true)
+  }
+
   return {
     isAuthenticated,
     isAuthLoading,
     isLoggingIn,
     login,
-    logout
+    logout,
+    nickname,
+    nicknameLoaded,
+    updateNickname
   }
 }

@@ -85,6 +85,9 @@ import {
 } from '@/utils/zipPlayback'
 import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -389,7 +392,28 @@ function App() {
   } | null>(null)
 
   // Authentication state
-  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout } = useAuth()
+  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, nickname, nicknameLoaded, updateNickname } = useAuth()
+  const [showNicknameModal, setShowNicknameModal] = useState(false)
+  const [tempNickname, setTempNickname] = useState('')
+
+  useEffect(() => {
+    if (!isAuthenticated || !nicknameLoaded) return
+
+    const hasNickname = Boolean(nickname?.trim())
+    setShowNicknameModal(!hasNickname)
+    if (hasNickname) {
+      setTempNickname(nickname ?? '')
+    }
+  }, [isAuthenticated, nickname, nicknameLoaded])
+
+  const handleSaveNickname = async () => {
+    const trimmedNickname = tempNickname.trim()
+    if (!trimmedNickname) return
+
+    await updateNickname(trimmedNickname)
+    setShowNicknameModal(false)
+  }
+
   const [currentTime, setCurrentTime] = useState(new Date())
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
   const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all')
@@ -1419,7 +1443,7 @@ function App() {
           const refreshedItem = await getMediaInfo(contentDetailsItem.id)
           setContentDetailsItem(refreshedItem)
         } catch (error) {
-          console.warn('[FixMatch] Failed to refresh content details item:', error)
+          console.warn('[ContentDetails] Failed to refresh content details item:', error)
         }
       }
     }
@@ -1589,6 +1613,20 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
+      <Dialog open={showNicknameModal} onOpenChange={setShowNicknameModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Welcome! Please set a Full Name.</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4">
+            <Input
+              value={tempNickname}
+              onChange={(e) => setTempNickname(e.target.value)}
+              placeholder="Full Name"
+            />            <Button onClick={handleSaveNickname}>Save</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {isUpdateGateActive && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-lg mx-4 rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-6">
@@ -2042,7 +2080,7 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-) : (view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED) || view === 'reminders' ? (
+            ) : (view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED) || view === 'reminders' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
                   <AnimatePresence mode="wait">
@@ -2078,7 +2116,7 @@ function App() {
               </div>
             ) : (
               <ScrollArea className="flex-1">
-                <div className={`content-container ${view === 'home' ? '!px-0 !py-0' : ''} ${view === 'social' ? 'h-full min-h-0' : ''}`}>
+                <div className={`content-container ${view === 'home' ? '!py-0' : ''} ${view === 'social' ? 'h-full min-h-0' : ''}`}>
                   <AnimatePresence mode="wait">
                     {/* Home View */}
                     {view === 'home' && (
@@ -2087,40 +2125,47 @@ function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="h-[calc(100vh-80px)] flex flex-col overflow-hidden relative"
+                        className="h-[calc(100vh-80px)] flex flex-col overflow-hidden relative px-8"
                       >
                         {/* Background Decorative Layer */}
                         <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
                         <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
-                        <div className="absolute right-6 top-10 z-20">
+                        <div className="absolute right-6 top-16 z-20">
                           <button
                             type="button"
                             onClick={() => setNotificationCenterOpen(true)}
-                            className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white/65 shadow-elevation-1 transition-all hover:bg-white/[0.08] hover:text-white"
+                            className="group relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white/10 to-transparent border border-white/10 backdrop-blur-xl shadow-2xl transition-all duration-500 hover:scale-105 active:scale-95"
                           >
-                            <Bell className="w-5 h-5 transition-transform duration-300 group-hover:scale-110" />
+                            <div className="absolute inset-0 rounded-2xl bg-white/0 group-hover:bg-white/5 transition-colors duration-500" />
+                            <Bell className="relative z-10 w-5 h-5 text-white/40 group-hover:text-white transition-colors duration-300" />
                             {unreadNotificationCount > 0 && (
-                              <div className="absolute -right-1 -top-1 flex min-w-[1.35rem] items-center justify-center rounded-full bg-white px-1.5 py-1 text-[9px] font-black leading-none text-black shadow-lg">
-                                {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
-                              </div>
+                              <span className="absolute -top-0.5 -right-0.5 z-20 flex h-4 w-4">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/40 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-4 w-4 bg-white items-center justify-center text-[8px] font-black text-black">
+                                  {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                                </span>
+                              </span>
                             )}
                           </button>
                         </div>
 
                         <div className="relative flex-1 flex flex-col min-h-0">
-                          {/* 1. Centered Clock Header */}
-                          <motion.header
-                            initial={{ opacity: 0, y: -20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="pt-16 pb-8 flex flex-col items-center justify-center flex-shrink-0"
-                          >
-                            <h1 className="text-6xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
-                              {formatTime(currentTime)}
-                            </h1>
-                          </motion.header>
+                          {/* 1. Header Row: Clock + Branding + Date */}
+                          <div className="pt-16 pb-12 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
+                            <div className="flex items-center gap-6">
+                                {/* Clock - Adjusted Size */}
+                                <h1 className="text-5xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
+                                  {formatTime(currentTime)}
+                                </h1>
+                                {/* Date moved to header row */}
+                                <div className="h-10 w-px bg-white/10" />
+                                <p className="text-sm font-black text-white/20 uppercase tracking-[0.2em]">
+                                    {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+                                </p>
+                            </div>                          </div>
 
                           {/* 2. Centered Sleek Search Bar */}
-                          <div className="flex justify-center px-6 pb-12 flex-shrink-0">
+                          <div className="flex justify-center px-6 pb-12 flex-shrink-0 w-full">
                             <div className="relative group w-full max-w-xl">
                               <div className="relative flex items-center bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 rounded-full transition-all duration-500 group-focus-within:border-white/40 group-focus-within:bg-white/[0.08] group-focus-within:shadow-glow-sm overflow-hidden">
                                 <Search className="w-5 h-5 text-white/30 ml-6 group-focus-within:text-white/60 transition-colors" />

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Cloud } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
@@ -830,6 +830,29 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
                 Season {item.season_number} · Episode {item.episode_number}
               </p>
             )}
+
+            {/* Added informative content in the gap */}
+            <div className="mt-2.5 flex flex-col gap-1.5">
+              {item.episode_title && (
+                <p className="text-[11px] text-white/50 font-bold line-clamp-1 group-hover:text-white/80 transition-colors tracking-tight">
+                  {item.episode_title}
+                </p>
+              )}
+              
+              <div className="flex items-center gap-2">
+                {item.is_cloud && (
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/5 border border-white/10 group-hover:bg-white/10 transition-colors">
+                    <Cloud className="w-2.5 h-2.5 text-white/40 group-hover:text-white/60" />
+                    <span className="text-[8px] font-black text-white/30 group-hover:text-white/50 uppercase tracking-widest">Cloud</span>
+                  </div>
+                )}
+                {item.last_watched && (
+                  <span className="text-[9px] font-bold text-white/20 uppercase tracking-[0.15em] group-hover:text-white/40 transition-colors">
+                    Active Recently
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="space-y-2.5">

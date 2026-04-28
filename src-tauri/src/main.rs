@@ -327,6 +327,18 @@ async fn get_library_filtered(
 
 // Get episodes for a TV show
 #[tauri::command]
+async fn get_nickname(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_setting("nickname").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_nickname(state: State<'_, AppState>, nickname: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.set_setting("nickname", nickname.trim()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_recently_added(
     state: State<'_, AppState>,
     limit: Option<i32>,
@@ -11834,6 +11846,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_nickname,
+            set_nickname,
             get_recently_added,
             get_library,
             get_library_filtered,
