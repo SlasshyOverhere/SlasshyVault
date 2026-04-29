@@ -4,6 +4,7 @@
 mod archive_manager;
 mod config;
 mod database;
+mod download_manager;
 mod gdrive;
 mod media_manager;
 mod mpv_ipc;
@@ -69,11 +70,11 @@ pub struct AppState {
     pub is_scanning: Arc<AtomicBool>,
     pub active_mpv_sessions: Mutex<HashMap<i64, ActiveMpvSession>>,
     pub active_zip_streams: Mutex<HashMap<i64, ActiveZipStream>>,
+    pub download_manager: download_manager::DownloadManager,
     pub gdrive_client: gdrive::GoogleDriveClient,
     pub social_auth_client: social_auth::SocialAuthClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
-    pub wt_proxy: Mutex<Option<zip_stream_proxy::ZipStreamProxyHandle>>,
 }
 
 // API Response types
@@ -4461,6 +4462,569 @@ fn infer_extension_for_media(media: &database::MediaItem) -> Option<String> {
         .filter(|ext| !ext.is_empty())
 }
 
+fn infer_download_filename(
+    media: &database::MediaItem,
+    metadata_name: Option<&str>,
+) -> String {
+    let fallback = format!("media-{}", media.id);
+    let base_name = metadata_name
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .or_else(|| {
+            media.zip_entry_path
+                .as_deref()
+                .and_then(|path| std::path::Path::new(path).file_name())
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+        })
+        .or_else(|| {
+            media.file_path
+                .as_deref()
+                .and_then(|path| std::path::Path::new(path).file_name())
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(|| {
+            let extension = infer_extension_for_media(media)
+                .map(|value| format!(".{}", value))
+                .unwrap_or_default();
+            format!("{}{}", media.title, extension)
+        });
+
+    download_manager::sanitize_download_filename(&base_name, &fallback)
+}
+
+#[tauri::command]
+async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<download_manager::DownloadJobSnapshot>, String> {
+    let mut jobs = state.download_manager.list_jobs();
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    for job in &mut jobs {
+        job.source_exists = db.get_media_by_id(job.media_id).is_ok();
+        job.target_exists = std::path::Path::new(&job.target_path).exists();
+    }
+    Ok(jobs)
+}
+
+#[tauri::command]
+async fn cancel_download_job(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    job_id: String,
+) -> Result<download_manager::DownloadJobSnapshot, String> {
+    let snapshot = state.download_manager.cancel_job(&job_id)?;
+    download_manager::emit_job_update(&app_handle, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+async fn delete_download_job(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<(), String> {
+    state.download_manager.delete_job(&job_id)
+}
+
+#[tauri::command]
+async fn clear_download_history(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    state.download_manager.clear_history();
+    // Refresh all jobs for the frontend
+    let jobs = state.download_manager.list_jobs();
+    let _ = app_handle.emit_all("download-queue-cleared", jobs);
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_download_job_target(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    job_id: String,
+) -> Result<(), String> {
+    let snapshot = state
+        .download_manager
+        .get_job(&job_id)
+        .ok_or_else(|| "Download job not found".to_string())?;
+    let path = std::path::PathBuf::from(&snapshot.target_path);
+    let target = if path.exists() {
+        path
+    } else {
+        path.parent()
+            .map(|value| value.to_path_buf())
+            .unwrap_or_else(download_manager::default_downloads_dir)
+    };
+    open::that_detached(&target).map_err(|error| error.to_string())?;
+    let _ = app_handle.emit_all("download-folder-opened", snapshot);
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_media_download(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    media_id: i64,
+) -> Result<download_manager::DownloadJobSnapshot, String> {
+    let media = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_media_by_id(media_id).map_err(|e| e.to_string())?
+    };
+
+    let downloads_dir = download_manager::default_downloads_dir();
+    std::fs::create_dir_all(&downloads_dir).map_err(|e| e.to_string())?;
+
+    if media.is_cloud.unwrap_or(false) {
+        if media.parent_zip_id.is_some() {
+            let archive_format = archive_manager::archive_format_for_media(&media);
+            let method = media.zip_compression_method.unwrap_or(-1);
+            let supports_direct_range = match archive_format {
+                archive_manager::ArchiveFormat::Zip => method == 0,
+                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => method == 0,
+            };
+
+            if supports_direct_range {
+                let stream_info = archive_manager::build_archive_stream_info(&media)?;
+                let metadata_name = media
+                    .zip_entry_path
+                    .as_deref()
+                    .and_then(|path| std::path::Path::new(path).file_name())
+                    .and_then(|value| value.to_str());
+                let file_name = infer_download_filename(&media, metadata_name);
+                let target_path = download_manager::unique_target_path(&downloads_dir, &file_name);
+                let total_bytes = stream_info
+                    .byte_end
+                    .saturating_sub(stream_info.byte_start)
+                    .saturating_add(1);
+
+                return Ok(download_manager::start_parallel_download(
+                    app_handle,
+                    state.download_manager.clone(),
+                    state.gdrive_client.clone(),
+                    download_manager::ParallelDownloadRequest {
+                        media_id,
+                        title: media.title.clone(),
+                        file_name,
+                        target_path,
+                        file_id: stream_info.zip_file_id,
+                        range_start: stream_info.byte_start,
+                        total_bytes,
+                        source_kind: "archive-range".to_string(),
+                        chunk_bytes: download_manager::default_parallel_chunk_bytes(),
+                        concurrency: download_manager::default_parallel_concurrency(),
+                    },
+                ));
+            }
+
+            if matches!(archive_format, archive_manager::ArchiveFormat::Zip) && method == 8 {
+                let file_name = infer_download_filename(&media, None);
+                let target_path = download_manager::unique_target_path(&downloads_dir, &file_name);
+                let estimated_total_bytes = media.zip_uncompressed_size.unwrap_or(0).max(0) as u64;
+                let (snapshot, cancel_flag) = state.download_manager.create_job(
+                    media_id,
+                    media.title.clone(),
+                    file_name.clone(),
+                    target_path.clone(),
+                    estimated_total_bytes,
+                    "archive-deflate-direct".to_string(),
+                );
+                download_manager::emit_job_update(&app_handle, &snapshot);
+
+                let gdrive_client = state.gdrive_client.clone();
+                let manager = state.download_manager.clone();
+                let media_for_extract = media.clone();
+                let job_id = snapshot.id.clone();
+                let title = media.title.clone();
+                let app_handle_clone = app_handle.clone();
+
+                println!(
+                    "[DOWNLOAD] queued direct ZIP deflate job {} for media {} ({})",
+                    job_id, media_id, title
+                );
+
+                tokio::spawn(async move {
+                    if let Some(updated) = manager.update_job(&job_id, |job| {
+                        job.status = "preparing".to_string();
+                    }) {
+                        download_manager::emit_job_update(&app_handle_clone, &updated);
+                    }
+
+                    if let Some(parent) = target_path.parent() {
+                        if let Err(error) = std::fs::create_dir_all(parent) {
+                            let error = format!("Failed to create download directory: {}", error);
+                            println!("[DOWNLOAD] ZIP deflate job {} failed: {}", job_id, error);
+                            if let Some(updated) = manager.update_job(&job_id, |job| {
+                                job.status = "failed".to_string();
+                                job.error = Some(error.clone());
+                            }) {
+                                download_manager::emit_job_update(&app_handle_clone, &updated);
+                            }
+                            return;
+                        }
+                    }
+
+                    let access_token = match gdrive_client.get_access_token().await {
+                        Ok(token) => token,
+                        Err(error) => {
+                            println!(
+                                "[DOWNLOAD] ZIP deflate job {} failed to get token: {}",
+                                job_id, error
+                            );
+                            if let Some(updated) = manager.update_job(&job_id, |job| {
+                                job.status = "failed".to_string();
+                                job.error = Some(error.clone());
+                            }) {
+                                download_manager::emit_job_update(&app_handle_clone, &updated);
+                            }
+                            return;
+                        }
+                    };
+
+                    let temp_path = target_path.with_extension(format!(
+                        "{}.part",
+                        target_path
+                            .extension()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("download")
+                    ));
+                    let manager_for_progress = manager.clone();
+                    let app_for_progress = app_handle_clone.clone();
+                    let job_id_for_progress = job_id.clone();
+                    let progress_step = 4 * 1024 * 1024_u64;
+
+                    println!(
+                        "[DOWNLOAD] ZIP deflate job {} extracting directly to {}",
+                        job_id,
+                        temp_path.to_string_lossy()
+                    );
+
+                    if let Some(updated) = manager.update_job(&job_id, |job| {
+                        job.status = "downloading".to_string();
+                    }) {
+                        download_manager::emit_job_update(&app_handle_clone, &updated);
+                    }
+
+                    let started_at = std::time::Instant::now();
+                    let media_for_worker = media_for_extract.clone();
+                    let temp_path_for_worker = temp_path.clone();
+                    let extract_result = tokio::task::spawn_blocking(move || {
+                        let mut last_emitted = 0u64;
+                        zip_manager::extract_zip_entry_to_path_with_progress(
+                            &access_token,
+                            &media_for_worker,
+                            &temp_path_for_worker,
+                            |written, total| {
+                                if written < total && written.saturating_sub(last_emitted) < progress_step {
+                                    return;
+                                }
+                                last_emitted = written;
+                                let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
+                                if let Some(updated) = manager_for_progress.update_job(&job_id_for_progress, |job| {
+                                    job.downloaded_bytes = written;
+                                    job.total_bytes = total;
+                                    job.progress = ((written as f64 / total.max(1) as f64) * 100.0)
+                                        .clamp(0.0, 100.0);
+                                    job.speed_bytes_per_second = Some(written as f64 / elapsed);
+                                }) {
+                                    download_manager::emit_job_update(&app_for_progress, &updated);
+                                }
+                            },
+                        )
+                    })
+                    .await;
+
+                    match extract_result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            let _ = std::fs::remove_file(&temp_path);
+                            let error = error.to_string();
+                            println!(
+                                "[DOWNLOAD] ZIP deflate job {} extraction failed: {}",
+                                job_id, error
+                            );
+                            if let Some(updated) = manager.update_job(&job_id, |job| {
+                                job.status = "failed".to_string();
+                                job.error = Some(error.clone());
+                            }) {
+                                download_manager::emit_job_update(&app_handle_clone, &updated);
+                            }
+                            return;
+                        }
+                        Err(error) => {
+                            let _ = std::fs::remove_file(&temp_path);
+                            let error = error.to_string();
+                            println!(
+                                "[DOWNLOAD] ZIP deflate job {} join failed: {}",
+                                job_id, error
+                            );
+                            if let Some(updated) = manager.update_job(&job_id, |job| {
+                                job.status = "failed".to_string();
+                                job.error = Some(error.clone());
+                            }) {
+                                download_manager::emit_job_update(&app_handle_clone, &updated);
+                            }
+                            return;
+                        }
+                    }
+
+                    if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = std::fs::remove_file(&temp_path);
+                        println!("[DOWNLOAD] ZIP deflate job {} cancelled", job_id);
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "cancelled".to_string();
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+
+                    if let Err(error) = std::fs::rename(&temp_path, &target_path) {
+                        let _ = std::fs::remove_file(&temp_path);
+                        let error = format!("Failed to finalize extracted download: {}", error);
+                        println!("[DOWNLOAD] ZIP deflate job {} finalize failed: {}", job_id, error);
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "failed".to_string();
+                            job.error = Some(error.clone());
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+
+                    if let Some(updated) = manager.update_job(&job_id, |job| {
+                        job.status = "completed".to_string();
+                        job.downloaded_bytes = job.total_bytes;
+                        job.progress = 100.0;
+                        job.target_exists = true;
+                        job.speed_bytes_per_second = None;
+                        job.error = None;
+                    }) {
+                        download_manager::emit_job_update(&app_handle_clone, &updated);
+                    }
+                });
+
+                return Ok(snapshot);
+            }
+
+            let file_name = infer_download_filename(&media, None);
+            let target_path = download_manager::unique_target_path(&downloads_dir, &file_name);
+            let estimated_total_bytes = media.zip_uncompressed_size.unwrap_or(0).max(0) as u64;
+            let (snapshot, cancel_flag) = state.download_manager.create_job(
+                media_id,
+                media.title.clone(),
+                file_name.clone(),
+                target_path.clone(),
+                estimated_total_bytes,
+                "archive-extract".to_string(),
+            );
+            download_manager::emit_job_update(&app_handle, &snapshot);
+
+            let cache_config = {
+                let config = state.config.lock().map_err(|e| e.to_string())?;
+                build_zip_cache_config(&config)
+            };
+            let gdrive_client = state.gdrive_client.clone();
+            let manager = state.download_manager.clone();
+            let media_for_extract = media.clone();
+            let job_id = snapshot.id.clone();
+            let title = media.title.clone();
+            let app_handle_clone = app_handle.clone();
+
+            println!(
+                "[DOWNLOAD] queued archive extract job {} for media {} ({})",
+                job_id, media_id, title
+            );
+
+            tokio::spawn(async move {
+                if let Some(updated) = manager.update_job(&job_id, |job| {
+                    job.status = "preparing".to_string();
+                }) {
+                    download_manager::emit_job_update(&app_handle_clone, &updated);
+                }
+
+                let access_token = match gdrive_client.get_access_token().await {
+                    Ok(token) => token,
+                    Err(error) => {
+                        println!(
+                            "[DOWNLOAD] archive extract job {} failed to get token: {}",
+                            job_id, error
+                        );
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "failed".to_string();
+                            job.error = Some(error.clone());
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+                };
+
+                println!(
+                    "[DOWNLOAD] extracting archive entry for job {} from media {}",
+                    job_id, media_id
+                );
+                let extracted_path = match tokio::task::spawn_blocking(move || {
+                    archive_manager::extract_archive_entry_to_cache(
+                        &access_token,
+                        &media_for_extract,
+                        &cache_config,
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(path)) => path,
+                    Ok(Err(error)) => {
+                        println!(
+                            "[DOWNLOAD] archive extract job {} extraction failed: {}",
+                            job_id, error
+                        );
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "failed".to_string();
+                            job.error = Some(error.clone());
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        println!(
+                            "[DOWNLOAD] archive extract job {} task join failed: {}",
+                            job_id, error
+                        );
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "failed".to_string();
+                            job.error = Some(error.clone());
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+                };
+
+                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[DOWNLOAD] archive extract job {} was cancelled after extract", job_id);
+                    if let Some(updated) = manager.update_job(&job_id, |job| {
+                        job.status = "cancelled".to_string();
+                    }) {
+                        download_manager::emit_job_update(&app_handle_clone, &updated);
+                    }
+                    return;
+                }
+
+                let source_path = std::path::PathBuf::from(&extracted_path);
+                let total_bytes = match std::fs::metadata(&source_path) {
+                    Ok(metadata) => metadata.len(),
+                    Err(error) => {
+                        let error = error.to_string();
+                        println!(
+                            "[DOWNLOAD] archive extract job {} missing extracted file: {}",
+                            job_id, error
+                        );
+                        if let Some(updated) = manager.update_job(&job_id, |job| {
+                            job.status = "failed".to_string();
+                            job.error = Some(error.clone());
+                        }) {
+                            download_manager::emit_job_update(&app_handle_clone, &updated);
+                        }
+                        return;
+                    }
+                };
+
+                if let Some(updated) = manager.update_job(&job_id, |job| {
+                    job.total_bytes = total_bytes;
+                    job.error = None;
+                }) {
+                    download_manager::emit_job_update(&app_handle_clone, &updated);
+                }
+
+                println!(
+                    "[DOWNLOAD] archive extract job {} handing off {} bytes to local copy",
+                    job_id, total_bytes
+                );
+                download_manager::run_local_copy_job(
+                    app_handle_clone,
+                    manager,
+                    job_id,
+                    cancel_flag,
+                    download_manager::LocalCopyRequest {
+                        media_id,
+                        title,
+                        file_name,
+                        target_path,
+                        source_path,
+                        total_bytes,
+                        source_kind: "archive-extract".to_string(),
+                    },
+                )
+                .await;
+            });
+
+            return Ok(snapshot);
+        }
+
+        let file_id = media
+            .cloud_file_id
+            .clone()
+            .ok_or_else(|| "Cloud file ID not found".to_string())?;
+        let metadata = state.gdrive_client.get_file_metadata(&file_id).await?;
+        let total_bytes = metadata
+            .size
+            .as_deref()
+            .and_then(|value| value.parse::<u64>().ok())
+            .or_else(|| media.file_size_bytes.and_then(|value| u64::try_from(value).ok()))
+            .ok_or_else(|| "Cloud file size not available for download".to_string())?;
+        if total_bytes == 0 {
+            return Err("Cloud file is empty and cannot be downloaded".to_string());
+        }
+        let file_name = infer_download_filename(&media, Some(&metadata.name));
+        let target_path = download_manager::unique_target_path(&downloads_dir, &file_name);
+        return Ok(download_manager::start_parallel_download(
+            app_handle,
+            state.download_manager.clone(),
+            state.gdrive_client.clone(),
+            download_manager::ParallelDownloadRequest {
+                media_id,
+                title: media.title.clone(),
+                file_name,
+                target_path,
+                file_id,
+                range_start: 0,
+                total_bytes,
+                source_kind: "cloud-drive".to_string(),
+                chunk_bytes: download_manager::default_parallel_chunk_bytes(),
+                concurrency: download_manager::default_parallel_concurrency(),
+            },
+        ));
+    }
+
+    let source_path = media
+        .file_path
+        .clone()
+        .ok_or_else(|| "Local file path not found".to_string())?;
+    let source_path = std::path::PathBuf::from(source_path);
+    if !source_path.exists() {
+        return Err("Local file does not exist".to_string());
+    }
+    let total_bytes = std::fs::metadata(&source_path)
+        .map_err(|e| e.to_string())?
+        .len();
+    let file_name = infer_download_filename(&media, None);
+    let target_path = download_manager::unique_target_path(&downloads_dir, &file_name);
+    Ok(download_manager::start_local_copy(
+        app_handle,
+        state.download_manager.clone(),
+        download_manager::LocalCopyRequest {
+            media_id,
+            title: media.title.clone(),
+            file_name,
+            target_path,
+            source_path,
+            total_bytes,
+            source_kind: "local-copy".to_string(),
+        },
+    ))
+}
+
 #[tauri::command]
 async fn get_media_technical_details(
     state: State<'_, AppState>,
@@ -5177,49 +5741,16 @@ async fn play_with_mpv(
                     "[MPV] Cloud file detected, getting stream URL for file ID: {}",
                     cloud_file_id
                 );
-                let cached_file_size =
-                    media.file_size_bytes.and_then(|value| u64::try_from(value).ok());
-                let content_name = media
-                    .file_path
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(media.title.as_str());
-                let metadata = if cached_file_size.is_some() {
-                    None
-                } else {
-                    Some(state.gdrive_client.get_file_metadata(cloud_file_id).await?)
-                };
-                let file_size = cached_file_size
-                    .or_else(|| {
-                        metadata
-                            .as_ref()
-                            .and_then(|value| value.size.as_deref())
-                            .and_then(|value| value.parse::<u64>().ok())
-                    })
-                    .ok_or_else(|| "Cloud file size not available for MPV proxy".to_string())?;
-                if file_size == 0 {
-                    return Err("Cloud file is empty and cannot be streamed".to_string());
-                }
-                let drive_url = state.gdrive_client.build_stream_url(cloud_file_id);
-                let proxy =
-                    zip_stream_proxy::start_proxy(zip_stream_proxy::build_file_proxy_spec(
-                        drive_url,
-                        state.gdrive_client.clone(),
-                        file_size,
-                        metadata
-                            .as_ref()
-                            .map(|value| value.mime_type.clone())
-                            .unwrap_or_else(|| zip_manager::content_type_for_name(content_name)),
-                    ))?;
-                let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
+                let (stream_url, access_token) =
+                    state.gdrive_client.get_stream_url(cloud_file_id).await?;
                 println!(
-                    "[MPV] Using authenticated localhost proxy for cloud playback (size={} bytes, inferred_name='{}')",
-                    file_size, content_name
+                    "[MPV] Using direct Google Drive stream for cloud playback, token length: {}",
+                    access_token.len()
                 );
                 (
                     stream_url,
+                    Some(format!("Authorization: Bearer {}", access_token)),
                     None,
-                    Some(proxy),
                     true,
                 )
             } else {
@@ -11233,14 +11764,7 @@ async fn wt_launch_mpv(
     start_position: f64,
 ) -> Result<u32, String> {
     // Get media info and config
-    let (
-        file_path,
-        mpv_path,
-        is_cloud,
-        cloud_file_id,
-        file_size_bytes,
-        display_title,
-    ) = {
+    let (file_path, mpv_path, is_cloud, cloud_file_id, display_title) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
         let config = state.config.lock().map_err(|e| e.to_string())?;
@@ -11251,53 +11775,35 @@ async fn wt_launch_mpv(
             mpv,
             media.is_cloud.unwrap_or(false),
             media.cloud_file_id,
-            media.file_size_bytes,
             display_title,
         )
     };
 
-    let (file_or_url, wt_proxy) = if is_cloud {
+    let file_or_url = if is_cloud {
         if let Some(file_id) = cloud_file_id {
-            let metadata = state
+            let (url, _token) = state
                 .gdrive_client
-                .get_file_metadata(&file_id)
+                .get_stream_url(&file_id)
                 .await
-                .map_err(|e| format!("Failed to get cloud streaming metadata: {}", e))?;
-            let file_size = metadata
-                .size
-                .as_deref()
-                .and_then(|value| value.parse::<u64>().ok())
-                .or_else(|| file_size_bytes.and_then(|value| u64::try_from(value).ok()))
-                .ok_or_else(|| {
-                    "Cloud file size not available for Watch Together MPV proxy".to_string()
-                })?;
-            if file_size == 0 {
-                return Err("Cloud file is empty and cannot be streamed".to_string());
-            }
-
-            let drive_url = state.gdrive_client.build_stream_url(&file_id);
-            let proxy =
-                zip_stream_proxy::start_proxy(zip_stream_proxy::build_file_proxy_spec(
-                    drive_url,
-                    state.gdrive_client.clone(),
-                    file_size,
-                    metadata.mime_type.clone(),
-                ))?;
-            (zip_stream_proxy::localhost_stream_url(proxy.port), Some(proxy))
+                .map_err(|e| format!("Failed to get cloud streaming URL: {}", e))?;
+            url
         } else {
             return Err("Cloud file has no file ID".to_string());
         }
     } else {
-        (file_path.ok_or("No file path for local media")?, None)
+        file_path.ok_or("No file path for local media")?
     };
 
-    {
-        let mut existing_proxy = state.wt_proxy.lock().map_err(|e| e.to_string())?;
-        if let Some(mut proxy) = existing_proxy.take() {
-            proxy.stop();
-        }
-        *existing_proxy = wt_proxy;
-    }
+    let auth_header: Option<String> = if is_cloud {
+        state
+            .gdrive_client
+            .get_access_token()
+            .await
+            .ok()
+            .map(|t| format!("Authorization: Bearer {}", t))
+    } else {
+        None
+    };
 
     // Determine if host
     let is_host = {
@@ -11314,7 +11820,7 @@ async fn wt_launch_mpv(
         Some(&display_title),
         &session_id,
         start_position,
-        None,
+        auth_header.as_deref(),
         is_host,
     )?;
 
@@ -11374,13 +11880,6 @@ async fn wt_launch_mpv(
                             // Clear the controller
                             let mut ctrl = wt_ctrl.lock().await;
                             *ctrl = None;
-                            let app_handle = window_clone.app_handle();
-                            let state: tauri::State<'_, AppState> = app_handle.state();
-                            if let Ok(mut proxy_slot) = state.wt_proxy.lock() {
-                                if let Some(mut proxy) = proxy_slot.take() {
-                                    proxy.stop();
-                                }
-                            }
                             break;
                         }
                         watch_together_mpv::MpvSyncEvent::PositionUpdate { .. } => {
@@ -11653,13 +12152,13 @@ fn main() {
         is_scanning: Arc::new(AtomicBool::new(false)),
         active_mpv_sessions: Mutex::new(HashMap::new()),
         active_zip_streams: Mutex::new(HashMap::new()),
+        download_manager: download_manager::DownloadManager::default(),
         gdrive_client: gdrive::GoogleDriveClient::new(),
         social_auth_client: social_auth::SocialAuthClient::new(),
         watch_together: Arc::new(tokio::sync::Mutex::new(
             watch_together::WatchTogetherManager::new(),
         )),
         wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
-        wt_proxy: Mutex::new(None),
     };
 
     // Create system tray menu
@@ -12021,6 +12520,12 @@ fn main() {
             get_cloud_cache_info,
             cleanup_cloud_cache,
             clear_cloud_cache,
+            get_download_jobs,
+            start_media_download,
+            cancel_download_job,
+            delete_download_job,
+            clear_download_history,
+            open_download_job_target,
             // Auto-update commands
             check_for_updates,
             download_update,

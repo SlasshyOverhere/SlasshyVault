@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw } from "lucide-react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
   searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
@@ -22,6 +22,8 @@ interface ContentDetailsModalProps {
   onOpenChange: (open: boolean) => void
   onPrimaryAction: (item: MediaItem) => void | Promise<void>
   onSecondaryAction?: (item: MediaItem) => void | Promise<void>
+  onDownloadAction?: (item: MediaItem) => void | Promise<void>
+  downloadActionLabel?: string
   secondaryActionLabel?: string
   onEpisodeSecondaryAction?: (item: MediaItem) => void | Promise<void>
   episodeSecondaryActionLabel?: string
@@ -247,6 +249,8 @@ export function ContentDetailsModal({
   onOpenChange,
   onPrimaryAction,
   onSecondaryAction,
+  onDownloadAction,
+  downloadActionLabel,
   secondaryActionLabel,
   onEpisodeSecondaryAction,
   episodeSecondaryActionLabel,
@@ -1167,6 +1171,15 @@ export function ContentDetailsModal({
                         <Check className="w-5 h-5 mr-3" /> {secondaryActionLabel}
                       </Button>
                     )}
+                    {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
+                      <Button
+                        onClick={() => onDownloadAction(displayItem)}
+                        variant="outline"
+                        className="h-16 px-8 rounded-2xl text-base font-bold border-cyan-300/20 text-cyan-100 bg-cyan-400/10 hover:bg-cyan-400/16 hover:text-white"
+                      >
+                        <Download className="w-5 h-5 mr-3" /> {downloadActionLabel}
+                      </Button>
+                    )}
                     <Button 
                       onClick={() => onPrimaryAction(displayItem)} 
                       className="h-16 px-12 rounded-2xl text-lg font-bold shadow-glow hover:scale-105 active:scale-95 transition-all duration-300 bg-white text-black hover:bg-white/90"
@@ -1314,6 +1327,18 @@ export function ContentDetailsModal({
                                       >
                                         <Check className="w-3.5 h-3.5" />
                                         {episodeSecondaryActionLabel}
+                                      </button>
+                                    ) : null}
+                                    {onDownloadAction && ep.is_cloud ? (
+                                      <button
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          void onDownloadAction(ep)
+                                        }}
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-100 transition-colors hover:bg-amber-400/16 hover:border-amber-300/35"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                        Download
                                       </button>
                                     ) : null}
                                     {rating && rating > 0 && (

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard
+  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard, Download
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -26,6 +26,7 @@ interface SidebarProps {
   betaEnabled?: boolean
   unstableEnabled?: boolean
   aiChatPaused?: boolean
+  downloadJobCount?: number
 }
 
 export function Sidebar({
@@ -41,6 +42,7 @@ export function Sidebar({
   betaEnabled = false,
   unstableEnabled = false,
   aiChatPaused = false,
+  downloadJobCount = 0,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [isHovered, setIsHovered] = useState(false);
@@ -103,6 +105,7 @@ export function Sidebar({
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
+    { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
@@ -187,6 +190,11 @@ export function Sidebar({
                         isActive ? "text-emerald-300" : "text-emerald-400/80 group-hover:text-emerald-300"
                       )} />
                     )}
+                    {isCollapsed && item.badge && (
+                      <div className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full border border-amber-400/50 bg-[#FFD700] px-1 text-[8px] font-black text-black shadow-[0_0_10px_rgba(255,215,0,0.4)]">
+                        {item.badge}
+                      </div>
+                    )}
                   </div>
 
                   {!isCollapsed && (
@@ -205,6 +213,15 @@ export function Sidebar({
                             : "border-amber-400/45 bg-amber-400/15 text-amber-300"
                         )}>
                           Paused
+                        </span>
+                      ) : item.badge ? (
+                        <span className={cn(
+                          "ml-auto min-w-6 rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.08em] text-center border transition-all duration-300 shadow-[0_0_15px_rgba(255,215,0,0.15)]",
+                          isActive
+                            ? "border-amber-300/60 bg-[#FFD700] text-black"
+                            : "border-amber-500/40 bg-amber-500/10 text-amber-400 group-hover:bg-amber-500/20"
+                        )}>
+                          {item.badge}
                         </span>
                       ) : item.isNew && (
                         <span className={cn(
@@ -226,6 +243,8 @@ export function Sidebar({
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
                       {item.paused ? (
                         <span className="text-xs font-bold text-amber-300 tracking-wider">{" • PAUSED"}</span>
+                      ) : item.badge ? (
+                        <span className="text-xs font-bold text-amber-400 tracking-wider">{` • ${item.badge}`}</span>
                       ) : item.isNew && (
                         <span className="text-xs font-bold text-amber-300 tracking-wider">{" • NEW"}</span>
                       )}

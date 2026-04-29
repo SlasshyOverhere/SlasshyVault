@@ -16,3 +16,4 @@ export * from './ContentDetailsModal'
 export * from './ZipPlaybackLoadingOverlay'
 export * from './NotificationCenter'
 export * from './Reminders';
+export * from './DownloadsView';

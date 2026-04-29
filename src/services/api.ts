@@ -157,6 +157,25 @@ export interface LibraryStats {
   episodes: number;
 }
 
+export interface DownloadJob {
+  id: string;
+  mediaId: number;
+  title: string;
+  fileName: string;
+  targetPath: string;
+  status: "queued" | "preparing" | "downloading" | "completed" | "failed" | "cancelled" | string;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speedBytesPerSecond?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  error?: string | null;
+  sourceKind: string;
+  sourceExists: boolean;
+  targetExists: boolean;
+}
+
 // TMDB search result
 export interface TmdbSearchResult {
   id: number;
@@ -735,6 +754,35 @@ export const searchTmdb = async (
     console.error("Failed to search TMDB:", error);
     throw error;
   }
+};
+
+export const getDownloadJobs = async (): Promise<DownloadJob[]> => {
+  try {
+    return await invoke<DownloadJob[]>("get_download_jobs");
+  } catch (error) {
+    console.error("Failed to get download jobs:", error);
+    return [];
+  }
+};
+
+export const startMediaDownload = async (mediaId: number): Promise<DownloadJob> => {
+  return await invoke<DownloadJob>("start_media_download", { mediaId });
+};
+
+export const cancelDownloadJob = async (jobId: string): Promise<DownloadJob> => {
+  return await invoke<DownloadJob>("cancel_download_job", { jobId });
+};
+
+export const deleteDownloadJob = async (jobId: string): Promise<void> => {
+  await invoke("delete_download_job", { jobId });
+};
+
+export const clearDownloadHistory = async (): Promise<void> => {
+  await invoke("clear_download_history");
+};
+
+export const openDownloadJobTarget = async (jobId: string): Promise<void> => {
+  await invoke("open_download_job_target", { jobId });
 };
 
 export const getTmdbTrending = async (): Promise<TmdbTrendingResponse> => {

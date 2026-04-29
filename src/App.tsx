@@ -17,6 +17,7 @@ import {
   ZipPlaybackLoadingOverlay,
   NotificationCenter,
   RemindersView,
+  DownloadsView,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -60,6 +61,13 @@ import {
   mergeCachedSeriesSubtitleTracks,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
+  DownloadJob,
+  getDownloadJobs,
+  startMediaDownload,
+  cancelDownloadJob,
+  deleteDownloadJob,
+  clearDownloadHistory,
+  openDownloadJobTarget,
 } from '@/services/api'
 import {
   Search, Loader2, Play, Film, Tv, Clock,
@@ -212,6 +220,7 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
+  const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([])
   const [historyEvents, setHistoryEvents] = useState<WatchHistoryEvent[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
@@ -395,6 +404,33 @@ function App() {
   const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, nickname, nicknameLoaded, updateNickname } = useAuth()
   const [showNicknameModal, setShowNicknameModal] = useState(false)
   const [tempNickname, setTempNickname] = useState('')
+
+  const mergeDownloadJob = useCallback((job: DownloadJob) => {
+    setDownloadJobs((current) => {
+      const existingIndex = current.findIndex((entry) => entry.id === job.id)
+      if (existingIndex === -1) {
+        return [job, ...current].sort((left, right) =>
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        )
+      }
+
+      const next = [...current]
+      next[existingIndex] = job
+      next.sort((left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      )
+      return next
+    })
+  }, [])
+
+  const loadDownloadQueue = useCallback(async () => {
+    try {
+      const jobs = await getDownloadJobs()
+      setDownloadJobs(jobs)
+    } catch (error) {
+      console.error('[Downloads] Failed to load jobs:', error)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isAuthenticated || !nicknameLoaded) return
@@ -659,6 +695,31 @@ function App() {
       checkGDriveStatus()
     }
   }, [view])
+
+  useEffect(() => {
+    void loadDownloadQueue()
+  }, [loadDownloadQueue])
+
+  useEffect(() => {
+    let unlistenDownloadUpdates: UnlistenFn | undefined
+    let unlistenDownloadCleared: UnlistenFn | undefined
+
+    const setupDownloadListener = async () => {
+      unlistenDownloadUpdates = await listen<DownloadJob>('download-job-updated', (event) => {
+        mergeDownloadJob(event.payload)
+      })
+
+      unlistenDownloadCleared = await listen<DownloadJob[]>('download-queue-cleared', (event) => {
+        setDownloadJobs(event.payload)
+      })
+    }
+
+    void setupDownloadListener()
+    return () => {
+      unlistenDownloadUpdates?.()
+      unlistenDownloadCleared?.()
+    }
+  }, [mergeDownloadJob])
 
   // Handler for tab visibility changes from settings
   const handleTabVisibilityChange = (visibility: TabVisibility) => {
@@ -1055,6 +1116,7 @@ function App() {
         console.log(`[WATCHER] Library updated: ${type} - ${title}`)
 
         setIsCloudIndexing(false)
+        await loadDownloadQueue()
 
         if (view === 'cloud') {
           await fetchData()
@@ -1112,10 +1174,10 @@ function App() {
       unlistenReminderFired?.()
       unlistenWatchlistReminderFired?.()
     }
-  }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, runWatchHistorySync, pushNotification, toast])
+  }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, loadDownloadQueue, runWatchHistorySync, pushNotification, toast])
 
   useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai' && view !== 'reminders') {
+    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai' && view !== 'reminders' && view !== 'downloads') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
@@ -1128,6 +1190,11 @@ function App() {
       return () => window.clearTimeout(timer)
     }
   }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents])
+
+  useEffect(() => {
+    if (view !== 'downloads') return
+    void loadDownloadQueue()
+  }, [view, loadDownloadQueue])
 
   useEffect(() => {
     if (view !== 'cloud') return
@@ -1386,6 +1453,92 @@ function App() {
       description: `Fetching insights for "${item.title}"...`,
     })
   }, [unstableEnabled, handleAiChatPaused, toast])
+
+  const handleStartDownload = useCallback(async (item: MediaItem) => {
+    if (!item.is_cloud) {
+      toast({
+        title: 'Download unavailable',
+        description: 'Direct downloads are available for StreamVault cloud items.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (item.media_type === 'tvshow') {
+      setContentDetailsItem(item)
+      setContentDetailsOpen(true)
+      return
+    }
+
+    try {
+      const job = await startMediaDownload(item.id)
+      mergeDownloadJob(job)
+      toast({
+        title: 'Download queued',
+        description: `${item.title} was added to the Downloads tab.`,
+      })
+    } catch (error) {
+      toast({
+        title: 'Download failed',
+        description: String(error) || 'Unable to start download.',
+        variant: 'destructive',
+      })
+    }
+  }, [mergeDownloadJob, toast])
+
+  const handleCancelDownload = useCallback(async (job: DownloadJob) => {
+    try {
+      const updated = await cancelDownloadJob(job.id)
+      mergeDownloadJob(updated)
+      toast({
+        title: 'Download cancelled',
+        description: `${job.title} has been stopped.`,
+      })
+    } catch (error) {
+      toast({
+        title: 'Cancel failed',
+        description: String(error) || 'Unable to cancel this download.',
+        variant: 'destructive',
+      })
+    }
+  }, [mergeDownloadJob, toast])
+
+  const handleOpenDownload = useCallback(async (job: DownloadJob) => {
+    try {
+      await openDownloadJobTarget(job.id)
+    } catch (error) {
+      toast({
+        title: 'Open failed',
+        description: String(error) || 'Unable to open the downloaded file.',
+        variant: 'destructive',
+      })
+    }
+  }, [toast])
+
+  const handleClearDownloadHistory = useCallback(async () => {
+    try {
+      await clearDownloadHistory()
+    } catch (error) {
+      toast({
+        title: 'Clear failed',
+        description: String(error) || 'Unable to clear download history.',
+        variant: 'destructive',
+      })
+    }
+  }, [toast])
+
+  const handleDeleteDownload = useCallback(async (jobId: string) => {
+    try {
+      await deleteDownloadJob(jobId)
+      setDownloadJobs(prev => prev.filter(j => j.id !== jobId))
+    } catch (error) {
+      toast({
+        title: 'Delete failed',
+        description: String(error) || 'Unable to delete download job.',
+        variant: 'destructive',
+      })
+    }
+  }, [toast])
 
   useEffect(() => {
     if (view === 'ai' && (!unstableEnabled || AI_CHAT_PAUSED)) {
@@ -1891,6 +2044,7 @@ function App() {
             betaEnabled={betaEnabled}
             unstableEnabled={unstableEnabled}
             aiChatPaused={AI_CHAT_PAUSED}
+            downloadJobCount={downloadJobs.filter((job) => job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled').length}
             onAiChatClick={handleAiChatPaused}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
@@ -2075,6 +2229,7 @@ function App() {
                           setSelectedShow(null)
                         }}
                         onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                        onDownload={handleStartDownload}
                       />
                     </Suspense>
                   </motion.div>
@@ -2219,6 +2374,7 @@ function App() {
                                         index={index}
                                         onClick={handleItemClick}
                                         onFixMatch={handleFixMatch}
+                                        onDownload={handleStartDownload}
                                         onDelete={handleDelete}
                                         onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                                       />
@@ -2299,6 +2455,7 @@ function App() {
                                             index={index}
                                             onClick={handleItemClick}
                                             onFixMatch={handleFixMatch}
+                                            onDownload={handleStartDownload}
                                             onDelete={handleDelete}
                                             onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                                             showNewBadge={false}
@@ -2631,6 +2788,23 @@ function App() {
                       </motion.div>
                     )}
 
+                    {view === 'downloads' && (
+                      <motion.div
+                        key="downloads"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <DownloadsView
+                          jobs={downloadJobs}
+                          onCancel={handleCancelDownload}
+                          onOpen={handleOpenDownload}
+                          onClearHistory={handleClearDownloadHistory}
+                          onDeleteJob={handleDeleteDownload}
+                        />
+                      </motion.div>
+                    )}
+
                     {/* Cloud Media Grid */}
                     {view === 'cloud' && (
                       <motion.div
@@ -2650,7 +2824,8 @@ function App() {
                               disableEntryAnimation={disableCloudEntryAnimation}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
-                          onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
+                              onDownload={handleStartDownload}
+                              onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
                               onDelete={handleDelete}
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
@@ -2860,6 +3035,8 @@ function App() {
             onOpenChange={handleContentDetailsOpenChange}
             item={contentDetailsItem}
             onPrimaryAction={handleDetailsPrimaryAction}
+            onDownloadAction={handleStartDownload}
+            downloadActionLabel="Download"
             onEpisodeSecondaryAction={handleDetailsMarkWatched}
             episodeSecondaryActionLabel="Mark as watched"
             onMetadataRefresh={handleContentDetailsMetadataRefresh}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Cloud } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Cloud, Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
@@ -20,6 +20,7 @@ export interface MovieCardProps {
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
   onAskAI?: (item: MediaItem) => void
+  onDownload?: (item: MediaItem) => void
   showNewBadge?: boolean
   disableEntryAnimation?: boolean
   aspectRatio?: "portrait" | "square"
@@ -48,6 +49,7 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     prev.onDelete !== next.onDelete ||
     prev.onWatchTogether !== next.onWatchTogether ||
     prev.onAskAI !== next.onAskAI ||
+    prev.onDownload !== next.onDownload ||
     prev.showNewBadge !== next.showNewBadge ||
     prev.disableEntryAnimation !== next.disableEntryAnimation
   ) {
@@ -92,6 +94,7 @@ function MovieCardBase({
   onDelete,
   onWatchTogether,
   onAskAI,
+  onDownload,
   showNewBadge = false,
   disableEntryAnimation = false,
   aspectRatio = "portrait",
@@ -292,6 +295,18 @@ function MovieCardBase({
                   <Bot className="w-4 h-4 text-amber-300" />
                 </div>
                 <span>Ask AI (New)</span>
+              </ContextMenuItem>
+            )}
+
+            {onDownload && item.is_cloud && (
+              <ContextMenuItem
+                onClick={() => onDownload(item)}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-200 text-amber-200 transition-colors"
+              >
+                <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-amber-300/30 flex items-center justify-center">
+                  <Download className="w-4 h-4 text-amber-200" />
+                </div>
+                <span>Download</span>
               </ContextMenuItem>
             )}
 
@@ -507,6 +522,28 @@ function MovieCardBase({
                     transform: isHovered ? 'scale(1)' : 'scale(0.9)',
                   } : undefined}
                 >
+                  {onDownload && item.is_cloud && (
+                    <button
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDownload(item);
+                      }}
+                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-amber-300/40 text-amber-200 hover:text-white hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
+                      title="Download this title"
+                      aria-label={`Download ${item.title}`}
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  )}
                   {onAskAI && item.is_cloud && (
                     <button
                       onPointerDown={(e) => {
@@ -635,6 +672,18 @@ function MovieCardBase({
               <Bot className="w-4 h-4 text-amber-300" />
             </div>
             <span>Ask AI (New)</span>
+          </ContextMenuItem>
+        )}
+
+        {onDownload && item.is_cloud && (
+          <ContextMenuItem
+            onClick={() => onDownload(item)}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-200 text-amber-200 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-amber-300/30 flex items-center justify-center">
+              <Download className="w-4 h-4 text-amber-200" />
+            </div>
+            <span>Download</span>
           </ContextMenuItem>
         )}
 
@@ -814,70 +863,67 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
         {/* Content */}
         <div className="relative flex-1 p-5 flex flex-col justify-between z-10 min-w-0">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              {item.media_type === 'tvshow' && (
-                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wide">
-                  TV Series
-                </span>
-              )}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                {item.media_type === 'tvshow' && (
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10">
+                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Series</span>
+                  </div>
+                )}
+                {item.is_cloud && (
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10 group-hover:bg-white/10 transition-colors">
+                    <Cloud className="w-2.5 h-2.5 text-white/40" />
+                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Cloud</span>
+                  </div>
+                )}
+              </div>
+
             </div>
 
-            <h4 className="font-bold text-[15px] text-white leading-snug line-clamp-1 mb-1 group-hover:text-white transition-colors">
+            <h4 className="font-bold text-[16px] text-white leading-tight line-clamp-1 mb-1 group-hover:text-amber-200 transition-colors">
               {item.title}
             </h4>
+            
             {item.season_number && item.episode_number && (
-              <p className="text-xs text-muted-foreground/70 font-medium">
-                Season {item.season_number} · Episode {item.episode_number}
+              <p className="text-[11px] text-white/50 font-medium tracking-wide uppercase flex items-center gap-2">
+                <span>Season {item.season_number}</span>
+                <span className="w-1 h-1 rounded-full bg-white/10" />
+                <span>Episode {item.episode_number}</span>
               </p>
             )}
 
-            {/* Added informative content in the gap */}
-            <div className="mt-2.5 flex flex-col gap-1.5">
-              {item.episode_title && (
-                <p className="text-[11px] text-white/50 font-bold line-clamp-1 group-hover:text-white/80 transition-colors tracking-tight">
-                  {item.episode_title}
-                </p>
-              )}
-              
-              <div className="flex items-center gap-2">
-                {item.is_cloud && (
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/5 border border-white/10 group-hover:bg-white/10 transition-colors">
-                    <Cloud className="w-2.5 h-2.5 text-white/40 group-hover:text-white/60" />
-                    <span className="text-[8px] font-black text-white/30 group-hover:text-white/50 uppercase tracking-widest">Cloud</span>
-                  </div>
-                )}
-                {item.last_watched && (
-                  <span className="text-[9px] font-bold text-white/20 uppercase tracking-[0.15em] group-hover:text-white/40 transition-colors">
-                    Active Recently
-                  </span>
-                )}
-              </div>
-            </div>
+            {item.episode_title && (
+              <p className="text-[11px] text-white/30 font-medium line-clamp-1 italic mt-1.5">
+                "{item.episode_title}"
+              </p>
+            )}
           </div>
 
           <div className="space-y-2.5">
-            {/* Progress bar */}
-            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-              <motion.div
-                className="h-full bg-white relative"
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 0.8, delay: 0.3 }}
-              >
-                {/* Shimmer effect */}
-                <div className="absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-white/40 to-transparent" />
-              </motion.div>
+            <div className="flex items-end justify-between text-[11px]">
+              <div className="flex items-center gap-1.5">
+                <span className="text-white font-bold">{Math.round(progress)}%</span>
+                <span className="text-white/20 uppercase text-[9px] tracking-widest font-medium">completed</span>
+              </div>
+              {remainingMinutes && (
+                <div className="flex items-center gap-1 text-amber-500/60 font-medium">
+                  <Clock className="w-3 h-3" />
+                  <span>{remainingMinutes}m left</span>
+                </div>
+              )}
             </div>
 
-            {/* Time info */}
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-white/80 font-semibold">{Math.round(progress)}% complete</span>
-              {remainingMinutes && (
-                <span className="text-muted-foreground/70 flex items-center gap-1.5 font-medium">
-                  <Clock className="w-3 h-3" />
-                  {remainingMinutes}m left
-                </span>
-              )}
+            {/* Sleek Progress Bar */}
+            <div className="h-1.5 rounded-full bg-white/5 border border-white/5 overflow-hidden">
+              <motion.div
+                className="h-full bg-gradient-to-r from-amber-600 to-amber-500 relative"
+                initial={{ width: 0 }}
+                animate={{ width: `${progress}%` }}
+                transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+              >
+                {/* Subtle Moving Shimmer */}
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
+              </motion.div>
             </div>
           </div>
         </div>

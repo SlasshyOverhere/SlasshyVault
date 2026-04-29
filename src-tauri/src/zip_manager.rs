@@ -352,6 +352,55 @@ pub fn extract_zip_entry_to_cache(
     Ok(cache_path.to_string_lossy().to_string())
 }
 
+pub fn extract_zip_entry_to_path_with_progress<F>(
+    access_token: &str,
+    media: &database::MediaItem,
+    output_path: &Path,
+    mut on_progress: F,
+) -> Result<(), ZipError>
+where
+    F: FnMut(u64, u64),
+{
+    let zip_file_id = media.parent_zip_id.clone().ok_or(ZipError::NotAValidZip)?;
+    let compression_method = zip_entry_compression_method(media)?;
+    let data_start_offset = media
+        .zip_data_start_offset
+        .ok_or(ZipError::CorruptedArchive)? as u64;
+    let compressed_size = media
+        .zip_compressed_size
+        .ok_or(ZipError::CorruptedArchive)? as u64;
+    let uncompressed_size = media
+        .zip_uncompressed_size
+        .ok_or(ZipError::CorruptedArchive)? as u64;
+    let expected_crc = parse_crc32(media.zip_crc32.as_deref())?;
+
+    if compressed_size == 0 || uncompressed_size == 0 || uncompressed_size > MAX_ENTRY_SIZE_BYTES {
+        return Err(ZipError::CorruptedArchive);
+    }
+
+    let client = build_client()?;
+    let range_end = data_start_offset
+        .checked_add(compressed_size)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or(ZipError::CorruptedArchive)?;
+    let response = fetch_response_range(
+        &client,
+        access_token,
+        &zip_file_id,
+        data_start_offset,
+        range_end,
+    )?;
+
+    extract_response_to_file_with_progress(
+        response,
+        compression_method,
+        output_path,
+        uncompressed_size,
+        expected_crc,
+        &mut on_progress,
+    )
+}
+
 pub fn cleanup_stale_zip_cache(cache_config: &ZipCacheConfig) -> Result<(), ZipError> {
     enforce_cache_policy(cache_config, 0)
 }
@@ -812,12 +861,39 @@ fn extract_response_to_file(
     expected_size: u64,
     expected_crc32: u32,
 ) -> Result<(), ZipError> {
+    extract_response_to_file_with_progress(
+        response,
+        compression_method,
+        output_path,
+        expected_size,
+        expected_crc32,
+        &mut |_, _| {},
+    )
+}
+
+fn extract_response_to_file_with_progress<F>(
+    response: reqwest::blocking::Response,
+    compression_method: u16,
+    output_path: &Path,
+    expected_size: u64,
+    expected_crc32: u32,
+    on_progress: &mut F,
+) -> Result<(), ZipError>
+where
+    F: FnMut(u64, u64),
+{
     let mut writer =
         BufWriter::new(File::create(output_path).map_err(|_| ZipError::CorruptedArchive)?);
     let mut crc = Crc32Hasher::new();
     let bytes_written = match compression_method {
-        0 => copy_and_hash(response, &mut writer, &mut crc)?,
-        8 => copy_and_hash(DeflateDecoder::new(response), &mut writer, &mut crc)?,
+        0 => copy_and_hash_with_progress(response, &mut writer, &mut crc, expected_size, on_progress)?,
+        8 => copy_and_hash_with_progress(
+            DeflateDecoder::new(response),
+            &mut writer,
+            &mut crc,
+            expected_size,
+            on_progress,
+        )?,
         method => return Err(ZipError::UnsupportedCompressionMethod(method)),
     };
 
@@ -831,9 +907,19 @@ fn extract_response_to_file(
 }
 
 fn copy_and_hash<R: Read, W: Write>(
+    reader: R,
+    writer: &mut W,
+    crc: &mut Crc32Hasher,
+) -> Result<u64, ZipError> {
+    copy_and_hash_with_progress(reader, writer, crc, 0, &mut |_, _| {})
+}
+
+fn copy_and_hash_with_progress<R: Read, W: Write, F: FnMut(u64, u64)>(
     mut reader: R,
     writer: &mut W,
     crc: &mut Crc32Hasher,
+    expected_size: u64,
+    on_progress: &mut F,
 ) -> Result<u64, ZipError> {
     let mut buffer = [0u8; 64 * 1024];
     let mut total = 0u64;
@@ -853,6 +939,7 @@ fn copy_and_hash<R: Read, W: Write>(
         total = total
             .checked_add(read as u64)
             .ok_or(ZipError::CorruptedArchive)?;
+        on_progress(total, expected_size);
     }
 
     Ok(total)

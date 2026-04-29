@@ -32,6 +32,7 @@ interface EpisodeBrowserProps {
     show: MediaItem
     onBack: () => void
     onWatchTogether?: (episode: MediaItem) => void
+    onDownload?: (episode: MediaItem) => void | Promise<void>
 }
 
 // Component to handle episode thumbnail loading from local cache or TMDB
@@ -417,7 +418,7 @@ const areEpisodeItemPropsEqual = (prevProps: EpisodeItemProps, nextProps: Episod
 
 const EpisodeItem = memo(EpisodeItemBase, areEpisodeItemPropsEqual);
 
-export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowserProps) {
+export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: EpisodeBrowserProps) {
     const [episodes, setEpisodes] = useState<MediaItem[]>([])
     const [loading, setLoading] = useState(true)
     const [posterUrl, setPosterUrl] = useState<string | null>(null)
@@ -943,6 +944,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether }: EpisodeBrowser
                 onOpenChange={setContentDetailsOpen}
                 item={contentDetailsItem}
                 onPrimaryAction={handleDetailsPrimaryAction}
+                onDownloadAction={onDownload}
+                downloadActionLabel="Download"
                 onSecondaryAction={handleMarkWatched}
                 secondaryActionLabel="Mark as watched"
             />
