@@ -289,9 +289,9 @@ function MovieCardBase({
             {onAskAI && item.is_cloud && (
               <ContextMenuItem
                 onClick={() => onAskAI(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-300 text-amber-300 transition-colors"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
               >
-                <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/35 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
                   <Bot className="w-4 h-4 text-amber-300" />
                 </div>
                 <span>Ask AI (New)</span>
@@ -301,9 +301,9 @@ function MovieCardBase({
             {onDownload && item.is_cloud && (
               <ContextMenuItem
                 onClick={() => onDownload(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-200 text-amber-200 transition-colors"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
               >
-                <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-amber-300/30 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
                   <Download className="w-4 h-4 text-amber-200" />
                 </div>
                 <span>Download</span>
@@ -465,7 +465,7 @@ function MovieCardBase({
                       initial={enableMotionEffects ? { opacity: 0, scale: 0.8, x: -10 } : false}
                       animate={enableMotionEffects ? { opacity: 1, scale: 1, x: 0 } : undefined}
                       exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/25 backdrop-blur-xl border border-amber-400/40 text-xs font-bold text-amber-300 shadow-xl"
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/25 backdrop-blur-xl border border-white/40 text-xs font-bold text-amber-300 shadow-xl"
                     >
                       <Sparkles className="w-3 h-3" />
                       <span>NEW</span>
@@ -559,7 +559,7 @@ function MovieCardBase({
                         e.stopPropagation();
                         onAskAI(item);
                       }}
-                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-amber-300/45 text-amber-200 hover:text-amber-100 hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
+                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-white/45 text-amber-200 hover:text-amber-100 hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
                       title="Ask AI about this title"
                       aria-label={`Ask AI about ${item.title}`}
                     >
@@ -666,9 +666,9 @@ function MovieCardBase({
         {onAskAI && item.is_cloud && (
           <ContextMenuItem
             onClick={() => onAskAI(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-300 text-amber-300 transition-colors"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
           >
-            <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/35 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
               <Bot className="w-4 h-4 text-amber-300" />
             </div>
             <span>Ask AI (New)</span>
@@ -678,9 +678,9 @@ function MovieCardBase({
         {onDownload && item.is_cloud && (
           <ContextMenuItem
             onClick={() => onDownload(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-amber-500/10 focus:text-amber-200 text-amber-200 transition-colors"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
           >
-            <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-amber-300/30 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
               <Download className="w-4 h-4 text-amber-200" />
             </div>
             <span>Download</span>

@@ -396,11 +396,11 @@ impl GoogleDriveClient {
         )
     }
 
-    async fn find_app_data_file_id(&self, file_name: &str) -> Result<Option<String>, String> {
+    async fn find_sync_file_id(&self, file_name: &str) -> Result<Option<String>, String> {
         let access_token = self.get_access_token().await?;
         let query = format!("name='{}' and trashed = false", file_name);
         let url = format!(
-            "{}/files?q={}&spaces=appDataFolder&fields=files(id,name,mimeType)&pageSize=1",
+            "{}/files?q={}&fields=files(id,name,mimeType)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=modifiedTime desc",
             DRIVE_API_BASE,
             urlencoding::encode(&query)
         );
@@ -411,7 +411,7 @@ impl GoogleDriveClient {
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
-            .map_err(|e| format!("Failed to search app data file: {}", e))?;
+            .map_err(|e| format!("Failed to search sync file: {}", e))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -421,12 +421,12 @@ impl GoogleDriveClient {
         let result: DriveListResponse = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse app data file search response: {}", e))?;
+            .map_err(|e| format!("Failed to parse sync file search response: {}", e))?;
 
         Ok(result.files.first().map(|f| f.id.clone()))
     }
 
-    async fn create_app_data_file(
+    async fn create_sync_file(
         &self,
         file_name: &str,
         mime_type: &str,
@@ -440,12 +440,11 @@ impl GoogleDriveClient {
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({
                 "name": file_name,
-                "parents": ["appDataFolder"],
                 "mimeType": mime_type
             }))
             .send()
             .await
-            .map_err(|e| format!("Failed to create app data file: {}", e))?;
+            .map_err(|e| format!("Failed to create sync file: {}", e))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -465,7 +464,7 @@ impl GoogleDriveClient {
 
     pub async fn load_ai_chat_history(&self) -> Result<Option<String>, String> {
         let file_id = match self
-            .find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME)
+            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
             .await?
         {
             Some(id) => id,
@@ -501,7 +500,7 @@ impl GoogleDriveClient {
     }
 
     pub async fn load_watch_history_snapshot(&self) -> Result<Option<String>, String> {
-        let file_id = match self.find_app_data_file_id(WATCH_HISTORY_FILE_NAME).await? {
+        let file_id = match self.find_sync_file_id(WATCH_HISTORY_FILE_NAME).await? {
             Some(id) => id,
             None => return Ok(None),
         };
@@ -539,14 +538,11 @@ impl GoogleDriveClient {
             .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
 
         let file_id = match self
-            .find_app_data_file_id(AI_CHAT_HISTORY_FILE_NAME)
+            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
             .await?
         {
             Some(id) => id,
-            None => {
-                self.create_app_data_file(AI_CHAT_HISTORY_FILE_NAME, "application/json")
-                    .await?
-            }
+            None => self.create_sync_file(AI_CHAT_HISTORY_FILE_NAME, "application/json").await?,
         };
 
         let access_token = self.get_access_token().await?;
@@ -578,12 +574,9 @@ impl GoogleDriveClient {
         serde_json::from_str::<serde_json::Value>(history_json)
             .map_err(|e| format!("Invalid watch history snapshot JSON: {}", e))?;
 
-        let file_id = match self.find_app_data_file_id(WATCH_HISTORY_FILE_NAME).await? {
+        let file_id = match self.find_sync_file_id(WATCH_HISTORY_FILE_NAME).await? {
             Some(id) => id,
-            None => {
-                self.create_app_data_file(WATCH_HISTORY_FILE_NAME, "application/json")
-                    .await?
-            }
+            None => self.create_sync_file(WATCH_HISTORY_FILE_NAME, "application/json").await?,
         };
 
         let access_token = self.get_access_token().await?;
@@ -612,7 +605,7 @@ impl GoogleDriveClient {
     }
 
     pub async fn load_watchlist_snapshot(&self) -> Result<Option<String>, String> {
-        let file_id = match self.find_app_data_file_id(WATCHLIST_FILE_NAME).await? {
+        let file_id = match self.find_sync_file_id(WATCHLIST_FILE_NAME).await? {
             Some(id) => id,
             None => return Ok(None),
         };
@@ -649,12 +642,9 @@ impl GoogleDriveClient {
         serde_json::from_str::<serde_json::Value>(watchlist_json)
             .map_err(|e| format!("Invalid watchlist snapshot JSON: {}", e))?;
 
-        let file_id = match self.find_app_data_file_id(WATCHLIST_FILE_NAME).await? {
+        let file_id = match self.find_sync_file_id(WATCHLIST_FILE_NAME).await? {
             Some(id) => id,
-            None => {
-                self.create_app_data_file(WATCHLIST_FILE_NAME, "application/json")
-                    .await?
-            }
+            None => self.create_sync_file(WATCHLIST_FILE_NAME, "application/json").await?,
         };
 
         let access_token = self.get_access_token().await?;

@@ -4,6 +4,7 @@
 mod archive_manager;
 mod config;
 mod database;
+mod direct_link_manager;
 mod download_manager;
 mod gdrive;
 mod media_manager;
@@ -116,6 +117,19 @@ struct WatchlistSyncStatus {
     merged_remote_items: usize,
     uploaded_items: usize,
     skipped_reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DdlIndexProgressPayload {
+    stage: String,
+    message: String,
+    filename: Option<String>,
+    current: Option<usize>,
+    total: Option<usize>,
+    season: Option<i32>,
+    episode: Option<i32>,
+    episode_title: Option<String>,
 }
 
 fn watchlist_merge_key(item: &database::WatchlistItem) -> String {
@@ -2869,14 +2883,20 @@ async fn delete_media_files(
     let mut db_media_ids_to_delete: Vec<i64> = Vec::new();
 
     // Separate cloud and local files
-    for (id, file_path, is_cloud, cloud_file_id, parent_zip_id) in &media_info {
-        if *is_cloud {
+    for (id, file_path, is_cloud, cloud_file_id, parent_zip_id, ddl_source_id) in media_info {
+        if is_cloud {
+            if ddl_source_id.is_some() {
+                // DDL item - no cloud file to delete on Google Drive
+                db_media_ids_to_delete.push(id);
+                continue;
+            }
+
             if let Some(zip_file_id) = parent_zip_id {
                 println!(
                     "[DELETE] Queuing ZIP archive for deletion via representative item {}: {}",
                     id, zip_file_id
                 );
-                zip_archive_ids_to_delete.insert(zip_file_id.clone());
+                zip_archive_ids_to_delete.insert(zip_file_id);
                 continue;
             }
 
@@ -2887,18 +2907,18 @@ async fn delete_media_files(
                     file_path.as_deref().unwrap_or("unknown"),
                     cloud_id
                 );
-                cloud_file_ids_to_delete.insert(cloud_id.clone());
-                db_media_ids_to_delete.push(*id);
+                cloud_file_ids_to_delete.insert(cloud_id);
+                db_media_ids_to_delete.push(id);
             }
         } else {
             // Local file - delete from disk
             if let Some(path_str) = file_path {
-                let path = std::path::Path::new(path_str);
+                let path = std::path::Path::new(&path_str);
                 if path.exists() {
                     match std::fs::remove_file(path) {
                         Ok(_) => {
                             println!("[DELETE] Successfully deleted local file: {}", path_str);
-                            deleted_file_paths.push(path_str.clone());
+                            deleted_file_paths.push(path_str);
                             deleted_count += 1;
                         }
                         Err(e) => {
@@ -2911,11 +2931,11 @@ async fn delete_media_files(
                         "[DELETE] Local file not found (already deleted?): {}",
                         path_str
                     );
-                    deleted_file_paths.push(path_str.clone());
+                    deleted_file_paths.push(path_str);
                     deleted_count += 1;
                 }
             }
-            db_media_ids_to_delete.push(*id);
+            db_media_ids_to_delete.push(id);
         }
     }
 
@@ -3266,13 +3286,15 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id) in &episode_info {
-                if *is_cloud {
+            for (id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in episode_info {
+                if is_cloud && ddl_source_id.is_none() {
                     if let Some(cloud_id) = cloud_file_id {
-                        cloud_file_ids.push(cloud_id.clone());
+                        cloud_file_ids.push(cloud_id);
                     }
-                } else if let Some(path) = file_path {
-                    local_file_paths.push(path.clone());
+                } else if !is_cloud && file_path.is_some() {
+                    if let Some(path) = file_path {
+                        local_file_paths.push(path);
+                    }
                 }
             }
 
@@ -3389,17 +3411,19 @@ async fn delete_series_cloud_folder(
                     .map_err(|e| e.to_string())?
             };
 
-            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id) in episode_info {
+            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in episode_info {
                 if let Some(cloud_id) = cloud_file_id {
-                    println!(
-                        "[DELETE] Deleting cloud file for series '{}': {}",
-                        series_title, cloud_id
-                    );
-                    if let Err(e) = state.gdrive_client.delete_file(&cloud_id).await {
+                    if ddl_source_id.is_none() {
                         println!(
-                            "[DELETE] Warning: Failed to delete cloud file {}: {}",
-                            cloud_id, e
+                            "[DELETE] Deleting cloud file for series '{}': {}",
+                            series_title, cloud_id
                         );
+                        if let Err(e) = state.gdrive_client.delete_file(&cloud_id).await {
+                            println!(
+                                "[DELETE] Warning: Failed to delete cloud file {}: {}",
+                                cloud_id, e
+                            );
+                        }
                     }
                 }
             }
@@ -5588,12 +5612,130 @@ async fn play_with_mpv(
         None
     };
 
+    let is_ddl_media = media.ddl_source_id.is_some();
+
     let (playback_url, auth_header, zip_proxy, playback_is_cloud): (
         String,
         Option<String>,
         Option<zip_stream_proxy::ZipStreamProxyHandle>,
         bool,
-    ) = if is_cloud {
+    ) = if is_ddl_media && is_zip_media {
+        // Direct Download Link media — use ProxyAuth::None
+        let ddl_source_id = media
+            .ddl_source_id
+            .as_deref()
+            .or(media.parent_zip_id.as_deref())
+            .ok_or_else(|| "DDL media missing source ID".to_string())?;
+        let ddl_url = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            let source = db
+                .get_ddl_source(ddl_source_id)
+                .map_err(|e| e.to_string())?;
+            if source.is_expired {
+                return Err("Link expired. Please refresh the link with a new URL.".to_string());
+            }
+            source.url
+        };
+
+        match archive_manager::archive_format_for_media(&media) {
+            archive_manager::ArchiveFormat::Zip => {
+                let comp_method = zip_compression_method.unwrap_or_default();
+                if comp_method == 0 {
+                    // Stored ZIP — use streaming proxy with cache support
+                    let stream_info = archive_manager::build_archive_stream_info(&media)?;
+
+                    // Build cache spec (same as GDrive path)
+                    let (cache_spec, local_cache_path, cache_is_complete) = {
+                        let cache_config = build_zip_cache_config(&config);
+                        match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
+                            Ok(snapshot) => {
+                                let local_cache_path = choose_store_zip_local_cache_for_mpv(
+                                    &media, &snapshot, start_position,
+                                );
+                                (
+                                    Some(zip_stream_proxy::ProxyCacheSpec {
+                                        cache_paths: snapshot.paths,
+                                        cache_config,
+                                        // Direct-link hosts are often heavily throttled per
+                                        // connection. If cache priming starts immediately, it
+                                        // competes with MPV's first read and slows startup.
+                                        start_delay_ms: 5_000,
+                                        throttle_delay_ms: 250,
+                                    }),
+                                    local_cache_path,
+                                    snapshot.is_complete,
+                                )
+                            }
+                            Err(_) => (None, None, false),
+                        }
+                    };
+
+                    let proxy = zip_stream_proxy::start_proxy(
+                        zip_stream_proxy::build_direct_link_proxy_spec(
+                            ddl_url,
+                            &stream_info,
+                            cache_spec,
+                        ),
+                    )?;
+
+                    if let Some(local_path) = local_cache_path {
+                        if cache_is_complete {
+                            println!(
+                                "[DDL] Using local complete cache for MPV: '{}' -> {}",
+                                media.title, local_path
+                            );
+                            (local_path, None, Some(proxy), false)
+                        } else {
+                            println!(
+                                "[DDL] Using streaming proxy with partial cache: '{}' -> {}",
+                                media.title,
+                                zip_stream_proxy::localhost_stream_url(proxy.port)
+                            );
+                            (
+                                zip_stream_proxy::localhost_stream_url(proxy.port),
+                                None,
+                                Some(proxy),
+                                true,
+                            )
+                        }
+                    } else {
+                        println!(
+                            "[DDL] Using streaming proxy for MPV: '{}' -> {}",
+                            media.title,
+                            zip_stream_proxy::localhost_stream_url(proxy.port)
+                        );
+                        (
+                            zip_stream_proxy::localhost_stream_url(proxy.port),
+                            None,
+                            Some(proxy),
+                            true,
+                        )
+                    }
+                } else {
+                    // Compressed ZIP — extract first, then play locally
+                    let extracted_path = build_zip_extracted_path(&state, &media).await?;
+                    (extracted_path, None, None, false)
+                }
+            }
+            _ => {
+                // Non-ZIP archives (tar/rar): use extract path
+                let stream_info = archive_manager::build_archive_stream_info(&media)?;
+                let proxy = zip_stream_proxy::start_proxy(
+                    zip_stream_proxy::build_direct_link_proxy_spec(
+                        ddl_url,
+                        &stream_info,
+                        None,
+                    ),
+                )?;
+                (
+                    zip_stream_proxy::localhost_stream_url(proxy.port),
+                    None,
+                    Some(proxy),
+                    true,
+                )
+            }
+        }
+    } else if is_cloud {
         if is_zip_media {
             if should_extract_zip_for_mpv(&media, start_position)? {
                 let extracted_path = build_zip_extracted_path(&state, &media).await?;
@@ -9318,7 +9460,12 @@ async fn build_zip_extracted_path(
         println!("[ZIP] Cache cleanup warning: {}", error);
     }
 
-    let access_token = state.gdrive_client.get_access_token().await?;
+    let is_ddl = media.ddl_source_id.is_some();
+    let access_token = if is_ddl {
+        String::new()
+    } else {
+        state.gdrive_client.get_access_token().await?
+    };
     let media = media.clone();
     let cache_config = cache_config.clone();
 
@@ -9346,7 +9493,22 @@ async fn build_zip_stream_url(
     stop_zip_stream_proxy(state, media_id);
 
     let stream_info = archive_manager::build_archive_stream_info(media)?;
-    let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
+    
+    let is_ddl = media.ddl_source_id.is_some();
+    
+    let drive_url = if is_ddl {
+        let ddl_source_id = media.ddl_source_id.as_deref()
+            .or(media.parent_zip_id.as_deref())
+            .ok_or_else(|| "DDL media missing source ID".to_string())?;
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let source = db.get_ddl_source(ddl_source_id).map_err(|e| e.to_string())?;
+        if source.is_expired {
+            return Err("Link expired. Please refresh the link with a new URL.".to_string());
+        }
+        source.url
+    } else {
+        state.gdrive_client.build_stream_url(&stream_info.zip_file_id)
+    };
     let proxy_cache_spec = match archive_manager::archive_format_for_media(media) {
         archive_manager::ArchiveFormat::Zip => {
             match zip_manager::zip_entry_compression_method(media) {
@@ -9370,12 +9532,22 @@ async fn build_zip_stream_url(
         }
         archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => None,
     };
-    let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
-        drive_url,
-        state.gdrive_client.clone(),
-        &stream_info,
-        proxy_cache_spec,
-    ))?;
+    let proxy_spec = if is_ddl {
+        zip_stream_proxy::build_direct_link_proxy_spec(
+            drive_url,
+            &stream_info,
+            proxy_cache_spec,
+        )
+    } else {
+        zip_stream_proxy::build_proxy_spec(
+            drive_url,
+            state.gdrive_client.clone(),
+            &stream_info,
+            proxy_cache_spec,
+        )
+    };
+    
+    let proxy = zip_stream_proxy::start_proxy(proxy_spec)?;
     let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
 
     let mut streams = state.active_zip_streams.lock().map_err(|e| e.to_string())?;
@@ -9395,14 +9567,31 @@ async fn build_temporary_zip_stream_url(
     media: &database::MediaItem,
 ) -> Result<(String, zip_stream_proxy::ZipStreamProxyHandle), String> {
     let stream_info = archive_manager::build_archive_stream_info(media)?;
-    let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
+    let proxy_spec = if let Some(ddl_source_id) = media
+        .ddl_source_id
+        .as_deref()
+        .or(media.parent_zip_id.as_deref())
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let source = db
+            .get_ddl_source(ddl_source_id)
+            .map_err(|e| e.to_string())?;
+        if source.is_expired {
+            return Err("Link expired. Please refresh the link with a new URL.".to_string());
+        }
 
-    let proxy = zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
-        drive_url,
-        state.gdrive_client.clone(),
-        &stream_info,
-        None,
-    ))?;
+        zip_stream_proxy::build_direct_link_proxy_spec(source.url, &stream_info, None)
+    } else {
+        let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
+        zip_stream_proxy::build_proxy_spec(
+            drive_url,
+            state.gdrive_client.clone(),
+            &stream_info,
+            None,
+        )
+    };
+
+    let proxy = zip_stream_proxy::start_proxy(proxy_spec)?;
 
     Ok((zip_stream_proxy::localhost_stream_url(proxy.port), proxy))
 }
@@ -12106,6 +12295,508 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
     }
 }
 
+// ---- Direct Download Link (DDL) commands ----
+
+#[tauri::command]
+async fn ddl_validate_url(url: String) -> Result<direct_link_manager::DdlValidationResult, String> {
+    tokio::task::spawn_blocking(move || direct_link_manager::validate_url(&url))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn ddl_index_archive(
+    window: Window,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    validation: direct_link_manager::DdlValidationResult,
+) -> Result<direct_link_manager::DdlSource, String> {
+    let emit_ddl_progress = |
+        stage: &str,
+        message: String,
+        filename: Option<String>,
+        current: Option<usize>,
+        total: Option<usize>,
+        season: Option<i32>,
+        episode: Option<i32>,
+        episode_title: Option<String>,
+    | {
+        let _ = window.emit(
+            "ddl-index-progress",
+            DdlIndexProgressPayload {
+                stage: stage.to_string(),
+                message,
+                filename,
+                current,
+                total,
+                season,
+                episode,
+                episode_title,
+            },
+        );
+    };
+
+    emit_ddl_progress(
+        "probing-archive",
+        "Reading archive structure...".to_string(),
+        Some(validation.filename.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+
+    let result = tokio::task::spawn_blocking(move || {
+        direct_link_manager::index_archive(&url, &validation)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Get config for TMDB API key and image cache dir
+    let (api_key, image_cache_dir) = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        (
+            tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default()),
+            database::get_image_cache_dir(),
+        )
+    };
+    std::fs::create_dir_all(&image_cache_dir).ok();
+
+    // Save source to database
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.upsert_ddl_source(
+            &result.source.id,
+            &result.source.url,
+            &result.source.filename,
+            result.source.file_size as i64,
+            &result.source.archive_format,
+            result.source.entry_count as i64,
+            result.source.video_count as i64,
+            result.source.cd_offset as i64,
+            result.source.cd_size as i64,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Determine if this is a multi-episode (TV show) or single file (movie)
+    let has_episodes = result.entries.iter().any(|e| e.season.is_some());
+    let is_tvshow = has_episodes || result.entries.len() > 1;
+
+    emit_ddl_progress(
+        "archive-indexed",
+        format!(
+            "Found {} playable entr{}.",
+            result.entries.len(),
+            if result.entries.len() == 1 { "y" } else { "ies" }
+        ),
+        Some(result.source.filename.clone()),
+        Some(0),
+        Some(result.entries.len()),
+        None,
+        None,
+        None,
+    );
+
+    let parent_id = if is_tvshow {
+        // Build a few title candidates because season-pack archive names are often noisy.
+        let archive_filename = &result.source.filename;
+        let archive_parsed = media_manager::parse_cloud_filename(archive_filename);
+        let first_entry_title = result
+            .entries
+            .first()
+            .map(|e| e.title.trim().to_string())
+            .unwrap_or_default();
+
+        let mut title_candidates = Vec::new();
+        if archive_parsed.title.len() > 2 && archive_parsed.title.to_lowercase() != "archive" {
+            title_candidates.push(archive_parsed.title.clone());
+        }
+        if !first_entry_title.is_empty()
+            && !title_candidates
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&first_entry_title))
+        {
+            title_candidates.push(first_entry_title.clone());
+        }
+        if title_candidates.is_empty() {
+            title_candidates.push(result.source.filename.clone());
+        }
+
+        let series_title = title_candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(|| result.source.filename.clone());
+        let series_year = archive_parsed.year;
+
+        // Search TMDB for the show using the strongest title/year hints first.
+        let tmdb_result = {
+            let mut matched: Option<(String, tmdb::TmdbMetadata)> = None;
+            for candidate in &title_candidates {
+                emit_ddl_progress(
+                    "fetching-show-metadata",
+                    format!("Matching show metadata for '{}'...", candidate),
+                    Some(result.source.filename.clone()),
+                    Some(0),
+                    Some(result.entries.len()),
+                    None,
+                    None,
+                    None,
+                );
+                println!(
+                    "[DDL] Searching TMDB for show: {} (year: {:?})",
+                    candidate, series_year
+                );
+                let api_key = api_key.clone();
+                let candidate_owned = candidate.clone();
+                let image_cache_dir = image_cache_dir.clone();
+                match tokio::task::spawn_blocking(move || {
+                    tmdb::search_metadata(
+                        &api_key,
+                        &candidate_owned,
+                        "tv",
+                        series_year,
+                        &image_cache_dir,
+                    )
+                })
+                .await
+                .map_err(|e| e.to_string())? {
+                    Ok(Some(meta)) => {
+                        matched = Some((candidate.clone(), meta));
+                        break;
+                    }
+                    Ok(None) => {
+                        println!("[DDL] No TMDB TV match for '{}'", candidate);
+                    }
+                    Err(err) => {
+                        println!("[DDL] TMDB TV search failed for '{}': {}", candidate, err);
+                    }
+                }
+            }
+            matched
+        };
+
+        let (title, year, overview, cast_names, poster_path, tmdb_id) = match &tmdb_result {
+            Some((matched_title, meta)) => (
+                media_manager::prefer_title_with_leading_article(matched_title, &meta.title),
+                meta.year,
+                meta.overview.clone(),
+                meta.cast_names.clone(),
+                meta.poster_path.clone(),
+                meta.tmdb_id.clone(),
+            ),
+            None => (series_title.clone(), None, None, None, None, None),
+        };
+
+        let parent_id = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            db.insert_ddl_tvshow(
+                &title,
+                &result.source.id,
+                year,
+                overview.as_deref(),
+                cast_names.as_deref(),
+                poster_path.as_deref(),
+                tmdb_id.as_deref(),
+            )
+            .map_err(|e| e.to_string())?
+        };
+
+        // Pre-fetch episode metadata from TMDB
+        if let Some(ref tid) = tmdb_id {
+            // Get all unique seasons
+            let seasons: std::collections::HashSet<i32> = result
+                .entries
+                .iter()
+                .filter_map(|e| e.season)
+                .collect();
+            for season_num in seasons {
+                emit_ddl_progress(
+                    "fetching-episode-metadata",
+                    format!("Fetching episode metadata for Season {}...", season_num),
+                    Some(result.source.filename.clone()),
+                    Some(0),
+                    Some(result.entries.len()),
+                    Some(season_num),
+                    None,
+                    None,
+                );
+                let api_key = api_key.clone();
+                let tmdb_id = tid.clone();
+                let title_clone = title.clone();
+                let image_cache_dir = image_cache_dir.clone();
+                match tokio::task::spawn_blocking(move || {
+                    tmdb::fetch_season_episodes(
+                        &api_key,
+                        &tmdb_id,
+                        season_num,
+                        &title_clone,
+                        &image_cache_dir,
+                    )
+                })
+                .await
+                .map_err(|e| e.to_string())? {
+                    Ok(season_info) => {
+                        // Cache all episode metadata for later lookup
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        for ep in &season_info.episodes {
+                            let _ = db.save_cached_episode_metadata(
+                                tid,
+                                ep.season_number,
+                                ep.episode_number,
+                                Some(&ep.name),
+                                ep.overview.as_deref(),
+                                ep.still_path.as_deref(),
+                                ep.air_date.as_deref(),
+                            );
+                        }
+                        println!(
+                            "[DDL] Cached {} episode stills for S{:02}",
+                            season_info.episodes.len(),
+                            season_num
+                        );
+                    }
+                    Err(err) => {
+                        println!(
+                            "[DDL] Failed to fetch season metadata for '{}' S{:02}: {}",
+                            title,
+                            season_num,
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        Some((parent_id, tmdb_id))
+    } else {
+        None
+    };
+
+    // Insert each entry as a media item
+    for (idx, entry) in result.entries.iter().enumerate() {
+        emit_ddl_progress(
+            "adding-entry",
+            if let (Some(season), Some(episode)) = (entry.season, entry.episode) {
+                format!("Adding S{:02}E{:02} to library...", season, episode)
+            } else {
+                format!("Adding '{}' to library...", entry.entry_name)
+            },
+            Some(result.source.filename.clone()),
+            Some(idx + 1),
+            Some(result.entries.len()),
+            entry.season,
+            entry.episode,
+            Some(entry.title.clone()),
+        );
+
+        let title = if entry.title.is_empty() {
+            entry.entry_name.clone()
+        } else {
+            entry.title.clone()
+        };
+        let season = entry.season.or(if parent_id.is_some() { Some(1) } else { None });
+        let episode = entry
+            .episode
+            .or(if parent_id.is_some() { Some((idx + 1) as i32) } else { None });
+
+        // Fetch episode-specific metadata from TMDB cache
+        let (ep_title, ep_overview, ep_still) = if let Some((_, Some(ref tmdb_id))) = parent_id {
+            if let (Some(s), Some(e)) = (season, episode) {
+                let db = state.db.lock().map_err(|e| e.to_string())?;
+                db.get_cached_episode_metadata(tmdb_id, s, e)
+                    .ok()
+                    .flatten()
+                    .map(|cached| (cached.episode_title, cached.overview, cached.still_path))
+                    .unwrap_or((None, None, None))
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
+        let pid = parent_id.as_ref().map(|(id, _)| *id);
+        let inserted_id = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            db.insert_ddl_episode(
+                &title,
+                pid,
+                season,
+                episode,
+                &result.source.id,
+                &result.source.archive_format,
+                &entry.entry_path,
+                entry.local_header_offset as i64,
+                entry.data_start_offset as i64,
+                entry.compressed_size as i64,
+                entry.uncompressed_size as i64,
+                &entry.crc32,
+                entry.compression_method,
+                ep_title.as_deref(),
+                ep_overview.as_deref(),
+                ep_still.as_deref(),
+            )
+            .map_err(|e| e.to_string())?
+        };
+
+        // For single movies, also enrich with TMDB right after insert
+        if !is_tvshow {
+            let movie_title = if !entry.title.is_empty() && entry.title.len() > 3 {
+                entry.title.clone()
+            } else {
+                // If entry title is weak, use archive title if it looks like a movie
+                let archive_parsed = media_manager::parse_cloud_filename(&result.source.filename);
+                if archive_parsed.media_type == media_manager::MediaParseType::Movie {
+                    archive_parsed.title
+                } else {
+                    entry.title.clone()
+                }
+            };
+            
+            println!("[DDL] Searching TMDB for movie: {}", movie_title);
+            let api_key = api_key.clone();
+            let movie_title_for_search = movie_title.clone();
+            let image_cache_dir = image_cache_dir.clone();
+            match tokio::task::spawn_blocking(move || {
+                tmdb::search_metadata(
+                    &api_key,
+                    &movie_title_for_search,
+                    "movie",
+                    None,
+                    &image_cache_dir,
+                )
+            })
+            .await
+            .map_err(|e| e.to_string())? {
+                Ok(Some(meta)) => {
+                    let db = state.db.lock().map_err(|e| e.to_string())?;
+                    let _ = db.update_metadata(inserted_id, &meta);
+                    println!("[DDL] Enriched movie '{}' with TMDB metadata (Poster: {:?})", movie_title, meta.poster_path);
+                }
+                Ok(None) => {
+                    println!("[DDL] No TMDB movie match for '{}'", movie_title);
+                }
+                Err(err) => {
+                    println!("[DDL] TMDB movie search failed for '{}': {}", movie_title, err);
+                }
+            }
+        }
+    }
+
+    println!(
+        "[DDL] Saved source '{}' with {} media entries (TMDB enriched)",
+        result.source.filename,
+        result.entries.len()
+    );
+
+    emit_ddl_progress(
+        "completed",
+        format!("Added {} entr{} successfully.", result.entries.len(), if result.entries.len() == 1 { "y" } else { "ies" }),
+        Some(result.source.filename.clone()),
+        Some(result.entries.len()),
+        Some(result.entries.len()),
+        None,
+        None,
+        None,
+    );
+
+    let _ = window.emit(
+        "library-updated",
+        serde_json::json!({
+            "type": "ddl-indexed",
+            "title": result.source.filename,
+            "source_id": result.source.id,
+        }),
+    );
+
+    Ok(result.source)
+}
+
+#[tauri::command]
+fn ddl_get_sources(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<direct_link_manager::DdlSource>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_ddl_sources().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ddl_check_link_health(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+) -> Result<bool, String> {
+    let url = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_ddl_source_url(&source_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    let healthy = tokio::task::spawn_blocking(move || direct_link_manager::check_link_health(&url))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    if !healthy {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.mark_ddl_source_expired(&source_id)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(healthy)
+}
+
+#[tauri::command]
+async fn ddl_refresh_link(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+    new_url: String,
+) -> Result<direct_link_manager::DdlRefreshResult, String> {
+    let source = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_ddl_source(&source_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    let url_for_verify = new_url.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        direct_link_manager::verify_and_refresh_link(&source, &url_for_verify)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if result.accepted {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_ddl_source_url(&source_id, &new_url)
+            .map_err(|e| e.to_string())?;
+        println!("[DDL] Refreshed link for source '{}'", source_id);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn ddl_delete_source(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.delete_ddl_source_and_media(&source_id)
+        .map_err(|e| e.to_string())?;
+    println!("[DDL] Deleted source '{}'", source_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn ddl_get_source_media(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_media_by_ddl_source(&source_id)
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     // Initialize single-instance plugin as early as possible for production builds.
     // This catches second instances BEFORE they attempt to open the database (which would cause a crash/panic).
@@ -12526,6 +13217,14 @@ fn main() {
             delete_download_job,
             clear_download_history,
             open_download_job_target,
+            // Direct Download Link (DDL) commands
+            ddl_validate_url,
+            ddl_index_archive,
+            ddl_get_sources,
+            ddl_check_link_health,
+            ddl_refresh_link,
+            ddl_delete_source,
+            ddl_get_source_media,
             // Auto-update commands
             check_for_updates,
             download_update,

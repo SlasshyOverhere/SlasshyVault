@@ -78,10 +78,10 @@ export function ZipPlaybackLoadingOverlay({
                     style={{ width: "42%" }}
                   />
                 </div>
-                <div className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-400/10 px-4 py-3">
+                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="flex items-start gap-3">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" />
-                    <div className="text-sm leading-relaxed text-amber-50/90">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-white/60" />
+                    <div className="text-sm leading-relaxed text-white/80">
                       For more uninterrupted ZIP playback, set{" "}
                       <span className="font-semibold text-white">
                         ZIP Cache Directory

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard, Download
+  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard, Download, Link2
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -106,6 +106,7 @@ export function Sidebar({
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
+    { id: "directlinks", label: "Direct Links", icon: Link2 },
     { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
@@ -187,11 +188,11 @@ export function Sidebar({
                     {item.isNew && (
                       <Sparkles className={cn(
                         "absolute -right-1 -top-1 h-2.5 w-2.5 transition-colors duration-300",
-                        isActive ? "text-emerald-300" : "text-emerald-400/80 group-hover:text-emerald-300"
+                        isActive ? "text-white" : "text-white/60 group-hover:text-white"
                       )} />
                     )}
                     {isCollapsed && item.badge && (
-                      <div className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full border border-amber-400/50 bg-[#FFD700] px-1 text-[8px] font-black text-black shadow-[0_0_10px_rgba(255,215,0,0.4)]">
+                      <div className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full border border-white/50 bg-white px-1 text-[8px] font-black text-black shadow-[0_0_10px_rgba(255,255,255,0.4)]">
                         {item.badge}
                       </div>
                     )}
@@ -209,17 +210,17 @@ export function Sidebar({
                         <span className={cn(
                           "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase border transition-colors duration-300",
                           isActive
-                            ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
-                            : "border-amber-400/45 bg-amber-400/15 text-amber-300"
+                            ? "border-white/40 bg-white/20 text-white"
+                            : "border-white/20 bg-white/10 text-neutral-400"
                         )}>
                           Paused
                         </span>
                       ) : item.badge ? (
                         <span className={cn(
-                          "ml-auto min-w-6 rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.08em] text-center border transition-all duration-300 shadow-[0_0_15px_rgba(255,215,0,0.15)]",
+                          "ml-auto min-w-6 rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.08em] text-center border transition-all duration-300 shadow-[0_0_15px_rgba(255,255,255,0.15)]",
                           isActive
-                            ? "border-amber-300/60 bg-[#FFD700] text-black"
-                            : "border-amber-500/40 bg-amber-500/10 text-amber-400 group-hover:bg-amber-500/20"
+                            ? "border-white/60 bg-white text-black"
+                            : "border-white/20 bg-white/10 text-neutral-400 group-hover:bg-white/20"
                         )}>
                           {item.badge}
                         </span>
@@ -228,8 +229,8 @@ export function Sidebar({
                           "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase",
                           "border transition-colors duration-300",
                           isActive
-                            ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
-                            : "border-amber-400/45 bg-amber-400/15 text-amber-300"
+                            ? "border-white/40 bg-white/20 text-white"
+                            : "border-white/20 bg-white/10 text-neutral-400"
                         )}>
                           New
                         </span>
@@ -242,11 +243,11 @@ export function Sidebar({
                     <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
                       {item.paused ? (
-                        <span className="text-xs font-bold text-amber-300 tracking-wider">{" • PAUSED"}</span>
+                        <span className="text-xs font-bold text-white tracking-wider">{" • PAUSED"}</span>
                       ) : item.badge ? (
-                        <span className="text-xs font-bold text-amber-400 tracking-wider">{` • ${item.badge}`}</span>
+                        <span className="text-xs font-bold text-white tracking-wider">{` • ${item.badge}`}</span>
                       ) : item.isNew && (
-                        <span className="text-xs font-bold text-amber-300 tracking-wider">{" • NEW"}</span>
+                        <span className="text-xs font-bold text-white tracking-wider">{" • NEW"}</span>
                       )}
                     </div>
                   )}

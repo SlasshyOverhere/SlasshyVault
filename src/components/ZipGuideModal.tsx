@@ -52,11 +52,11 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
               </pre>
             </div>
 
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="flex items-start gap-2">
-                <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-400" />
+                <ShieldAlert className="mt-0.5 h-4 w-4 text-white" />
                 <div>
-                  <p className="text-sm font-medium text-amber-300">
+                  <p className="text-sm font-medium text-white">
                     Avoid these options
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">

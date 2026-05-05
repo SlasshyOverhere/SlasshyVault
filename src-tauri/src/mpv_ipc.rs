@@ -394,8 +394,15 @@ pub fn launch_mpv_with_tracking(
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
         cmd.arg("--keep-open=yes");
-        cmd.arg("--cache-pause-wait=10");
         cmd.arg("--network-timeout=30");
+
+        if is_local_zip_proxy {
+            // The ZIP proxy is already local and range-aware. Favor immediate
+            // startup over waiting for MPV to build a deep cache window.
+            cmd.arg("--cache-pause-wait=2");
+        } else {
+            cmd.arg("--cache-pause-wait=10");
+        }
 
         // Check if disk caching is enabled - use stream-record for persistent caching
         if let Some(cache) = cache_settings {
@@ -422,6 +429,9 @@ pub fn launch_mpv_with_tracking(
                     let cache_bytes = (cache.max_size_mb as u64) * 1024 * 1024;
                     cmd.arg(format!("--demuxer-max-bytes={}", cache_bytes));
                     cmd.arg(format!("--demuxer-max-back-bytes={}", cache_bytes / 4));
+                    if is_local_zip_proxy {
+                        cmd.arg("--demuxer-readahead-secs=1");
+                    }
 
                     println!(
                         "[MPV] Disk cache enabled: {} (max {}MB)",
@@ -435,6 +445,7 @@ pub fn launch_mpv_with_tracking(
                 if is_local_zip_proxy {
                     cmd.arg("--demuxer-max-bytes=256MiB");
                     cmd.arg("--demuxer-max-back-bytes=128MiB");
+                    cmd.arg("--demuxer-readahead-secs=1");
                     println!("[MPV] Using expanded cache profile for local ZIP proxy");
                 } else {
                     cmd.arg("--demuxer-max-bytes=500MiB");
@@ -447,6 +458,7 @@ pub fn launch_mpv_with_tracking(
             if is_local_zip_proxy {
                 cmd.arg("--demuxer-max-bytes=256MiB");
                 cmd.arg("--demuxer-max-back-bytes=128MiB");
+                cmd.arg("--demuxer-readahead-secs=1");
                 println!("[MPV] Using expanded cache profile for local ZIP proxy");
             } else {
                 cmd.arg("--demuxer-max-bytes=500MiB");

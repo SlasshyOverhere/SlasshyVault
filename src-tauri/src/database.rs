@@ -93,6 +93,7 @@ pub struct MediaItem {
     pub zip_crc32: Option<String>,
     pub zip_compression_method: Option<i64>,
     pub file_size_bytes: Option<i64>,
+    pub ddl_source_id: Option<String>,
     pub archive_playback_can_play: Option<bool>,
     pub archive_playback_mode: Option<String>,
     pub archive_playback_message: Option<String>,
@@ -725,6 +726,33 @@ impl Database {
             )
             .ok();
 
+        // Direct Download Link (DDL) sources table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS ddl_sources (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                archive_format TEXT NOT NULL DEFAULT 'zip',
+                entry_count INTEGER NOT NULL DEFAULT 0,
+                video_count INTEGER NOT NULL DEFAULT 0,
+                cd_offset INTEGER NOT NULL DEFAULT 0,
+                cd_size INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_expired INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+
+        // Add ddl_source_id column to media table for linking to DDL sources
+        if !columns.contains(&"ddl_source_id".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN ddl_source_id TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
+
         // Cover the common library list queries: filter by media_type, then order by title.
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_type_title ON media(media_type, title)",
@@ -766,6 +794,10 @@ impl Database {
         )?;
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_zip_archives_file_id ON zip_archives(zip_file_id)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_ddl_source_id ON media(ddl_source_id) WHERE ddl_source_id IS NOT NULL",
             [],
         )?;
         self.conn.execute(
@@ -856,7 +888,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method
+                    zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
         );
 
@@ -898,7 +930,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method
+                    zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
         );
 
@@ -943,7 +975,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method
+                    zip_compression_method, ddl_source_id
              FROM media WHERE media_type IN ('movie', 'tvshow')"
         );
 
@@ -976,7 +1008,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method, file_size_bytes
+                    zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
         )?;
 
@@ -1020,7 +1052,8 @@ impl Database {
                 m.zip_compressed_size,
                 m.zip_uncompressed_size,
                 m.zip_crc32,
-                m.zip_compression_method
+                m.zip_compression_method,
+                m.ddl_source_id
              FROM media m
              LEFT JOIN media p ON m.parent_id = p.id
              WHERE m.last_watched IS NOT NULL
@@ -1162,7 +1195,7 @@ impl Database {
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
-                    zip_compression_method, file_size_bytes
+                    zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE id = ?",
         )?;
 
@@ -2337,6 +2370,236 @@ impl Database {
             .is_ok()
     }
 
+    // ---- Direct Download Link (DDL) methods ----
+
+    pub fn upsert_ddl_source(
+        &self,
+        id: &str,
+        url: &str,
+        filename: &str,
+        file_size: i64,
+        archive_format: &str,
+        entry_count: i64,
+        video_count: i64,
+        cd_offset: i64,
+        cd_size: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ddl_sources (id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size, created_at, last_verified_at, is_expired)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+             ON CONFLICT(id) DO UPDATE SET
+                url = excluded.url,
+                filename = excluded.filename,
+                file_size = excluded.file_size,
+                archive_format = excluded.archive_format,
+                entry_count = excluded.entry_count,
+                video_count = excluded.video_count,
+                cd_offset = excluded.cd_offset,
+                cd_size = excluded.cd_size,
+                last_verified_at = CURRENT_TIMESTAMP,
+                is_expired = 0",
+            params![id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_ddl_sources(&self) -> Result<Vec<crate::direct_link_manager::DdlSource>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, url, filename, file_size, archive_format, entry_count, video_count,
+                    cd_offset, cd_size, created_at, last_verified_at, is_expired
+             FROM ddl_sources ORDER BY created_at DESC",
+        )?;
+        let sources = stmt
+            .query_map([], |row| {
+                Ok(crate::direct_link_manager::DdlSource {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    filename: row.get(2)?,
+                    file_size: row.get::<_, i64>(3)? as u64,
+                    archive_format: row.get(4)?,
+                    entry_count: row.get::<_, i64>(5)? as usize,
+                    video_count: row.get::<_, i64>(6)? as usize,
+                    cd_offset: row.get::<_, i64>(7)? as u64,
+                    cd_size: row.get::<_, i64>(8)? as u64,
+                    created_at: row.get(9)?,
+                    last_verified_at: row.get(10)?,
+                    is_expired: row.get::<_, i64>(11)? != 0,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(sources)
+    }
+
+    pub fn get_ddl_source(&self, source_id: &str) -> Result<crate::direct_link_manager::DdlSource> {
+        self.conn.query_row(
+            "SELECT id, url, filename, file_size, archive_format, entry_count, video_count,
+                    cd_offset, cd_size, created_at, last_verified_at, is_expired
+             FROM ddl_sources WHERE id = ?",
+            params![source_id],
+            |row| {
+                Ok(crate::direct_link_manager::DdlSource {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    filename: row.get(2)?,
+                    file_size: row.get::<_, i64>(3)? as u64,
+                    archive_format: row.get(4)?,
+                    entry_count: row.get::<_, i64>(5)? as usize,
+                    video_count: row.get::<_, i64>(6)? as usize,
+                    cd_offset: row.get::<_, i64>(7)? as u64,
+                    cd_size: row.get::<_, i64>(8)? as u64,
+                    created_at: row.get(9)?,
+                    last_verified_at: row.get(10)?,
+                    is_expired: row.get::<_, i64>(11)? != 0,
+                })
+            },
+        )
+    }
+
+    pub fn update_ddl_source_url(&self, source_id: &str, new_url: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ddl_sources SET url = ?, last_verified_at = CURRENT_TIMESTAMP, is_expired = 0 WHERE id = ?",
+            params![new_url, source_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_ddl_source_expired(&self, source_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ddl_sources SET is_expired = 1 WHERE id = ?",
+            params![source_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_ddl_source_and_media(&self, source_id: &str) -> Result<usize> {
+        // First delete parent shows that only have DDL episodes
+        self.conn.execute(
+            "DELETE FROM media WHERE id IN (
+                SELECT DISTINCT parent_id FROM media WHERE ddl_source_id = ? AND parent_id IS NOT NULL
+            ) AND NOT EXISTS (
+                SELECT 1 FROM media child WHERE child.parent_id = media.id AND child.ddl_source_id IS NULL
+            )",
+            params![source_id],
+        )?;
+        // Delete the episode/movie entries
+        self.conn.execute(
+            "DELETE FROM media WHERE ddl_source_id = ?",
+            params![source_id],
+        )?;
+        let deleted = self.conn.execute(
+            "DELETE FROM ddl_sources WHERE id = ?",
+            params![source_id],
+        )?;
+        Ok(deleted)
+    }
+
+    pub fn get_media_by_ddl_source(&self, source_id: &str) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, ddl_source_id
+             FROM media WHERE ddl_source_id = ?
+             ORDER BY season_number, episode_number, title",
+        )?;
+        let items = stmt
+            .query_map(params![source_id], Self::map_media_item)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(items)
+    }
+
+    pub fn insert_ddl_episode(
+        &self,
+        title: &str,
+        parent_id: Option<i64>,
+        season: Option<i32>,
+        episode: Option<i32>,
+        ddl_source_id: &str,
+        archive_format: &str,
+        zip_entry_path: &str,
+        zip_local_header_offset: i64,
+        zip_data_start_offset: i64,
+        zip_compressed_size: i64,
+        zip_uncompressed_size: i64,
+        zip_crc32: &str,
+        zip_compression_method: i64,
+        episode_title: Option<&str>,
+        episode_overview: Option<&str>,
+        episode_still_path: Option<&str>,
+    ) -> Result<i64> {
+        let virtual_path = format!("ddl://{}:{}/{}", ddl_source_id, archive_format, zip_entry_path);
+        let media_type = if parent_id.is_some() {
+            "tvepisode"
+        } else {
+            "movie"
+        };
+
+        self.conn.execute(
+            "INSERT INTO media (
+                title, file_path, media_type, parent_id, season_number, episode_number,
+                is_cloud, archive_format, ddl_source_id,
+                parent_zip_id, zip_entry_path, zip_local_header_offset, zip_data_start_offset,
+                zip_compressed_size, zip_uncompressed_size, zip_crc32, zip_compression_method,
+                episode_title, overview, still_path
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                title,
+                virtual_path,
+                media_type,
+                parent_id,
+                season,
+                episode,
+                archive_format,
+                ddl_source_id,
+                ddl_source_id,
+                zip_entry_path,
+                zip_local_header_offset,
+                zip_data_start_offset,
+                zip_compressed_size,
+                zip_uncompressed_size,
+                zip_crc32,
+                zip_compression_method,
+                episode_title,
+                episode_overview,
+                episode_still_path,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn insert_ddl_tvshow(
+        &self,
+        title: &str,
+        ddl_source_id: &str,
+        year: Option<i32>,
+        overview: Option<&str>,
+        cast_names: Option<&str>,
+        poster_path: Option<&str>,
+        tmdb_id: Option<&str>,
+    ) -> Result<i64> {
+        let virtual_path = format!("ddl://{}:show", ddl_source_id);
+        self.conn.execute(
+            "INSERT INTO media (title, file_path, media_type, is_cloud, ddl_source_id, year, overview, cast_names, poster_path, tmdb_id)
+             VALUES (?, ?, 'tvshow', 1, ?, ?, ?, ?, ?, ?)",
+            params![title, virtual_path, ddl_source_id, year, overview, cast_names, poster_path, tmdb_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_ddl_source_url(&self, source_id: &str) -> Result<String> {
+        self.conn.query_row(
+            "SELECT url FROM ddl_sources WHERE id = ?",
+            params![source_id],
+            |row| row.get(0),
+        )
+    }
+
     pub fn upsert_cloud_index_failure(
         &self,
         cloud_file_id: &str,
@@ -3451,14 +3714,14 @@ impl Database {
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
-    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>)>> {
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id FROM media WHERE id IN ({})",
+            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id, ddl_source_id FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
 
@@ -3473,6 +3736,7 @@ impl Database {
                 row.get::<_, i32>(2)? == 1,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })?;
 
@@ -4049,6 +4313,7 @@ impl Database {
             zip_crc32: Self::get_optional_named(row, "zip_crc32"),
             zip_compression_method: Self::get_optional_named(row, "zip_compression_method"),
             file_size_bytes: Self::get_optional_named(row, "file_size_bytes"),
+            ddl_source_id: Self::get_optional_named(row, "ddl_source_id"),
             archive_playback_can_play: None,
             archive_playback_mode: None,
             archive_playback_message: None,

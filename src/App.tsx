@@ -93,6 +93,7 @@ import {
 } from '@/utils/zipPlayback'
 import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
+import DirectLinksView from '@/components/DirectLinksView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -2801,6 +2802,29 @@ function App() {
                           onOpen={handleOpenDownload}
                           onClearHistory={handleClearDownloadHistory}
                           onDeleteJob={handleDeleteDownload}
+                        />
+                      </motion.div>
+                    )}
+
+                    {/* Direct Links View */}
+                    {view === 'directlinks' && (
+                      <motion.div
+                        key="directlinks"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <DirectLinksView
+                          onPlayMedia={async (mediaId) => {
+                            try {
+                              const media = await getMediaInfo(mediaId)
+                              if (media) {
+                                await startPlaybackFlow(media)
+                              }
+                            } catch (e: any) {
+                              toast({ title: 'Playback Error', description: String(e), variant: 'destructive' })
+                            }
+                          }}
                         />
                       </motion.div>
                     )}

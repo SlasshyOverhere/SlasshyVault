@@ -26,6 +26,7 @@ pub struct ProxyCacheSpec {
 #[derive(Debug, Clone)]
 pub enum ProxyAuth {
     GoogleDrive(gdrive::GoogleDriveClient),
+    None,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +97,10 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
                 return;
             }
         };
-        let client = match Client::builder().timeout(Duration::from_secs(60)).build() {
+        let client = match Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .tcp_nodelay(true)
+            .build() {
             Ok(client) => client,
             Err(error) => {
                 println!("[ZIP PROXY] Failed to build HTTP client: {}", error);
@@ -275,13 +279,16 @@ fn handle_request(
                     "[ZIP PROXY] Partial cache hit {} bytes, upstream {}..{}",
                     local_available_len, upstream_start, upstream_end
                 );
-                let upstream = client
+                let mut req = client
                     .get(&spec.drive_url)
-                    .header(AUTHORIZATION, format!("Bearer {}", access_token))
-                    .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
+                    .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
+                if !access_token.is_empty() {
+                    req = req.header(AUTHORIZATION, format!("Bearer {}", access_token));
+                }
+                let upstream = req
                     .send()
                     .and_then(|response| response.error_for_status())
-                    .map_err(|error| format!("Drive request failed: {}", error))?;
+                    .map_err(|error| format!("Upstream request failed: {}", error))?;
 
                 let hybrid_reader: Box<dyn Read + Send> =
                     Box::new(file.take(local_available_len).chain(upstream));
@@ -313,13 +320,16 @@ fn handle_request(
         "[ZIP PROXY] Forwarding upstream request {}..{}",
         upstream_start, upstream_end
     );
-    let upstream = client
+    let mut req = client
         .get(&spec.drive_url)
-        .header(AUTHORIZATION, format!("Bearer {}", access_token))
-        .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
+        .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
+    if !access_token.is_empty() {
+        req = req.header(AUTHORIZATION, format!("Bearer {}", access_token));
+    }
+    let upstream = req
         .send()
         .and_then(|response| response.error_for_status())
-        .map_err(|error| format!("Drive request failed: {}", error))?;
+        .map_err(|error| format!("Upstream request failed: {}", error))?;
 
     if matches!(request.method(), Method::Head) {
         let response = headers.into_iter().fold(
@@ -558,10 +568,13 @@ fn background_cache_store(
             }
         };
 
-        let mut response = match client
+        let mut req = client
             .get(&spec.drive_url)
-            .header(AUTHORIZATION, format!("Bearer {}", access_token))
-            .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end))
+            .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
+        if !access_token.is_empty() {
+            req = req.header(AUTHORIZATION, format!("Bearer {}", access_token));
+        }
+        let mut response = match req
             .send()
             .and_then(|response| response.error_for_status())
         {
@@ -648,6 +661,21 @@ pub fn build_file_proxy_spec(
     }
 }
 
+pub fn build_direct_link_proxy_spec(
+    url: String,
+    stream_info: &zip_manager::ZipStreamInfo,
+    cache_spec: Option<ProxyCacheSpec>,
+) -> ProxyStreamSpec {
+    ProxyStreamSpec {
+        drive_url: url,
+        auth: ProxyAuth::None,
+        byte_start: stream_info.byte_start,
+        byte_end: stream_info.byte_end,
+        content_type: stream_info.content_type.clone(),
+        cache_spec,
+    }
+}
+
 fn build_auth_runtime(auth: &ProxyAuth) -> Result<Option<TokioRuntime>, String> {
     match auth {
         ProxyAuth::GoogleDrive(_) => TokioRuntimeBuilder::new_current_thread()
@@ -655,6 +683,7 @@ fn build_auth_runtime(auth: &ProxyAuth) -> Result<Option<TokioRuntime>, String> 
             .build()
             .map(Some)
             .map_err(|error| error.to_string()),
+        ProxyAuth::None => Ok(None),
     }
 }
 
@@ -667,5 +696,6 @@ fn resolve_access_token(
             .as_ref()
             .ok_or_else(|| "Missing auth runtime for Google Drive proxy".to_string())?
             .block_on(client.get_access_token()),
+        ProxyAuth::None => Ok(String::new()),
     }
 }

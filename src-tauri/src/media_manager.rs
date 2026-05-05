@@ -737,6 +737,15 @@ pub fn parse_cloud_filename(filename: &str) -> ParsedMedia {
         return parsed;
     }
 
+    if let Some(parsed) = try_parse_tv_season_pack(filename_without_ext) {
+        println!(
+            "[CLOUD_PARSE] Detected as TV season pack: title='{}', S{:02}",
+            parsed.title,
+            parsed.season.unwrap_or(0)
+        );
+        return parsed;
+    }
+
     // Parse as movie
     let movie = parse_as_movie(filename_without_ext);
     println!(
@@ -978,6 +987,38 @@ fn try_parse_tv_episode(filename: &str, folder_ctx: &FolderContext) -> Option<Pa
                     });
                 }
             }
+        }
+    }
+
+    None
+}
+
+fn try_parse_tv_season_pack(filename: &str) -> Option<ParsedMedia> {
+    let patterns = [
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+S(?P<season>\d{1,2})(?:[.\s_-]|$)").ok()?,
+        Regex::new(r"(?i)^(?P<title>.+?)[.\s_-]+Season\s*(?P<season>\d{1,2})(?:[.\s_-]|$)").ok()?,
+    ];
+
+    for pattern in patterns {
+        if let Some(caps) = pattern.captures(filename) {
+            let raw_title = caps.name("title").map(|m| m.as_str()).unwrap_or("");
+            let title = clean_title(raw_title);
+            let (title, year) = extract_year_from_title(&title);
+            let title = clean_junk_from_title(&title);
+            let season = caps.name("season").and_then(|m| m.as_str().parse().ok());
+
+            if title.len() < 2 || season.is_none() {
+                continue;
+            }
+
+            return Some(ParsedMedia {
+                title,
+                year,
+                media_type: MediaParseType::TvEpisode,
+                season,
+                episode: None,
+                episode_end: None,
+            });
         }
     }
 
@@ -1477,6 +1518,18 @@ mod tests {
         assert_eq!(parsed.media_type, MediaParseType::TvEpisode);
         assert_eq!(parsed.season, Some(1));
         assert_eq!(parsed.episode, Some(3));
+    }
+
+    #[test]
+    fn test_parse_cloud_tv_season_pack() {
+        let parsed = parse_cloud_filename(
+            "If Wishes Could Kill (2026) S01 2160p NF 10bit WEB-DL DoVi HDR HEVC",
+        );
+        assert_eq!(parsed.title, "If Wishes Could Kill");
+        assert_eq!(parsed.year, Some(2026));
+        assert_eq!(parsed.media_type, MediaParseType::TvEpisode);
+        assert_eq!(parsed.season, Some(1));
+        assert_eq!(parsed.episode, None);
     }
 
     #[test]
