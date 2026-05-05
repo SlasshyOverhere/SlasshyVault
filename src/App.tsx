@@ -791,6 +791,17 @@ function App() {
     }
   }, [view])
 
+  const loadRecentlyAddedForHome = useCallback(async () => {
+    try {
+      const items = await getRecentlyAdded(10)
+      setRecentlyAdded(items)
+      return items
+    } catch (error) {
+      console.error('Failed to load recently added', error)
+      return [] as MediaItem[]
+    }
+  }, [])
+
   const loadContinueWatching = useCallback(async () => {
     try {
       const history = await getWatchHistory()
@@ -867,6 +878,15 @@ function App() {
       setIsHomeSearching(false)
     }
   }, [homeSearchQuery])
+
+  const handleDdlIndexComplete = useCallback(async ({ contentName }: { mediaIds: number[]; contentName: string }) => {
+    setView('home')
+    await loadRecentlyAddedForHome()
+    toast({
+      title: 'Content Indexed',
+      description: `${contentName} is now available in Newly Added.`
+    })
+  }, [loadRecentlyAddedForHome])
 
   const fetchData = useCallback(async () => {
     try {
@@ -2447,9 +2467,9 @@ function App() {
                                         <motion.div
                                           key={item.id}
                                           initial={{ opacity: 0, scale: 0.9 }}
-                                          animate={{ opacity: 1, scale: 1 }}
+                                          animate={{ opacity: 1, scale: 1, y: 0 }}
                                           transition={{ delay: index * 0.04 }}
-                                          className="aspect-[2/3]"
+                                          className="aspect-[2/3] rounded-[1.4rem]"
                                         >
                                           <MovieCard
                                             item={item}
@@ -2813,19 +2833,12 @@ function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
+                        className="relative min-h-[calc(100vh-80px)]"
                       >
-                        <DirectLinksView
-                          onPlayMedia={async (mediaId) => {
-                            try {
-                              const media = await getMediaInfo(mediaId)
-                              if (media) {
-                                await startPlaybackFlow(media)
-                              }
-                            } catch (e: any) {
-                              toast({ title: 'Playback Error', description: String(e), variant: 'destructive' })
-                            }
-                          }}
-                        />
+                        {/* Background Decorative Layer - Matching Home View Aesthetic */}
+                        <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
+                        <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
+                        <DirectLinksView onIndexComplete={handleDdlIndexComplete} />
                       </motion.div>
                     )}
 

@@ -12512,12 +12512,17 @@ async fn ddl_index_archive(
                 .filter_map(|e| e.season)
                 .collect();
             for season_num in seasons {
+                let season_episode_total = result
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.season == Some(season_num))
+                    .count();
                 emit_ddl_progress(
                     "fetching-episode-metadata",
                     format!("Fetching episode metadata for Season {}...", season_num),
                     Some(result.source.filename.clone()),
                     Some(0),
-                    Some(result.entries.len()),
+                    Some(season_episode_total),
                     Some(season_num),
                     None,
                     None,
@@ -12551,6 +12556,19 @@ async fn ddl_index_archive(
                                 ep.air_date.as_deref(),
                             );
                         }
+                        emit_ddl_progress(
+                            "fetching-episode-metadata",
+                            format!(
+                                "Cached metadata for Season {}.",
+                                season_num
+                            ),
+                            Some(result.source.filename.clone()),
+                            Some(season_episode_total),
+                            Some(season_episode_total),
+                            Some(season_num),
+                            None,
+                            season_info.episodes.last().map(|ep| ep.name.clone()),
+                        );
                         println!(
                             "[DDL] Cached {} episode stills for S{:02}",
                             season_info.episodes.len(),

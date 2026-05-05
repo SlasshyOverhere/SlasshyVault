@@ -158,8 +158,8 @@ export function Sidebar({
                   className={cn(
                     "group relative w-full flex items-center gap-3 px-3.5 py-3 rounded-xl transition-colors duration-300",
                     isActive
-                      ? "bg-white/[0.08] text-white shadow-[0_0_20px_rgba(255,255,255,0.05)] border border-white/10"
-                      : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.03]",
+                      ? "bg-white/[0.12] text-white shadow-[0_0_25px_rgba(255,255,255,0.08)] border border-white/20 backdrop-blur-md"
+                      : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.04]",
                     item.paused ? "opacity-75" : "",
                     isCollapsed ? "justify-center px-0" : ""
                   )}
@@ -169,12 +169,12 @@ export function Sidebar({
                     <>
                       <motion.div
                         layoutId="active-glow"
-                        className="absolute inset-0 rounded-xl bg-white/5 blur-md"
+                        className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/10 to-transparent blur-xl opacity-50"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
                       <motion.div
                         layoutId="active-pill"
-                        className="absolute left-0 inset-y-0 my-auto w-1 h-6 bg-white rounded-r-full shadow-[0_0_15px_rgba(255,255,255,0.5)]"
+                        className="absolute left-0 inset-y-0 my-auto w-1 h-8 bg-white rounded-r-full shadow-[0_0_20px_rgba(255,255,255,0.8)]"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
                     </>

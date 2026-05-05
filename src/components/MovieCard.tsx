@@ -386,10 +386,10 @@ function MovieCardBase({
               "absolute -inset-2 rounded-3xl blur-2xl transition-opacity duration-500 pointer-events-none",
               isHovered ? "opacity-100" : "opacity-0"
             )}
+            animate={enableMotionEffects ? { opacity: isHovered ? 1 : 0 } : undefined}
             style={{
               background: `radial-gradient(circle at center, rgba(255, 255, 255, 0.2) 0%, transparent 70%)`,
             }}
-            animate={enableMotionEffects ? { opacity: isHovered ? 1 : 0 } : undefined}
           />
 
           {/* Card Container */}
