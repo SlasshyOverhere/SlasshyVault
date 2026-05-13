@@ -157,6 +157,10 @@ impl WatchTogetherController {
             CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
         };
 
+        if self.connected.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // Wait for MPV to create the pipe
         let mut file = None;
         for _ in 0..50 {
@@ -210,6 +214,21 @@ impl WatchTogetherController {
         let connected = self.connected.clone();
         let ignoring = self.ignoring_on_the_fly.clone();
 
+        // Channel for state updates from the blocking reader to the async world
+        let (state_tx, mut state_rx) = tokio::sync::mpsc::unbounded_channel::<PlayerState>();
+
+        // Spawn a dedicated async task that owns the state and receives updates via the channel
+        let local_state_clone = local_state.clone();
+        tokio::spawn(async move {
+            while let Some(new_state) = state_rx.recv().await {
+                let mut s = local_state_clone.write().await;
+                s.position = new_state.position;
+                s.paused = new_state.paused;
+                s.duration = new_state.duration;
+                s.last_update = new_state.last_update;
+            }
+        });
+
         // Spawn writer task - sends commands to MPV pipe
         let write_connected = connected.clone();
         tokio::task::spawn_blocking(move || {
@@ -251,16 +270,14 @@ impl WatchTogetherController {
                                     Some("time-pos") => {
                                         if let Some(serde_json::Value::Number(n)) = &event.data {
                                             if let Some(pos) = n.as_f64() {
-                                                // Update local state
-                                                let state = local_state.clone();
-                                                let rt = tokio::runtime::Handle::try_current();
-                                                if let Ok(rt) = rt {
-                                                    rt.block_on(async {
-                                                        let mut s = state.write().await;
-                                                        s.position = pos;
-                                                        s.last_update = std::time::Instant::now();
-                                                    });
-                                                }
+                                                // Send state update via channel instead of block_on
+                                                let _ = state_tx.send(PlayerState {
+                                                    position: pos,
+                                                    duration: 0.0,
+                                                    paused: last_paused,
+                                                    speed: 1.0,
+                                                    last_update: std::time::Instant::now(),
+                                                });
                                                 last_position = pos;
                                                 if pending_user_seek {
                                                     pending_user_seek = false;
@@ -274,15 +291,13 @@ impl WatchTogetherController {
                                     Some("pause") => {
                                         if let Some(serde_json::Value::Bool(paused)) = &event.data {
                                             let paused = *paused;
-                                            let state = local_state.clone();
-                                            let rt = tokio::runtime::Handle::try_current();
-                                            if let Ok(rt) = rt {
-                                                rt.block_on(async {
-                                                    let mut s = state.write().await;
-                                                    s.paused = paused;
-                                                    s.last_update = std::time::Instant::now();
-                                                });
-                                            }
+                                            let _ = state_tx.send(PlayerState {
+                                                position: last_position,
+                                                duration: 0.0,
+                                                paused,
+                                                speed: 1.0,
+                                                last_update: std::time::Instant::now(),
+                                            });
 
                                             // Only emit event if this is a USER action (not echo)
                                             let ign = ignoring.load(Ordering::SeqCst);
@@ -302,14 +317,13 @@ impl WatchTogetherController {
                                     Some("duration") => {
                                         if let Some(serde_json::Value::Number(n)) = &event.data {
                                             if let Some(dur) = n.as_f64() {
-                                                let state = local_state.clone();
-                                                let rt = tokio::runtime::Handle::try_current();
-                                                if let Ok(rt) = rt {
-                                                    rt.block_on(async {
-                                                        let mut s = state.write().await;
-                                                        s.duration = dur;
-                                                    });
-                                                }
+                                                let _ = state_tx.send(PlayerState {
+                                                    position: last_position,
+                                                    duration: dur,
+                                                    paused: last_paused,
+                                                    speed: 1.0,
+                                                    last_update: std::time::Instant::now(),
+                                                });
                                             }
                                         }
                                     }

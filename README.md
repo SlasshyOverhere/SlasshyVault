@@ -150,6 +150,29 @@ This project is entirely **vibe-coded** as a hobby project.
 ---
 
 
+## Testing
+
+### Frontend Tests
+```bash
+npm test
+```
+
+### Backend Tests
+```bash
+cd src-tauri
+cargo test
+```
+
+### Lint
+```bash
+npm run lint
+```
+
+### Type Check
+```bash
+npx tsc --noEmit
+```
+
 ## License
 
 [MIT License](LICENSE)

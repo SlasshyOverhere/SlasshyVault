@@ -173,6 +173,7 @@ const getPreferredEpisodeSize = (episode: MediaItem): number | null => {
   return episode.file_size_bytes ?? episode.zip_uncompressed_size ?? episode.zip_compressed_size ?? null
 }
 
+// TODO: Extract this to a shared component (duplicated in EpisodeBrowser.tsx)
 function EpisodeThumbnailImage({
   localStillPath,
   tmdbStillUrl,
@@ -633,7 +634,9 @@ export function ContentDetailsModal({
             const chosen = exactMatch ?? results.find(r => r.media_type === expectedType && !!r.backdrop_path)
             nextHero = getTmdbImageUrl(chosen?.backdrop_path, "original")
           }
-        } catch { /* ignore */ }
+        } catch (error) {
+          console.warn("Failed to fetch hero image fallback:", error);
+        }
       }
 
       if (!nextHero) nextHero = poster
@@ -1095,15 +1098,12 @@ export function ContentDetailsModal({
             {heroImageUrl ? (
               <img 
                 src={heroImageUrl} 
-                alt="" 
+                alt={displayTitle + " poster"}
                 className="w-full h-full object-cover opacity-60 transition-opacity duration-500" 
               />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-[#11141d] to-[#07080b]" />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#090a0d] via-[#090a0d]/80 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-r from-[#090a0d]/90 via-transparent to-[#090a0d]/40" />
-            <div className="absolute inset-0 bg-black/20" />
           </div>
 
           {/* Content Layer */}
@@ -1112,7 +1112,7 @@ export function ContentDetailsModal({
               <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
                 {posterImageUrl && !isShow && (
                   <div className="hidden sm:block w-[160px] aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border border-white/10 shrink-0 scale-100 hover:scale-[1.02] transition-transform duration-500">
-                    <img src={posterImageUrl} alt="" className="w-full h-full object-cover" />
+                    <img src={posterImageUrl} alt={displayTitle + " poster"} className="w-full h-full object-cover" />
                   </div>
                 )}
                 <div className="flex-1 min-w-0">

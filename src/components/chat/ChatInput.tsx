@@ -8,7 +8,7 @@ interface ChatInputProps {
   friendId: string;
 }
 
-export function ChatInput({ friendId }: ChatInputProps) {
+export function ChatInput({ friendId }: ChatInputProps): JSX.Element {
   const [message, setMessage] = useState('');
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 

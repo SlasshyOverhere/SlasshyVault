@@ -1,3 +1,4 @@
+import React from "react"
 import { Bell, Clapperboard, Film, Inbox, Tv } from "lucide-react"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -44,6 +45,36 @@ function formatNotificationTime(value: string) {
   })
 }
 
+const NotificationItem = React.memo(function NotificationItem({ item }: { item: NotificationCenterItem }) {
+  return (
+    <div
+      className={cn(
+        "rounded-[1.75rem] border px-5 py-4 transition-colors",
+        item.read
+          ? "border-white/6 bg-white/[0.025]"
+          : "border-white/12 bg-white/[0.05]",
+      )}
+    >
+      <div className="flex items-start gap-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/30">
+          <NotificationIcon category={item.category} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h4 className="truncate text-sm font-black tracking-tight text-white">{item.title}</h4>
+              <p className="mt-1 text-sm leading-relaxed text-white/55">{item.message}</p>
+            </div>
+            <div className="shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-white/25">
+              {formatNotificationTime(item.createdAt)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+})
+
 function NotificationIcon({ category }: { category: NotificationCenterItem["category"] }) {
   if (category === "reminder") {
     return <Clapperboard className="w-4 h-4 text-white/80" />
@@ -86,6 +117,7 @@ export function NotificationCenter({
             </div>
             <button
               onClick={onClearAll}
+              aria-label="Clear all notifications"
               className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-white/55 transition-colors hover:bg-white/[0.08] hover:text-white"
               type="button"
             >
@@ -100,6 +132,7 @@ export function NotificationCenter({
               <button
                 key={filter.id}
                 type="button"
+                aria-label={`Filter by ${filter.label}`}
                 onClick={() => onFilterChange(filter.id)}
                 className={cn(
                   "rounded-2xl px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] transition-all",
@@ -128,32 +161,7 @@ export function NotificationCenter({
               </div>
             ) : (
               filteredItems.map((item) => (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "rounded-[1.75rem] border px-5 py-4 transition-colors",
-                    item.read
-                      ? "border-white/6 bg-white/[0.025]"
-                      : "border-white/12 bg-white/[0.05]",
-                  )}
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/30">
-                      <NotificationIcon category={item.category} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <h4 className="truncate text-sm font-black tracking-tight text-white">{item.title}</h4>
-                          <p className="mt-1 text-sm leading-relaxed text-white/55">{item.message}</p>
-                        </div>
-                        <div className="shrink-0 text-[10px] font-black uppercase tracking-[0.18em] text-white/25">
-                          {formatNotificationTime(item.createdAt)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <NotificationItem key={item.id} item={item} />
               ))
             )}
           </div>

@@ -35,11 +35,11 @@ impl SocialAuthClient {
     }
 
     pub fn is_authenticated(&self) -> bool {
-        self.tokens.lock().unwrap().is_some()
+        self.tokens.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 
     pub async fn get_access_token(&self, auth_server_url: Option<&str>) -> Result<String, String> {
-        let tokens = self.tokens.lock().unwrap().clone();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         match tokens {
             Some(t) => {
@@ -96,7 +96,7 @@ impl SocialAuthClient {
         let expires_in = token_response["expires_in"].as_i64().unwrap_or(3600);
         let expires_at = chrono::Utc::now().timestamp() + expires_in;
 
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut t) = *tokens {
             t.access_token = access_token.clone();
             t.expires_at = Some(expires_at);
@@ -108,12 +108,12 @@ impl SocialAuthClient {
 
     pub fn store_tokens(&self, tokens: GoogleTokens) -> Result<(), String> {
         save_tokens(&tokens)?;
-        *self.tokens.lock().unwrap() = Some(tokens);
+        *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = Some(tokens);
         Ok(())
     }
 
     pub fn clear_tokens(&self) -> Result<(), String> {
-        *self.tokens.lock().unwrap() = None;
+        *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let path = get_tokens_path();
         if path.exists() {
             fs::remove_file(path)
@@ -161,6 +161,17 @@ fn get_tokens_path() -> PathBuf {
     get_app_data_dir().join("social_tokens.json")
 }
 
+fn obfuscate(data: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    BASE64.encode(data)
+}
+
+fn deobfuscate(data: &str) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    let bytes = BASE64.decode(data).map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
+}
+
 fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
     let path = get_tokens_path();
     let json = serde_json::to_string_pretty(tokens)
@@ -170,13 +181,15 @@ fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
         fs::create_dir_all(parent).ok();
     }
 
-    fs::write(&path, json).map_err(|e| format!("Failed to save social auth tokens: {}", e))
+    let encoded = obfuscate(&json);
+    fs::write(&path, encoded).map_err(|e| format!("Failed to save social auth tokens: {}", e))
 }
 
 fn load_tokens() -> Result<GoogleTokens, String> {
     let path = get_tokens_path();
-    let json = fs::read_to_string(&path)
+    let encoded = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read social auth tokens: {}", e))?;
 
+    let json = deobfuscate(&encoded)?;
     serde_json::from_str(&json).map_err(|e| format!("Failed to parse social auth tokens: {}", e))
 }

@@ -228,6 +228,7 @@ export function SocialView() {
             onClick={handleConnect}
             disabled={connecting}
             className="bg-purple-600 hover:bg-purple-700"
+            aria-label="Connect with Google"
           >
             {connecting ? (
               <>
@@ -256,10 +257,11 @@ export function SocialView() {
             <button
               onClick={() => setShowProfileEditor(true)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800/50 hover:bg-zinc-700/50 transition-colors cursor-pointer"
+              aria-label="Edit profile"
             >
               <div className="w-6 h-6 rounded-full bg-zinc-700 overflow-hidden">
                 {profile.avatarUrl ? (
-                  <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
+                  <img src={profile.avatarUrl} alt={profile.displayName} className="w-full h-full object-cover" />
                 ) : (
                   <User className="w-full h-full p-1 text-zinc-500" />
                 )}
@@ -278,6 +280,7 @@ export function SocialView() {
             size="sm"
             onClick={() => setShowPrivacySettings(true)}
             className="border-zinc-700"
+            aria-label="Open privacy settings"
           >
             <Shield className="w-4 h-4 mr-2" />
             Privacy
@@ -285,6 +288,7 @@ export function SocialView() {
           <Button
             onClick={() => setShowFriendsPanel(true)}
             className="bg-purple-600 hover:bg-purple-700 relative"
+            aria-label="Open friends panel"
           >
             <Users className="w-4 h-4 mr-2" />
             Friends
@@ -299,6 +303,7 @@ export function SocialView() {
             size="sm"
             onClick={() => { void handleDisconnect(); }}
             className="border-red-500/50 text-red-500 hover:bg-red-500/10"
+            aria-label="Disconnect social account"
           >
             <LogIn className="w-4 h-4 mr-2 rotate-180" />
             Disconnect

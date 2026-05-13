@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 import {
   CalendarRange,
   CheckCircle2,
@@ -61,7 +61,7 @@ const buildEpisodeLabel = (event: WatchHistoryEvent) => {
   return event.episode_title ? `${code} • ${event.episode_title}` : code;
 };
 
-export function HistoryEventCard({
+export const HistoryEventCard = memo(function HistoryEventCard({
   event,
   onOpen,
   onRemove,
@@ -106,6 +106,7 @@ export function HistoryEventCard({
           type="button"
           onClick={() => onOpen?.(event)}
           disabled={!canOpen}
+          aria-label={canOpen ? `Open ${title}` : undefined}
           className={cn(
             "flex min-w-0 items-center gap-3 rounded-[14px] border border-transparent px-2 py-1.5 text-left transition-colors",
             canOpen ? "hover:border-white/8 hover:bg-white/[0.03]" : "cursor-default",
@@ -272,4 +273,4 @@ export function HistoryEventCard({
       </div>
     </div>
   );
-}
+})

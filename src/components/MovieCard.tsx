@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Cloud, Download } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
@@ -189,6 +189,9 @@ function MovieCardBase({
               onClick={() => onClick(item)}
               onMouseEnter={handleHoverStart}
               onMouseLeave={handleHoverEnd}
+              onFocus={handleHoverStart}
+              onBlur={handleHoverEnd}
+              tabIndex={0}
               initial={shouldAnimateEntry ? { opacity: 0, y: 12 } : false}
               animate={shouldAnimateEntry ? { opacity: 1, y: 0 } : undefined}
               transition={shouldAnimateEntry
@@ -267,6 +270,7 @@ function MovieCardBase({
             <ContextMenuItem
               onClick={() => onClick(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+              aria-label="Open details"
             >
               <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
                 <Play className="w-4 h-4 text-white" />
@@ -279,6 +283,7 @@ function MovieCardBase({
             <ContextMenuItem
               onClick={() => onFixMatch(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+              aria-label="Fix match"
             >
               <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
                 <Edit className="w-4 h-4 text-muted-foreground" />
@@ -290,6 +295,7 @@ function MovieCardBase({
               <ContextMenuItem
                 onClick={() => onAskAI(item)}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
+                aria-label="Ask AI about this title"
               >
                 <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
                   <Bot className="w-4 h-4 text-amber-300" />
@@ -302,6 +308,7 @@ function MovieCardBase({
               <ContextMenuItem
                 onClick={() => onDownload(item)}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
+                aria-label="Download"
               >
                 <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
                   <Download className="w-4 h-4 text-amber-200" />
@@ -316,6 +323,7 @@ function MovieCardBase({
                 <ContextMenuItem
                   onClick={() => onWatchTogether(item)}
                   className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+                  aria-label="Watch together"
                 >
                   <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
                     <Users className="w-4 h-4 text-white" />
@@ -331,6 +339,7 @@ function MovieCardBase({
                 <ContextMenuItem
                   onClick={() => onRemoveFromHistory(item)}
                   className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+                  aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}
                 >
                   <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
                     <X className="w-4 h-4 text-muted-foreground" />
@@ -346,6 +355,7 @@ function MovieCardBase({
                 <ContextMenuItem
                   onClick={() => onDelete(item)}
                   className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
+                  aria-label="Delete from drive"
                 >
                   <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
                     <Trash2 className="w-4 h-4 text-red-400" />
@@ -370,6 +380,9 @@ function MovieCardBase({
             onClick={() => onClick(item)}
             onMouseEnter={handleHoverStart}
             onMouseLeave={handleHoverEnd}
+            onFocus={handleHoverStart}
+            onBlur={handleHoverEnd}
+            tabIndex={0}
             initial={shouldAnimateEntry ? { opacity: 0, y: 30, scale: 0.95 } : false}
             animate={shouldAnimateEntry ? { opacity: 1, y: 0, scale: 1 } : undefined}
             transition={shouldAnimateEntry
@@ -644,6 +657,7 @@ function MovieCardBase({
         <ContextMenuItem
           onClick={() => onClick(item)}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+          aria-label="Open details"
         >
           <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
             <Play className="w-4 h-4 text-white" />
@@ -656,6 +670,7 @@ function MovieCardBase({
         <ContextMenuItem
           onClick={() => onFixMatch(item)}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+          aria-label="Fix match"
         >
           <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
             <Edit className="w-4 h-4 text-muted-foreground" />
@@ -667,6 +682,7 @@ function MovieCardBase({
           <ContextMenuItem
             onClick={() => onAskAI(item)}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
+            aria-label="Ask AI about this title"
           >
             <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
               <Bot className="w-4 h-4 text-amber-300" />
@@ -679,6 +695,7 @@ function MovieCardBase({
           <ContextMenuItem
             onClick={() => onDownload(item)}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
+            aria-label="Download"
           >
             <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
               <Download className="w-4 h-4 text-amber-200" />
@@ -693,6 +710,7 @@ function MovieCardBase({
             <ContextMenuItem
               onClick={() => onWatchTogether(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+              aria-label="Watch together"
             >
               <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
                 <Users className="w-4 h-4 text-white" />
@@ -708,6 +726,7 @@ function MovieCardBase({
             <ContextMenuItem
               onClick={() => onRemoveFromHistory(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
+              aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}
             >
               <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
                 <X className="w-4 h-4 text-muted-foreground" />
@@ -723,6 +742,7 @@ function MovieCardBase({
             <ContextMenuItem
               onClick={() => onDelete(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
+              aria-label="Delete from drive"
             >
               <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
                 <Trash2 className="w-4 h-4 text-red-400" />
@@ -793,6 +813,12 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
     ? item.duration_seconds - item.resume_position_seconds
     : null
   const remainingMinutes = remainingSeconds ? Math.ceil(remainingSeconds / 60) : null
+  const formatRemaining = (mins: number) => {
+    if (mins < 60) return `${mins}m left`
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
+    return m > 0 ? `${h}h ${m}m left` : `${h}h left`
+  }
 
   return (
     <motion.div
@@ -816,116 +842,76 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
       <motion.div
         className={cn(
           "relative flex rounded-2xl overflow-hidden cursor-pointer",
-          "h-[155px] min-w-[340px] max-w-[420px]",
-          "bg-card/80 backdrop-blur-sm border border-white/[0.08]",
+          "h-[155px] min-w-[300px] max-w-[380px]",
+          "border border-white/[0.08]",
           "transition-all duration-400",
-          isHovered && "border-white/30"
+          isHovered && "border-white/25"
         )}
         animate={{
-          y: isHovered ? -5 : 0,
-          scale: isHovered ? 1.01 : 1,
+          y: isHovered ? -6 : 0,
+          scale: isHovered ? 1.02 : 1,
         }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.35 }}
         style={{
           boxShadow: isHovered
-            ? '0 20px 40px -12px rgba(0,0,0,0.5), 0 0 30px -5px rgba(255, 255, 255, 0.15)'
-            : '0 4px 6px -1px rgba(0,0,0,0.2)',
+            ? '0 24px 48px -12px rgba(0,0,0,0.6), 0 0 40px -8px rgba(255,255,255,0.1)'
+            : '0 8px 12px -4px rgba(0,0,0,0.3)',
         }}
       >
-        {/* Blurred background effect */}
-        {posterUrl && (
-          <div
-            className="absolute inset-0 opacity-15 blur-3xl scale-125 pointer-events-none"
-            style={{ backgroundImage: `url(${posterUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-          />
-        )}
+        {/* Full-bleed poster background */}
+        <motion.img
+          src={imageSrc}
+          alt={item.title}
+          className="absolute inset-0 w-full h-full object-cover"
+          animate={{ scale: isHovered ? 1.08 : 1 }}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        />
 
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-r from-card via-card/95 to-card/80 z-0" />
+        {/* Dark gradient overlay for text readability */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 via-40% to-black/10 z-[1]" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-transparent z-[1]" />
 
-        {/* Poster */}
-        <div className="relative w-[110px] h-full flex-shrink-0 overflow-hidden z-10">
-          <motion.img
-            src={imageSrc}
-            alt={item.title}
-            className="w-full h-full object-cover"
-            animate={{
-              scale: isHovered ? 1.1 : 1,
-            }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-          />
+        {/* Content overlay */}
+        <div className="relative flex flex-col justify-end z-10 p-4 w-full h-full">
+          <h4 className="text-base font-black text-white leading-tight line-clamp-1">
+            {item.title}
+          </h4>
 
-          {/* Poster gradient fade */}
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-card pointer-events-none" />
-
-        </div>
-
-        {/* Content */}
-        <div className="relative flex-1 p-5 flex flex-col justify-between z-10 min-w-0">
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                {item.media_type === 'tvshow' && (
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10">
-                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Series</span>
-                  </div>
-                )}
-                {item.is_cloud && (
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10 group-hover:bg-white/10 transition-colors">
-                    <Cloud className="w-2.5 h-2.5 text-white/40" />
-                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Cloud</span>
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-            <h4 className="font-bold text-[16px] text-white leading-tight line-clamp-1 mb-1 group-hover:text-amber-200 transition-colors">
-              {item.title}
-            </h4>
-            
-            {item.season_number && item.episode_number && (
-              <p className="text-[11px] text-white/50 font-medium tracking-wide uppercase flex items-center gap-2">
-                <span>Season {item.season_number}</span>
-                <span className="w-1 h-1 rounded-full bg-white/10" />
-                <span>Episode {item.episode_number}</span>
-              </p>
-            )}
-
-            {item.episode_title && (
-              <p className="text-[11px] text-white/30 font-medium line-clamp-1 italic mt-1.5">
-                "{item.episode_title}"
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2.5">
-            <div className="flex items-end justify-between text-[11px]">
-              <div className="flex items-center gap-1.5">
-                <span className="text-white font-bold">{Math.round(progress)}%</span>
-                <span className="text-white/20 uppercase text-[9px] tracking-widest font-medium">completed</span>
-              </div>
-              {remainingMinutes && (
-                <div className="flex items-center gap-1 text-amber-500/60 font-medium">
-                  <Clock className="w-3 h-3" />
-                  <span>{remainingMinutes}m left</span>
-                </div>
+          {(item.media_type === 'movie' || (item.season_number && item.episode_number) || item.episode_title) && (
+            <div className="flex items-center gap-1.5 text-[11px] text-white/50 min-w-0 mt-0.5">
+              {item.media_type === 'movie' ? (
+                <span className="text-amber-400/80">Movie</span>
+              ) : item.season_number && item.episode_number ? (
+                <span className="text-amber-400/80">S{item.season_number} · E{item.episode_number}</span>
+              ) : null}
+              {item.episode_title && (
+                <>
+                  <span className="text-white/30">—</span>
+                  <span className="italic text-white/50 truncate min-w-0">{item.episode_title}</span>
+                </>
               )}
             </div>
+          )}
 
-            {/* Sleek Progress Bar */}
-            <div className="h-1.5 rounded-full bg-white/5 border border-white/5 overflow-hidden">
-              <motion.div
-                className="h-full bg-gradient-to-r from-amber-600 to-amber-500 relative"
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
-              >
-                {/* Subtle Moving Shimmer */}
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
-              </motion.div>
-            </div>
+          <div className="flex items-center justify-between mt-1.5">
+            {remainingMinutes && (
+              <div className="flex items-center gap-1 text-[11px] text-white/35 font-medium">
+                <Clock className="w-3 h-3" />
+                <span>{formatRemaining(remainingMinutes)}</span>
+              </div>
+            )}
+            <span className="text-[10px] font-medium text-white/50 tabular-nums">{Math.round(progress)}%</span>
           </div>
+        </div>
+
+        {/* Progress bar at very bottom */}
+        <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/[0.06] z-[2]">
+          <motion.div
+            className="h-full bg-gradient-to-r from-amber-600 to-amber-500"
+            initial={{ width: 0 }}
+            animate={{ width: `${progress}%` }}
+            transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+          />
         </div>
       </motion.div>
     </motion.div>

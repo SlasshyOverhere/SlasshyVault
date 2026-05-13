@@ -77,11 +77,12 @@ coverage/
 # PR review workspace
 pr-review-workspace/
 
-# Markdown files (only allow README)
-*.md
-!README.md
-!CHANGELOG*.md
-!release_notes*.md
+# Documentation
+DEV_*.md
+IMPROVEMENTS*.md
+ROUNDED_*.md
+SECURITY_*.md
+SIMULTANEOUS_*.md
 
 # Documentation bloat
 DEV_*.md

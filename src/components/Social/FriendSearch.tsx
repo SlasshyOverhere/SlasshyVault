@@ -83,7 +83,7 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
             >
               <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden">
                 {user.avatarUrl ? (
-                  <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                  <img src={user.avatarUrl} alt={`${user.displayName}'s avatar`} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-zinc-500 bg-gradient-to-br from-zinc-800 to-zinc-900">
                     <User className="w-5 h-5 opacity-50" />
@@ -98,6 +98,7 @@ export function FriendSearch({ excludeIds }: FriendSearchProps) {
                 disabled={isPending}
                 onClick={() => handleAddFriend(user.id, user.displayName)}
                 className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg h-8 text-xs font-bold"
+                aria-label={isPending ? `Friend request sent to ${user.displayName}` : `Add ${user.displayName} as friend`}
               >
                 {isPending ? (
                   "Sent"

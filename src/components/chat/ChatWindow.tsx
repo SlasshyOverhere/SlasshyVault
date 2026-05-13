@@ -11,7 +11,6 @@ import {
   onSocialEvent,
   ChatMessage,
   Friend,
-  formatRelativeTime as _formatRelativeTime
 } from '@/services/social';
 
 interface ChatWindowProps {
@@ -108,7 +107,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
           <div className="relative">
             <div className="w-8 h-8 rounded-full bg-zinc-700 overflow-hidden">
               {friend.avatar ? (
-                <img src={friend.avatar} alt="" className="w-full h-full object-cover" />
+                <img src={friend.avatar} alt={friend.name + "'s avatar"} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-zinc-400 text-sm">
                   {friend.name.charAt(0).toUpperCase()}

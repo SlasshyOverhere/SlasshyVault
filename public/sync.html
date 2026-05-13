@@ -20,21 +20,38 @@
 
             // Send progress data to parent window (Tauri app)
             if (window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'streamvault_progress_sync',
-                    data: progress
-                }, '*');
+                try {
+                    window.parent.postMessage({
+                        type: 'streamvault_progress_sync',
+                        data: progress
+                    }, 'tauri://localhost');
+                } catch (e) {
+                    console.warn('[Sync] postMessage to tauri://localhost failed, falling back to *:', e);
+                    window.parent.postMessage({
+                        type: 'streamvault_progress_sync',
+                        data: progress
+                    }, '*');
+                }
             }
 
             console.log('[Sync] Sent progress data:', Object.keys(progress).length, 'items');
         } catch (e) {
             console.error('[Sync] Failed to read progress:', e);
             if (window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'streamvault_progress_sync',
-                    data: {},
-                    error: e.message
-                }, '*');
+                try {
+                    window.parent.postMessage({
+                        type: 'streamvault_progress_sync',
+                        data: {},
+                        error: e.message
+                    }, 'tauri://localhost');
+                } catch (e2) {
+                    console.warn('[Sync] postMessage to tauri://localhost failed, falling back to *:', e2);
+                    window.parent.postMessage({
+                        type: 'streamvault_progress_sync',
+                        data: {},
+                        error: e.message
+                    }, '*');
+                }
             }
         }
     </script>

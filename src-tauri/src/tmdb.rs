@@ -35,6 +35,20 @@ pub fn get_tmdb_proxy_base_url() -> String {
         }
     }
 
+    // Check config file for tmdb_proxy_url override
+    if let Some(app_data) = dirs::data_dir().map(|d| d.join("StreamVault").join("config.json")) {
+        if let Ok(contents) = std::fs::read_to_string(&app_data) {
+            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(proxy_url) = config.get("tmdb_proxy_url").and_then(|v| v.as_str()) {
+                    let trimmed = proxy_url.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.trim_end_matches('/').to_string();
+                    }
+                }
+            }
+        }
+    }
+
     if cfg!(debug_assertions) {
         "http://localhost:3001/api/tmdb".to_string()
     } else {

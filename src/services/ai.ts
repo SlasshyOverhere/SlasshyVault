@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/tauri';
 import { arch, locale, platform, type as osType, version as osVersion } from '@tauri-apps/api/os';
 import { getDefaultAuthServerUrl, getDevSettings, getSocialCredentials, setSocialAccessToken } from './social';
 import { isDev } from '../config/social';
@@ -113,7 +114,6 @@ interface SignedFetchResult<T> {
 
 const AI_INSTALL_ID_KEY = 'streamvault_ai_install_id';
 const AI_DEVICE_SIGNATURE_KEY = 'streamvault_ai_device_signature';
-const AI_SIGNATURE_SECRET = (import.meta.env.VITE_AI_SIGNATURE_SECRET || '').trim();
 const REQUEST_TIMEOUT_MS = 30000;
 
 export class AiApiError extends Error {
@@ -153,25 +153,6 @@ async function sha256Hex(input: string): Promise<string> {
   return bytesToHex(digest);
 }
 
-async function hmacSha256Hex(secret: string, input: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input));
-  return bytesToHex(signature);
-}
-
-function generateNonce(): string {
-  const random = typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID().replace(/-/g, '')
-    : Math.random().toString(36).slice(2, 14);
-  return `${Date.now().toString(36)}_${random}`;
-}
-
 async function getDeviceSignature(installId: string): Promise<string> {
   const cached = localStorage.getItem(AI_DEVICE_SIGNATURE_KEY);
   if (cached && cached.trim()) return cached;
@@ -197,7 +178,8 @@ async function getDeviceSignature(installId: string): Promise<string> {
     const signature = await sha256Hex(base);
     localStorage.setItem(AI_DEVICE_SIGNATURE_KEY, signature);
     return signature;
-  } catch {
+  } catch (sigError) {
+    console.warn('[AI] Failed to get device signature, using fallback:', sigError);
     const fallback = await sha256Hex(`fallback|${installId}`);
     localStorage.setItem(AI_DEVICE_SIGNATURE_KEY, fallback);
     return fallback;
@@ -223,8 +205,8 @@ function parseRateLimitHeaders(headers: Headers): AiRateLimitHeaders | null {
 }
 
 function extractErrorMessage(status: number, payload: unknown): string {
-  if (payload && typeof payload === 'object') {
-    const candidate = (payload as Record<string, unknown>).error;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const candidate = 'error' in payload ? (payload as { error: unknown }).error : undefined;
     if (typeof candidate === 'string' && candidate.trim()) {
       return candidate;
     }
@@ -233,33 +215,20 @@ function extractErrorMessage(status: number, payload: unknown): string {
 }
 
 async function buildSignedHeaders(method: string, path: string, body: unknown): Promise<Record<string, string>> {
-  if (!AI_SIGNATURE_SECRET) {
-    throw new AiApiError(
-      'AI signing secret missing. Set VITE_AI_SIGNATURE_SECRET in desktop frontend env.',
-      503
-    );
-  }
-  if (!crypto?.subtle) {
-    throw new AiApiError('Secure crypto API is unavailable in this runtime.', 503);
-  }
-
-  const timestamp = Date.now();
-  const nonce = generateNonce();
-  const payloadForHash = body === undefined ? {} : body;
-  const bodyHash = await sha256Hex(JSON.stringify(payloadForHash));
-  const signatureBase = `${method.toUpperCase()}\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`;
-  const signature = await hmacSha256Hex(AI_SIGNATURE_SECRET, signatureBase);
-
   const installId = ensureInstallId();
   const deviceSignature = await getDeviceSignature(installId);
 
-  return {
-    'x-ai-timestamp': String(timestamp),
-    'x-ai-nonce': nonce,
-    'x-ai-signature': signature,
-    'x-device-id': installId,
-    'x-device-signature': deviceSignature,
-  };
+  try {
+    return await invoke<Record<string, string>>('ai_sign_headers', {
+      method,
+      path,
+      body: body ?? {},
+      installId,
+      deviceSignature,
+    });
+  } catch {
+    throw new AiApiError('Failed to sign AI request headers via backend', 503);
+  }
 }
 
 async function resolveAuthTokenForAi(): Promise<string | null> {
@@ -274,8 +243,8 @@ async function resolveAuthTokenForAi(): Promise<string | null> {
         setSocialAccessToken(fresh);
       }
     }
-  } catch {
-    // Fallback to stored social token.
+  } catch (tokenError) {
+    console.warn('[AI] Failed to refresh access token, falling back to stored token:', tokenError);
   }
 
   return token || null;
@@ -289,8 +258,8 @@ async function signedFetch<T>(path: string, method: 'GET' | 'POST', body?: unkno
       if (typeof devSettings.authServerUrl === 'string' && devSettings.authServerUrl.trim()) {
         mainBackendUrl = devSettings.authServerUrl.trim();
       }
-    } catch {
-      // Ignore malformed dev settings; use hardcoded default backend.
+    } catch (devSettingsError) {
+      console.warn('[AI] Ignored malformed dev settings:', devSettingsError);
     }
   }
 
@@ -351,8 +320,8 @@ function extractTextFromMessageContent(content: unknown): string {
     const parts = content
       .map((item) => {
         if (typeof item === 'string') return item;
-        if (item && typeof item === 'object') {
-          const textValue = (item as Record<string, unknown>).text;
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          const textValue = 'text' in item ? (item as { text: unknown }).text : undefined;
           if (typeof textValue === 'string') return textValue;
         }
         return '';
@@ -368,7 +337,7 @@ function extractAssistantText(raw: unknown): string {
   if (typeof raw === 'string') return raw.trim();
   if (!raw || typeof raw !== 'object') return '';
 
-  const payload = raw as Record<string, unknown>;
+  const payload = raw as { [key: string]: unknown };
   const directKeys = ['text', 'answer', 'output_text', 'response', 'content', 'message'];
 
   for (const key of directKeys) {
@@ -376,18 +345,20 @@ function extractAssistantText(raw: unknown): string {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
 
-  if (payload.message && typeof payload.message === 'object') {
-    const fromMessage = extractTextFromMessageContent((payload.message as Record<string, unknown>).content);
+  if (payload.message && typeof payload.message === 'object' && !Array.isArray(payload.message)) {
+    const messageObj = payload.message as { content: unknown };
+    const fromMessage = extractTextFromMessageContent(messageObj.content);
     if (fromMessage) return fromMessage;
   }
 
   if (Array.isArray(payload.choices) && payload.choices.length > 0) {
-    const firstChoice = payload.choices[0] as Record<string, unknown>;
+    const firstChoice = payload.choices[0] as { [key: string]: unknown };
     if (typeof firstChoice.text === 'string' && firstChoice.text.trim()) {
       return firstChoice.text.trim();
     }
-    if (firstChoice.message && typeof firstChoice.message === 'object') {
-      const fromChoice = extractTextFromMessageContent((firstChoice.message as Record<string, unknown>).content);
+    if (firstChoice.message && typeof firstChoice.message === 'object' && !Array.isArray(firstChoice.message)) {
+      const messageObj = firstChoice.message as { content: unknown };
+      const fromChoice = extractTextFromMessageContent(messageObj.content);
       if (fromChoice) return fromChoice;
     }
   }

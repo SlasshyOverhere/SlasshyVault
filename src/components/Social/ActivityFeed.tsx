@@ -211,11 +211,15 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 animate={{ scale: 1, opacity: 1 }}
                 className="flex-shrink-0 w-40 bg-zinc-800/50 rounded-lg p-3 cursor-pointer hover:bg-zinc-800 transition-colors"
                 onClick={() => onViewProfile?.(item.userId)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') onViewProfile?.(item.userId); }}
+                aria-label={`View ${item.userName}'s profile`}
               >
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-6 h-6 rounded-full bg-zinc-700 overflow-hidden">
                     {item.userAvatar ? (
-                      <img src={item.userAvatar} alt="" className="w-full h-full object-cover" />
+                      <img src={item.userAvatar} alt={`${item.userName}'s avatar`} className="w-full h-full object-cover" />
                     ) : (
                       <User className="w-full h-full p-1 text-zinc-500" />
                     )}
@@ -253,6 +257,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 ? 'bg-purple-600 text-white'
                 : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Show all content types"
           >
             All
           </button>
@@ -263,6 +268,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 ? 'bg-purple-600 text-white'
                 : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Filter by movies"
           >
             <Film className="w-3 h-3" />
             Movies
@@ -274,6 +280,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 ? 'bg-purple-600 text-white'
                 : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Filter by TV shows"
           >
             <Tv className="w-3 h-3" />
             TV Shows
@@ -287,6 +294,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
               variant="outline"
               size="sm"
               className="h-8 text-xs border-zinc-700 bg-zinc-800"
+              aria-label="Open genre filter"
             >
               {genreFilter === 'all' ? 'All Genres' : genreFilter}
             </Button>
@@ -296,6 +304,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 className={`w-full px-3 py-2 text-left text-xs hover:bg-zinc-700 ${
                   genreFilter === 'all' ? 'text-purple-400' : 'text-zinc-300'
                 }`}
+                aria-label="Show all genres"
               >
                 All Genres
               </button>
@@ -306,6 +315,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                   className={`w-full px-3 py-2 text-left text-xs hover:bg-zinc-700 ${
                     genreFilter === genre ? 'text-purple-400' : 'text-zinc-300'
                   }`}
+                  aria-label={`Filter by ${genre}`}
                 >
                   {genre}
                 </button>
@@ -323,6 +333,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
               setGenreFilter('all');
             }}
             className="h-8 text-xs text-zinc-500 hover:text-white"
+            aria-label="Clear all filters"
           >
             <X className="w-3 h-3 mr-1" />
             Clear
@@ -344,6 +355,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 variant="outline" 
                 onClick={retryLoad}
                 className="border-zinc-700"
+                aria-label="Retry loading activity"
               >
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Retry
@@ -352,6 +364,7 @@ export function ActivityFeed({ onViewProfile, onReconnect }: ActivityFeedProps) 
                 <Button 
                   onClick={onReconnect}
                   className="bg-purple-600 hover:bg-purple-700"
+                  aria-label="Reconnect social"
                 >
                   <LogIn className="w-4 h-4 mr-2" />
                   Reconnect
@@ -439,7 +452,7 @@ const ActivityItem = React.memo(function ActivityItem({ activity, onViewProfile 
         {activity.posterPath ? (
           <img
             src={`https://image.tmdb.org/t/p/w92${activity.posterPath}`}
-            alt=""
+            alt={activity.title}
             className="w-full h-full object-cover"
           />
         ) : (
@@ -452,19 +465,20 @@ const ActivityItem = React.memo(function ActivityItem({ activity, onViewProfile 
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <div
-            className="flex items-center gap-1.5 cursor-pointer hover:text-purple-400 transition-colors"
+          <button
+            className="flex items-center gap-1.5 hover:text-purple-400 transition-colors"
             onClick={handleViewProfile}
+            aria-label={`View ${activity.userName}'s profile`}
           >
             <div className="w-5 h-5 rounded-full bg-zinc-700 overflow-hidden">
               {activity.userAvatar ? (
-                <img src={activity.userAvatar} alt="" className="w-full h-full object-cover" />
+                <img src={activity.userAvatar} alt={`${activity.userName}'s avatar`} className="w-full h-full object-cover" />
               ) : (
                 <User className="w-full h-full p-0.5 text-zinc-500" />
               )}
             </div>
             <span className="text-sm font-medium">{activity.userName}</span>
-          </div>
+          </button>
           <span className="text-xs text-zinc-500">watched</span>
         </div>
 

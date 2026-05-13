@@ -236,6 +236,7 @@ export function FullHistoryView({
                 <select
                   value={filter}
                   onChange={(event) => setFilter(event.target.value as QuickFilter)}
+                  aria-label="Filter history entries"
                   className="h-11 w-full appearance-none rounded-full border border-white/10 bg-[#2a2a2a] px-4 pr-10 text-sm text-white outline-none transition-colors hover:bg-[#323232] focus:border-white/20 [color-scheme:dark]"
                 >
                   {FILTER_OPTIONS.map((option) => (

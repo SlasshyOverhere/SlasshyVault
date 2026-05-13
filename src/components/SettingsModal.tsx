@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -125,7 +125,22 @@ export function SettingsModal({
   const [detectingMpv, setDetectingMpv] = useState(false);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
+  const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
   const { toast } = useToast();
+
+  const validatePath = useCallback((path: string, label: string) => {
+    if (!path) {
+      setPathValidation(prev => ({ ...prev, [label]: "" }));
+      return;
+    }
+    if (path.includes("..") || path.includes("~")) {
+      setPathValidation(prev => ({ ...prev, [label]: "Path contains relative segments" }));
+    } else if (path.length > 260) {
+      setPathValidation(prev => ({ ...prev, [label]: "Path too long" }));
+    } else {
+      setPathValidation(prev => ({ ...prev, [label]: "" }));
+    }
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -321,13 +336,12 @@ export function SettingsModal({
     setResetting(true);
     try {
       await clearAllAppData();
-      toast({
-        title: "App Reset Complete",
-        description: "All data has been cleared. The app is now like new.",
-      });
       setShowResetConfirm(false);
       onOpenChange(false);
-      window.location.reload();
+      toast({
+        title: "App Reset Complete",
+        description: "All data has been cleared. Please restart the app for changes to take effect.",
+      });
     } catch (error) {
       console.error("Failed to reset app", error);
       toast({
@@ -467,6 +481,7 @@ export function SettingsModal({
                 <button
                   onClick={() => onOpenChange(false)}
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  aria-label="Close settings"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -483,6 +498,7 @@ export function SettingsModal({
                         ? "bg-white/10 text-white"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                     )}
+                    aria-label={`${section.label} settings section`}
                   >
                     {section.icon}
                     <span className="text-xs sm:text-sm font-medium truncate">
@@ -499,6 +515,7 @@ export function SettingsModal({
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
                 <AnimatePresence mode="wait">
                   {/* General Section */}
+                  {/* ===== General Settings ===== */}
                   {activeSection === "general" && (
                     <motion.div
                       key="general"
@@ -555,19 +572,28 @@ export function SettingsModal({
                           </div>
                         </div>
                         <div className="flex gap-2">
-                          <Input
-                            value={config.mpv_path || ""}
-                            onChange={(e) =>
-                              setConfig({ ...config, mpv_path: e.target.value })
-                            }
-                            placeholder="C:\path\to\mpv.exe"
-                            className="flex-1"
-                          />
+                          <div className="flex-1 relative">
+                            <Input
+                              value={config.mpv_path || ""}
+                              onChange={(e) => {
+                                setConfig({ ...config, mpv_path: e.target.value });
+                                validatePath(e.target.value, "mpv_path");
+                              }}
+                              placeholder="C:\path\to\mpv.exe"
+                              className="flex-1"
+                              aria-label="MPV executable path"
+                              aria-invalid={!!pathValidation.mpv_path}
+                            />
+                            {pathValidation.mpv_path && (
+                              <p className="text-xs text-destructive mt-1">{pathValidation.mpv_path}</p>
+                            )}
+                          </div>
                           <Button
                             variant="outline"
                             size="icon"
                             onClick={browseMpvPath}
                             title="Browse"
+                            aria-label="Browse for MPV executable"
                           >
                             <FolderOpen className="h-4 w-4" />
                           </Button>
@@ -577,6 +603,7 @@ export function SettingsModal({
                             disabled={detectingMpv}
                             className="gap-2"
                             title="Auto-detect MPV on your PC"
+                            aria-label="Auto-detect MPV on your PC"
                           >
                             <RefreshCw
                               className={cn(
@@ -625,7 +652,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Beta Features Section */}
+                  {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (
                     <motion.div
                       key="beta"
@@ -680,6 +707,7 @@ export function SettingsModal({
                             checked={betaEnabled}
                             onCheckedChange={(checked) => {
                               if (checked) {
+                                // TODO: Replace browser confirm() with custom modal
                                 const confirmed = window.confirm(
                                   "Beta Features Warning\n\n" +
                                     "These features are experimental and for public testing only:\n\n" +
@@ -732,6 +760,7 @@ export function SettingsModal({
                             checked={unstableEnabled}
                             onCheckedChange={(checked) => {
                               if (checked) {
+                                // TODO: Replace browser confirm() with custom modal
                                 const confirmed = window.confirm(
                                   "Unstable Features Warning\n\n" +
                                     "These features may be paused, incomplete, or not usable yet:\n\n" +
@@ -951,7 +980,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Updates & Security Section */}
+                  {/* ===== Updates & Security ===== */}
                   {activeSection === "updates" && (
                     <motion.div
                       key="updates"
@@ -1057,7 +1086,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Cloud Storage Section */}
+                  {/* ===== Cloud Storage ===== */}
                   {activeSection === "cloud" && (
                     <motion.div
                       key="cloud"
@@ -1189,7 +1218,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* API Section */}
+                  {/* ===== API Configuration ===== */}
                   {activeSection === "api" && (
                     <motion.div
                       key="api"
@@ -1346,7 +1375,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Danger Section */}
+                  {/* ===== Factory Reset (Danger Zone) ===== */}
                   {activeSection === "danger" && (
                     <motion.div
                       key="danger"
@@ -1427,7 +1456,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Developer Section - Only visible in dev mode */}
+                  {/* ===== Developer Settings ===== */}
                   {activeSection === "dev" && isDev && (
                     <motion.div
                       key="dev"

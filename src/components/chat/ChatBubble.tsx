@@ -14,7 +14,7 @@ interface ChatBubbleProps {
   showSenderInfo?: boolean;
 }
 
-export function ChatBubble({ message, isOwn, showSenderInfo = true }: ChatBubbleProps) {
+export function ChatBubble({ message, isOwn, showSenderInfo = true }: ChatBubbleProps): JSX.Element {
   return (
     <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mb-4`}>
       <div className={`flex max-w-[80%] ${isOwn ? 'flex-row-reverse' : 'flex-row'} items-start gap-2`}>

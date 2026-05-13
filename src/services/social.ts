@@ -171,7 +171,7 @@ function getAuthServerUrl(): string {
         }
       }
     } catch {
-      // Ignore parse errors
+      console.warn('[Social] Failed to parse dev settings');
     }
   }
   return DEFAULT_AUTH_SERVER_URL;
@@ -185,7 +185,7 @@ export function getDevSettings(): { authServerUrl: string } {
       return JSON.parse(stored);
     }
   } catch {
-    // Ignore
+    console.warn('[Social] Failed to get dev settings');
   }
   return { authServerUrl: DEFAULT_AUTH_SERVER_URL };
 }
@@ -194,13 +194,13 @@ export function setDevSettings(settings: { authServerUrl: string }): void {
   try {
     localStorage.setItem(DEV_SETTINGS_KEY, JSON.stringify(settings));
     // Reconnect WebSocket with new URL
-    if (socialWs) {
-      const previousWs = socialWs;
-      socialWs = null;
+    if (SocialState.socialWs) {
+      const previousWs = SocialState.socialWs;
+      SocialState.socialWs = null;
       previousWs.close(1000, 'Reconnecting with updated settings');
     }
-    if (accessToken) {
-      reconnectEnabled = true;
+    if (SocialState.accessToken) {
+      SocialState.reconnectEnabled = true;
       void connectSocialWebSocket();
     }
   } catch (error) {
@@ -213,18 +213,30 @@ export function getDefaultAuthServerUrl(): string {
 }
 
 // State
-let accessToken: string | null = null;
-let googleId: string | null = null;
-let socialWs: WebSocket | null = null;
-let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-let reconnectAttempts: number = 0;
-let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-let profileSyncInterval: ReturnType<typeof setInterval> | null = null;
-let cachedProfile: UserProfile | null = null;
-let reconnectEnabled = true;
-let tokenRefreshPromise: Promise<string | null> | null = null;
+const SocialState = {
+    accessToken: null as string | null,
+    googleId: null as string | null,
+    socialWs: null as WebSocket | null,
+    wsReconnectTimeout: null as ReturnType<typeof setTimeout> | null,
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 10,
+    heartbeatInterval: null as ReturnType<typeof setInterval> | null,
+    profileSyncInterval: null as ReturnType<typeof setInterval> | null,
+    cachedProfile: null as UserProfile | null,
+    reconnectEnabled: true,
+    tokenRefreshPromise: null as Promise<string | null> | null,
+};
 const eventListeners: Map<string, Set<(data: SocialEvent) => void>> = new Map();
 const MAX_RECONNECT_DELAY_MS = 60000;
+
+function cleanup() {
+    if (SocialState.profileSyncInterval) { clearInterval(SocialState.profileSyncInterval); SocialState.profileSyncInterval = null; }
+    if (SocialState.heartbeatInterval) { clearInterval(SocialState.heartbeatInterval); SocialState.heartbeatInterval = null; }
+    if (SocialState.wsReconnectTimeout) { clearTimeout(SocialState.wsReconnectTimeout); SocialState.wsReconnectTimeout = null; }
+    if (SocialState.socialWs) { SocialState.socialWs.close(); SocialState.socialWs = null; }
+    SocialState.reconnectAttempts = 0;
+    SocialState.tokenRefreshPromise = null;
+}
 
 /**
  * Storage helpers
@@ -232,8 +244,11 @@ const MAX_RECONNECT_DELAY_MS = 60000;
 function getSocialStorage(): { accessToken?: string; googleId?: string } {
   try {
     const stored = localStorage.getItem(SOCIAL_STORAGE_KEY);
-    return stored ? JSON.parse(stored) : {};
+    if (!stored) return {};
+    const decoded = atob(stored);
+    return JSON.parse(decoded);
   } catch {
+    console.warn('[Social] Failed to parse social storage');
     return {};
   }
 }
@@ -241,7 +256,8 @@ function getSocialStorage(): { accessToken?: string; googleId?: string } {
 function setSocialStorage(data: { accessToken?: string; googleId?: string }) {
   try {
     const current = getSocialStorage();
-    localStorage.setItem(SOCIAL_STORAGE_KEY, JSON.stringify({ ...current, ...data }));
+    const merged = JSON.stringify({ ...current, ...data });
+    localStorage.setItem(SOCIAL_STORAGE_KEY, btoa(merged));
   } catch (error) {
     console.error('[Social] Storage error:', error);
   }
@@ -259,6 +275,7 @@ function getLastSocialSyncCursor(): string {
     const stored = localStorage.getItem(key);
     return stored || SOCIAL_DEFAULT_SYNC_CURSOR;
   } catch {
+    console.warn('[Social] Failed to get sync cursor');
     return SOCIAL_DEFAULT_SYNC_CURSOR;
   }
 }
@@ -281,6 +298,7 @@ function getSyncedActivityKeys(): string[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is string => typeof item === 'string');
   } catch {
+    console.warn('[Social] Failed to get synced activity keys');
     return [];
   }
 }
@@ -343,8 +361,8 @@ function mapWatchActivityToSocialActivity(activity: WatchActivityItem): Omit<Act
  * Initialize social features with access token
  */
 export async function initSocial(token: string): Promise<UserProfile | null> {
-  reconnectEnabled = true;
-  accessToken = token;
+  SocialState.reconnectEnabled = true;
+  SocialState.accessToken = token;
   setSocialStorage({ accessToken: token });
 
   const serverUrl = getAuthServerUrl();
@@ -380,8 +398,8 @@ export async function initSocial(token: string): Promise<UserProfile | null> {
       return null;
     }
 
-    googleId = data.profile.id;
-    setSocialStorage({ googleId: googleId || undefined });
+    SocialState.googleId = data.profile.id;
+    setSocialStorage({ googleId: SocialState.googleId || undefined });
 
     // Cache profile locally
     setProfileCache(data.profile);
@@ -412,24 +430,24 @@ export function isSocialInitialized(): boolean {
  */
 export function getSocialCredentials(): { accessToken: string | null; googleId: string | null } {
   const storage = getSocialStorage();
-  accessToken = storage.accessToken || null;
-  googleId = storage.googleId || null;
-  return { accessToken, googleId };
+  SocialState.accessToken = storage.accessToken || null;
+  SocialState.googleId = storage.googleId || null;
+  return { accessToken: SocialState.accessToken, googleId: SocialState.googleId };
 }
 
 export function setSocialAccessToken(token: string): void {
   const normalized = typeof token === 'string' ? token.trim() : '';
   if (!normalized) return;
-  accessToken = normalized;
+  SocialState.accessToken = normalized;
   setSocialStorage({ accessToken: normalized });
 }
 
 async function refreshAccessToken(reason: string): Promise<string | null> {
-  if (tokenRefreshPromise) {
-    return tokenRefreshPromise;
+  if (SocialState.tokenRefreshPromise) {
+    return SocialState.tokenRefreshPromise;
   }
 
-  tokenRefreshPromise = (async () => {
+  SocialState.tokenRefreshPromise = (async () => {
     try {
       const refreshed = await getSocialAccessToken(getAuthServerUrl());
       const normalized = typeof refreshed === 'string' ? refreshed.trim() : '';
@@ -443,18 +461,18 @@ async function refreshAccessToken(reason: string): Promise<string | null> {
       console.warn(`[Social] Failed to refresh access token (${reason}):`, error);
       return null;
     } finally {
-      tokenRefreshPromise = null;
+      SocialState.tokenRefreshPromise = null;
     }
   })();
 
-  return tokenRefreshPromise;
+  return SocialState.tokenRefreshPromise;
 }
 
 /**
  * Restore social connection on app start
  */
 export async function restoreSocialConnection(): Promise<boolean> {
-  reconnectEnabled = true;
+  SocialState.reconnectEnabled = true;
   let { accessToken: token } = getSocialCredentials();
 
   if (!token) {
@@ -481,7 +499,7 @@ export async function restoreSocialConnection(): Promise<boolean> {
       return true;
     }
   } catch {
-    // Token expired or invalid
+    console.warn('[Social] Token expired or invalid');
     clearSocialStorage();
   }
   return false;
@@ -490,9 +508,9 @@ export async function restoreSocialConnection(): Promise<boolean> {
 function clearSocialStorage() {
   localStorage.removeItem(SOCIAL_STORAGE_KEY);
   localStorage.removeItem(PROFILE_CACHE_KEY);
-  accessToken = null;
-  googleId = null;
-  cachedProfile = null;
+  SocialState.accessToken = null;
+  SocialState.googleId = null;
+  SocialState.cachedProfile = null;
 }
 
 export async function disconnectSocialAccount(): Promise<void> {
@@ -512,18 +530,18 @@ function getProfileCache(): UserProfile | null {
     const stored = localStorage.getItem(PROFILE_CACHE_KEY);
     if (stored) {
       const data = JSON.parse(stored);
-      cachedProfile = data.profile;
-      return cachedProfile;
+      SocialState.cachedProfile = data.profile;
+      return SocialState.cachedProfile;
     }
   } catch {
-    // Ignore parse errors
+    console.warn('[Social] Failed to parse profile cache');
   }
   return null;
 }
 
 function setProfileCache(profile: UserProfile): void {
   try {
-    cachedProfile = profile;
+    SocialState.cachedProfile = profile;
     localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({
       profile,
       lastSynced: Date.now()
@@ -537,7 +555,7 @@ function setProfileCache(profile: UserProfile): void {
  * Get cached profile instantly (for UI)
  */
 export function getCachedProfile(): UserProfile | null {
-  if (cachedProfile) return cachedProfile;
+  if (SocialState.cachedProfile) return SocialState.cachedProfile;
   return getProfileCache();
 }
 
@@ -566,15 +584,15 @@ function startProfileSync() {
   // Initial sync
   syncProfile();
   // Periodic sync every 10 minutes
-  profileSyncInterval = setInterval(() => {
+  SocialState.profileSyncInterval = setInterval(() => {
     syncProfile();
   }, PROFILE_SYNC_INTERVAL);
 }
 
 function stopProfileSync() {
-  if (profileSyncInterval) {
-    clearInterval(profileSyncInterval);
-    profileSyncInterval = null;
+  if (SocialState.profileSyncInterval) {
+    clearInterval(SocialState.profileSyncInterval);
+    SocialState.profileSyncInterval = null;
   }
 }
 
@@ -582,16 +600,16 @@ function stopProfileSync() {
  * WebSocket connection for real-time features
  */
 async function connectSocialWebSocket(forceRefreshToken = false): Promise<void> {
-  if (!reconnectEnabled) return;
-  if (socialWs && (socialWs.readyState === WebSocket.OPEN || socialWs.readyState === WebSocket.CONNECTING)) return;
+  if (!SocialState.reconnectEnabled) return;
+  if (SocialState.socialWs && (SocialState.socialWs.readyState === WebSocket.OPEN || SocialState.socialWs.readyState === WebSocket.CONNECTING)) return;
 
-  if (!accessToken) {
+  if (!SocialState.accessToken) {
     getSocialCredentials();
   }
-  if (forceRefreshToken || !accessToken) {
+  if (forceRefreshToken || !SocialState.accessToken) {
     await refreshAccessToken(forceRefreshToken ? 'ws-forced-refresh' : 'ws-missing-token');
   }
-  if (!accessToken) {
+  if (!SocialState.accessToken) {
     scheduleReconnect();
     return;
   }
@@ -600,20 +618,26 @@ async function connectSocialWebSocket(forceRefreshToken = false): Promise<void> 
   const wsUrl = authServerUrl.replace('https://', 'wss://').replace('http://', 'ws://');
 
   try {
-    const ws = new WebSocket(`${wsUrl}/ws/social?token=${encodeURIComponent(accessToken)}`);
-    socialWs = ws;
+    const ws = new WebSocket(`${wsUrl}/ws/social`);
+    SocialState.socialWs = ws;
 
     ws.onopen = () => {
-      if (socialWs !== ws) return;
+      if (SocialState.socialWs !== ws) return;
       console.log('[Social WS] Connected');
-      reconnectAttempts = 0;
+      SocialState.reconnectAttempts = 0;
       startHeartbeat();
+      ws.send(JSON.stringify({ type: 'auth', token: SocialState.accessToken }));
     };
 
     ws.onmessage = (event) => {
-      if (socialWs !== ws) return;
+      if (SocialState.socialWs !== ws) return;
       try {
-        const data = JSON.parse(event.data) as SocialEvent;
+        const parsed = JSON.parse(event.data);
+        if (typeof parsed !== 'object' || parsed === null || typeof parsed.type !== 'string') {
+          console.warn('[Social WS] Invalid event format');
+          return;
+        }
+        const data = parsed as SocialEvent;
         emitEvent(data.type, data);
       } catch (error) {
         console.error('[Social WS] Parse error:', error);
@@ -621,12 +645,12 @@ async function connectSocialWebSocket(forceRefreshToken = false): Promise<void> 
     };
 
     ws.onclose = async (event) => {
-      if (socialWs !== ws) return;
-      socialWs = null;
+      if (SocialState.socialWs !== ws) return;
+      SocialState.socialWs = null;
       console.log('[Social WS] Disconnected:', event.code, event.reason);
       stopHeartbeat();
 
-      if (!reconnectEnabled) {
+      if (!SocialState.reconnectEnabled) {
         return;
       }
 
@@ -646,7 +670,7 @@ async function connectSocialWebSocket(forceRefreshToken = false): Promise<void> 
     };
 
     ws.onerror = (error) => {
-      if (socialWs !== ws) return;
+      if (SocialState.socialWs !== ws) return;
       console.error('[Social WS] Error:', error);
     };
   } catch (error) {
@@ -656,23 +680,27 @@ async function connectSocialWebSocket(forceRefreshToken = false): Promise<void> 
 }
 
 function scheduleReconnect(overrideDelayMs?: number) {
-  if (!reconnectEnabled) return;
-  if (wsReconnectTimeout) return;
+  if (!SocialState.reconnectEnabled) return;
+  if (SocialState.wsReconnectTimeout) return;
+  if (SocialState.reconnectAttempts >= SocialState.maxReconnectAttempts) {
+    console.warn('[Social WS] Max reconnect attempts reached, stopping');
+    return;
+  }
 
   const computedDelay = Math.min(
-    RECONNECT_DELAY_BASE * Math.pow(2, Math.max(0, reconnectAttempts)),
+    RECONNECT_DELAY_BASE * Math.pow(2, Math.max(0, SocialState.reconnectAttempts)),
     MAX_RECONNECT_DELAY_MS
   );
   const delay = typeof overrideDelayMs === 'number'
     ? Math.max(0, overrideDelayMs)
     : computedDelay;
-  reconnectAttempts++;
+  SocialState.reconnectAttempts++;
 
-  console.log(`[Social WS] Scheduling reconnection in ${delay}ms (attempt ${reconnectAttempts})`);
+  console.log(`[Social WS] Scheduling reconnection in ${delay}ms (attempt ${SocialState.reconnectAttempts})`);
 
-  wsReconnectTimeout = setTimeout(() => {
-    wsReconnectTimeout = null;
-    if (reconnectEnabled) {
+  SocialState.wsReconnectTimeout = setTimeout(() => {
+    SocialState.wsReconnectTimeout = null;
+    if (SocialState.reconnectEnabled) {
       void connectSocialWebSocket();
     }
   }, delay);
@@ -680,17 +708,17 @@ function scheduleReconnect(overrideDelayMs?: number) {
 
 function startHeartbeat() {
   stopHeartbeat();
-  heartbeatInterval = setInterval(() => {
-    if (socialWs?.readyState === WebSocket.OPEN) {
-      socialWs.send(JSON.stringify({ type: 'heartbeat' }));
+  SocialState.heartbeatInterval = setInterval(() => {
+    if (SocialState.socialWs?.readyState === WebSocket.OPEN) {
+      SocialState.socialWs.send(JSON.stringify({ type: 'heartbeat' }));
     }
   }, 30000);
 }
 
 function stopHeartbeat() {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
+  if (SocialState.heartbeatInterval) {
+    clearInterval(SocialState.heartbeatInterval);
+    SocialState.heartbeatInterval = null;
   }
 }
 
@@ -728,20 +756,20 @@ async function requestWithRetry<T>(
   for (let attempt = 0; attempt < retries; attempt++) {
     let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
-      if (!accessToken) {
+      if (!SocialState.accessToken) {
         getSocialCredentials();
       }
-      if (!accessToken) {
+      if (!SocialState.accessToken) {
         await refreshAccessToken('api-missing-token');
       }
-      if (!accessToken) {
+      if (!SocialState.accessToken) {
         throw new Error('Auth error: Missing access token');
       }
 
       const controller = new AbortController();
       timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
       const headers = new Headers(options.headers);
-      headers.set('Authorization', `Bearer ${accessToken}`);
+      headers.set('Authorization', `Bearer ${SocialState.accessToken}`);
 
       const response = await fetch(`${getAuthServerUrl()}${endpoint}`, {
         ...options,
@@ -774,7 +802,11 @@ async function requestWithRetry<T>(
         return undefined as unknown as T;
       }
 
-      return await response.json() as T;
+      const result = await response.json();
+      if (typeof result !== 'object' || result === null) {
+        throw new Error('Invalid API response: expected JSON object');
+      }
+      return result as T;
     } catch (error) {
       lastError = error as Error;
 
@@ -830,6 +862,7 @@ export async function getProfile(): Promise<UserProfile | null> {
   try {
     return await apiGet<UserProfile>('/api/social/profile');
   } catch {
+    console.warn('[Social] Failed to get profile');
     return null;
   }
 }
@@ -852,8 +885,8 @@ export async function updateProfile(updates: {
 
 export async function updatePrivacySettings(settings: Partial<PrivacySettings>): Promise<PrivacySettings> {
   const privacySettings = await apiPatch<PrivacySettings>('/api/social/privacy', settings);
-  if (cachedProfile) {
-    const updatedProfile = { ...cachedProfile, privacySettings };
+  if (SocialState.cachedProfile) {
+    const updatedProfile = { ...SocialState.cachedProfile, privacySettings };
     setProfileCache(updatedProfile);
     emitEvent('profile_updated', { type: 'profile_updated', profile: updatedProfile });
   }
@@ -864,6 +897,7 @@ export async function getFriendProfile(friendId: string): Promise<UserProfile | 
   try {
     return await apiGet<UserProfile>(`/api/social/profile/${friendId}`);
   } catch {
+    console.warn('[Social] Failed to get friend profile');
     return null;
   }
 }
@@ -896,7 +930,7 @@ export async function removeFriend(friendId: string): Promise<void> {
 }
 
 export async function searchUsers(query: string): Promise<{ id: string; displayName: string; avatarUrl: string | null }[]> {
-  return apiGet(`/api/social/search?q=${encodeURIComponent(query)}`);
+  return apiGet<{ id: string; displayName: string; avatarUrl: string | null }[]>(`/api/social/search?q=${encodeURIComponent(query)}`);
 }
 
 /**
@@ -938,8 +972,8 @@ export async function getActivityGenres(): Promise<string[]> {
  */
 export async function syncStats(stats: Partial<UserStats>): Promise<UserStats> {
   const updatedStats = await apiPost<UserStats>('/api/social/stats/sync', stats);
-  if (cachedProfile) {
-    const updatedProfile = { ...cachedProfile, stats: updatedStats };
+  if (SocialState.cachedProfile) {
+    const updatedProfile = { ...SocialState.cachedProfile, stats: updatedStats };
     setProfileCache(updatedProfile);
     emitEvent('profile_updated', { type: 'profile_updated', profile: updatedProfile });
   }
@@ -947,7 +981,7 @@ export async function syncStats(stats: Partial<UserStats>): Promise<UserStats> {
 }
 
 export async function syncLocalWatchDataToSocial(): Promise<SocialAutoSyncResult> {
-  if (!accessToken) {
+  if (!SocialState.accessToken) {
     getSocialCredentials();
   }
 
@@ -959,7 +993,7 @@ export async function syncLocalWatchDataToSocial(): Promise<SocialAutoSyncResult
     lastCursor: getLastSocialSyncCursor(),
   };
 
-  if (!accessToken) {
+  if (!SocialState.accessToken) {
     return result;
   }
 
@@ -1047,17 +1081,17 @@ export async function syncLocalWatchDataToSocial(): Promise<SocialAutoSyncResult
  * Currently Watching
  */
 export function setCurrentlyWatching(content: Omit<CurrentlyWatching, 'startedAt'> | null): void {
-  if (socialWs?.readyState === WebSocket.OPEN) {
+  if (SocialState.socialWs?.readyState === WebSocket.OPEN) {
     if (content) {
-      socialWs.send(JSON.stringify({ type: 'currently_watching', content }));
+      SocialState.socialWs.send(JSON.stringify({ type: 'currently_watching', content }));
     } else {
-      socialWs.send(JSON.stringify({ type: 'stop_watching' }));
+      SocialState.socialWs.send(JSON.stringify({ type: 'stop_watching' }));
     }
   }
 }
 
 export async function getFriendsWatching(): Promise<(CurrentlyWatching & { userId: string; userName: string; userAvatar?: string })[]> {
-  return apiGet('/api/social/watching');
+  return apiGet<(CurrentlyWatching & { userId: string; userName: string; userAvatar?: string })[]>('/api/social/watching');
 }
 
 /**
@@ -1102,8 +1136,8 @@ export async function sendChatMessage(friendId: string, text: string): Promise<C
     const canFallbackToWs = message.includes('404') || message.includes('405');
 
     // Backward compatibility fallback: older backend can still accept WS chat messages.
-    if (canFallbackToWs && socialWs?.readyState === WebSocket.OPEN) {
-      socialWs.send(JSON.stringify({
+    if (canFallbackToWs && SocialState.socialWs?.readyState === WebSocket.OPEN) {
+      SocialState.socialWs.send(JSON.stringify({
         type: 'chat_message',
         friendId: normalizedFriendId,
         text: normalizedText,
@@ -1116,8 +1150,8 @@ export async function sendChatMessage(friendId: string, text: string): Promise<C
 }
 
 export function sendTypingIndicator(friendId: string): void {
-  if (socialWs?.readyState === WebSocket.OPEN) {
-    socialWs.send(JSON.stringify({
+  if (SocialState.socialWs?.readyState === WebSocket.OPEN) {
+    SocialState.socialWs.send(JSON.stringify({
       type: 'typing',
       friendId
     }));
@@ -1128,27 +1162,9 @@ export function sendTypingIndicator(friendId: string): void {
  * Disconnect and cleanup
  */
 export function disconnectSocial(): void {
-  reconnectEnabled = false;
-  stopHeartbeat();
-  stopProfileSync();
-
-  if (wsReconnectTimeout) {
-    clearTimeout(wsReconnectTimeout);
-    wsReconnectTimeout = null;
-  }
-
-  if (socialWs) {
-    const ws = socialWs;
-    socialWs = null;
-    ws.close(1000, 'Client disconnected');
-  }
-
-  reconnectAttempts = 0;
-  tokenRefreshPromise = null;
-
-  // Clear all event listeners
+  SocialState.reconnectEnabled = false;
+  cleanup();
   eventListeners.clear();
-
   clearSocialStorage();
 }
 

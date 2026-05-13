@@ -123,6 +123,8 @@ interface TmdbMoreInfoData {
   mediaAssets: string[];
 }
 
+// ===== Constants =====
+
 const LOCAL_HISTORY_FALLBACK_KEY = 'streamvault_ai_beta_history_v1';
 const MAX_HISTORY_LINES = 40;
 const DEFAULT_AI_MODEL = (import.meta.env.VITE_AI_MODEL || 'llama-3.1-8b-instant').trim();
@@ -140,6 +142,8 @@ const PROMPT_CHIPS = [
   'What should I watch if I liked Interstellar?',
   'Give me 5 comfort TV shows',
 ];
+
+// ===== Formatting Helpers =====
 
 function formatReset(resetAtMs?: number): string {
   if (!resetAtMs || Number.isNaN(resetAtMs)) return '--';
@@ -268,6 +272,7 @@ function normalizeProfileUrlCandidate(url: string): string {
     const normalized = parsed.toString();
     return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
   } catch {
+    console.warn('[AIChatView] Invalid URL in normalizeProfileUrlCandidate:', trimmed);
     return trimmed;
   }
 }
@@ -279,6 +284,7 @@ function inferProfileLinkLabel(url: string): string {
     const parsed = new URL(url);
     return parsed.hostname.replace(/^www\./i, '');
   } catch {
+    console.warn('[AIChatView] Could not parse URL for link label:', url);
     return 'Reference';
   }
 }
@@ -311,6 +317,8 @@ function extractTmdbProfileLinks(line: string): TmdbProfileLink[] {
 
   return links;
 }
+
+// ===== TMDB Profile Parsing =====
 
 function parseTmdbTargetFromUrl(url: string): TmdbTargetRef | null {
   const match = url.match(/themoviedb\.org\/(movie|tv)\/(\d+)/i);
@@ -351,6 +359,8 @@ function extractImdbUrlFromProfile(profile: TmdbDeepProfileData): string | null 
   }
   return null;
 }
+
+// ===== TMDB Data Transformers =====
 
 function toStringArray(value: unknown, max = 30): string[] {
   if (!Array.isArray(value)) return [];
@@ -613,6 +623,7 @@ function normalizeExternalHttpUrl(url?: string): string | null {
     }
     return parsed.toString();
   } catch {
+    console.warn('[AIChatView] Invalid external URL:', trimmed);
     return null;
   }
 }
@@ -715,7 +726,7 @@ function resolveMainBackendUrl(): string {
         mainBackendUrl = devSettings.authServerUrl.trim();
       }
     } catch {
-      // Ignore malformed dev settings; use default backend.
+      console.warn('[AIChatView] Malformed dev settings, using default backend');
     }
   }
 
@@ -868,6 +879,8 @@ function toProviderSummary(rawProviders: unknown): Record<string, unknown> | nul
     buy,
   };
 }
+
+// ===== TMDB Summary Builders =====
 
 function summarizeMovieTmdb(raw: Record<string, unknown>): Record<string, unknown> {
   const credits = (raw.credits as Record<string, unknown> | undefined) || {};
@@ -1027,6 +1040,8 @@ function buildAutoTmdbDeepDivePrompt(linkedItem: LinkedMediaItem): string {
   ].join(' ');
 }
 
+// ===== Component =====
+
 export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled }: AIChatViewProps) {
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [quota, setQuota] = useState<AiQuotaResponse | null>(null);
@@ -1068,6 +1083,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
   const lastFocusedAssistantMessageIdRef = useRef<string>('');
 
   const { toast } = useToast();
+
+  // ===== Derived State =====
 
   const minAdditionalWords = upgradeStatus?.additional_reason_min_words || quota?.additional_reason_min_words || 40;
   const minAdditionalChars = upgradeStatus?.additional_reason_min_chars || quota?.additional_reason_min_chars || 30;
@@ -1137,6 +1154,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     };
   };
 
+  // ===== Effects: History Loading =====
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1159,8 +1178,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
           setDriveHistoryEnabled(true);
           loadedFromDrive = true;
         }
-      } catch {
-        // Fallback to local cache when Drive history is unavailable.
+      } catch (driveError) {
+        console.warn('[AIChatView] Drive history unavailable, falling back to local cache:', driveError);
         if (!cancelled) {
           setDriveHistoryEnabled(false);
         }
@@ -1173,8 +1192,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
             const parsed = JSON.parse(raw);
             setMessages(normalizeLines(parsed));
           }
-        } catch {
-          // Ignore malformed local history.
+        } catch (localError) {
+          console.warn('[AIChatView] Malformed local history, ignoring:', localError);
         }
       }
 
@@ -1194,6 +1213,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     };
   }, []);
 
+  // ===== Effects: History Persistence =====
+
   useEffect(() => {
     if (!historyReady) return;
 
@@ -1201,8 +1222,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
 
     try {
       localStorage.setItem(LOCAL_HISTORY_FALLBACK_KEY, payload);
-    } catch {
-      // Ignore local fallback cache errors.
+    } catch (cacheError) {
+      console.warn('[AIChatView] Local fallback cache write failed:', cacheError);
     }
 
     if (!driveHistoryEnabled) return;
@@ -1220,6 +1241,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     refreshQuota();
     refreshUpgradeStatus();
   }, []);
+
+  // ===== Effects: Quota & Upgrade Polling =====
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1259,6 +1282,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
       unsubscribe();
     };
   }, []);
+
+  // ===== Effects: Scroll, Mention, Linked Items =====
 
   useEffect(() => {
     if (!quota || quota.remaining > 0) {
@@ -1357,6 +1382,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     handleSend();
   }, [sending, loadingQuota, input, quota?.remaining, isBanned]);
 
+  // ===== Handlers: API =====
+
   const refreshQuota = async () => {
     setLoadingQuota(true);
     try {
@@ -1386,8 +1413,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     try {
       const result = await getAiUpgradeRequestStatus();
       setUpgradeStatus(result);
-    } catch {
-      // Ignore when user is not authenticated for social endpoints.
+    } catch (upgradeError) {
+      console.warn('[AIChatView] Failed to fetch upgrade status (user may not be authenticated):', upgradeError);
       setUpgradeStatus(null);
     } finally {
       setLoadingUpgradeStatus(false);
@@ -1914,6 +1941,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
     }
   }, [fetchTmdbProxyJson]);
 
+  // ===== Handlers: Chat =====
+
   const addMessage = (line: ChatLine) => {
     setMessages((prev) => [...prev, line].slice(-MAX_HISTORY_LINES));
   };
@@ -2162,6 +2191,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
   const hasQuotaExhausted = !!quota && quota.remaining <= 0;
   const showQuotaNudge = hasQuotaExhausted && !isBanned && !dismissedQuotaNudge;
 
+  // ===== Render: Messages =====
+
   const memoizedMessages = useMemo(() => {
     return messages.map((line) => {
       const deepProfile = line.role === 'assistant'
@@ -2214,6 +2245,8 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
       );
     });
   }, [messages, openTmdbMoreInfo]);
+
+  // ===== Render: Main UI =====
 
   return (
     <motion.div
@@ -2300,6 +2333,9 @@ export function AIChatView({ launchItem = null, launchNonce = 0, onLaunchHandled
             <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-5">
               {messages.length === 0 ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 text-center">
+                  <Bot className="mb-3 h-10 w-10 text-neutral-500" />
+                  <p className="text-sm text-neutral-300">Start a conversation with AI...</p>
+                  <p className="mt-1 text-xs text-neutral-500">Ask about movies, get recommendations, or explore your library.</p>
                 </div>
               ) : (
                 <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto pr-1">

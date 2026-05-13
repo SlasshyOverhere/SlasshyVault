@@ -24,6 +24,7 @@ use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, N
 use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -337,6 +338,21 @@ async fn get_library_filtered(
     };
     let items = db
         .get_library_filtered(db_type, search.as_deref(), is_cloud)
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
+// Get DDL library items
+#[tauri::command]
+async fn get_ddl_media(
+    state: State<'_, AppState>,
+    media_type: String,
+    search: Option<String>,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let db_type = if media_type == "tv" { "tvshow" } else { "movie" };
+    let items = db
+        .get_ddl_media(db_type, search.as_deref())
         .map_err(|e| e.to_string())?;
     Ok(enrich_media_items_archive_assessment(items))
 }
@@ -2759,7 +2775,10 @@ async fn check_cloud_changes(
 
 // Clear all app data (reset to new state)
 #[tauri::command]
-async fn clear_all_app_data(state: State<'_, AppState>) -> Result<ApiResponse, String> {
+async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Result<ApiResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     println!("[RESET] Starting complete app data reset...");
 
     // Clear database and get image cache path
@@ -2778,7 +2797,7 @@ async fn clear_all_app_data(state: State<'_, AppState>) -> Result<ApiResponse, S
             Err(e) => println!("[RESET] Warning: Failed to delete image cache: {}", e),
         }
         // Recreate empty image cache directory
-        std::fs::create_dir_all(cache_path).ok();
+        std::fs::create_dir_all(cache_path).map_err(|e| println!("[RESET] Warning: Failed to recreate image cache: {}", e)).ok();
     }
 
     println!("[RESET] App data reset complete!");
@@ -2825,17 +2844,6 @@ async fn cleanup_missing_metadata(state: State<'_, AppState>) -> Result<CleanupR
     })
 }
 
-// Repair broken file paths - not applicable for cloud-only mode
-#[tauri::command]
-async fn repair_file_paths(_state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    // In cloud-only mode, file paths are managed by Google Drive
-    // No local file repair is needed
-    Ok(ApiResponse {
-        message: "Cloud media paths are managed automatically by Google Drive. No repair needed."
-            .to_string(),
-    })
-}
-
 // Response for delete operation
 #[derive(serde::Serialize)]
 struct DeleteResponse {
@@ -2852,7 +2860,11 @@ async fn delete_media_files(
     state: State<'_, AppState>,
     window: Window,
     media_ids: Vec<i64>,
+    confirmed: bool,
 ) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     if media_ids.is_empty() {
         return Err("No media IDs provided".to_string());
     }
@@ -2911,11 +2923,12 @@ async fn delete_media_files(
                 db_media_ids_to_delete.push(id);
             }
         } else {
-            // Local file - delete from disk
+            // Local file - delete from disk (with path canonicalization)
             if let Some(path_str) = file_path {
-                let path = std::path::Path::new(&path_str);
-                if path.exists() {
-                    match std::fs::remove_file(path) {
+                let raw_path = std::path::Path::new(&path_str);
+                let canonical = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_path_buf());
+                if canonical.exists() {
+                    match std::fs::remove_file(&canonical) {
                         Ok(_) => {
                             println!("[DELETE] Successfully deleted local file: {}", path_str);
                             deleted_file_paths.push(path_str);
@@ -3243,7 +3256,11 @@ async fn delete_series(
     state: State<'_, AppState>,
     series_id: i64,
     delete_files: bool,
+    confirmed: bool,
 ) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     println!(
         "[DELETE] Deleting series ID {} (delete_files: {})",
         series_id, delete_files
@@ -3469,7 +3486,11 @@ async fn save_config(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     new_config: config::Config,
+    confirmed: bool,
 ) -> Result<ApiResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     *config = new_config.clone();
     config::save_config(&new_config).map_err(|e| e.to_string())?;
@@ -4076,6 +4097,11 @@ fn detect_tracks_from_running_mpv(pipe_name: &str) -> Result<DetectedMpvTracks, 
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
+    // NOTE(from_raw_handle safety): File::from_raw_handle takes ownership of the
+    // Windows handle. The returned File will close the handle on drop. This function
+    // must NOT be called more than once for the same pipe, because the handle would
+    // already be consumed. The `break` after successful acquisition prevents retry
+    // within this loop; callers are responsible for ensuring single invocation.
     let mut file = None;
     for _ in 0..100 {
         let wide_name: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -4165,6 +4191,17 @@ fn detect_tracks_from_running_mpv(_pipe_name: &str) -> Result<DetectedMpvTracks,
     Err("MPV IPC track detection is currently supported only on Windows".to_string())
 }
 
+/// Write auth headers to a temporary file and return its path.
+/// This avoids leaking tokens in process listings (visible via `ps` on Linux).
+fn temp_file_for_headers(header_content: &str) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("ffprobe_headers_{}.txt", uuid::Uuid::new_v4());
+    let file_path = temp_dir.join(file_name);
+    let file_path_str = file_path.to_string_lossy().to_string();
+    std::fs::write(&file_path, header_content).map_err(|e| format!("Failed to write header file: {}", e))?;
+    Ok(file_path_str)
+}
+
 fn probe_tracks_with_ffprobe(
     ffprobe_path: &str,
     source: &str,
@@ -4190,16 +4227,26 @@ fn probe_tracks_with_ffprobe(
         .arg("-of")
         .arg("json");
 
-    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+    let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        let header_content = format!("Authorization: Bearer {}\r\n", token);
+        let path = temp_file_for_headers(&header_content)?;
         command
             .arg("-headers")
-            .arg(format!("Authorization: Bearer {}\r\n", token));
-    }
+            .arg(&path);
+        Some(path)
+    } else {
+        None
+    };
 
     let output = command
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    // Clean up header temp file
+    if let Some(path) = _header_file {
+        let _ = std::fs::remove_file(&path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4331,16 +4378,26 @@ fn probe_media_technical_details_with_ffprobe(
         .arg("-of")
         .arg("json");
 
-    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+    let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        let header_content = format!("Authorization: Bearer {}\r\n", token);
+        let path = temp_file_for_headers(&header_content)?;
         command
             .arg("-headers")
-            .arg(format!("Authorization: Bearer {}\r\n", token));
-    }
+            .arg(&path);
+        Some(path)
+    } else {
+        None
+    };
 
     let output = command
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    // Clean up header temp file
+    if let Some(path) = _header_file {
+        let _ = std::fs::remove_file(&path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -5560,10 +5617,6 @@ async fn play_with_mpv(
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
         let resume_info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
 
-        // Update last_watched
-        db.update_last_watched(media_id)
-            .map_err(|e| e.to_string())?;
-
         (media, resume_info)
     };
 
@@ -5880,21 +5933,51 @@ async fn play_with_mpv(
             // Cloud file - get stream URL from Google Drive
             if let Some(ref cloud_file_id) = media.cloud_file_id {
                 println!(
-                    "[MPV] Cloud file detected, getting stream URL for file ID: {}",
+                    "[MPV] Cloud file detected, routing through proxy for file ID: {}",
                     cloud_file_id
                 );
-                let (stream_url, access_token) =
-                    state.gdrive_client.get_stream_url(cloud_file_id).await?;
+                let cached_file_size = media
+                    .file_size_bytes
+                    .and_then(|value| u64::try_from(value).ok());
+                let content_name = media
+                    .file_path
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(media.title.as_str());
+                let meta = if cached_file_size.is_some() {
+                    None
+                } else {
+                    Some(state.gdrive_client.get_file_metadata(cloud_file_id).await?)
+                };
+                let file_size = cached_file_size
+                    .or_else(|| {
+                        meta.as_ref()
+                            .and_then(|m| m.size.as_deref())
+                            .and_then(|s| s.parse::<u64>().ok())
+                    })
+                    .ok_or_else(|| "Cloud file size unavailable".to_string())?;
+                if file_size == 0 {
+                    return Err("Cloud file is empty".to_string());
+                }
+                let drive_url = state.gdrive_client.build_stream_url(cloud_file_id);
+                let mime_type = meta
+                    .as_ref()
+                    .map(|m| m.mime_type.clone())
+                    .unwrap_or_else(|| zip_manager::content_type_for_name(content_name));
+                let proxy = zip_stream_proxy::start_proxy(
+                    zip_stream_proxy::build_file_proxy_spec(
+                        drive_url,
+                        state.gdrive_client.clone(),
+                        file_size,
+                        mime_type,
+                    ),
+                )?;
+                let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
                 println!(
-                    "[MPV] Using direct Google Drive stream for cloud playback, token length: {}",
-                    access_token.len()
+                    "[MPV] Using authenticated localhost proxy for cloud playback (size={}, name='{}')",
+                    file_size, content_name
                 );
-                (
-                    stream_url,
-                    Some(format!("Authorization: Bearer {}", access_token)),
-                    None,
-                    true,
-                )
+                (stream_url, None, Some(proxy), true)
             } else {
                 return Err("Cloud file ID not found".to_string());
             }
@@ -6023,6 +6106,13 @@ async fn play_with_mpv(
 
         if let Ok(db) = database::Database::new(&db_path) {
             let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
+
+            // Only mark as last_watched when actual playback progress was recorded
+            if result.final_position.is_some() && result.final_duration.is_some()
+                && result.final_duration.unwrap_or(0.0) > 0.0
+            {
+                let _ = db.update_last_watched(media_id);
+            }
 
             // Emit event to frontend when MPV exits
             let _ = window_clone.emit(
@@ -12844,9 +12934,9 @@ fn main() {
 
     // Ensure directories exist
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent).map_err(|e| println!("[INIT] Warning: Failed to create db parent dir: {}", e)).ok();
     }
-    std::fs::create_dir_all(&image_cache_dir).ok();
+    std::fs::create_dir_all(&image_cache_dir).map_err(|e| println!("[INIT] Warning: Failed to create image cache dir: {}", e)).ok();
 
     // Initialize database
     let db = database::Database::new(&db_path).expect("Failed to initialize database");
@@ -12915,6 +13005,28 @@ fn main() {
             if let Some(window) = app.get_window("main") {
                 window.set_title(runtime_window_title()).ok();
                 apply_window_corner_radius(&window);
+            }
+
+            // Allow both dev and production image cache directories in the asset protocol scope
+            let base_dir = if cfg!(windows) {
+                std::env::var_os("APPDATA").map(PathBuf::from)
+            } else {
+                dirs::home_dir()
+            };
+            if let Some(base_dir) = base_dir {
+                for dir_name in &["StreamVault", "StreamVault-Dev"] {
+                    let app_dir = if cfg!(windows) {
+                        base_dir.join(dir_name)
+                    } else {
+                        base_dir.join(format!(".{}", dir_name))
+                    };
+                    let cache_dir = app_dir.join("image_cache");
+                    if let Err(e) = app.asset_protocol_scope().allow_directory(&cache_dir, true) {
+                        println!("[ASSET-SCOPE] Warning: Failed to allow {:?}: {}", cache_dir, e);
+                    } else {
+                        println!("[ASSET-SCOPE] Allowed image cache: {:?}", cache_dir);
+                    }
+                }
             }
 
             apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
@@ -13084,7 +13196,7 @@ fn main() {
                 })();
             "#;
 
-            window.eval(popup_block_script).ok();
+            let _ = window.emit("inject-script", popup_block_script);
         })
         .on_window_event(|event| {
             match event.event() {
@@ -13097,7 +13209,7 @@ fn main() {
                     if *focused {
                         // Re-inject popup blocker when window regains focus
                         let window = event.window();
-                        window.eval(r#"
+                        let _ = window.emit("inject-script", r#"
                             if (!window.__adBlockerActive) {
                                 window.__adBlockerActive = true;
                                 const origOpen = window.open;
@@ -13106,7 +13218,7 @@ fn main() {
                                     return null;
                                 };
                             }
-                        "#).ok();
+                        "#);
                     }
                 }
                 _ => {}
@@ -13118,6 +13230,7 @@ fn main() {
             get_recently_added,
             get_library,
             get_library_filtered,
+            get_ddl_media,
             get_library_stats,
             get_episodes,
             get_watch_history,
@@ -13139,7 +13252,6 @@ fn main() {
             // App reset command
             clear_all_app_data,
             cleanup_missing_metadata,
-            repair_file_paths,
             // Other commands
             delete_media_files,
             delete_series,

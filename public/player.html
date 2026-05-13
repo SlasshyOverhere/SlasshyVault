@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>StreamVault Player</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://player.videasy.net https://*.videasy.net; img-src 'self' data: https:; connect-src 'self' https:;">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -493,21 +494,23 @@
 
     <script>
         (function () {
-            // Generate floating particles for visual effect
-            const particlesContainer = document.getElementById('particles');
-            if (particlesContainer) {
-                for (let i = 0; i < 20; i++) {
-                    const particle = document.createElement('div');
-                    particle.className = 'particle';
-                    particle.style.left = Math.random() * 100 + '%';
-                    particle.style.animationDelay = Math.random() * 8 + 's';
-                    particle.style.animationDuration = (6 + Math.random() * 4) + 's';
-                    particle.style.width = (2 + Math.random() * 4) + 'px';
-                    particle.style.height = particle.style.width;
-                    particle.style.background = Math.random() > 0.5
-                        ? 'rgba(139, 92, 246, ' + (0.3 + Math.random() * 0.4) + ')'
-                        : 'rgba(6, 182, 212, ' + (0.3 + Math.random() * 0.4) + ')';
-                    particlesContainer.appendChild(particle);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                // Generate floating particles for visual effect
+                const particlesContainer = document.getElementById('particles');
+                if (particlesContainer) {
+                    for (let i = 0; i < 20; i++) {
+                        const particle = document.createElement('div');
+                        particle.className = 'particle';
+                        particle.style.left = Math.random() * 100 + '%';
+                        particle.style.animationDelay = Math.random() * 8 + 's';
+                        particle.style.animationDuration = (6 + Math.random() * 4) + 's';
+                        particle.style.width = (2 + Math.random() * 4) + 'px';
+                        particle.style.height = particle.style.width;
+                        particle.style.background = Math.random() > 0.5
+                            ? 'rgba(139, 92, 246, ' + (0.3 + Math.random() * 0.4) + ')'
+                            : 'rgba(6, 182, 212, ' + (0.3 + Math.random() * 0.4) + ')';
+                        particlesContainer.appendChild(particle);
+                    }
                 }
             }
 
@@ -615,19 +618,21 @@
             function updateDebug(message) {
                 if (!debug) return;
                 const content = document.getElementById('debugContent');
-                content.innerHTML = `
-                    <div>Type: ${type}</div>
-                    <div>ID: ${id}</div>
-                    <div>Season: ${season || 'N/A'}</div>
-                    <div>Episode: ${episode || 'N/A'}</div>
-                    <div>Start: ${startTime || '0'}s</div>
-                    <hr style="margin: 5px 0; border-color: #333;">
-                    <div>Position: ${currentProgress.position.toFixed(1)}s</div>
-                    <div>Duration: ${currentProgress.duration.toFixed(1)}s</div>
-                    <div>Progress: ${currentProgress.progress_percent.toFixed(1)}%</div>
-                    <hr style="margin: 5px 0; border-color: #333;">
-                    <div style="color: #8b5cf6;">${message}</div>
-                `;
+                content.innerHTML = '';
+                const lines = [
+                    'Type: ' + (type || 'N/A'),
+                    'ID: ' + (id || 'N/A'),
+                    'Season: ' + (season || 'N/A'),
+                    'Episode: ' + (episode || 'N/A'),
+                    'Start: ' + (startTime || '0') + 's',
+                    'Progress: ' + Math.round(currentProgress.position) + '/' + Math.round(currentProgress.duration) + 's',
+                    'Debug: ' + (message || '')
+                ];
+                lines.forEach(function(line) {
+                    var div = document.createElement('div');
+                    div.textContent = line;
+                    content.appendChild(div);
+                });
             }
 
             // Validate parameters
@@ -706,6 +711,10 @@
 
             // Listen for postMessage from Videasy iframe
             window.addEventListener('message', function (event) {
+                var allowedOrigins = ['https://player.videasy.net'];
+                if (allowedOrigins.indexOf(event.origin) === -1 && !event.origin.match(/\.videasy\.net$/)) {
+                    return; // Ignore messages from unknown origins
+                }
                 // Log all messages for debugging
                 console.log('[Player] Message received:', event.origin, event.data);
                 updateDebug('Message from: ' + event.origin);
@@ -797,8 +806,9 @@
             const container = document.getElementById('playerContainer');
             const iframe = document.createElement('iframe');
             iframe.src = playerUrl;
-            iframe.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media; accelerometer; gyroscope';
+            iframe.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media';
             iframe.allowFullscreen = true;
+            iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
             iframe.referrerPolicy = 'no-referrer';
 
             // Hide loading after iframe loads
@@ -818,9 +828,6 @@
             setTimeout(function () {
                 document.getElementById('loadingOverlay').classList.add('hidden');
             }, 5000);
-
-            // Block popups
-            window.open = function () { return null; };
 
             // Save progress before page unload
             window.addEventListener('beforeunload', function () {

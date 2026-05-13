@@ -77,7 +77,7 @@ export function EpisodeSelector({
                 if (details.seasons.length > 0) {
                     setSelectedSeason(details.seasons[0].season_number);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 console.error('Failed to fetch TV details:', err);
                 setError(typeof err === 'string' ? err : 'Failed to load TV show details');
             } finally {
@@ -99,7 +99,7 @@ export function EpisodeSelector({
                     seasonNumber: selectedSeason,
                 });
                 setEpisodes(seasonDetails.episodes);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 console.error('Failed to fetch episodes:', err);
                 setEpisodes([]);
             } finally {

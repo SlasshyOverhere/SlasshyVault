@@ -106,13 +106,15 @@ impl DownloadManager {
             }
         }
 
+        startup_cleanup_orphaned_parts();
+
         Self {
             jobs: Arc::new(Mutex::new(jobs)),
         }
     }
 
     pub fn list_jobs(&self) -> Vec<DownloadJobSnapshot> {
-        let jobs = self.jobs.lock().unwrap();
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         let mut snapshots = jobs
             .values()
             .map(|record| record.snapshot.clone())
@@ -156,14 +158,14 @@ impl DownloadManager {
             cancel_flag: cancel_flag.clone(),
         };
         {
-            self.jobs.lock().unwrap().insert(id, record);
+            self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(id, record);
         }
         self.persist_jobs();
         (snapshot, cancel_flag)
     }
 
     pub fn cancel_job(&self, job_id: &str) -> Result<DownloadJobSnapshot, String> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         let record = jobs
             .get_mut(job_id)
             .ok_or_else(|| "Download job not found".to_string())?;
@@ -179,7 +181,7 @@ impl DownloadManager {
     }
 
     pub fn delete_job(&self, job_id: &str) -> Result<(), String> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         jobs.remove(job_id).ok_or_else(|| "Download job not found".to_string())?;
         drop(jobs);
         self.persist_jobs();
@@ -187,7 +189,7 @@ impl DownloadManager {
     }
 
     pub fn clear_history(&self) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         jobs.retain(|_, record| {
             matches!(
                 record.snapshot.status.as_str(),
@@ -199,7 +201,7 @@ impl DownloadManager {
     }
 
     pub fn get_job(&self, job_id: &str) -> Option<DownloadJobSnapshot> {
-        let jobs = self.jobs.lock().unwrap();
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         jobs.get(job_id).map(|record| record.snapshot.clone())
     }
 
@@ -207,7 +209,7 @@ impl DownloadManager {
     where
         F: FnMut(&mut DownloadJobSnapshot),
     {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         let record = jobs.get_mut(job_id)?;
         update(&mut record.snapshot);
         record.snapshot.updated_at = chrono::Utc::now().to_rfc3339();
@@ -219,7 +221,7 @@ impl DownloadManager {
 
     fn persist_jobs(&self) {
         let snapshots = {
-            let jobs = self.jobs.lock().unwrap();
+            let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
             jobs.values()
                 .map(|record| record.snapshot.clone())
                 .collect::<Vec<_>>()
@@ -719,6 +721,18 @@ fn fail_job(
         job.error = Some(error.clone());
     }) {
         emit_job_update(app_handle, &snapshot);
+    }
+}
+
+fn startup_cleanup_orphaned_parts() {
+    let downloads_dir = default_downloads_dir();
+    if let Ok(entries) = std::fs::read_dir(&downloads_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("part") {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 }
 

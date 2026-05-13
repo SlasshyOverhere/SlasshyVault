@@ -39,13 +39,14 @@ export function FriendActivity({ watching, onJoinWatch, onViewProfile }: FriendA
           )}
 
           <div className="relative z-10 space-y-3">
-            <div 
-              className="flex items-center gap-2 cursor-pointer group/user"
-              onClick={() => onViewProfile(item.userId)}
-            >
-              <div className="w-6 h-6 rounded-full bg-zinc-700 overflow-hidden ring-1 ring-white/10">
-                {item.userAvatar ? (
-                  <img src={item.userAvatar} alt="" className="w-full h-full object-cover" />
+              <button 
+                className="flex items-center gap-2 group/user"
+                onClick={() => onViewProfile(item.userId)}
+                aria-label={`View ${item.userName}'s profile`}
+              >
+                <div className="w-6 h-6 rounded-full bg-zinc-700 overflow-hidden ring-1 ring-white/10">
+                  {item.userAvatar ? (
+                    <img src={item.userAvatar} alt={`${item.userName}'s avatar`} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-400 font-bold">
                     {item.userName.charAt(0).toUpperCase()}
@@ -56,12 +57,12 @@ export function FriendActivity({ watching, onJoinWatch, onViewProfile }: FriendA
                 {item.userName}
               </span>
               <span className="text-[10px] text-zinc-500 font-medium ml-auto uppercase tracking-tighter">Watching Now</span>
-            </div>
+            </button>
 
             <div className="flex gap-3">
               <div className="w-14 h-20 bg-zinc-900 rounded-lg overflow-hidden shrink-0 shadow-lg ring-1 ring-white/5">
                 {item.posterPath ? (
-                  <img src={item.posterPath} alt="" className="w-full h-full object-cover" />
+                  <img src={item.posterPath} alt={`${item.title} poster`} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-zinc-700">
                     {item.contentType === 'movie' ? <Film className="w-6 h-6" /> : <Tv className="w-6 h-6" />}
@@ -86,6 +87,7 @@ export function FriendActivity({ watching, onJoinWatch, onViewProfile }: FriendA
             <Button
               className="w-full h-9 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl gap-2 shadow-lg shadow-black/20"
               onClick={() => onJoinWatch(item)}
+              aria-label={`Join ${item.userName} watching ${item.title}`}
             >
               <Users className="w-4 h-4" />
               <span>Join Together</span>

@@ -17,7 +17,7 @@ interface VideoPlayerProps {
     mediaId?: number
 }
 
-export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTime = 0, isCloud = false, accessToken, mediaId }: VideoPlayerProps) {
+export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTime = 0, isCloud = false, accessToken, mediaId: _mediaId }: VideoPlayerProps) {
     const videoRef = useRef<HTMLVideoElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const progressReportRef = useRef<number>(0)
@@ -43,7 +43,6 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
     // Attempt to start transcoding when playback fails
     const attemptTranscode = useCallback(async (filePath: string) => {
         if (transcodeAttempted || isCloud) {
-            console.log('[VideoPlayer] Transcoding already attempted or is cloud file, skipping');
             return false;
         }
 
@@ -52,21 +51,16 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
         setError(null);
         setIsLoading(true);
 
-        console.log('[VideoPlayer] Attempting to transcode file:', filePath);
-
         try {
-            // Try to start transcoding
             const result = await invoke<{ session_id: number; stream_url: string }>('start_transcode_stream', {
                 filePath: filePath,
                 startTime: initialTime > 0 ? initialTime : null
             });
 
-            console.log('[VideoPlayer] Transcoding started:', result);
             setVideoSrc(result.stream_url);
             setIsTranscoding(false);
             return true;
         } catch (e) {
-            console.error('[VideoPlayer] Transcoding failed:', e);
             setIsTranscoding(false);
             setError(`Transcoding failed: ${e}. Please configure FFmpeg in Settings > Player, or use MPV/VLC player.`);
             setIsLoading(false);
@@ -79,66 +73,35 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
         let cancelled = false;
 
         async function loadVideo() {
-            console.log('[VideoPlayer] ========== LOADING VIDEO ==========');
-            console.log('[VideoPlayer] Source:', src);
-            console.log('[VideoPlayer] isCloud:', isCloud);
-            console.log('[VideoPlayer] accessToken:', accessToken ? 'present' : 'none');
-            console.log('[VideoPlayer] mediaId:', mediaId);
-            console.log('[VideoPlayer] initialTime:', initialTime);
-
-            // Reset state
             setError(null);
             setIsLoading(true);
 
-            // If it's already a URL (http/https/blob), use it directly
-            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('blob:')) {
-                console.log('[VideoPlayer] Using URL directly (HTTP/HTTPS/Blob)');
-                setVideoSrc(src);
-                setIsLoading(false);
-                return;
-            }
-
-            // Check file extension
-            const ext = src.split('.').pop()?.toLowerCase();
-            console.log('[VideoPlayer] File extension:', ext);
-
-            // Known formats that typically need transcoding
-            const needsTranscode = ['mkv', 'avi', 'wmv', 'flv', 'mov', 'm2ts', 'ts', 'vob', 'divx', 'xvid', 'rmvb', 'rm'];
-
-            if (needsTranscode.includes(ext || '')) {
-                console.log('[VideoPlayer] File needs transcoding based on extension');
-                // Try transcoding directly
-                const success = await attemptTranscode(src);
-                if (!success && !cancelled) {
-                    setError(`This video format (${ext?.toUpperCase()}) requires FFmpeg transcoding. Please configure FFmpeg in Settings > Player, or use MPV/VLC player instead.`);
-                    setIsLoading(false);
-                }
-                return;
-            }
-
-            // For MP4/WebM/M4V - try loading as blob first
             try {
-                console.log('[VideoPlayer] Attempting to load as blob...');
-
-                // Get file size first
-                const fileSize = await invoke<number>('get_video_file_size', { filePath: src });
-                console.log('[VideoPlayer] File size:', fileSize, 'bytes', `(${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
-
-                // For very large files (>4GB), warn user
-                if (fileSize > 4 * 1024 * 1024 * 1024) {
-                    console.log('[VideoPlayer] Large file detected (>4GB), may take time to load');
+                if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('blob:')) {
+                    setVideoSrc(src);
+                    return;
                 }
 
-                // Read file in chunks and create blob
-                const chunkSize = 10 * 1024 * 1024; // 10MB chunks
+                const ext = src.split('.').pop()?.toLowerCase();
+
+                const needsTranscode = ['mkv', 'avi', 'wmv', 'flv', 'mov', 'm2ts', 'ts', 'vob', 'divx', 'xvid', 'rmvb', 'rm'];
+
+                if (needsTranscode.includes(ext || '')) {
+                    const success = await attemptTranscode(src);
+                    if (!success && !cancelled) {
+                        setError(`This video format (${ext?.toUpperCase()}) requires FFmpeg transcoding. Please configure FFmpeg in Settings > Player, or use MPV/VLC player instead.`);
+                    }
+                    return;
+                }
+
+                const fileSize = await invoke<number>('get_video_file_size', { filePath: src });
+
+                const chunkSize = 10 * 1024 * 1024;
                 const chunks: Uint8Array[] = [];
                 let offset = 0;
 
                 while (offset < fileSize) {
-                    if (cancelled) {
-                        console.log('[VideoPlayer] Loading cancelled');
-                        return;
-                    }
+                    if (cancelled) return;
 
                     const chunk = await invoke<number[]>('read_video_chunk', {
                         filePath: src,
@@ -148,39 +111,29 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
 
                     chunks.push(new Uint8Array(chunk));
                     offset += chunk.length;
-
-                    const percent = Math.round(offset / fileSize * 100);
-                    if (percent % 20 === 0) {
-                        console.log(`[VideoPlayer] Loading... ${percent}%`);
-                    }
                 }
 
                 if (cancelled) return;
 
-                // Determine MIME type based on file extension
                 let mimeType = 'video/mp4';
                 if (ext === 'webm') mimeType = 'video/webm';
                 else if (ext === 'm4v') mimeType = 'video/mp4';
 
-                console.log('[VideoPlayer] Creating blob with MIME type:', mimeType);
-
-                // Create blob and URL
                 const blob = new Blob(chunks as BlobPart[], { type: mimeType });
                 const url = URL.createObjectURL(blob);
 
-                // Clean up old blob URL if exists
                 if (blobUrlRef.current) {
                     URL.revokeObjectURL(blobUrlRef.current);
                 }
                 blobUrlRef.current = url;
 
-                console.log('[VideoPlayer] Created blob URL:', url);
                 setVideoSrc(url);
-                // Note: isLoading will be set to false when video canPlay event fires
             } catch (e) {
-                console.error('[VideoPlayer] Failed to load video as blob:', e);
                 if (!cancelled) {
                     setError(`Failed to load video: ${e}`);
+                }
+            } finally {
+                if (!cancelled) {
                     setIsLoading(false);
                 }
             }
@@ -190,7 +143,6 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
 
         return () => {
             cancelled = true;
-            // Cleanup blob URL on unmount
             if (blobUrlRef.current) {
                 URL.revokeObjectURL(blobUrlRef.current);
                 blobUrlRef.current = null;
@@ -204,22 +156,13 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
         const errorCode = video.error?.code;
         const errorMessage = video.error?.message || 'Unknown error';
 
-        console.error('[VideoPlayer] ========== VIDEO ERROR ==========');
-        console.error('[VideoPlayer] Error code:', errorCode);
-        console.error('[VideoPlayer] Error message:', errorMessage);
-        console.error('[VideoPlayer] Video src:', videoSrc);
-        console.error('[VideoPlayer] Original src:', src);
-
-        // Error code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (format/codec not supported)
         if (errorCode === 4 && !transcodeAttempted && !isCloud && src && !src.startsWith('http')) {
-            console.log('[VideoPlayer] Format not supported, attempting transcoding...');
             const success = await attemptTranscode(src);
             if (success) {
-                return; // Transcoding started, don't show error yet
+                return;
             }
         }
 
-        // Show error to user
         setError(`Failed to play video: ${errorMessage}. Try using MPV or VLC player instead.`);
         setIsLoading(false);
     }, [videoSrc, src, transcodeAttempted, isCloud, attemptTranscode]);

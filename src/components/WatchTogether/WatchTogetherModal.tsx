@@ -97,7 +97,6 @@ export function WatchTogetherModal({
     // Keep refs updated
     useEffect(() => {
         selectedMediaRef.current = selectedMedia;
-        console.log('[WT] selectedMedia updated:', selectedMedia?.id, selectedMedia?.title);
     }, [selectedMedia]);
 
     useEffect(() => {
@@ -136,21 +135,12 @@ export function WatchTogetherModal({
 
     // Memoized launch function to avoid stale closures
     const launchMpv = useCallback(async (startPosition: number = 0): Promise<void> => {
-        // Prevent double launch
         if (mpvLaunchedRef.current) {
-            console.log('[WT] MPV already launched, skipping');
             return;
         }
 
         const media = selectedMediaRef.current;
         const session = sessionIdRef.current;
-
-        console.log('[WT] launchMpv called with:', {
-            mediaId: media?.id,
-            mediaTitle: media?.title,
-            session,
-            startPosition
-        });
 
         if (!media) {
             const errorMsg = 'Cannot launch MPV: No media selected';
@@ -166,30 +156,23 @@ export function WatchTogetherModal({
             return;
         }
 
-        // Mark as launched BEFORE the async call to prevent race conditions
         mpvLaunchedRef.current = true;
 
-        console.log('[WT] Launching MPV for session:', session, 'media:', media.id, media.title);
         try {
-            const pid = await wtLaunchMpv(media.id, session, startPosition);
-            console.log('[WT] MPV launched with PID:', pid);
+            await wtLaunchMpv(media.id, session, startPosition);
             setIsConnected(true);
             setError(null);
         } catch (err) {
             console.error('[WT] Failed to launch MPV:', err);
             setError(err instanceof Error ? err.message : 'Failed to launch player');
-            // Reset flag on error so user can retry
             mpvLaunchedRef.current = false;
         }
     }, []);
 
     // Listen for Watch Together events - runs always, not just when modal is open
     useEffect(() => {
-        console.log('[WT] Setting up event listeners');
-
         const unlisten = listen<WatchEvent>('wt-event', (event) => {
             const data = event.payload;
-            console.log('[WT] Event received:', data.type, data);
 
             switch (data.type) {
                 case 'room_updated':
@@ -200,22 +183,18 @@ export function WatchTogetherModal({
                     }
                     break;
                 case 'sync_command':
-                    // Sync commands are applied in the Tauri backend.
                     setLastSyncTime(Date.now());
                     setIsConnected(true);
                     break;
                 case 'state_update':
-                    // Authoritative periodic sync update from backend relay.
                     setLastSyncTime(Date.now());
                     setIsConnected(true);
                     break;
                 case 'playback_started':
-                    console.log('[WT] Playback started event received');
                     setView('playing');
                     setLastSyncTime(Date.now());
                     setIsConnected(true);
                     onSessionChange(activeRoomRef.current, sessionIdRef.current, true, selectedMediaRef.current || undefined);
-                    // Launch MPV for participants (host already launched it)
                     launchMpv(data.position || 0);
                     break;
                 case 'error':
@@ -223,7 +202,6 @@ export function WatchTogetherModal({
                     setError(data.message || 'An error occurred');
                     break;
                 case 'disconnected':
-                    console.log('[WT] Disconnected');
                     setIsConnected(false);
                     setCurrentUserId('');
                     setLastSyncTime(undefined);
@@ -235,15 +213,13 @@ export function WatchTogetherModal({
         });
 
         return () => {
-            console.log('[WT] Cleaning up event listeners');
             unlisten.then((fn) => fn());
         };
-    }, [launchMpv, onSessionChange, isPlaying]);
+    }, [launchMpv, onSessionChange]);
 
     // Listen for MPV ended event
     useEffect(() => {
         const unlisten = listen('wt-mpv-ended', () => {
-            console.log('[WT] MPV ended');
             mpvLaunchedRef.current = false;
             setView('lobby');
             onSessionChange(activeRoomRef.current, sessionIdRef.current, false, selectedMediaRef.current || undefined);
@@ -265,14 +241,12 @@ export function WatchTogetherModal({
         localStorage.setItem('wt_nickname', nickname);
 
         try {
-            console.log('[WT] Creating room for media:', selectedMedia.id, selectedMedia.title);
             const newRoom = await wtCreateRoom(
                 selectedMedia.id,
                 selectedMedia.title,
                 buildMediaMatchKey(selectedMedia),
                 nickname.trim()
             );
-            console.log('[WT] Room created:', newRoom.code);
             const localClientId = await wtGetClientId();
             if (localClientId) {
                 setCurrentUserId(localClientId);
@@ -301,7 +275,6 @@ export function WatchTogetherModal({
         localStorage.setItem('wt_nickname', nickname);
 
         try {
-            console.log('[WT] Joining room:', roomCode, 'with media:', selectedMedia.id);
             const joinedRoom = await wtJoinRoom(
                 roomCode.trim().toUpperCase(),
                 selectedMedia.id,
@@ -309,7 +282,6 @@ export function WatchTogetherModal({
                 buildMediaMatchKey(selectedMedia),
                 nickname.trim()
             );
-            console.log('[WT] Joined room:', joinedRoom.code);
             const localClientId = await wtGetClientId();
             if (localClientId) {
                 setCurrentUserId(localClientId);
@@ -317,7 +289,6 @@ export function WatchTogetherModal({
             const roomIsPlaying = joinedRoom.is_playing || joinedRoom.state === 'playing';
             mpvLaunchedRef.current = false;
             setIsConnected(true);
-            // Pass the media along with the session change
             onSessionChange(joinedRoom, joinedRoom.code, roomIsPlaying, selectedMedia);
 
             if (roomIsPlaying) {
@@ -335,7 +306,6 @@ export function WatchTogetherModal({
     };
 
     const handleClose = () => {
-        // Just close the modal - don't leave the room
         setError(null);
         setRoomCode('');
         onClose();
@@ -402,8 +372,8 @@ export function WatchTogetherModal({
 
                             <Tabs defaultValue="create" className="w-full">
                                 <TabsList className="grid w-full grid-cols-2 bg-zinc-800">
-                                    <TabsTrigger value="create">Create Room</TabsTrigger>
-                                    <TabsTrigger value="join">Join Room</TabsTrigger>
+                                    <TabsTrigger value="create" aria-label="Create room tab">Create Room</TabsTrigger>
+                                    <TabsTrigger value="join" aria-label="Join room tab">Join Room</TabsTrigger>
                                 </TabsList>
 
                                 <TabsContent value="create" className="space-y-4 mt-4">
@@ -414,6 +384,7 @@ export function WatchTogetherModal({
                                         onClick={handleCreateRoom}
                                         disabled={!nickname.trim() || !selectedMedia || isLoading}
                                         className="w-full bg-purple-600 hover:bg-purple-700"
+                                        aria-label="Create a watch together room"
                                     >
                                         {isLoading ? (
                                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -436,6 +407,7 @@ export function WatchTogetherModal({
                                         onClick={handleJoinRoom}
                                         disabled={!nickname.trim() || !roomCode.trim() || !selectedMedia || isLoading}
                                         className="w-full bg-purple-600 hover:bg-purple-700"
+                                        aria-label="Join a watch together room"
                                     >
                                         {isLoading ? (
                                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -488,6 +460,7 @@ export function WatchTogetherModal({
                                     variant="outline"
                                     onClick={handleClose}
                                     className="border-zinc-700"
+                                    aria-label="Close modal but stay in room"
                                 >
                                     <X className="w-4 h-4 mr-2" />
                                     Close (Stay in Room)
@@ -496,6 +469,7 @@ export function WatchTogetherModal({
                                     variant="ghost"
                                     onClick={handleLeave}
                                     className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                    aria-label="Leave watch together room"
                                 >
                                     Leave Room
                                 </Button>

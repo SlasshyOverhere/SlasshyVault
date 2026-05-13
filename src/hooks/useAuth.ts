@@ -41,6 +41,24 @@ export function useAuth() {
   const initialScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
 
+  const autoDetectMpvIfUnconfigured = async () => {
+    try {
+      const config = await withTimeoutOrNull(getConfig(), AUTH_CHECK_TIMEOUT_MS)
+      if (config && !config.mpv_path) {
+        const mpvPath = await withTimeoutOrNull(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS)
+        if (mpvPath) {
+          await saveConfig({ ...config, mpv_path: mpvPath })
+          toast({
+            title: "MPV Detected",
+            description: "Media player configured automatically"
+          })
+        }
+      }
+    } catch (error) {
+      console.warn('[useAuth] MPV auto-detect failed:', error)
+    }
+  }
+
   useEffect(() => {
     isMountedRef.current = true
     return () => {
@@ -96,30 +114,11 @@ export function useAuth() {
 
       // Non-critical boot tasks run after auth loading is cleared.
       if (isMountedRef.current && connected) {
-        // Auto-detect MPV if not configured (background, bounded by timeout)
-        void (async () => {
-          try {
-            const config = await withTimeoutOrNull(getConfig(), AUTH_CHECK_TIMEOUT_MS)
-            if (config && !config.mpv_path) {
-              console.log('[Boot] No MPV configured, auto-detecting...')
-              const mpvPath = await withTimeoutOrNull(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS)
-              if (mpvPath) {
-                await saveConfig({ ...config, mpv_path: mpvPath })
-                console.log('[Boot] MPV auto-detected:', mpvPath)
-                toast({
-                  title: "MPV Detected",
-                  description: "Media player configured automatically"
-                })
-              }
-            }
-          } catch (mpvError) {
-            console.log('[Boot] MPV auto-detect failed (non-critical):', mpvError)
-          }
-        })()
+        void autoDetectMpvIfUnconfigured()
 
         // Restore social connection in background (don't block UI)
         restoreSocialConnection().catch(err => {
-          console.log('[Auth] Social restore failed (non-critical):', err)
+          console.warn('[useAuth] Social restore failed:', err)
         })
       }
     }
@@ -159,29 +158,10 @@ export function useAuth() {
 
           // Initialize social connection with new tokens in background
           restoreSocialConnection().catch((socialError) => {
-            console.log('[Auth] Social init failed (non-critical):', socialError)
+            console.warn('[useAuth] Social init failed:', socialError)
           })
 
-          // Auto-detect MPV in background to avoid blocking the login flow
-          void (async () => {
-            try {
-              const config = await withTimeoutOrNull(getConfig(), AUTH_CHECK_TIMEOUT_MS)
-              if (config && !config.mpv_path) {
-                console.log('[Auth] No MPV configured, auto-detecting...')
-                const mpvPath = await withTimeoutOrNull(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS)
-                if (mpvPath) {
-                  await saveConfig({ ...config, mpv_path: mpvPath })
-                  console.log('[Auth] MPV auto-detected:', mpvPath)
-                  toast({
-                    title: "MPV Detected",
-                    description: "Media player configured automatically"
-                  })
-                }
-              }
-            } catch (mpvError) {
-              console.log('[Auth] MPV auto-detect failed (non-critical):', mpvError)
-            }
-          })()
+          void autoDetectMpvIfUnconfigured()
 
           // Trigger initial cloud scan to set up folders
           if (initialScanTimeoutRef.current) {
@@ -190,11 +170,9 @@ export function useAuth() {
           initialScanTimeoutRef.current = setTimeout(async () => {
             try {
               const { scanCloudFolder } = await import('@/services/gdrive')
-              console.log('[Auth] Starting initial cloud scan...')
               await scanCloudFolder('root', 'My Drive')
-              console.log('[Auth] Initial cloud scan complete')
             } catch (scanError) {
-              console.log('[Auth] Initial scan failed (non-critical):', scanError)
+              console.warn('[useAuth] Initial scan failed:', scanError)
             }
           }, 1000)
         } else {
@@ -223,7 +201,7 @@ export function useAuth() {
       const { disconnectGDrive, disconnectSocialAuth } = await import('@/services/gdrive')
       await disconnectGDrive()
       await disconnectSocialAuth().catch((error) => {
-        console.log('[Auth] Social auth disconnect failed (non-critical):', error)
+        console.warn('[useAuth] Social auth disconnect failed:', error)
       })
       disconnectSocial()
       if (isMountedRef.current) {

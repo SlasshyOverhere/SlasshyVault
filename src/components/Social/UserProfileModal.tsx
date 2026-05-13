@@ -89,7 +89,7 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-zinc-800">
           <h2 className="font-semibold">Profile</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close profile">
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -104,6 +104,7 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
                 variant="outline" 
                 onClick={retryLoad}
                 className="border-zinc-700"
+                aria-label="Retry loading profile"
               >
                 Retry
               </Button>
@@ -118,7 +119,7 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
               <div className="flex items-center gap-4 mb-6">
                 <div className="w-20 h-20 rounded-full bg-zinc-800 overflow-hidden">
                   {profile.avatarUrl ? (
-                    <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
+                    <img src={profile.avatarUrl} alt={profile.displayName} className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-3xl text-zinc-500">
                       {profile.displayName.charAt(0).toUpperCase()}
@@ -136,9 +137,10 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
               {/* Actions */}
               {!isOwnProfile && (
                 <div className="flex gap-2 mb-6">
-                  <Button
+                    <Button
                     className="flex-1 bg-purple-600 hover:bg-purple-700"
                     onClick={() => onChat?.(userId)}
+                    aria-label="Send message to user"
                   >
                     <MessageCircle className="w-4 h-4 mr-2" />
                     Message
@@ -147,6 +149,7 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
                     variant="outline"
                     className="border-red-500/50 text-red-500 hover:bg-red-500/10"
                     onClick={handleRemoveFriend}
+                    aria-label="Remove friend"
                   >
                     <UserMinus className="w-4 h-4" />
                   </Button>
@@ -241,9 +244,9 @@ export function UserProfileModal({ userId, isOwnProfile, onClose, onChat }: User
                       <div key={activity.id} className="flex items-center gap-3 p-2 bg-zinc-800/30 rounded">
                         <div className="w-8 h-12 bg-zinc-800 rounded overflow-hidden flex-shrink-0">
                           {activity.posterPath ? (
-                            <img
+                              <img
                               src={`https://image.tmdb.org/t/p/w92${activity.posterPath}`}
-                              alt=""
+                              alt={activity.title}
                               className="w-full h-full object-cover"
                             />
                           ) : (

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Zap, Clock, X, Search as SearchIcon } from 'lucide-react';
+import { Users, Zap, Clock, X, Search as SearchIcon, type LucideIcon } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { 
@@ -117,7 +117,7 @@ export function SocialSidebar({ isOpen, onClose, onOpenChat, onViewProfile, onJo
 
   if (!isOpen) return null;
 
-  const tabs: { id: Tab; icon: any; label: string; count?: number }[] = [
+  const tabs: { id: Tab; icon: LucideIcon; label: string; count?: number }[] = [
     { id: 'friends', icon: Users, label: 'Friends' },
     { id: 'activity', icon: Zap, label: 'Activity', count: watching.length },
     { id: 'requests', icon: Clock, label: 'Requests', count: requests.length },
@@ -146,6 +146,7 @@ export function SocialSidebar({ isOpen, onClose, onOpenChat, onViewProfile, onJo
             size="icon" 
             onClick={onClose}
             className="rounded-xl hover:bg-white/5 hover:text-white transition-colors"
+            aria-label="Close social sidebar"
           >
             <X className="w-4 h-4" />
           </Button>
@@ -165,6 +166,7 @@ export function SocialSidebar({ isOpen, onClose, onOpenChat, onViewProfile, onJo
                     ? 'bg-white/10 text-white shadow-inner ring-1 ring-white/10' 
                     : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
                 }`}
+                aria-label={`${tab.label} tab`}
               >
                 <Icon className={`w-4 h-4 mb-1 transition-transform duration-300 ${isActive ? 'scale-110' : ''}`} />
                 <span className="text-[10px] font-bold uppercase tracking-wider">{tab.label}</span>

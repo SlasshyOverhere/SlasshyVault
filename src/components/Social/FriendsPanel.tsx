@@ -200,7 +200,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
               </span>
             )}
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close friends panel">
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -212,6 +212,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
               activeTab === 'friends' ? 'text-purple-500 border-b-2 border-purple-500' : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Friends tab"
           >
             Friends ({friends.length})
           </button>
@@ -220,6 +221,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
             className={`flex-1 py-2 text-sm font-medium transition-colors relative ${
               activeTab === 'requests' ? 'text-purple-500 border-b-2 border-purple-500' : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Friend requests tab"
           >
             Requests
             {requests.length > 0 && (
@@ -233,6 +235,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
               activeTab === 'add' ? 'text-purple-500 border-b-2 border-purple-500' : 'text-zinc-400 hover:text-white'
             }`}
+            aria-label="Add friends tab"
           >
             <UserPlus className="w-4 h-4 mx-auto" />
           </button>
@@ -249,6 +252,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                 variant="outline" 
                 onClick={retryLoad}
                 className="border-zinc-700"
+                aria-label="Retry loading friends"
               >
                 Retry
               </Button>
@@ -322,7 +326,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                   >
                     <div className="w-10 h-10 rounded-full bg-zinc-700 overflow-hidden">
                       {request.fromAvatar ? (
-                        <img src={request.fromAvatar} alt="" className="w-full h-full object-cover" />
+                        <img src={request.fromAvatar} alt={`${request.fromName}'s avatar`} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-zinc-400">
                           {request.fromName.charAt(0).toUpperCase()}
@@ -339,6 +343,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                         variant="ghost"
                         className="h-8 w-8 text-green-500 hover:text-green-400 hover:bg-green-500/10"
                         onClick={() => handleAcceptRequest(request.fromId)}
+                        aria-label={`Accept friend request from ${request.fromName}`}
                       >
                         <Check className="w-4 h-4" />
                       </Button>
@@ -347,6 +352,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                         variant="ghost"
                         className="h-8 w-8 text-red-500 hover:text-red-400 hover:bg-red-500/10"
                         onClick={() => handleRejectRequest(request.fromId)}
+                        aria-label={`Reject friend request from ${request.fromName}`}
                       >
                         <X className="w-4 h-4" />
                       </Button>
@@ -380,7 +386,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                     >
                       <div className="w-10 h-10 rounded-full bg-zinc-700 overflow-hidden">
                         {user.avatarUrl ? (
-                          <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                          <img src={user.avatarUrl} alt={`${user.displayName}'s avatar`} className="w-full h-full object-cover" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-zinc-400">
                             {user.displayName.charAt(0).toUpperCase()}
@@ -394,6 +400,7 @@ export function FriendsPanel({ isOpen, onClose, onOpenChat, onViewProfile }: Fri
                         size="sm"
                         onClick={() => handleSendRequest(user.id)}
                         className="bg-purple-600 hover:bg-purple-700"
+                        aria-label={`Send friend request to ${user.displayName}`}
                       >
                         <UserPlus className="w-4 h-4 mr-1" />
                         Add
@@ -431,10 +438,10 @@ interface FriendItemProps {
 function FriendItem({ friend, isOnline, onChat, onViewProfile }: FriendItemProps) {
   return (
     <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-zinc-800/50 group">
-      <div className="relative cursor-pointer" onClick={onViewProfile}>
+      <div className="relative cursor-pointer" onClick={onViewProfile} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onViewProfile(); }}>
         <div className="w-10 h-10 rounded-full bg-zinc-700 overflow-hidden">
           {friend.avatar ? (
-            <img src={friend.avatar} alt="" className="w-full h-full object-cover" />
+            <img src={friend.avatar} alt={friend.name} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-zinc-400">
               {friend.name.charAt(0).toUpperCase()}
@@ -446,7 +453,7 @@ function FriendItem({ friend, isOnline, onChat, onViewProfile }: FriendItemProps
         )}
       </div>
 
-      <div className="flex-1 min-w-0 cursor-pointer" onClick={onViewProfile}>
+      <div className="flex-1 min-w-0 cursor-pointer" onClick={onViewProfile} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onViewProfile(); }}>
         <p className="font-medium truncate">{friend.name}</p>
         {friend.currentlyWatching ? (
           <div className="flex items-center gap-1 text-xs text-purple-400">
@@ -469,6 +476,7 @@ function FriendItem({ friend, isOnline, onChat, onViewProfile }: FriendItemProps
         variant="ghost"
         className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={onChat}
+        aria-label={`Chat with ${friend.name}`}
       >
         <MessageCircle className="w-4 h-4" />
       </Button>

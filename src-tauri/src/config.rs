@@ -100,8 +100,10 @@ fn expand_and_check_pattern(pattern: &str) -> Option<String> {
         if let Ok(entries) = fs::read_dir(prefix) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let full_path = format!("{}{}", entry.path().display(), suffix);
-                if Path::new(&full_path).exists() {
-                    return Some(full_path);
+                let path = Path::new(&full_path);
+                if path.exists() {
+                    let canonical = path.canonicalize().ok()?;
+                    return Some(canonical.to_string_lossy().to_string());
                 }
             }
         }
@@ -164,9 +166,10 @@ pub fn validate_executable_path(path: &str, expected_name: &str) -> Result<(), S
     }
 
     let path = Path::new(path);
+    let canonical = path.canonicalize().map_err(|e| format!("Invalid executable path: {}", e))?;
 
     // Extract the file stem (filename without extension)
-    let file_stem = path
+    let file_stem = canonical
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid executable path: {}", path.display()))?;
@@ -313,7 +316,11 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    let config: Config = serde_json::from_str(&contents)?;
+    let mut config: Config = serde_json::from_str(&contents)?;
+    // Apply validation bounds
+    config.cloud_cache_max_mb = config.cloud_cache_max_mb.min(100000);
+    config.zip_cache_max_gb = config.zip_cache_max_gb.min(100);
+    config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
     Ok(config)
 }
 

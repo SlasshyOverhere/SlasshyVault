@@ -13,4 +13,4 @@ paths-ignore:
 # Secret types to ignore (TMDB tokens are read-only public metadata tokens)
 matches-ignore:
   - name: "TMDB read-only metadata token"
-    match: "eyJ*"
+    match: "eyJhbGci*"

@@ -113,7 +113,7 @@ const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 
-const AI_CHAT_PAUSED = true
+const AI_CHAT_PAUSED = import.meta.env.VITE_AI_CHAT_PAUSED === 'true'
 
 
 interface ScanProgressPayload {
@@ -137,6 +137,19 @@ interface MpvPlaybackEndedPayload {
   final_position?: number
   final_duration?: number
   completed: boolean
+}
+
+interface ReminderFiredPayload {
+  movie_id: number
+  title: string
+}
+
+interface WatchlistReminderFiredPayload {
+  id: number
+  title: string
+  tmdb_id: string
+  media_type: string
+  notification_mode: string
 }
 
 const AUTO_MARK_WATCHED_THRESHOLD_PERCENT = 93
@@ -260,8 +273,6 @@ function App() {
     if (!isChunkedCloudRender) return sortedItems
     return sortedItems.slice(0, visibleCloudItemsCount)
   }, [sortedItems, isChunkedCloudRender, visibleCloudItemsCount])
-  const disableCloudEntryAnimation = false
-
   useEffect(() => {
     let unlisten: UnlistenFn | null = null
     const setup = async () => {
@@ -288,7 +299,7 @@ function App() {
     try {
       localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode)
     } catch {
-      // ignore storage errors (private mode, quota, etc.)
+      console.warn('[App] Failed to save view mode')
     }
   }, [viewMode])
 
@@ -461,8 +472,10 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+  const formatTimeDigits = (date: Date) => {
+    const h = date.getHours() % 12 || 12
+    const m = date.getMinutes()
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
   }
 
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
@@ -490,7 +503,7 @@ function App() {
     try {
       localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
     } catch {
-      // ignore storage errors
+      console.warn('[App] Failed to persist notifications')
     }
   }, [notifications])
 
@@ -533,7 +546,8 @@ function App() {
     if (error instanceof Error) return error.message
     if (typeof error === 'string') return error
     if (error && typeof error === 'object') {
-      return (error as any).message || (error as any).error || JSON.stringify(error)
+      const record = error as Record<string, unknown>
+      return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
     }
     return 'Unknown update error.'
   }
@@ -684,8 +698,7 @@ function App() {
       const { isGDriveConnected: checkConnected } = await import('@/services/gdrive')
       const connected = await checkConnected()
       setIsGDriveConnected(connected)
-    } catch (error) {
-      console.log('[GDrive] Status check failed:', error)
+    } catch {
       setIsGDriveConnected(false)
     }
   }
@@ -910,8 +923,8 @@ function App() {
 
   // Load initial data
   useEffect(() => {
-    loadContinueWatching(),
-        loadRecentlyAdded()
+    loadContinueWatching()
+    loadRecentlyAdded()
     loadLibraryStats()
   }, [tabVisibility, loadContinueWatching, loadRecentlyAdded, loadLibraryStats])
 
@@ -926,8 +939,8 @@ function App() {
     const syncAndRefresh = async () => {
       await runWatchHistorySync()
       if (cancelled) return
-      await loadContinueWatching(),
-        loadRecentlyAdded()
+      await loadContinueWatching()
+      await loadRecentlyAdded()
       if (cancelled) return
       await loadHistoryEvents()
     }
@@ -962,12 +975,11 @@ function App() {
         })
       })
 
-      unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', (event) => {
+      unlistenCloudIndexingStarted = await listen<{ count: number }>('cloud-indexing-started', () => {
         setIsCloudIndexing(true)
-        console.log(`[Cloud] Indexing started: ${event.payload.count} files`)
       })
 
-      unlistenReminderFired = await listen<any>('movie-reminder-fired', (event) => {
+      unlistenReminderFired = await listen<ReminderFiredPayload>('movie-reminder-fired', (event) => {
         const reminder = event.payload
         pushNotification({
           category: 'reminder',
@@ -981,7 +993,7 @@ function App() {
         emit('refresh-reminders')
       })
 
-      unlistenWatchlistReminderFired = await listen<any>('watchlist-reminder-fired', (event) => {
+      unlistenWatchlistReminderFired = await listen<WatchlistReminderFiredPayload>('watchlist-reminder-fired', (event) => {
         const item = event.payload
         const isSpam = item.notification_mode === 'spam'
         const title = isSpam ? 'Spam Reminder' : 'Watchlist Reminder'
@@ -1047,8 +1059,8 @@ function App() {
           await loadHistoryEvents()
         }
         await loadLibraryStats()
-        await loadContinueWatching(),
-        loadRecentlyAdded()
+        await loadContinueWatching()
+        await loadRecentlyAdded()
 
         toast({ title: "Scan Complete", description: "Library has been updated." })
       })
@@ -1101,8 +1113,8 @@ function App() {
         } else if (view === 'history') {
           await loadHistoryEvents()
         }
-        await loadContinueWatching(),
-        loadRecentlyAdded()
+        await loadContinueWatching()
+        await loadRecentlyAdded()
         await runWatchHistorySync()
       })
 
@@ -1132,9 +1144,6 @@ function App() {
 
       unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
         const payload = event.payload || {}
-        const type = payload.type || 'updated'
-        const title = payload.title || 'Library'
-        console.log(`[WATCHER] Library updated: ${type} - ${title}`)
 
         setIsCloudIndexing(false)
         await loadDownloadQueue()
@@ -1162,8 +1171,8 @@ function App() {
           }
         }
         await loadLibraryStats()
-        await loadContinueWatching(),
-        loadRecentlyAdded()
+        await loadContinueWatching()
+        await loadRecentlyAdded()
       })
 
       unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
@@ -1375,7 +1384,7 @@ function App() {
           try {
             posterUrl = await getCachedImageUrl(item.poster_path.replace('image_cache/', '')) || undefined
           } catch {
-            // Ignore cache lookup failures and continue playback.
+            console.warn('[App] Cache lookup failed')
           }
         }
 
@@ -1672,8 +1681,8 @@ function App() {
         description: `"${event.parent_title || event.title}" removed from watch history.`,
       })
       await loadHistoryEvents()
-      await loadContinueWatching(),
-        loadRecentlyAdded()
+      await loadContinueWatching()
+      await loadRecentlyAdded()
       await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
@@ -1691,8 +1700,8 @@ function App() {
         description: `Removed ${historyEvents.length} watch history ${historyEvents.length === 1 ? 'entry' : 'entries'}.`,
       })
       await loadHistoryEvents()
-      await loadContinueWatching(),
-        loadRecentlyAdded()
+      await loadContinueWatching()
+      await loadRecentlyAdded()
       await runWatchHistorySync()
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
@@ -1709,6 +1718,7 @@ function App() {
       const deletePrompt = item.parent_zip_id
         ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
         : `Are you sure you want to permanently delete "${item.title}"?`
+      // TODO: Replace with custom modal
       const confirmed = confirm(deletePrompt)
       if (confirmed) {
         try {
@@ -1739,8 +1749,8 @@ function App() {
       toast({ title: "Marked Complete", description: `${markCompleteData.title} marked as watched` })
       // Emit event so EpisodeBrowser and other components can refresh
       await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
-      await loadContinueWatching(),
-        loadRecentlyAdded()
+      await loadContinueWatching()
+      await loadRecentlyAdded()
       await loadHistoryEvents()
       await runWatchHistorySync()
       // Refresh library items to update progress display on cards
@@ -2070,7 +2080,7 @@ function App() {
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
-          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden pl-[70px]">
+          <main className="flex-1 flex flex-col min-w-0 relative z-10 overflow-hidden">
             {/* Floating Scan Progress Indicator */}
             <AnimatePresence>
               {isScanning && scanProgress && (
@@ -2327,15 +2337,17 @@ function App() {
 
                         <div className="relative flex-1 flex flex-col min-h-0">
                           {/* 1. Header Row: Clock + Branding + Date */}
-                          <div className="pt-16 pb-12 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
-                            <div className="flex items-center gap-6">
-                                {/* Clock - Adjusted Size */}
-                                <h1 className="text-5xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
-                                  {formatTime(currentTime)}
-                                </h1>
-                                {/* Date moved to header row */}
-                                <div className="h-10 w-px bg-white/10" />
-                                <p className="text-sm font-black text-white/20 uppercase tracking-[0.2em]">
+                           <div className="pt-16 pb-6 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
+                            <div className="flex flex-col items-center gap-2">
+                                <div className="flex items-baseline gap-2">
+                                    <h1 className="text-5xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
+                                        {formatTimeDigits(currentTime)}
+                                    </h1>
+                                    <span className="text-sm font-bold text-white/30 tracking-[0.15em] uppercase">
+                                        {currentTime.getHours() >= 12 ? 'pm' : 'am'}
+                                    </span>
+                                </div>
+                                <p className="text-xs font-bold text-white/20 uppercase tracking-[0.25em]">
                                     {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                                 </p>
                             </div>                          </div>
@@ -2488,47 +2500,41 @@ function App() {
                                   </motion.section>
                                 )}
 
-                                {/* 4. Statistics Dashboard Widgets - Ultra Compact Bottom */}
+                                {/* Stats bar */}
                                 {tabVisibility.showCloud && (libraryStats.movies > 0 || libraryStats.shows > 0) && (
-                                  <motion.section
-                                    initial={{ opacity: 0, y: 20 }}
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: 0.3 }}
-                                    className="grid grid-cols-1 sm:grid-cols-3 gap-6 flex-shrink-0"
+                                    className="flex items-center justify-center gap-5 py-3 flex-shrink-0"
                                   >
                                     <button
                                       onClick={() => { setView('cloud'); setCloudSubTab('movies'); }}
-                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                      className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <Film className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
-                                      <div className="flex items-baseline gap-2">
-                                        <span className="text-2xl font-black text-white">{libraryStats.movies}</span>
-                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Movies</span>
-                                      </div>
+                                      <Film className="w-4 h-4" />
+                                      <span className="font-bold tabular-nums">{libraryStats.movies}</span>
+                                      <span className="text-white/25">Movies</span>
                                     </button>
-
+                                    <span className="w-px h-5 bg-white/10" />
                                     <button
                                       onClick={() => { setView('cloud'); setCloudSubTab('tv'); }}
-                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                      className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <Tv className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
-                                      <div className="flex items-baseline gap-2">
-                                        <span className="text-2xl font-black text-white">{libraryStats.shows}</span>
-                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Shows</span>
-                                      </div>
+                                      <Tv className="w-4 h-4" />
+                                      <span className="font-bold tabular-nums">{libraryStats.shows}</span>
+                                      <span className="text-white/25">Shows</span>
                                     </button>
-
+                                    <span className="w-px h-5 bg-white/10" />
                                     <button
                                       onClick={() => setView('history')}
-                                      className="group flex items-center justify-center gap-4 py-3 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-white/10 transition-all"
+                                      className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <TrendingUp className="w-5 h-5 text-white/40 group-hover:text-white transition-colors" />
-                                      <div className="flex items-baseline gap-2">
-                                        <span className="text-2xl font-black text-white">{continueWatching.length}</span>
-                                        <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Watching</span>
-                                      </div>
+                                      <TrendingUp className="w-4 h-4" />
+                                      <span className="font-bold tabular-nums">{continueWatching.length}</span>
+                                      <span className="text-white/25">Watching</span>
                                     </button>
-                                  </motion.section>
+                                  </motion.div>
                                 )}
 
                                 {/* Empty state - Fixed scale */}
@@ -2833,12 +2839,21 @@ function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="relative min-h-[calc(100vh-80px)]"
+                        className="relative h-[calc(100vh-80px)]"
                       >
                         {/* Background Decorative Layer - Matching Home View Aesthetic */}
                         <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
                         <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
-                        <DirectLinksView onIndexComplete={handleDdlIndexComplete} />
+                        <DirectLinksView
+                          onIndexComplete={handleDdlIndexComplete}
+                          viewMode={viewMode}
+                          onItemClick={handleItemClick}
+                          onFixMatch={handleFixMatch}
+                          onDownload={handleStartDownload}
+                          onDelete={handleDelete}
+                          onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
+                          onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
+                        />
                       </motion.div>
                     )}
 
@@ -2858,7 +2873,6 @@ function App() {
                               item={item}
                               index={index}
                               layout={viewMode}
-                              disableEntryAnimation={disableCloudEntryAnimation}
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
                               onDownload={handleStartDownload}

@@ -104,9 +104,9 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           {/* Privacy Notice */}
           <p className="text-neutral-500 text-xs text-center mt-6 leading-relaxed">
             By signing in, you agree to our{' '}
-            <span className="text-neutral-400 hover:text-white cursor-pointer">Terms of Service</span>
+            <a href="https://streamvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
             {' '}and{' '}
-            <span className="text-neutral-400 hover:text-white cursor-pointer">Privacy Policy</span>.
+            <a href="https://streamvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
             <br />
             Your data is stored securely in your own Google Drive.
           </p>

@@ -35,7 +35,7 @@ interface EpisodeBrowserProps {
     onDownload?: (episode: MediaItem) => void | Promise<void>
 }
 
-// Component to handle episode thumbnail loading from local cache or TMDB
+// TODO: Extract this to a shared component (duplicated in ContentDetailsModal.tsx)
 const EpisodeThumbnailImage = memo(function EpisodeThumbnailImage({
     localStillPath,
     tmdbStillUrl,
@@ -61,28 +61,20 @@ const EpisodeThumbnailImage = memo(function EpisodeThumbnailImage({
                 if (filename.startsWith('image_cache/')) {
                     filename = filename.replace('image_cache/', '');
                 }
-                console.log(`[EpisodeThumbnail] Loading local image for E${episodeNumber}: ${filename}`);
-
                 try {
                     const cachedUrl = await getCachedImageUrl(filename);
                     if (cachedUrl) {
-                        console.log(`[EpisodeThumbnail] Successfully loaded local image for E${episodeNumber}`);
                         setImageUrl(cachedUrl);
                         setLoading(false);
                         return;
-                    } else {
-                        console.log(`[EpisodeThumbnail] getCachedImageUrl returned null for E${episodeNumber}`);
                     }
                 } catch (error) {
-                    console.log(`[EpisodeThumbnail] Failed to load local image for E${episodeNumber}:`, error);
+                    console.error(`[EpisodeThumbnail] Failed to load local image for E${episodeNumber}:`, error);
                 }
-            } else {
-                console.log(`[EpisodeThumbnail] No localStillPath for E${episodeNumber}`);
             }
 
             // Fall back to TMDB URL
             if (tmdbStillUrl) {
-                console.log(`[EpisodeThumbnail] Falling back to TMDB URL for E${episodeNumber}`);
                 setImageUrl(tmdbStillUrl);
             }
             setLoading(false);
@@ -436,7 +428,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
     // Player selection state
     const [playerModalOpen, setPlayerModalOpen] = useState(false)
     const [pendingPlayEpisode, setPendingPlayEpisode] = useState<MediaItem | null>(null)
-    const [pendingResumeTime, setPendingResumeTime] = useState(0)
+    const [_pendingResumeTime, _setPendingResumeTime] = useState(0)
 
     // Details modal state
     const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
@@ -568,7 +560,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
             toast({ title: "Metadata Refreshed", description: result });
             // Reload episodes to get updated metadata
             await loadEpisodes();
-        } catch {
+        } catch (error) {
+            console.warn("Failed to refresh metadata:", error);
             toast({ title: "Error", description: "Failed to refresh metadata", variant: "destructive" });
         } finally {
             setIsRefreshing(false);
@@ -650,7 +643,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
                 title: "Marked as watched",
                 description: `S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')} saved to history.`,
             });
-        } catch {
+        } catch (error) {
+            console.warn("Failed to mark episode as watched:", error);
             toast({ title: "Error", description: "Failed to mark episode as watched", variant: "destructive" });
         }
     }, [toast]);
@@ -706,7 +700,8 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
             } else {
                 await startPlayback(episode, 0);
             }
-        } catch {
+        } catch (error) {
+            console.warn("Failed to start playback (handlePlay):", error);
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
         }
     }
@@ -735,42 +730,20 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
             toast({
                 title: "Playing",
                 description: `Now playing S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')}`
-            })
-        } catch {
+            });
+        } catch (error) {
+            console.warn("Failed to start playback:", error);
             toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
-        }
-    }
-
-    const handlePlayerSelect = async (player: 'mpv' | 'vlc' | 'builtin') => {
-        if (!pendingPlayEpisode) return;
-
-        // Only MPV is supported now
-        if (player === 'mpv') {
-            try {
-                await launchPlaybackWithZipLoading(
-                    pendingPlayEpisode,
-                    pendingResumeTime > 0,
-                    resolveSeriesAudioPreferenceForPlayback(
-                        show.id,
-                        pendingPlayEpisode.season_number,
-                    ),
-                    resolveSeriesSubtitlePreferenceForPlayback(
-                        show.id,
-                        pendingPlayEpisode.season_number,
-                    ),
-                );
-                toast({
-                    title: "Playing",
-                    description: `Now playing S${String(pendingPlayEpisode.season_number).padStart(2, '0')}E${String(pendingPlayEpisode.episode_number).padStart(2, '0')}`
-                })
-            } catch {
-                toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
-            }
         }
 
         setPendingPlayEpisode(null);
-        setPendingResumeTime(0);
     }
+
+    const handlePlayerSelect = useCallback((_player: 'mpv' | 'vlc' | 'builtin') => {
+        if (pendingPlayEpisode) {
+            void startPlayback(pendingPlayEpisode, 0);
+        }
+    }, [pendingPlayEpisode]);
 
     const imageSrc = posterUrl || `https://placehold.co/400x600/1a1a2e/3a3a4e?text=${encodeURIComponent(show.title.slice(0, 2))}`;
 
@@ -919,7 +892,6 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
                 onOpenChange={setPlayerModalOpen}
                 onSelectPlayer={handlePlayerSelect}
                 title={pendingPlayEpisode ? `S${String(pendingPlayEpisode.season_number).padStart(2, '0')}E${String(pendingPlayEpisode.episode_number).padStart(2, '0')} - ${pendingPlayEpisode.title}` : ''}
-                hasTmdbId={!!show.tmdb_id}
             />
 
             {/* Resume Dialog */}

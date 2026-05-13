@@ -69,11 +69,12 @@ function normalizeExternalHttpUrl(url: string): string | null {
     }
     return parsed.toString();
   } catch {
+    console.warn('[TmdbDeepProfileCard] Invalid URL:', url);
     return null;
   }
 }
 
-async function handleExternalLink(url: string, event?: React.MouseEvent) {
+async function handleExternalLink(url: string, event?: React.MouseEvent<HTMLAnchorElement>) {
   if (event) {
     event.preventDefault();
   }
@@ -83,6 +84,7 @@ async function handleExternalLink(url: string, event?: React.MouseEvent) {
   try {
     await open(safeUrl);
   } catch {
+    console.warn('[TmdbDeepProfileCard] Failed to open external link, falling back to window.open');
     window.open(safeUrl, '_blank', 'noopener,noreferrer');
   }
 }

@@ -117,7 +117,7 @@ export function Sidebar({
     <motion.aside
       data-tour="sidebar"
       className={cn(
-        "h-screen flex flex-col fixed left-0 top-0 z-[100]",
+        "h-screen flex flex-col z-[100]",
         "bg-[#0D0D0D]",
         "border-r border-white/[0.05] shadow-2xl",
         "will-change-[width]",
@@ -133,6 +133,12 @@ export function Sidebar({
       }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocus={handleMouseEnter}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          handleMouseLeave()
+        }
+      }}
     >
       {/* Glossy Overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
@@ -145,10 +151,11 @@ export function Sidebar({
               const isActive = currentView === item.id;
 
               return (
-                <button
-                  key={item.id}
-                  data-tour={`nav-${item.id}`}
-                  onClick={() => {
+                  <button
+                    key={item.id}
+                    data-tour={`nav-${item.id}`}
+                    aria-label={item.label}
+                    onClick={() => {
                     if (item.id === "ai" && item.paused) {
                       onAiChatClick?.()
                       return
@@ -240,7 +247,7 @@ export function Sidebar({
 
                   {/* Tooltip for collapsed mode */}
                   {isCollapsed && (
-                    <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+                    <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
                       {item.paused ? (
                         <span className="text-xs font-bold text-white tracking-wider">{" • PAUSED"}</span>
@@ -270,6 +277,7 @@ export function Sidebar({
                 data-tour="scan-library-btn"
                 onClick={onCloudScan}
                 disabled={isCloudIndexing || isScanning}
+                aria-label="Update Library"
                 className={cn(
                   "w-full flex items-center justify-between transition-all duration-300",
                   isCollapsed 
@@ -361,11 +369,12 @@ export function Sidebar({
                 data-tour="settings-btn"
                 onClick={onOpenSettings}
                 title="Open settings"
+                aria-label="Open settings"
                 className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
               >
                 <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
               </button>
-              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                 <span className="text-xs font-semibold text-white">Open Settings</span>
               </div>
             </div>
@@ -373,15 +382,16 @@ export function Sidebar({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <button
-              data-tour="settings-btn"
-              onClick={onOpenSettings}
-              title="Open settings"
-              className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
-            >
-              <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
-              <span className="text-xs font-semibold tracking-wide">Settings</span>
-            </button>
+              <button
+                data-tour="settings-btn"
+                onClick={onOpenSettings}
+                title="Open settings"
+                aria-label="Open settings"
+                className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+              >
+                <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
+                <span className="text-xs font-semibold tracking-wide">Settings</span>
+              </button>
           </div>
         )}
       </div>

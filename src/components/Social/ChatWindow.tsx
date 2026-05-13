@@ -74,7 +74,9 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
 
     const unsubMessage = onSocialEvent('chat_message', (data) => {
       if (data.fromUserId === friend.id) {
-        appendMessage(data.message as ChatMessage);
+        if (data.message && typeof data.message === 'object' && 'id' in data.message) {
+          appendMessage(data.message as ChatMessage);
+        }
         void markConversationRead();
         scrollToBottom();
       }
@@ -82,7 +84,9 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
 
     const unsubSent = onSocialEvent('chat_message_sent', (data) => {
       if (data.friendId === friend.id) {
-        appendMessage(data.message as ChatMessage);
+        if (data.message && typeof data.message === 'object' && 'id' in data.message) {
+          appendMessage(data.message as ChatMessage);
+        }
         scrollToBottom();
       }
     });
@@ -154,7 +158,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
           <div className="relative">
             <div className="w-8 h-8 rounded-full bg-zinc-700 overflow-hidden">
               {friend.avatar ? (
-                <img src={friend.avatar} alt="" className="w-full h-full object-cover" />
+                <img src={friend.avatar} alt={friend.name} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-zinc-400 text-sm">
                   {friend.name.charAt(0).toUpperCase()}
@@ -171,7 +175,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
               <p className="text-xs text-purple-400">typing...</p>
             )}
           </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label={`Close chat with ${friend.name}`}>
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -188,6 +192,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
                 size="sm" 
                 className="mt-3 border-zinc-700"
                 onClick={loadChatHistory}
+                aria-label="Retry loading chat history"
               >
                 Retry
               </Button>
@@ -249,6 +254,7 @@ export function ChatWindow({ friend, onClose }: ChatWindowProps) {
               onClick={handleSend}
               disabled={!newMessage.trim() || sending}
               className="bg-purple-600 hover:bg-purple-700"
+              aria-label="Send message"
             >
               {sending ? (
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

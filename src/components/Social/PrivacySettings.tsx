@@ -84,7 +84,7 @@ export function PrivacySettings({ isOpen, onClose }: PrivacySettingsProps) {
             <Shield className="w-5 h-5 text-purple-500" />
             <h2 className="font-semibold">Privacy Settings</h2>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close privacy settings">
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -100,6 +100,7 @@ export function PrivacySettings({ isOpen, onClose }: PrivacySettingsProps) {
                 variant="outline" 
                 onClick={retryLoad}
                 className="border-zinc-700"
+                aria-label="Retry loading privacy settings"
               >
                 Retry
               </Button>

@@ -58,7 +58,7 @@ export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile,
             key={friend.id}
             className="flex items-center gap-3 p-2 rounded-xl hover:bg-zinc-800/50 group transition-all duration-200"
           >
-            <div className="relative cursor-pointer" onClick={() => onViewProfile(friend.id)}>
+            <div className="relative cursor-pointer" onClick={() => onViewProfile(friend.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onViewProfile(friend.id); }}>
               <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden shadow-inner">
                 {friend.avatar ? (
                   <img src={friend.avatar} alt={friend.name} className="w-full h-full object-cover" />
@@ -74,7 +74,7 @@ export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile,
               )} />
             </div>
 
-            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onViewProfile(friend.id)}>
+            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onViewProfile(friend.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onViewProfile(friend.id); }}>
               <div className="flex items-center gap-1.5">
                 <p className="font-semibold text-sm text-zinc-200 truncate">{friend.name}</p>
               </div>
@@ -102,6 +102,7 @@ export function FriendsList({ friends, onlineFriends, onOpenChat, onViewProfile,
               variant="ghost"
               className="h-8 w-8 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white transition-all duration-200"
               onClick={() => onOpenChat(friend)}
+              aria-label={`Chat with ${friend.name}`}
             >
               <MessageCircle className="w-4 h-4" />
             </Button>

@@ -34,11 +34,12 @@ export function WatchTogetherBanner({
                     <Play className="w-3 h-3 fill-current" />
                 </div>
             )}
-            <Button
+                <Button
                 size="sm"
                 variant="ghost"
                 onClick={onOpenModal}
                 className="text-white hover:bg-purple-500/50 h-6 px-2 text-xs"
+                aria-label="Open watch together modal"
             >
                 Open
             </Button>
@@ -47,6 +48,7 @@ export function WatchTogetherBanner({
                 variant="ghost"
                 onClick={handleLeave}
                 className="text-white hover:bg-red-500/50 h-6 w-6 p-0"
+                aria-label="Leave watch together room"
             >
                 <X className="w-3 h-3" />
             </Button>

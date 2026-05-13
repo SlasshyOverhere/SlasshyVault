@@ -4,7 +4,7 @@ interface TypingIndicatorProps {
   text: string;
 }
 
-export function TypingIndicator({ text }: TypingIndicatorProps) {
+export function TypingIndicator({ text }: TypingIndicatorProps): JSX.Element {
   return (
     <div className="flex items-center gap-2 mb-4 px-4">
       <div className="flex items-center gap-1">

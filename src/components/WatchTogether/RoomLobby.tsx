@@ -96,11 +96,7 @@ export function RoomLobby({
         if (!isHost || !allReady) return;
         setIsStarting(true);
         try {
-            console.log('[WT] Host starting playback...');
-            // First, notify the server that playback is starting
             await wtStartPlayback();
-            console.log('[WT] Server notified, launching MPV for host...');
-            // Host launches MPV directly - don't wait for server event
             await onLaunchMpv(0);
             onPlaybackStart();
         } catch (error) {
@@ -137,6 +133,7 @@ export function RoomLobby({
                         size="icon"
                         onClick={handleCopyCode}
                         className="text-zinc-400 hover:text-white"
+                        aria-label="Copy room code"
                     >
                         {copied ? (
                             <Check className="w-5 h-5 text-green-500" />
@@ -163,19 +160,20 @@ export function RoomLobby({
                         <UserPlus className="w-4 h-4 text-purple-400" />
                         Invite Friends
                     </p>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-zinc-400 hover:text-white"
-                        onClick={loadInviteCandidates}
-                        disabled={invitesLoading}
-                    >
-                        {invitesLoading ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                            <RefreshCw className="w-4 h-4" />
-                        )}
-                    </Button>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-zinc-400 hover:text-white"
+                    onClick={loadInviteCandidates}
+                    disabled={invitesLoading}
+                    aria-label="Refresh invite candidates"
+                >
+                    {invitesLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                        <RefreshCw className="w-4 h-4" />
+                    )}
+                </Button>
                 </div>
 
                 {inviteError && (
@@ -201,6 +199,7 @@ export function RoomLobby({
                                     onClick={() => handleInviteFriend(friend)}
                                     disabled={invitingFriendId === friend.id || !!invitedFriendIds[friend.id]}
                                     className="h-8 bg-purple-600 hover:bg-purple-700"
+                                    aria-label={`Invite ${friend.name} to room`}
                                 >
                                     {invitingFriendId === friend.id ? (
                                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -235,28 +234,30 @@ export function RoomLobby({
             {/* Actions */}
             <div className="flex flex-col gap-3">
                 {!isReady && (
-                    <Button
-                        onClick={handleSetReady}
-                        className="w-full bg-green-600 hover:bg-green-700"
-                    >
-                        <Check className="w-4 h-4 mr-2" />
-                        I'm Ready
-                    </Button>
+                <Button
+                    onClick={handleSetReady}
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    aria-label="Mark yourself as ready"
+                >
+                    <Check className="w-4 h-4 mr-2" />
+                    I'm Ready
+                </Button>
                 )}
 
                 {isHost && (
-                    <Button
-                        onClick={handleStartPlayback}
-                        disabled={!allReady || isStarting}
-                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50"
-                    >
-                        {isStarting ? (
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                            <Play className="w-4 h-4 mr-2" />
-                        )}
-                        {allReady ? 'Start Watching' : 'Waiting for everyone...'}
-                    </Button>
+                <Button
+                    onClick={handleStartPlayback}
+                    disabled={!allReady || isStarting}
+                    className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50"
+                    aria-label="Start playback for all"
+                >
+                    {isStarting ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                        <Play className="w-4 h-4 mr-2" />
+                    )}
+                    {allReady ? 'Start Watching' : 'Waiting for everyone...'}
+                </Button>
                 )}
 
                 {!isHost && isReady && (
@@ -270,6 +271,7 @@ export function RoomLobby({
                     onClick={handleLeave}
                     disabled={isLeaving}
                     className="w-full border-zinc-700 text-zinc-400 hover:text-white"
+                    aria-label="Leave watch together room"
                 >
                     {isLeaving ? (
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />

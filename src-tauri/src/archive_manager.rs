@@ -16,9 +16,20 @@ use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tar::Archive as TarArchive;
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 use unrar::Archive as RarArchive;
+
+fn get_rar_runtime() -> &'static tokio::runtime::Runtime {
+    static RAR_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RAR_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create RAR runtime")
+    })
+}
 
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const ARCHIVE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
@@ -553,10 +564,7 @@ fn analyze_rar_from_drive_fast(
         file_size_bytes,
     )?);
     let package = RarFilesPackage::new(vec![media]);
-    let runtime = TokioRuntimeBuilder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let runtime = get_rar_runtime();
     let entries = runtime
         .block_on(async {
             package

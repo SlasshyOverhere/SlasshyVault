@@ -967,6 +967,47 @@ impl Database {
             .collect()
     }
 
+    /// Get DDL media items (movies and TV shows indexed from direct download links)
+    pub fn get_ddl_media(
+        &self,
+        media_type: &str,
+        search: Option<&str>,
+    ) -> Result<Vec<MediaItem>> {
+        let mut sql = String::from(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, ddl_source_id
+             FROM media WHERE media_type = ? AND ddl_source_id IS NOT NULL",
+        );
+
+        if let Some(query) = search {
+            sql.push_str(" AND title LIKE ?");
+        }
+        sql.push_str(" ORDER BY last_watched DESC, title");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let items = if let Some(query) = search {
+            stmt.query_map(
+                params![media_type, format!("%{}%", query)],
+                Self::map_media_item,
+            )?
+        } else {
+            stmt.query_map(params![media_type], Self::map_media_item)?
+        };
+
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
     pub fn get_recently_added(&self, limit: i32, is_cloud: Option<bool>) -> Result<Vec<MediaItem>> {
         let mut sql = String::from(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
@@ -1806,10 +1847,13 @@ impl Database {
     }
 
     pub fn media_exists(&self, file_path: &str) -> Result<bool> {
+        let path = std::path::Path::new(file_path);
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical_str = canonical_path.to_string_lossy().to_string();
         let mut stmt = self
             .conn
             .prepare("SELECT id FROM media WHERE file_path = ?")?;
-        let exists = stmt.exists(params![file_path])?;
+        let exists = stmt.exists(params![canonical_str])?;
         Ok(exists)
     }
 
@@ -2261,8 +2305,8 @@ impl Database {
                 format!("{:?}", archive.compression_type).to_lowercase(),
                 archive.central_dir_offset as i64,
                 archive.central_dir_size as i64,
-                archive.total_entries as i64,
-                archive.video_entries as i64,
+                archive.total_entries.try_into().unwrap_or(0),
+                archive.video_entries.try_into().unwrap_or(0),
             ],
         )?;
         Ok(())
@@ -2627,6 +2671,7 @@ impl Database {
     }
 
     pub fn get_cloud_index_failures(&self, limit: usize) -> Result<Vec<CloudIndexFailure>> {
+        let limit = (limit as i64).min(1000);
         let mut stmt = self.conn.prepare(
             "SELECT cloud_file_id, file_name, last_error, COALESCE(last_attempt, '')
              FROM cloud_index_failures
@@ -2634,7 +2679,7 @@ impl Database {
              LIMIT ?",
         )?;
 
-        let items = stmt.query_map(params![limit as i64], |row| {
+        let items = stmt.query_map(params![limit], |row| {
             Ok(CloudIndexFailure {
                 cloud_file_id: row.get(0)?,
                 file_name: row.get(1)?,

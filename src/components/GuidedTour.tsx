@@ -34,12 +34,14 @@ const springConfig = {
 }
 
 export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourProps) {
+  const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
   const [tooltipPosition, setTooltipPosition] = useState<TooltipPosition | null>(null)
   const [isTransitioning, setIsTransitioning] = useState(false)
   const lastExecutedStepRef = useRef<number>(-1)
 
+  const noAnim = prefersReducedMotion ? { duration: 0 } : undefined
   const currentStep = steps[currentStepIndex]
   const isLastStep = currentStepIndex === steps.length - 1
   const isFirstStep = currentStepIndex === 0
@@ -158,16 +160,13 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
 
     updateTargetPosition()
 
-    // Small delay to ensure DOM has updated
     const timer = setTimeout(updateTargetPosition, 100)
-    const resizeTimer = setTimeout(updateTargetPosition, 300)
 
     window.addEventListener('resize', updateTargetPosition)
     window.addEventListener('scroll', updateTargetPosition, true)
 
     return () => {
       clearTimeout(timer)
-      clearTimeout(resizeTimer)
       window.removeEventListener('resize', updateTargetPosition)
       window.removeEventListener('scroll', updateTargetPosition, true)
     }
@@ -242,10 +241,10 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
           {/* Overlay with spotlight cutout */}
           <motion.div
             className="fixed inset-0 z-[300] pointer-events-auto"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={noAnim ? undefined : { opacity: 0 }}
+            animate={noAnim ? undefined : { opacity: 1 }}
+            exit={noAnim ? undefined : { opacity: 0 }}
+            transition={noAnim || { duration: 0.3 }}
           >
             {/* Dark overlay - NO blur so highlighted elements stay sharp */}
             <div className="absolute inset-0 bg-black/70" />
@@ -254,8 +253,8 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
             {targetRect && currentStep?.highlight !== false && (
               <motion.div
                 className="absolute inset-0"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+                initial={noAnim ? undefined : { opacity: 0 }}
+                animate={noAnim ? undefined : { opacity: 1 }}
                 style={{
                   background: 'transparent',
                   boxShadow: `0 0 0 9999px rgba(0, 0, 0, 0.75)`,
@@ -266,7 +265,7 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                   height: targetRect.height + 16,
                   position: 'absolute',
                 }}
-                transition={{ duration: 0.3 }}
+                transition={noAnim || { duration: 0.3 }}
               />
             )}
 
@@ -274,9 +273,9 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
             {targetRect && currentStep?.highlight !== false && (
               <motion.div
                 className="absolute pointer-events-none"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={springConfig}
+                initial={noAnim ? undefined : { opacity: 0, scale: 0.95 }}
+                animate={noAnim ? undefined : { opacity: 1, scale: 1 }}
+                transition={noAnim || springConfig}
                 style={{
                   top: targetRect.top - 8,
                   left: targetRect.left - 8,
@@ -287,19 +286,20 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                   boxShadow: '0 0 30px rgba(255, 255, 255, 0.3), inset 0 0 20px rgba(255, 255, 255, 0.1)',
                 }}
               >
-                {/* Animated pulse ring */}
-                <motion.div
-                  className="absolute inset-0 rounded-2xl border-2 border-white/50"
-                  animate={{
-                    scale: [1, 1.05, 1],
-                    opacity: [0.5, 0, 0.5]
-                  }}
-                  transition={{
-                    duration: 2,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                />
+                {!noAnim && (
+                  <motion.div
+                    className="absolute inset-0 rounded-2xl border-2 border-white/50"
+                    animate={{
+                      scale: [1, 1.05, 1],
+                      opacity: [0.5, 0, 0.5]
+                    }}
+                    transition={{
+                      duration: 2,
+                      repeat: Infinity,
+                      ease: "easeInOut"
+                    }}
+                  />
+                )}
               </motion.div>
             )}
           </motion.div>
@@ -308,14 +308,14 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
           {tooltipPosition && (
             <motion.div
               className="fixed z-[400] w-[340px] pointer-events-auto"
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-              animate={{
+              initial={noAnim ? undefined : { opacity: 0, y: 10, scale: 0.95 }}
+              animate={noAnim ? undefined : {
                 opacity: isTransitioning ? 0.5 : 1,
                 y: 0,
                 scale: 1
               }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              transition={springConfig}
+              exit={noAnim ? undefined : { opacity: 0, y: 10, scale: 0.95 }}
+              transition={noAnim || springConfig}
               style={{
                 top: tooltipPosition.top,
                 left: tooltipPosition.left,
@@ -340,13 +340,19 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                 {/* Header with step counter */}
                 <div className="flex items-center justify-between px-5 pt-4 pb-2">
                   <div className="flex items-center gap-2">
-                    <motion.div
-                      className="p-1.5 rounded-lg bg-white/20"
-                      animate={{ rotate: [0, 10, -10, 0] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                    >
-                      <Sparkles className="w-4 h-4 text-white" />
-                    </motion.div>
+                    {noAnim ? (
+                      <div className="p-1.5 rounded-lg bg-white/20">
+                        <Sparkles className="w-4 h-4 text-white" />
+                      </div>
+                    ) : (
+                      <motion.div
+                        className="p-1.5 rounded-lg bg-white/20"
+                        animate={{ rotate: [0, 10, -10, 0] }}
+                        transition={{ duration: 2, repeat: Infinity }}
+                      >
+                        <Sparkles className="w-4 h-4 text-white" />
+                      </motion.div>
+                    )}
                     <span className="text-xs font-medium text-white">
                       Step {currentStepIndex + 1} of {steps.length}
                     </span>
@@ -363,11 +369,11 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                 <div className="px-5 pb-4">
                   <AnimatePresence mode="wait">
                     <motion.div
-                      key={currentStep.id}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.2 }}
+                    key={currentStep.id}
+                    initial={noAnim ? undefined : { opacity: 0, x: 20 }}
+                    animate={noAnim ? undefined : { opacity: 1, x: 0 }}
+                    exit={noAnim ? undefined : { opacity: 0, x: -20 }}
+                    transition={noAnim || { duration: 0.2 }}
                     >
                       <h3 className="text-lg font-bold text-foreground mb-2">
                         {currentStep.title}
@@ -382,7 +388,7 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                 {/* Progress dots */}
                 <div className="flex justify-center gap-1.5 pb-3">
                   {steps.map((_, index) => (
-                    <motion.div
+                    <div
                       key={index}
                       className={cn(
                         "w-1.5 h-1.5 rounded-full transition-colors",
@@ -392,8 +398,6 @@ export function GuidedTour({ steps, isActive, onComplete, onSkip }: GuidedTourPr
                             ? "bg-white/50"
                             : "bg-muted-foreground/30"
                       )}
-                      animate={index === currentStepIndex ? { scale: [1, 1.3, 1] } : {}}
-                      transition={{ duration: 0.5 }}
                     />
                   ))}
                 </div>

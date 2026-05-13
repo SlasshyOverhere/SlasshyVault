@@ -121,16 +121,17 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
           <h2 className="text-lg font-semibold">My Profile</h2>
           <div className="flex items-center gap-2">
             {!editMode ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setEditMode(true)}
-                className="border-zinc-700"
-                disabled={loading || !!error}
-              >
-                <Edit3 className="w-4 h-4 mr-2" />
-                Edit
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditMode(true)}
+                  className="border-zinc-700"
+                  disabled={loading || !!error}
+                  aria-label="Edit profile"
+                >
+                  <Edit3 className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
             ) : (
               <>
                 <Button
@@ -138,6 +139,7 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                   size="sm"
                   onClick={handleCancel}
                   disabled={saving}
+                  aria-label="Cancel editing"
                 >
                   <X className="w-4 h-4 mr-1" />
                   Cancel
@@ -147,6 +149,7 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                   onClick={handleSave}
                   disabled={saving}
                   className="bg-purple-600 hover:bg-purple-700"
+                  aria-label="Save profile changes"
                 >
                   {saving ? (
                     'Saving...'
@@ -159,7 +162,7 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                 </Button>
               </>
             )}
-            <Button variant="ghost" size="icon" onClick={onClose}>
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close profile editor">
               <X className="w-4 h-4" />
             </Button>
           </div>
@@ -175,6 +178,7 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                 variant="outline" 
                 onClick={retryLoad}
                 className="border-zinc-700"
+                aria-label="Retry loading profile"
               >
                 Retry
               </Button>
@@ -190,11 +194,11 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                 <div className="relative group">
                   <div className="w-24 h-24 rounded-full bg-zinc-800 overflow-hidden border-4 border-zinc-700">
                     {profile.avatarUrl ? (
-                      <img
-                        src={profile.avatarUrl}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
+                    <img
+                      src={profile.avatarUrl}
+                      alt={profile.displayName}
+                      className="w-full h-full object-cover"
+                    />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-4xl text-zinc-500">
                         {profile.displayName?.charAt(0).toUpperCase()}
@@ -278,17 +282,18 @@ export function ProfileEditor({ isOpen, onClose, onProfileUpdated }: ProfileEdit
                 {editMode ? (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {GENRE_OPTIONS.map((genre) => (
-                      <button
-                        key={genre}
-                        onClick={() => setFavoriteGenre(genre === favoriteGenre ? '' : genre)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                          favoriteGenre === genre
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white'
-                        }`}
-                      >
-                        {genre}
-                      </button>
+                    <button
+                      key={genre}
+                      onClick={() => setFavoriteGenre(genre === favoriteGenre ? '' : genre)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                        favoriteGenre === genre
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white'
+                      }`}
+                      aria-label={`Select ${genre} as favorite genre`}
+                    >
+                      {genre}
+                    </button>
                     ))}
                   </div>
                 ) : (

@@ -81,18 +81,24 @@ export function ReminderEditor({
   const [schedule, setSchedule] = useState<TmdbReleaseSchedule | null>(null)
   
   const [title, setTitle] = useState('')
+  const [titleError, setTitleError] = useState('')
   const [reminderAt, setReminderAt] = useState('')
+  const [reminderAtError, setReminderAtError] = useState('')
   const [notes, setNotes] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [source, setSource] = useState('manual')
 
+  const typedData = (d: Partial<MovieReminderInput> | MovieReminder | undefined | null) => (d ?? {}) as Partial<MovieReminderInput> & Partial<MovieReminder>
+
   useEffect(() => {
     if (!open) return
 
+    setTitleError('')
+    setReminderAtError('')
+
     const setup = async () => {
       if (initialData) {
-        // If it's a MovieReminder (from backend), it has snake_case
-        const data = initialData as any
+        const data = typedData(initialData)
         
         setTitle(data.title || '')
         setReminderAt(utcToLocalDatetime(data.reminder_at || data.reminderAt))
@@ -102,7 +108,7 @@ export function ReminderEditor({
 
         // If we have TMDB info but no reminder time, fetch suggestion
         const tmdbId = data.tmdb_id || data.tmdbId
-        const mediaType = data.media_type || data.mediaType
+        const mediaType = data.media_type || data.mediaType || 'movie'
         const seasonNumber = data.season_number ?? data.seasonNumber
         const episodeNumber = data.episode_number ?? data.episodeNumber
 
@@ -111,7 +117,7 @@ export function ReminderEditor({
           try {
             const sched = await getTmdbReleaseSchedule(
               Number(tmdbId), 
-              mediaType, 
+              mediaType as 'movie' | 'tv', 
               seasonNumber, 
               episodeNumber
             )
@@ -143,11 +149,24 @@ export function ReminderEditor({
   }, [open, initialData])
 
   const handleSave = async () => {
-    if (!title || !reminderAt) return
+    let hasError = false
+    if (!title.trim()) {
+      setTitleError('Title is required')
+      hasError = true
+    } else {
+      setTitleError('')
+    }
+    if (!reminderAt) {
+      setReminderAtError('Scheduled time is required')
+      hasError = true
+    } else {
+      setReminderAtError('')
+    }
+    if (hasError) return
 
     setLoading(true)
     try {
-      const data = initialData as any
+      const data = typedData(initialData)
       const mediaType = data?.media_type || data?.mediaType || 'movie'
       const seasonNumber = schedule?.seasonNumber ?? data?.season_number ?? data?.seasonNumber ?? null
       const episodeNumber = schedule?.episodeNumber ?? data?.episode_number ?? data?.episodeNumber ?? null
@@ -207,10 +226,16 @@ export function ReminderEditor({
                 <Input 
                   id="title" 
                   value={title} 
-                  onChange={e => setTitle(e.target.value)}
+                  onChange={e => { setTitle(e.target.value); setTitleError('') }}
                   placeholder="Movie or TV Show Name"
+                  aria-label="Reminder title"
+                  aria-describedby="title-error"
+                  aria-invalid={!!titleError}
                   className="bg-white/5 border-white/10 focus:border-white/20 focus:bg-white/[0.08] h-14 rounded-2xl px-5 text-base font-bold placeholder:text-white/10 transition-all shadow-inner"
                 />
+                {titleError && (
+                  <p id="title-error" className="text-[10px] font-bold text-red-400 ml-1 mt-1">{titleError}</p>
+                )}
               </div>
             </div>
 
@@ -224,10 +249,17 @@ export function ReminderEditor({
                   value={reminderAt} 
                   onChange={e => {
                     setReminderAt(e.target.value)
+                    setReminderAtError('')
                     setSource('manual')
                   }}
+                  aria-label="Reminder scheduled time"
+                  aria-describedby="reminderAt-error"
+                  aria-invalid={!!reminderAtError}
                   className="bg-white/5 border-white/10 focus:border-white/20 focus:bg-white/[0.08] h-14 rounded-2xl pl-12 pr-5 text-base font-bold text-white [color-scheme:dark] transition-all shadow-inner"
                 />
+                {reminderAtError && (
+                  <p id="reminderAt-error" className="text-[10px] font-bold text-red-400 ml-1 mt-1">{reminderAtError}</p>
+                )}
                 <AnimatePresence>
                   {suggesting && (
                     <motion.div 

@@ -29,7 +29,7 @@ export function FriendRequests({ requests, onAccept, onReject }: FriendRequestsP
         >
           <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/5 overflow-hidden">
             {request.fromAvatar ? (
-              <img src={request.fromAvatar} alt="" className="w-full h-full object-cover" />
+              <img src={request.fromAvatar} alt={`${request.fromName}'s avatar`} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-zinc-500 bg-gradient-to-br from-zinc-800 to-zinc-900 font-semibold text-sm">
                 {request.fromName.charAt(0).toUpperCase()}
@@ -48,6 +48,7 @@ export function FriendRequests({ requests, onAccept, onReject }: FriendRequestsP
               variant="ghost"
               className="h-8 w-8 rounded-lg bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white transition-all duration-200 shadow-sm"
               onClick={() => onAccept(request.fromId)}
+              aria-label={`Accept friend request from ${request.fromName}`}
             >
               <Check className="w-4 h-4" />
             </Button>
@@ -56,6 +57,7 @@ export function FriendRequests({ requests, onAccept, onReject }: FriendRequestsP
               variant="ghost"
               className="h-8 w-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all duration-200 shadow-sm"
               onClick={() => onReject(request.fromId)}
+              aria-label={`Reject friend request from ${request.fromName}`}
             >
               <X className="w-4 h-4" />
             </Button>

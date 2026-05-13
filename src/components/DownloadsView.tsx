@@ -15,9 +15,13 @@ import {
   CheckSquare,
   History,
   ChevronRight,
+  ArrowDownToLine,
+  HardDrive,
+  Cloud,
+  Globe,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
+import { useState, useMemo, memo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface DownloadsViewProps {
@@ -47,40 +51,53 @@ const formatSpeed = (bytesPerSecond?: number | null) => {
   return `${formatBytes(bytesPerSecond)}/s`;
 };
 
-const isActiveStatus = (status: string) =>
+const formatTimeRemaining = (job: DownloadJob): string | null => {
+  if (job.status !== "downloading" || !job.speedBytesPerSecond || job.speedBytesPerSecond <= 0) return null;
+  const remaining = job.totalBytes - job.downloadedBytes;
+  const seconds = remaining / job.speedBytesPerSecond;
+  if (seconds < 60) return `${Math.ceil(seconds)}s`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.ceil((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+};
+
+type DownloadJobStatus = 'queued' | 'preparing' | 'downloading' | 'completed' | 'failed' | 'cancelled';
+
+const isActiveStatus = (status: DownloadJobStatus): status is 'queued' | 'preparing' | 'downloading' =>
   status === "queued" || status === "preparing" || status === "downloading";
 
-const statusMeta = (status: string) => {
+const statusMeta = (status: DownloadJobStatus) => {
   switch (status) {
     case "completed":
       return {
         icon: CheckCircle2,
         label: "Completed",
-        className: "bg-white/10 text-white border-white/20",
+        className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
       };
     case "failed":
       return {
         icon: AlertTriangle,
         label: "Failed",
-        className: "bg-white/5 text-zinc-400 border-white/10",
+        className: "bg-red-500/10 text-red-400 border-red-500/20",
       };
     case "cancelled":
       return {
         icon: XCircle,
         label: "Cancelled",
-        className: "bg-white/5 text-zinc-500 border-white/10",
+        className: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
       };
     case "preparing":
       return {
         icon: Clock3,
         label: "Preparing",
-        className: "bg-white/10 text-white border-white/20",
+        className: "bg-amber-500/10 text-amber-400 border-amber-500/20",
       };
     case "queued":
       return {
         icon: PauseCircle,
         label: "Queued",
-        className: "bg-white/5 text-zinc-400 border-white/10",
+        className: "bg-blue-500/10 text-blue-400 border-blue-500/20",
       };
     default:
       return {
@@ -90,6 +107,8 @@ const statusMeta = (status: string) => {
       };
   }
 };
+
+type TabFilter = "all" | "active" | "completed" | "failed";
 
 export function DownloadsView({ 
   jobs, 
@@ -101,11 +120,12 @@ export function DownloadsView({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabFilter>("all");
 
-  const activeJobs = jobs.filter((job) => isActiveStatus(job.status));
-  const archivedJobs = [...jobs]
+  const activeJobs = useMemo(() => jobs.filter((job) => isActiveStatus(job.status)), [jobs]);
+  const archivedJobs = useMemo(() => [...jobs]
     .filter((job) => !isActiveStatus(job.status))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()), [jobs]);
 
   const toggleSelect = (id: string) => {
     const next = new Set(selectedIds);
@@ -120,8 +140,12 @@ export function DownloadsView({
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (window.confirm(`Delete ${selectedIds.size} selected items?`)) {
-      for (const id of selectedIds) {
-        await onDeleteJob(id);
+      const ids = Array.from(selectedIds);
+      const results = await Promise.allSettled(ids.map(id => onDeleteJob(id)));
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error("Failed to delete job:", result.reason);
+        }
       }
       setSelectedIds(new Set());
       setSelectionMode(false);
@@ -135,157 +159,214 @@ export function DownloadsView({
     }
   };
 
-  const latestJob = archivedJobs[0];
+  const stats = useMemo(() => ({
+    active: activeJobs.length,
+    completed: jobs.filter((j) => j.status === "completed").length,
+    failed: jobs.filter((j) => j.status === "failed").length,
+    total: jobs.length,
+  }), [jobs, activeJobs]);
+
+  const TABS: Array<{ id: TabFilter; label: string; count: number }> = [
+    { id: "all", label: "All", count: jobs.length },
+    { id: "active", label: "Active", count: activeJobs.length },
+    { id: "completed", label: "Completed", count: stats.completed },
+    { id: "failed", label: "Failed", count: stats.failed },
+  ];
 
   return (
-    <div className="h-full overflow-hidden">
-      <div className="h-full overflow-y-auto pt-24 pb-4 scrollbar-none">
+    <div className="h-full overflow-hidden relative">
+      <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
+      <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
+      <div className="absolute inset-0 noise-overlay opacity-[0.02] pointer-events-none" />
+
+      <div className="relative h-full overflow-y-auto pt-24 pb-4 scrollbar-none">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
           className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 sm:px-6 lg:px-10 pb-12"
         >
-        <section className="flex flex-shrink-0 flex-col gap-6 px-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <h1 className="text-3xl font-black tracking-tighter text-white sm:text-4xl">
-              Downloads
-            </h1>
-            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">
-              Parallel Engine v2
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <MetricChip label="Active" value={activeJobs.length} />
-            <MetricChip
-              label="Completed"
-              value={jobs.filter((job) => job.status === "completed").length}
-            />
-            <MetricChip
-              label="Failed"
-              value={jobs.filter((job) => job.status === "failed").length}
-            />
-          </div>
-        </section>
-
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-white/5 pb-4 px-2">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSelectionMode(!selectionMode);
-                setSelectedIds(new Set());
-              }}
-              className={cn(
-                "h-9 rounded-xl border-white/10 px-4 text-[10px] font-black uppercase tracking-widest transition-all",
-                selectionMode ? "bg-white text-black hover:bg-white/90" : "bg-white/5 text-white/60 hover:bg-white/10"
-              )}
+          {/* Header */}
+          <section className="flex flex-shrink-0 flex-col gap-6 px-2 sm:flex-row sm:items-center sm:justify-between">
+            <motion.div
+              initial={{ x: -20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1] }}
+              className="flex items-center gap-4"
             >
-              {selectionMode ? "Cancel" : "Manage"}
-            </Button>
-            
-            <AnimatePresence>
-              {selectionMode && selectedIds.size > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
-                >
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDeleteSelected}
-                    className="h-9 rounded-xl border-white/20 bg-white/10 px-4 text-[10px] font-black uppercase tracking-widest text-white hover:bg-white hover:text-black"
-                  >
-                    <Trash2 className="mr-2 h-3.5 w-3.5" />
-                    Delete ({selectedIds.size})
-                  </Button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+              <div className="relative group">
+                <div className="absolute -inset-2 bg-white/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+                <div className="relative w-12 h-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
+                  <ArrowDownToLine className="w-6 h-6 text-white/70" />
+                </div>
+              </div>
+              <div className="space-y-0.5">
+                <h1 className="text-4xl font-black tracking-tighter leading-none bg-clip-text text-transparent bg-gradient-to-b from-white to-white/40">
+                  Downloads
+                </h1>
+                <div className="flex items-center gap-2">
+                  <div className={cn(
+                    "w-1 h-1 rounded-full transition-all duration-500",
+                    activeJobs.length > 0 ? "bg-emerald-500/50 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.5)]" : "bg-white/10"
+                  )} />
+                  <p className="text-white/20 text-[9px] font-black uppercase tracking-[0.3em]">
+                    {activeJobs.length > 0 ? `${activeJobs.length} active transfer${activeJobs.length !== 1 ? 's' : ''}` : "Parallel Engine v2"}
+                  </p>
+                </div>
+              </div>
+            </motion.div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleClearHistory}
-            disabled={archivedJobs.length === 0}
-            className="h-9 rounded-xl px-4 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:bg-white/5 hover:text-white disabled:opacity-30"
+            <motion.div
+              initial={{ x: 20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.1 }}
+              className="flex flex-wrap items-center gap-3"
+            >
+              <MetricChip label="Active" value={stats.active} active={stats.active > 0} />
+              <MetricChip label="Completed" value={stats.completed} />
+              <MetricChip label="Failed" value={stats.failed} alert={stats.failed > 0} />
+            </motion.div>
+          </section>
+
+          {/* Toolbar */}
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.15 }}
+            className="flex flex-shrink-0 items-center justify-between border-b border-white/5 pb-4 px-2"
           >
-            Clear History
-          </Button>
-        </div>
-
-        <section className="w-full space-y-4">
-          <SectionHeader 
-            title="Active Downloads" 
-            count={activeJobs.length}
-          />
-          {activeJobs.length === 0 ? (
-            <EmptyDownloadsState compact />
-          ) : (
-            <div className="grid gap-3 min-w-0">
-              {activeJobs.map((job) => (
-                <DownloadRow 
-                  key={job.id} 
-                  job={job} 
-                  onCancel={onCancel} 
-                  onOpen={onOpen}
-                  onDelete={onDeleteJob}
-                  isSelectionMode={selectionMode}
-                  isSelected={selectedIds.has(job.id)}
-                  onToggleSelect={() => toggleSelect(job.id)}
-                  compact
-                />
-              ))}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSelectionMode(!selectionMode);
+                  setSelectedIds(new Set());
+                }}
+                className={cn(
+                  "h-9 rounded-xl border-white/10 px-4 text-[10px] font-black uppercase tracking-widest transition-all",
+                  selectionMode ? "bg-white text-black hover:bg-white/90" : "bg-white/5 text-white/60 hover:bg-white/10"
+                )}
+              >
+                {selectionMode ? "Cancel" : "Manage"}
+              </Button>
+              
+              <AnimatePresence>
+                {selectionMode && selectedIds.size > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -10 }}
+                  >
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDeleteSelected}
+                      className="h-9 rounded-xl border-red-500/20 bg-red-500/10 px-4 text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                    >
+                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                      Delete ({selectedIds.size})
+                    </Button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearHistory}
+              disabled={archivedJobs.length === 0}
+              className="h-9 rounded-xl px-4 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:bg-white/5 hover:text-white disabled:opacity-30"
+            >
+              Clear History
+            </Button>
+          </motion.div>
+
+          {/* Tab Bar */}
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.2 }}
+            className="flex w-fit items-center gap-1 rounded-2xl p-1 bg-white/[0.03] border border-white/[0.05] backdrop-blur-md mx-2"
+          >
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "relative px-5 py-2 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all duration-500",
+                  activeTab === tab.id
+                    ? "bg-white text-black shadow-glow-sm"
+                    : "text-white/30 hover:text-white/60 hover:bg-white/5"
+                )}
+              >
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className={cn(
+                    "ml-2 tabular-nums",
+                    activeTab === tab.id ? "text-black/50" : "text-white/20"
+                  )}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </motion.div>
+
+          {/* Active Downloads Section */}
+          {(activeTab === "all" || activeTab === "active") && (
+          <section className="w-full space-y-4">
+            <SectionHeader title="Acquisition Queue" subtitle="Active transfers and pending items" />
+            {activeJobs.length === 0 ? (
+              <EmptyDownloadsState />
+            ) : (
+              <AnimatePresence mode="popLayout">
+                <div className="grid gap-3 min-w-0">
+                  {activeJobs.map((job, idx) => (
+                    <motion.div
+                      key={job.id}
+                      layout
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: Math.min(idx, 8) * 0.04 }}
+                    >
+                      <DownloadRow 
+                        job={job} 
+                        onCancel={onCancel} 
+                        onOpen={onOpen}
+                        onDelete={onDeleteJob}
+                        isSelectionMode={selectionMode}
+                        isSelected={selectedIds.has(job.id)}
+                        onToggleSelect={() => toggleSelect(job.id)}
+                        compact
+                      />
+                    </motion.div>
+                  ))}
+                </div>
+              </AnimatePresence>
+            )}
+          </section>
           )}
-        </section>
 
-        <section className="w-full space-y-4">
-          <SectionHeader 
-            title="Completed" 
-            count={archivedJobs.length}
-            onExpand={archivedJobs.length > 1 ? () => setIsHistoryOpen(true) : undefined}
-          />
-          {archivedJobs.length === 0 ? (
-            <div className="flex h-32 items-center justify-center rounded-[2rem] border border-dashed border-white/5 bg-white/[0.01] px-8 py-12 text-center text-sm font-medium text-zinc-600">
-              No historical data available.
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              <DownloadRow 
-                key={latestJob.id} 
-                job={latestJob} 
-                onCancel={onCancel} 
-                onOpen={onOpen}
-                onDelete={onDeleteJob}
-                isSelectionMode={selectionMode}
-                isSelected={selectedIds.has(latestJob.id)}
-                onToggleSelect={() => toggleSelect(latestJob.id)}
-              />
-              {archivedJobs.length > 1 && (
-                <button
-                  onClick={() => setIsHistoryOpen(true)}
-                  className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-3 transition-all hover:bg-white/[0.04] hover:border-white/10 group"
-                >
-                  <div className="flex items-center gap-3">
-                    <History className="h-4 w-4 text-zinc-500 group-hover:text-white transition-colors" />
-                    <span className="text-[11px] font-black uppercase tracking-widest text-zinc-500 group-hover:text-white">
-                      View {archivedJobs.length - 1} more items in history
-                    </span>
-                  </div>
-                  <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-white transition-all transform group-hover:translate-x-1" />
-                </button>
-              )}
-            </div>
+          {/* Completed / Archived Section */}
+          {(activeTab === "all" || activeTab === "completed" || activeTab === "failed") && (
+            <ArchivedSection
+              archivedJobs={archivedJobs}
+              activeTab={activeTab}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onCancel={onCancel}
+              onOpen={onOpen}
+              onDelete={onDeleteJob}
+              onShowHistory={() => setIsHistoryOpen(true)}
+            />
           )}
-        </section>
-      </motion.div>
-    </div>
+        </motion.div>
+      </div>
 
-      {/* History Modal */}
+      {/* History Dialog */}
       <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] bg-[#0D0D0D] border-white/10 p-0 overflow-hidden flex flex-col rounded-[2.5rem]">
           <DialogHeader className="p-8 pb-4 flex-shrink-0 border-b border-white/5">
@@ -307,18 +388,24 @@ export function DownloadsView({
           <div className="flex-1 overflow-hidden p-4">
             <ScrollArea className="h-full pr-4">
               <div className="grid gap-4 pb-8">
-                {archivedJobs.map((job) => (
-                  <DownloadRow 
-                    key={job.id} 
-                    job={job} 
-                    onCancel={onCancel} 
-                    onOpen={onOpen}
-                    onDelete={onDeleteJob}
-                    isSelectionMode={selectionMode}
-                    isSelected={selectedIds.has(job.id)}
-                    onToggleSelect={() => toggleSelect(job.id)}
-                    compact
-                  />
+                {archivedJobs.map((job, idx) => (
+                  <motion.div
+                    key={job.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: Math.min(idx, 10) * 0.03 }}
+                  >
+                    <DownloadRow 
+                      job={job} 
+                      onCancel={onCancel} 
+                      onOpen={onOpen}
+                      onDelete={onDeleteJob}
+                      isSelectionMode={selectionMode}
+                      isSelected={selectedIds.has(job.id)}
+                      onToggleSelect={() => toggleSelect(job.id)}
+                      compact
+                    />
+                  </motion.div>
                 ))}
               </div>
             </ScrollArea>
@@ -332,68 +419,143 @@ export function DownloadsView({
 function MetricChip({
   label,
   value,
+  active,
+  alert,
 }: {
   label: string;
   value: number;
+  active?: boolean;
+  alert?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.03] px-4 py-2 backdrop-blur-md transition-all hover:border-white/15 hover:bg-white/[0.05]">
+    <div className={cn(
+      "flex items-center gap-3 rounded-2xl border px-4 py-2 backdrop-blur-md transition-all",
+      active
+        ? "border-white/15 bg-white/[0.05] hover:bg-white/[0.07]"
+        : alert
+          ? "border-red-500/15 bg-red-500/[0.04] hover:bg-red-500/[0.06]"
+          : "border-white/5 bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]"
+    )}>
+      {active && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]" />}
+      {alert && <span className="w-1.5 h-1.5 rounded-full bg-red-500/70 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.4)]" />}
       <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">{label}</span>
-      <span className="text-sm font-black text-white">{value}</span>
+      <span className={cn(
+        "text-sm font-black",
+        active ? "text-emerald-400" : alert ? "text-red-400" : "text-white"
+      )}>{value}</span>
     </div>
   );
 }
 
-function SectionHeader({ title, count, onExpand }: { title: string; count?: number; onExpand?: () => void }) {
+function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div className="flex items-end justify-between px-2">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
-          {count !== undefined && count > 0 && (
-            <span className="flex h-5 items-center justify-center rounded-full bg-white/10 px-2 text-[10px] font-bold text-white/60 border border-white/5">
-              {count}
-            </span>
-          )}
-          {onExpand && (
-            <button 
-              onClick={onExpand}
-              className="ml-1 p-1 rounded-lg hover:bg-white/10 transition-colors text-zinc-500 hover:text-white"
-              title="View History"
-            >
-              <History className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+      <div className="flex items-center gap-3">
+        <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
+        {subtitle && (
+          <span className="hidden sm:block text-[9px] font-black uppercase tracking-[0.2em] text-white/15">
+            {subtitle}
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-function EmptyDownloadsState({ compact = false }: { compact?: boolean }) {
+function ArchivedSection({
+  archivedJobs,
+  activeTab,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
+  onCancel,
+  onOpen,
+  onDelete,
+  onShowHistory,
+}: {
+  archivedJobs: DownloadJob[];
+  activeTab: TabFilter;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onCancel: (job: DownloadJob) => void | Promise<void>;
+  onOpen: (job: DownloadJob) => void | Promise<void>;
+  onDelete: (jobId: string) => void | Promise<void>;
+  onShowHistory: () => void;
+}) {
+  const filteredArchived = activeTab === "completed"
+    ? archivedJobs.filter(j => j.status === "completed")
+    : activeTab === "failed"
+      ? archivedJobs.filter(j => j.status === "failed" || j.status === "cancelled")
+      : archivedJobs;
+  const latestFiltered = filteredArchived[0];
+
+  if (!filteredArchived.length) {
+    return (
+      <section className="w-full space-y-4">
+        <SectionHeader title="Transfer Log" subtitle="Finished downloads and history" />
+        <div className="flex h-24 items-center justify-center rounded-[2rem] border border-dashed border-white/5 bg-white/[0.01] px-8 py-12 text-center text-sm font-medium text-zinc-600">
+          No historical data available.
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <div className={cn(
-      "group relative rounded-[2.5rem] border border-dashed border-white/10 bg-white/[0.01] px-6 text-center transition-all hover:bg-white/[0.02]",
-      compact ? "py-10" : "py-20"
-    )}>
-      <div className={cn(
-        "mx-auto flex items-center justify-center rounded-[2rem] border border-white/10 bg-white/5 transition-transform duration-500 group-hover:scale-110",
-        compact ? "h-14 w-14" : "h-20 w-20"
-      )}>
-        <Download className={cn(compact ? "h-6 w-6" : "h-8 w-8", "text-white/40")} />
+    <section className="w-full space-y-4">
+      <SectionHeader title="Transfer Log" subtitle="Finished downloads and history" />
+      <div className="grid gap-4">
+        <DownloadRow 
+          job={latestFiltered} 
+          onCancel={onCancel} 
+          onOpen={onOpen}
+          onDelete={onDelete}
+          isSelectionMode={selectionMode}
+          isSelected={selectedIds.has(latestFiltered.id)}
+          onToggleSelect={() => onToggleSelect(latestFiltered.id)}
+        />
+        {filteredArchived.length > 1 && (
+          <motion.button
+            onClick={onShowHistory}
+            whileHover={{ scale: 1.005 }}
+            className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-3.5 transition-all hover:bg-white/[0.04] hover:border-white/10 group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/[0.03] border border-white/5 group-hover:bg-white/[0.06] transition-colors">
+                <History className="h-4 w-4 text-zinc-500 group-hover:text-white transition-colors" />
+              </div>
+              <span className="text-[11px] font-black uppercase tracking-widest text-zinc-500 group-hover:text-white transition-colors">
+                View {filteredArchived.length - 1} more item{filteredArchived.length - 1 !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-white transition-all transform group-hover:translate-x-1" />
+          </motion.button>
+        )}
       </div>
-      <h3 className={cn("font-bold text-white", compact ? "mt-5 text-base" : "mt-8 text-xl")}>Standby Mode</h3>
-      <p className={cn(
-        "mx-auto max-w-sm leading-relaxed text-zinc-500",
-        compact ? "mt-2 text-xs" : "mt-3 text-sm"
-      )}>
+    </section>
+  );
+}
+
+function EmptyDownloadsState() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
+      className="group relative rounded-[2.5rem] border border-dashed border-white/10 bg-white/[0.01] px-6 text-center transition-all hover:bg-white/[0.02] py-14"
+    >
+      <div className="mx-auto flex items-center justify-center rounded-[2rem] border border-white/10 bg-white/5 transition-transform duration-500 group-hover:scale-110 h-14 w-14">
+        <Download className="h-6 w-6 text-white/40" />
+      </div>
+      <h3 className="font-bold text-white mt-5 text-base">Standby Mode</h3>
+      <p className="mx-auto max-w-sm text-zinc-500 mt-2 text-xs leading-relaxed">
         The pipeline is idle. Initiate a transfer from the cloud drive to begin acquisition.
       </p>
-    </div>
+    </motion.div>
   );
 }
 
-function DownloadRow({
+const DownloadRow = memo(function DownloadRow({
   job,
   onCancel,
   onOpen,
@@ -415,22 +577,23 @@ function DownloadRow({
   const meta = statusMeta(job.status);
   const StatusIcon = meta.icon;
   const active = isActiveStatus(job.status);
+  const timeRemaining = formatTimeRemaining(job);
 
   return (
-    <motion.div 
+    <motion.div
       layout
       className={cn(
         "group relative rounded-[2rem] border transition-all w-full min-w-0 overflow-hidden",
-        compact ? "p-4" : "p-6",
+        compact ? "p-4 xl:p-5" : "p-6",
         isSelected 
           ? "border-white/30 bg-white/[0.08] shadow-elevation-2" 
-          : "border-white/5 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]"
+          : "border-white/[0.06] bg-white/[0.015] hover:border-white/[0.12] hover:bg-white/[0.03] hover:shadow-elevation-1"
       )}
       onClick={() => isSelectionMode && onToggleSelect?.()}
     >
       <div className={cn("flex flex-col xl:flex-row xl:items-center", compact ? "gap-4" : "gap-6")}>
         {isSelectionMode && (
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center shrink-0">
             <div className={cn(
               "flex h-6 w-6 items-center justify-center rounded-lg border transition-all",
               isSelected ? "bg-white border-white text-black" : "border-white/20 text-transparent"
@@ -440,48 +603,75 @@ function DownloadRow({
           </div>
         )}
 
+        {/* Left: Icon area for source type */}
+        <div className="hidden sm:flex shrink-0">
+          <div className={cn(
+            "flex h-12 w-12 items-center justify-center rounded-[1.25rem] border transition-all",
+            isSelected
+              ? "border-white/20 bg-white/[0.08]"
+              : "border-white/[0.06] bg-white/[0.02] group-hover:bg-white/[0.04] group-hover:border-white/[0.1]"
+          )}>
+            {job.sourceKind === "gdrive" ? (
+              <Cloud className="h-5 w-5 text-white/40" />
+            ) : job.sourceKind === "direct" ? (
+              <Globe className="h-5 w-5 text-white/40" />
+            ) : (
+              <HardDrive className="h-5 w-5 text-white/40" />
+            )}
+          </div>
+        </div>
+
+        {/* Center: Content */}
         <div className="min-w-0 flex-1 overflow-hidden">
-          <div className={cn("flex flex-wrap items-center gap-3", compact ? "mb-3" : "mb-4")}>
+          <div className={cn("flex flex-wrap items-center gap-2.5", compact ? "mb-2.5" : "mb-3")}>
             <span
               className={cn(
-                "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wider",
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider",
                 meta.className,
               )}
             >
               <StatusIcon className="h-3 w-3" />
               {meta.label}
             </span>
-            <span className="rounded-full border border-white/5 bg-white/5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+            <span className="rounded-full border border-white/5 bg-white/[0.03] px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
               {job.sourceKind.replace(/-/g, " ")}
             </span>
           </div>
           
-          <div className="space-y-1">
-            <h3 className={cn("truncate font-bold tracking-tight text-white", compact ? "text-lg" : "text-xl")}>{job.title}</h3>
+          <div className="space-y-0.5">
+            <h3 className="truncate font-bold tracking-tight text-white text-base sm:text-lg">{job.title}</h3>
             <p className="truncate text-xs font-medium text-zinc-600 font-mono">{job.fileName}</p>
           </div>
 
           <div className={cn(
-            "flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] font-bold uppercase tracking-widest text-zinc-500",
-            compact ? "mt-3" : "mt-5"
+            "flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500",
+            compact ? "mt-2.5" : "mt-4"
           )}>
-            <div className="flex items-center gap-2">
-              <span className="text-white/40">Size</span>
-              <span className="text-white/80">{formatBytes(job.downloadedBytes)} / {formatBytes(job.totalBytes)}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-white/30">Size</span>
+              <span className="text-white/70">{formatBytes(job.downloadedBytes)} / {formatBytes(job.totalBytes)}</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-white/40">Speed</span>
-              <span className="text-white/80">{formatSpeed(job.speedBytesPerSecond)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-white/40">Date</span>
-              <span className="text-white/80">{new Date(job.updatedAt).toLocaleDateString()}</span>
+            {job.status === "downloading" && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-white/30">Speed</span>
+                <span className="text-white/70">{formatSpeed(job.speedBytesPerSecond)}</span>
+              </div>
+            )}
+            {timeRemaining && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-white/30">ETA</span>
+                <span className="text-white/70">{timeRemaining}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-1.5">
+              <span className="text-white/30">Date</span>
+              <span className="text-white/70">{new Date(job.updatedAt).toLocaleDateString()}</span>
             </div>
           </div>
           
           {job.error && (
-            <div className="mt-4 flex items-start gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
-              <AlertTriangle className="h-4 w-4 text-zinc-500 mt-0.5 shrink-0" />
+            <div className="mt-3 flex items-start gap-3 rounded-2xl border border-red-500/10 bg-red-500/[0.03] p-3.5">
+              <AlertTriangle className="h-4 w-4 text-red-400/70 mt-0.5 shrink-0" />
               <p className="text-xs font-medium text-zinc-400 leading-relaxed">
                 {job.error}
               </p>
@@ -489,15 +679,24 @@ function DownloadRow({
           )}
         </div>
 
-        <div className={cn("flex flex-col xl:items-end w-full xl:w-auto", compact ? "xl:min-w-[240px] gap-3" : "xl:min-w-[280px] gap-5")}>
+        {/* Right: Progress + Actions */}
+        <div className={cn("flex flex-col xl:items-end w-full xl:w-auto", compact ? "xl:min-w-[240px] gap-3" : "xl:min-w-[280px] gap-4")}>
           <div className="w-full">
-            <div className="mb-3 flex items-center justify-between text-[11px] font-black uppercase tracking-widest text-zinc-500">
-              <span>{active ? "Network Payload" : "Verification"}</span>
-              <span className="text-white">{Math.round(job.progress)}%</span>
+            <div className="mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
+              <span className={active ? "text-white/40" : "text-zinc-600"}>
+                {active ? "Progress" : "Complete"}
+              </span>
+              <span className={cn(
+                "tabular-nums",
+                active ? "text-white" : "text-zinc-500"
+              )}>{Math.round(job.progress)}%</span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
               <motion.div
-                className="h-full bg-white shadow-[0_0_15px_rgba(255,255,255,0.5)]"
+                className={cn(
+                  "h-full transition-all",
+                  active ? "bg-white shadow-[0_0_15px_rgba(255,255,255,0.5)]" : "bg-white/30"
+                )}
                 initial={{ width: 0 }}
                 animate={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}
                 transition={{ duration: 0.8, ease: [0.19, 1, 0.22, 1] }}
@@ -505,7 +704,7 @@ function DownloadRow({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 w-full xl:justify-end">
             {!isSelectionMode && (
               <>
                 {job.targetExists ? (
@@ -516,14 +715,14 @@ function DownloadRow({
                       void onOpen(job);
                     }}
                     variant="outline"
-                    className="h-11 rounded-xl border-white/10 bg-white/[0.04] px-6 text-xs font-black uppercase tracking-widest text-white hover:bg-white hover:text-black transition-all duration-300"
+                    className="h-10 rounded-xl border-white/10 bg-white/[0.04] px-5 text-[10px] font-black uppercase tracking-widest text-white hover:bg-white hover:text-black transition-all duration-300"
                   >
-                    <FolderOpen className="mr-2 h-4 w-4" />
+                    <FolderOpen className="mr-2 h-3.5 w-3.5" />
                     Navigate
                   </Button>
                 ) : (
                   !active && (
-                    <div className="inline-flex h-11 items-center rounded-xl border border-white/10 bg-white/5 px-6 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                    <div className="inline-flex h-10 items-center rounded-xl border border-white/10 bg-white/5 px-5 text-[10px] font-black uppercase tracking-widest text-zinc-500">
                       <Trash2 className="mr-2 h-3.5 w-3.5" />
                       Deleted
                     </div>
@@ -537,12 +736,12 @@ function DownloadRow({
                       void onCancel(job);
                     }}
                     variant="outline"
-                    className="h-11 rounded-xl border-white/10 bg-white/[0.02] px-6 text-xs font-black uppercase tracking-widest text-zinc-500 hover:bg-white/10 hover:text-white transition-all duration-300"
+                    className="h-10 rounded-xl border-white/10 bg-white/[0.02] px-5 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:bg-white/10 hover:text-white transition-all duration-300"
                   >
                     {job.status === "downloading" ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <PauseCircle className="mr-2 h-4 w-4" />
+                      <PauseCircle className="mr-2 h-3.5 w-3.5" />
                     )}
                     Abort
                   </Button>
@@ -555,7 +754,7 @@ function DownloadRow({
                       void onDelete(job.id);
                     }}
                     variant="ghost"
-                    className="h-11 w-11 rounded-xl bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-white"
+                    className="h-10 w-10 rounded-xl bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-white"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -567,4 +766,4 @@ function DownloadRow({
       </div>
     </motion.div>
   );
-}
+});
