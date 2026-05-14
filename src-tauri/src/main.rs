@@ -493,64 +493,6 @@ async fn sync_watchlist(state: State<'_, AppState>) -> Result<WatchlistSyncStatu
     sync_watchlist_to_drive(&state).await
 }
 
-// ==================== STREAMING HISTORY COMMANDS ====================
-
-// Save streaming progress (for Videasy player)
-#[tauri::command]
-async fn save_streaming_progress(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    position: f64,
-    duration: f64,
-) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.save_streaming_progress(
-        &tmdb_id,
-        &media_type,
-        &title,
-        poster_path.as_deref(),
-        season,
-        episode,
-        position,
-        duration,
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(ApiResponse {
-        message: "Streaming progress saved".to_string(),
-    })
-}
-
-// Get streaming history
-#[tauri::command]
-async fn get_streaming_history(
-    state: State<'_, AppState>,
-    limit: Option<i32>,
-) -> Result<Vec<database::StreamingHistoryItem>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_streaming_history(limit.unwrap_or(50))
-        .map_err(|e| e.to_string())
-}
-
-// Get streaming resume info for a specific content
-#[tauri::command]
-async fn get_streaming_resume_info(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    season: Option<i32>,
-    episode: Option<i32>,
-) -> Result<Option<database::StreamingHistoryItem>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_streaming_resume_info(&tmdb_id, &media_type, season, episode)
-        .map_err(|e| e.to_string())
-}
-
 // ==================== SOCIAL SYNC COMMANDS ====================
 
 // Get aggregated watch stats for social sync
@@ -573,32 +515,6 @@ async fn get_recent_watch_activities(
         .map_err(|e| e.to_string())
 }
 
-// Remove a single item from streaming history
-#[tauri::command]
-async fn remove_from_streaming_history(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.remove_from_streaming_history(id)
-        .map_err(|e| e.to_string())?;
-    Ok(ApiResponse {
-        message: "Item removed from streaming history".to_string(),
-    })
-}
-
-// Clear all streaming history
-#[tauri::command]
-async fn clear_all_streaming_history(state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let count = db
-        .clear_all_streaming_history()
-        .map_err(|e| e.to_string())?;
-    Ok(ApiResponse {
-        message: format!("Cleared {} items from streaming history", count),
-    })
-}
-
 // ==================== GOOGLE DRIVE COMMANDS ====================
 
 /// Check if user is connected to Google Drive
@@ -619,28 +535,6 @@ async fn gdrive_get_account_info(
     state: State<'_, AppState>,
 ) -> Result<gdrive::DriveAccountInfo, String> {
     state.gdrive_client.get_account_info().await
-}
-
-/// Load AI chat history JSON from Google Drive appDataFolder (hidden app storage)
-#[tauri::command]
-async fn gdrive_get_ai_chat_history(state: State<'_, AppState>) -> Result<String, String> {
-    let history = state.gdrive_client.load_ai_chat_history().await?;
-    Ok(history.unwrap_or_else(|| "[]".to_string()))
-}
-
-/// Save AI chat history JSON to Google Drive appDataFolder (hidden app storage)
-#[tauri::command]
-async fn gdrive_save_ai_chat_history(
-    state: State<'_, AppState>,
-    history_json: String,
-) -> Result<ApiResponse, String> {
-    state
-        .gdrive_client
-        .save_ai_chat_history(&history_json)
-        .await?;
-    Ok(ApiResponse {
-        message: "AI chat history saved".to_string(),
-    })
 }
 
 /// Start Google Drive OAuth flow - returns auth URL
@@ -2127,7 +2021,7 @@ async fn check_cloud_changes(
                     format!("{} items removed (deleted from Drive)", messages.len())
                 };
 
-                dispatch_notification(&window, "StreamVault", &message, "info");
+                dispatch_notification(&window, "SlasshyVault", &message, "info");
             }
         }
     }
@@ -2574,7 +2468,7 @@ async fn check_cloud_changes(
         for title in &titles {
             dispatch_notification(
                 &window,
-                "StreamVault",
+                "SlasshyVault",
                 &format!("{} added to your library", title),
                 "success",
             );
@@ -6000,9 +5894,11 @@ async fn play_with_mpv(
     };
 
     config::validate_executable_path(&mpv_path, "mpv")?;
+    let pipe_prefix = if is_dev_runtime() { "slasshyvault-mpv-dev" } else { "slasshyvault-mpv" };
     let mpv_audio_probe_pipe = if is_zip_media {
         Some(format!(
-            r"\\.\pipe\streamvault-mpv-{}-{}",
+            r"\\.\pipe\{}-{}-{}",
+            pipe_prefix,
             media_id,
             chrono::Utc::now().timestamp_millis()
         ))
@@ -6551,7 +6447,7 @@ fn http_get_with_retry_auth(
             .tcp_keepalive(std::time::Duration::from_secs(20))
             .http1_only()
             .tcp_nodelay(true)
-            .user_agent("StreamVault/1.0")
+            .user_agent("SlasshyVault/1.0")
             .build()
         {
             Ok(c) => c,
@@ -6640,7 +6536,7 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
             // Set TCP nodelay for faster request/response
             .tcp_nodelay(true)
             // Add a user agent (some APIs block requests without one)
-            .user_agent("StreamVault/1.0")
+            .user_agent("SlasshyVault/1.0")
             .build()
         {
             Ok(c) => c,
@@ -7357,7 +7253,7 @@ fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>,
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(12))
         .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent("StreamVault/1.0")
+        .user_agent("SlasshyVault/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -8379,121 +8275,6 @@ async fn get_tmdb_trending(state: State<'_, AppState>) -> Result<TmdbTrendingRes
     Ok(TmdbTrendingResponse { results })
 }
 
-// Videasy localStorage progress format
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-struct VideasyProgress {
-    duration: f64,
-    watched: f64,
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct VideasyStorageItem {
-    poster: Option<String>,
-    background: Option<String>,
-    id: i64,
-    media_type: String,
-    title: String,
-    progress: Option<VideasyProgress>,
-}
-
-// Open Videasy in the user's default browser
-#[tauri::command]
-async fn open_videasy_player(
-    app_handle: tauri::AppHandle,
-    _state: State<'_, AppState>,
-    url: String,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    _poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-) -> Result<ApiResponse, String> {
-    println!(
-        "[VIDEASY] Opening in browser for: {} (tmdb_id: {})",
-        title, tmdb_id
-    );
-
-    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
-    let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
-    if parsed_url.scheme() != "https" {
-        return Err("Only HTTPS URLs are allowed".to_string());
-    }
-
-    if let Some(host_str) = parsed_url.host_str() {
-        if host_str != "videasy.net" && !host_str.ends_with(".videasy.net") {
-            return Err("URL domain not allowed".to_string());
-        }
-    } else {
-        return Err("Invalid URL domain".to_string());
-    }
-
-    // Open the URL directly in the user's default browser using Tauri's shell API
-    tauri::api::shell::open(&app_handle.shell_scope(), &url, None)
-        .map_err(|e| format!("Failed to open browser: {}", e))?;
-
-    let display_title = if media_type == "tv" {
-        format!(
-            "{} - S{}E{}",
-            title,
-            season.unwrap_or(1),
-            episode.unwrap_or(1)
-        )
-    } else {
-        title.clone()
-    };
-
-    Ok(ApiResponse {
-        message: format!("Opening \"{}\" in browser", display_title),
-    })
-}
-
-// Save progress from Videasy player (called from JavaScript)
-#[tauri::command]
-async fn save_videasy_progress(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    position: f64,
-    duration: f64,
-) -> Result<ApiResponse, String> {
-    println!(
-        "[VIDEASY] Saving progress: {} - {:.1}s / {:.1}s",
-        title, position, duration
-    );
-
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-
-    let poster_url = poster_path.map(|p| {
-        if p.starts_with("http") {
-            p
-        } else {
-            format!("https://image.tmdb.org/t/p/w342{}", p)
-        }
-    });
-
-    db.save_streaming_progress(
-        &tmdb_id,
-        &media_type,
-        &title,
-        poster_url.as_deref(),
-        season,
-        episode,
-        position,
-        duration,
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(ApiResponse {
-        message: "Progress saved".to_string(),
-    })
-}
-
 // ==================== TRANSCODING COMMANDS ====================
 
 /// Transcode response with stream URL
@@ -8992,25 +8773,25 @@ fn is_dev_runtime() -> bool {
 
 fn runtime_window_title() -> &'static str {
     if is_dev_runtime() {
-        "StreamVault Dev"
+        "SlasshyVault Dev"
     } else {
-        "StreamVault"
+        "SlasshyVault"
     }
 }
 
 fn runtime_app_identifier() -> &'static str {
     if is_dev_runtime() {
-        "com.streamvault.app.dev"
+        "com.slasshyvault.app.dev"
     } else {
-        "com.streamvault.app"
+        "com.slasshyvault.app"
     }
 }
 
 fn runtime_deep_link_scheme() -> &'static str {
     if is_dev_runtime() {
-        "streamvault-dev"
+        "slasshyvault-dev"
     } else {
-        "streamvault"
+        "slasshyvault"
     }
 }
 
@@ -9055,7 +8836,7 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
         notification
             .summary(summary)
             .body(body)
-            .appname("StreamVault")
+            .appname("SlasshyVault")
             .app_id(&windows_app_id)
             .timeout(notify_rust::Timeout::Milliseconds(5000));
 
@@ -9072,7 +8853,7 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
     notification
         .summary(summary)
         .body(body)
-        .appname("StreamVault")
+        .appname("SlasshyVault")
         .timeout(notify_rust::Timeout::Milliseconds(5000));
 
     if let Err(err) = notification.show() {
@@ -9172,7 +8953,7 @@ async fn run_watchlist_scheduler(app_handle: AppHandle) {
         for item in due_items {
             send_system_notification(
                 &app_handle,
-                "StreamVault watchlist",
+                "SlasshyVault watchlist",
                 &format_watchlist_notification_body(&item),
             );
             let _ = app_handle.emit_all("watchlist-reminder-fired", item.clone());
@@ -9247,7 +9028,7 @@ async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
 
         for reminder in due_reminders {
             let body = format_reminder_notification_body(&reminder);
-            send_system_notification(&app_handle, "StreamVault reminder", &body);
+            send_system_notification(&app_handle, "SlasshyVault reminder", &body);
             let _ = app_handle.emit_all("movie-reminder-fired", reminder.clone());
 
             if should_continue_tv_reminder(&reminder) {
@@ -10451,7 +10232,7 @@ async fn background_check_cloud_changes(
                     format!("{} items removed (deleted from Drive)", messages.len())
                 };
 
-                dispatch_notification_from_handle(app_handle, "StreamVault", &message, "info");
+                dispatch_notification_from_handle(app_handle, "SlasshyVault", &message, "info");
             }
         }
     }
@@ -10872,7 +10653,7 @@ async fn background_check_cloud_changes(
                 format!("{} items added to your library", indexed_count)
             };
 
-            dispatch_notification_from_handle(app_handle, "StreamVault", &message, "success");
+            dispatch_notification_from_handle(app_handle, "SlasshyVault", &message, "success");
         }
 
         // Emit library-updated if window exists
@@ -11040,7 +10821,7 @@ async fn background_check_cloud_changes(
 
 // GitHub PAT for accessing private releases
 const GITHUB_RELEASE_TOKEN: &str = ""; // User will provide their PAT
-const ALLOWED_REPO: &str = "SlasshyOverhere/StreamVault";
+const ALLOWED_REPO: &str = "SlasshyOverhere/SlasshyVault";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateInfo {
@@ -11078,9 +10859,9 @@ struct GitHubAsset {
     size: i64,
 }
 
-const RELEASES_PAGE_URL: &str = "https://github.com/SlasshyOverhere/StreamVault/releases/latest";
+const RELEASES_PAGE_URL: &str = "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest";
 const RELEASES_METADATA_URL: &str =
-    "https://github.com/SlasshyOverhere/StreamVault/releases/latest/download/latest.json";
+    "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest/download/latest.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct TauriLatestManifest {
@@ -11161,7 +10942,7 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     println!("[UPDATE] Fetching release metadata...");
     let response = client
         .get(RELEASES_METADATA_URL)
-        .header("User-Agent", "StreamVault-Updater")
+        .header("User-Agent", "SlasshyVault-Updater")
         .send()
         .await
         .map_err(|e| {
@@ -11486,7 +11267,12 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 }
 
 fn updater_staging_root() -> std::path::PathBuf {
-    std::env::temp_dir().join("streamvault-updater")
+    let dir_name = if is_dev_runtime() {
+        "slasshyvault-updater-dev"
+    } else {
+        "slasshyvault-updater"
+    };
+    std::env::temp_dir().join(dir_name)
 }
 
 fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
@@ -11522,7 +11308,7 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
 }
 
 fn sanitize_update_filename(parsed_url: &url::Url) -> String {
-    let fallback = "streamvault-update.bin";
+    let fallback = "slasshyvault-update.bin";
     let Some(raw_filename) = parsed_url
         .path_segments()
         .and_then(|segments| segments.last())
@@ -11745,11 +11531,11 @@ mod install_update_tests {
     use uuid::Uuid;
 
     #[cfg(target_os = "windows")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.exe";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.exe";
     #[cfg(target_os = "macos")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.pkg";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.pkg";
     #[cfg(target_os = "linux")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.deb";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.deb";
 
     fn remove_test_artifact(path: &Path) {
         if path.is_dir() {
@@ -11765,7 +11551,7 @@ mod install_update_tests {
 
     fn create_temp_installer(name: &str) -> PathBuf {
         let dir =
-            updater_staging_root().join(format!("streamvault-installer-test-{}", Uuid::new_v4()));
+            updater_staging_root().join(format!("slasshyvault-installer-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
 
@@ -11789,7 +11575,7 @@ mod install_update_tests {
 
     #[test]
     fn rejects_disallowed_extension_in_temp_dir() {
-        let installer_path = create_temp_installer("streamvault-update.txt");
+        let installer_path = create_temp_installer("slasshyvault-update.txt");
         let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
         assert!(error.contains("allowed"));
         remove_test_artifact(&installer_path);
@@ -11799,7 +11585,7 @@ mod install_update_tests {
     fn rejects_installer_outside_staging_dir() {
         let installer_path = std::env::current_dir()
             .unwrap()
-            .join(format!("streamvault-outside-temp-{}", TEST_INSTALLER_NAME));
+            .join(format!("slasshyvault-outside-temp-{}", TEST_INSTALLER_NAME));
         fs::write(&installer_path, b"test-installer").unwrap();
 
         let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
@@ -12905,6 +12691,97 @@ fn ddl_get_source_media(
         .map_err(|e| e.to_string())
 }
 
+/// Returns the OLD app data directory (pre-rename "StreamVault") respecting dev/prod isolation.
+/// Dev builds target "StreamVault-Dev", production targets "StreamVault".
+fn get_old_app_data_dir() -> std::path::PathBuf {
+    let dir_name = if cfg!(debug_assertions) {
+        "StreamVault-Dev"
+    } else {
+        "StreamVault"
+    };
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return std::path::PathBuf::from(appdata).join(dir_name);
+        }
+    }
+    dirs::home_dir()
+        .map(|h| h.join(format!(".{}", dir_name)))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// Returns the NEW app data directory (post-rename "SlasshyVault"), delegating to database::get_app_data_dir.
+fn get_new_app_data_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(database::get_app_data_dir().to_string_lossy().as_ref())
+}
+
+fn copy_dir_all(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    std::fs::create_dir_all(&dst)?;
+    for entry in std::fs::read_dir(&src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.as_ref().join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_app_data() {
+    let old_dir = get_old_app_data_dir();
+    let new_dir = get_new_app_data_dir();
+
+    // If old dir doesn't exist, nothing to migrate (fresh install or already migrated)
+    if !old_dir.exists() {
+        println!("[MIGRATE] Old data directory {:?} does not exist, no migration needed", old_dir);
+        return;
+    }
+
+    // If both old and new databases exist, migration was already completed
+    let old_db = old_dir.join("media_library.db");
+    let new_db = new_dir.join("media_library.db");
+    if old_db.exists() && new_db.exists() {
+        if let Ok(db) = database::Database::new(&new_db.to_string_lossy()) {
+            if let Ok(Some(_)) = db.get_setting("migration_completed") {
+                println!("[MIGRATE] Migration already completed (flag found), skipping");
+                return;
+            }
+        }
+    }
+
+    println!("[MIGRATE] Migrating app data from {:?} to {:?}", old_dir, new_dir);
+
+    match copy_dir_all(&old_dir, &new_dir) {
+        Ok(_) => {
+            println!("[MIGRATE] Successfully copied data to {:?}", new_dir);
+
+            if new_db.exists() {
+                match database::Database::new(&new_db.to_string_lossy()) {
+                    Ok(_db) => {
+                        println!("[MIGRATE] Verified database at new location");
+                        // Mark migration as completed in the new DB (old dir is preserved)
+                        let _ = _db.set_setting("migration_completed", "true");
+                    }
+                    Err(e) => {
+                        println!("[MIGRATE] Warning: Database verification failed: {}. Rolling back.", e);
+                        let _ = std::fs::remove_dir_all(&new_dir);
+                    }
+                }
+            } else {
+                println!("[MIGRATE] Warning: Database file not found at new location");
+            }
+        }
+        Err(e) => {
+            println!("[MIGRATE] Warning: Failed to copy data: {}. Startup will continue with fresh data.", e);
+            let _ = std::fs::remove_dir_all(&new_dir);
+        }
+    }
+}
+
 fn main() {
     // Initialize single-instance plugin as early as possible for production builds.
     // This catches second instances BEFORE they attempt to open the database (which would cause a crash/panic).
@@ -12923,6 +12800,11 @@ fn main() {
     // Load .env file from project root (for development)
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
     dotenvy::dotenv().ok();
+
+    // Migrate app data from old StreamVault directory to new SlasshyVault directory.
+    // Dev builds use StreamVault-Dev → SlasshyVault-Dev (isolated from production).
+    // Release builds use StreamVault → SlasshyVault (production data migration).
+    migrate_app_data();
 
     // Prepare deep link before building the app.
     // Dev and production use separate identifiers/schemes so they can run independently.
@@ -12961,7 +12843,7 @@ fn main() {
     };
 
     // Create system tray menu
-    let show = CustomMenuItem::new("show".to_string(), "Show StreamVault");
+    let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
     let tray_menu = SystemTrayMenu::new()
         .add_item(show)
@@ -13014,7 +12896,7 @@ fn main() {
                 dirs::home_dir()
             };
             if let Some(base_dir) = base_dir {
-                for dir_name in &["StreamVault", "StreamVault-Dev"] {
+                for dir_name in &["SlasshyVault", "SlasshyVault-Dev"] {
                     let app_dir = if cfg!(windows) {
                         base_dir.join(dir_name)
                     } else {
@@ -13240,12 +13122,6 @@ fn main() {
             clear_all_watch_history,
             sync_watch_history,
             mark_as_complete,
-            // Streaming history commands
-            save_streaming_progress,
-            get_streaming_history,
-            get_streaming_resume_info,
-            remove_from_streaming_history,
-            clear_all_streaming_history,
             // Social sync commands
             get_watch_stats,
             get_recent_watch_activities,
@@ -13306,15 +13182,10 @@ fn main() {
             delete_watchlist_item,
             sync_watchlist,
             merge_duplicate_shows,
-            // Videasy player commands
-            open_videasy_player,
-            save_videasy_progress,
             // Google Drive commands
             gdrive_is_connected,
             gdrive_get_access_token,
             gdrive_get_account_info,
-            gdrive_get_ai_chat_history,
-            gdrive_save_ai_chat_history,
             gdrive_start_auth,
             gdrive_complete_auth,
             gdrive_auth_with_code,

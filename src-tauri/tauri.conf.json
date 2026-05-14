@@ -7,7 +7,7 @@
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "StreamVault",
+    "productName": "SlasshyVault",
     "version": "3.0.39"
   },
   "tauri": {
@@ -47,7 +47,6 @@
           "https://api.themoviedb.org/**",
           "https://www.googleapis.com/**",
           "https://streamvault-backend-server.onrender.com/**",
-          "https://player.videasy.net/**",
           "http://localhost:3000/**",
           "http://127.0.0.1:3000/**"
         ]
@@ -69,10 +68,10 @@
       },
       "externalBin": [],
       "icon": [
-        "icons/steamvault.png",
-        "icons/steamvault.ico"
+        "icons/slasshyvault.png",
+        "icons/slasshyvault.ico"
       ],
-      "identifier": "com.streamvault.app",
+      "identifier": "com.slasshyvault.app",
       "longDescription": "",
       "macOS": {
         "entitlements": null,
@@ -91,18 +90,18 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self'; frame-src https://player.videasy.net https://*.videasy.net; child-src https://player.videasy.net https://*.videasy.net; script-src 'self'; connect-src 'self' https://api.themoviedb.org https://www.googleapis.com https://streamvault-backend-server.onrender.com ws://streamvault-backend-server.onrender.com wss://streamvault-backend-server.onrender.com http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self'; script-src 'self'; connect-src 'self' https://api.themoviedb.org https://www.googleapis.com https://streamvault-backend-server.onrender.com ws://streamvault-backend-server.onrender.com wss://streamvault-backend-server.onrender.com http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
     },
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/SlasshyOverhere/StreamVault/releases/latest/download/latest.json"
+        "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest/download/latest.json"
       ],
       "dialog": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDQ0I5Mjk5NjFBQjU5MzEKUldReFdhdGhtWkxMVENNT1FNbWhZT0VUVmlJaEREdkR2akRGdFhFVDFHRWZIMnlUQ0JQSUtPN0UK"
     },
     "systemTray": {
-      "iconPath": "icons/steamvault.ico",
+      "iconPath": "icons/slasshyvault.ico",
       "iconAsTemplate": false,
       "menuOnLeftClick": false
     },
@@ -113,7 +112,7 @@
         "fullscreen": false,
         "height": 900,
         "resizable": true,
-        "title": "StreamVault",
+        "title": "SlasshyVault",
         "width": 1400,
         "maximizable": true,
         "minWidth": 900,

@@ -5,12 +5,12 @@ use std::path::PathBuf;
 
 use crate::zip_manager;
 
-const APP_NAME: &str = "StreamVault";
+const APP_NAME: &str = "SlasshyVault";
 const AUTO_MARK_WATCHED_THRESHOLD_PERCENT: f64 = 93.0;
 const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
 
 /// Get the app data directory, with separate paths for dev and production builds
-/// Dev builds use "StreamVault-Dev" to keep data isolated from production
+/// Dev builds use "SlasshyVault-Dev" to keep data isolated from production
 pub fn get_app_data_dir() -> PathBuf {
     // Use a different directory name for debug/dev builds
     let dir_name = if cfg!(debug_assertions) {
@@ -4455,7 +4455,7 @@ mod tests {
     #[test]
     fn init_migrates_legacy_media_table_before_creating_indexes() {
         let db_path =
-            std::env::temp_dir().join(format!("streamvault-db-test-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("slasshyvault-db-test-{}.db", Uuid::new_v4()));
 
         {
             let conn = Connection::open(&db_path).unwrap();
@@ -4513,7 +4513,7 @@ mod tests {
     #[test]
     fn get_library_stats_returns_counts_without_loading_rows() {
         let db_path =
-            std::env::temp_dir().join(format!("streamvault-db-stats-test-{}.db", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("slasshyvault-db-stats-test-{}.db", Uuid::new_v4()));
         let db = Database::new(db_path.to_str().unwrap()).unwrap();
 
         db.insert_movie(

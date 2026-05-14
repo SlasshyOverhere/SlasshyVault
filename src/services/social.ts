@@ -1,5 +1,5 @@
 /**
- * StreamVault Social Service
+ * SlasshyVault Social Service
  *
  * Handles all social features including:
  * - User profiles and privacy settings

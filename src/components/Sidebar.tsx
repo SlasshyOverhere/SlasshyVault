@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard, Download, Link2
+  Home, RotateCw, Cloud, Users, Clapperboard, Download, Link2
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -11,7 +11,6 @@ interface SidebarProps {
   className?: string
   currentView: string
   setView: (view: string) => void
-  onAiChatClick?: () => void
   onOpenSettings: () => void
   onCloudScan?: () => void
   theme?: 'dark' | 'light'
@@ -24,8 +23,6 @@ interface SidebarProps {
   } | null
   showCloudTab?: boolean
   betaEnabled?: boolean
-  unstableEnabled?: boolean
-  aiChatPaused?: boolean
   downloadJobCount?: number
 }
 
@@ -33,15 +30,12 @@ export function Sidebar({
   className,
   currentView,
   setView,
-  onAiChatClick,
   onOpenSettings,
   onCloudScan,
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
   betaEnabled = false,
-  unstableEnabled = false,
-  aiChatPaused = false,
   downloadJobCount = 0,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -107,7 +101,6 @@ export function Sidebar({
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "directlinks", label: "Direct Links", icon: Link2 },
-    { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
     { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
@@ -155,19 +148,13 @@ export function Sidebar({
                     key={item.id}
                     data-tour={`nav-${item.id}`}
                     aria-label={item.label}
-                    onClick={() => {
-                    if (item.id === "ai" && item.paused) {
-                      onAiChatClick?.()
-                      return
-                    }
-                    setView(item.id)
-                  }}
+                    onClick={() => setView(item.id)}
                   className={cn(
                     "group relative w-full flex items-center gap-3 px-3.5 py-3 rounded-xl transition-colors duration-300",
                     isActive
                       ? "bg-white/[0.12] text-white shadow-[0_0_25px_rgba(255,255,255,0.08)] border border-white/20 backdrop-blur-md"
                       : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.04]",
-                    item.paused ? "opacity-75" : "",
+
                     isCollapsed ? "justify-center px-0" : ""
                   )}
                 >
@@ -192,12 +179,6 @@ export function Sidebar({
                       "w-5 h-5 transition-all duration-300",
                       isActive ? "text-white drop-shadow-white" : "text-neutral-500 group-hover:text-neutral-300"
                     )} />
-                    {item.isNew && (
-                      <Sparkles className={cn(
-                        "absolute -right-1 -top-1 h-2.5 w-2.5 transition-colors duration-300",
-                        isActive ? "text-white" : "text-white/60 group-hover:text-white"
-                      )} />
-                    )}
                     {isCollapsed && item.badge && (
                       <div className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full border border-white/50 bg-white px-1 text-[8px] font-black text-black shadow-[0_0_10px_rgba(255,255,255,0.4)]">
                         {item.badge}
@@ -213,16 +194,7 @@ export function Sidebar({
                       )}>
                         {item.label}
                       </span>
-                      {item.paused ? (
-                        <span className={cn(
-                          "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase border transition-colors duration-300",
-                          isActive
-                            ? "border-white/40 bg-white/20 text-white"
-                            : "border-white/20 bg-white/10 text-neutral-400"
-                        )}>
-                          Paused
-                        </span>
-                      ) : item.badge ? (
+                      {item.badge && (
                         <span className={cn(
                           "ml-auto min-w-6 rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.08em] text-center border transition-all duration-300 shadow-[0_0_15px_rgba(255,255,255,0.15)]",
                           isActive
@@ -230,16 +202,6 @@ export function Sidebar({
                             : "border-white/20 bg-white/10 text-neutral-400 group-hover:bg-white/20"
                         )}>
                           {item.badge}
-                        </span>
-                      ) : item.isNew && (
-                        <span className={cn(
-                          "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase",
-                          "border transition-colors duration-300",
-                          isActive
-                            ? "border-white/40 bg-white/20 text-white"
-                            : "border-white/20 bg-white/10 text-neutral-400"
-                        )}>
-                          New
                         </span>
                       )}
                     </>
@@ -249,12 +211,8 @@ export function Sidebar({
                   {isCollapsed && (
                     <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
-                      {item.paused ? (
-                        <span className="text-xs font-bold text-white tracking-wider">{" • PAUSED"}</span>
-                      ) : item.badge ? (
+                      {item.badge && (
                         <span className="text-xs font-bold text-white tracking-wider">{` • ${item.badge}`}</span>
-                      ) : item.isNew && (
-                        <span className="text-xs font-bold text-white tracking-wider">{" • NEW"}</span>
                       )}
                     </div>
                   )}

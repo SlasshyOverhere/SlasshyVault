@@ -1,7 +1,7 @@
 
-# StreamVault
+# SlasshyVault
 
-StreamVault is a cloud-first desktop media library app built with Tauri, Rust, React, and TypeScript.
+SlasshyVault is a cloud-first desktop media library app built with Tauri, Rust, React, and TypeScript.
 
 It indexes video content from Google Drive, enriches it with TMDB metadata, and plays it through MPV with progress tracking, resume support, and archive-aware playback.
 
@@ -9,7 +9,7 @@ It indexes video content from Google Drive, enriches it with TMDB metadata, and 
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
 ![Version](https://img.shields.io/badge/version-3.0.38-white?style=flat-square)
 
-## What StreamVault Does
+## What SlasshyVault Does
 
 - Indexes your Google Drive video library into a local SQLite database
 - Fetches posters, thumbnails, episode metadata, and overviews from TMDB
@@ -31,13 +31,13 @@ It indexes video content from Google Drive, enriches it with TMDB metadata, and 
 
 ## Archive Support
 
-StreamVault can detect and assess archived media before playback.
+SlasshyVault can detect and assess archived media before playback.
 
 - `.zip`: supported where the archive entry can be played or prepared by the backend
 - `.rar`: supported for playable archive cases
 - `.tar`: currently not playable
 
-If StreamVault detects a `.tar` file, it informs the user in the UI and explains why it cannot be indexed for playback right now.
+If SlasshyVault detects a `.tar` file, it informs the user in the UI and explains why it cannot be indexed for playback right now.
 
 ## Playback
 
@@ -61,7 +61,7 @@ Playback is powered by MPV.
 
 ## Prerequisites
 
-Before running StreamVault locally, install:
+Before running SlasshyVault locally, install:
 
 1. Node.js 18+
 2. Rust stable
@@ -75,8 +75,8 @@ Windows:
 ## Local Development
 
 ```bash
-git clone https://github.com/SlasshyOverhere/StreamVault.git
-cd StreamVault/streamvault
+git clone https://github.com/SlasshyOverhere/SlasshyVault.git
+cd SlasshyVault/slasshyvault
 npm install
 npm run tauri dev
 ```
@@ -91,7 +91,7 @@ Installers are generated under `src-tauri/target/release/bundle/`.
 
 ## First-Time Setup
 
-1. Launch StreamVault
+1. Launch SlasshyVault
 2. Complete onboarding
 3. Connect Google Drive
 4. Add your TMDB API key if you want metadata and artwork
@@ -101,7 +101,7 @@ Installers are generated under `src-tauri/target/release/bundle/`.
 
 Official backend repository:
 
-- [StreamVault-Backend](https://github.com/SlasshyOverhere/StreamVault-Backend)
+- [SlasshyVault-Backend](https://github.com/SlasshyOverhere/SlasshyVault-Backend)
 
 If you want to use your own backend:
 
@@ -119,7 +119,7 @@ Common supported formats include:
 ## Project Structure
 
 ```text
-streamvault/
+slasshyvault/
 ├── src/                 React frontend
 ├── src-tauri/           Rust + Tauri backend
 ├── package.json

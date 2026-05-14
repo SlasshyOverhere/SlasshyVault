@@ -39,7 +39,7 @@ export function OnboardingModal({ open, onComplete }: OnboardingModalProps) {
   const steps: OnboardingStep[] = [
     {
       id: "welcome",
-      title: "Welcome to StreamVault",
+      title: "Welcome to SlasshyVault",
       subtitle: "Your Personal Media Center",
       description: "Organize, discover, and enjoy your movies and TV shows in one beautiful place.",
       icon: <Play className="w-8 h-8" />,
@@ -59,7 +59,7 @@ export function OnboardingModal({ open, onComplete }: OnboardingModalProps) {
       id: "library",
       title: "Your Media Library",
       subtitle: "All Your Content, Organized",
-      description: "Add your media folders and StreamVault will automatically organize your movies and TV shows with beautiful artwork.",
+      description: "Add your media folders and SlasshyVault will automatically organize your movies and TV shows with beautiful artwork.",
       icon: <Film className="w-8 h-8" />,
       color: "#CCCCCC",
       features: [
@@ -127,7 +127,7 @@ export function OnboardingModal({ open, onComplete }: OnboardingModalProps) {
       id: "ready",
       title: "You're All Set!",
       subtitle: "Let's Get Started",
-      description: "Configure your settings and start enjoying your media collection. Welcome to StreamVault!",
+      description: "Configure your settings and start enjoying your media collection. Welcome to SlasshyVault!",
       icon: <Rocket className="w-8 h-8" />,
       color: "#FFFFFF",
       features: [

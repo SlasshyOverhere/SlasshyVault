@@ -247,7 +247,7 @@ impl Default for DownloadManager {
 pub fn default_downloads_dir() -> PathBuf {
     dirs::download_dir()
         .unwrap_or_else(|| get_app_data_dir().join("downloads"))
-        .join("StreamVault")
+        .join("SlasshyVault")
 }
 
 fn download_jobs_path() -> PathBuf {

@@ -1,5 +1,5 @@
 /**
- * StreamVault Login Screen
+ * SlasshyVault Login Screen
  *
  * Forces users to sign in with Google before accessing the app.
  * Data is stored in user's own Google Drive for privacy.
@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { Loader2, Film, Users, Shield, Zap, Minus, X } from 'lucide-react'
 import { appWindow } from '@tauri-apps/api/window'
-import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
+import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 
 interface LoginScreenProps {
   onLogin: () => void
@@ -30,13 +30,13 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           <div className="flex items-center gap-2 pl-3 select-none">
             <img
               data-tauri-drag-region
-              src={streamvaultIcon}
+              src={slasshyvaultIcon}
               alt=""
               draggable={false}
               className="pointer-events-none h-4 w-4 object-contain"
             />
             <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
-              StreamVault
+              SlasshyVault
             </span>
           </div>
           <div className="flex items-center gap-1 pr-1.5">
@@ -70,14 +70,14 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
         <div className="flex items-center gap-4 mb-8">
           <div className="w-14 h-14 rounded-xl border border-white/20 bg-white/5 flex items-center justify-center shadow-lg shadow-white/10">
             <img
-              src={streamvaultIcon}
-              alt="StreamVault logo"
+              src={slasshyvaultIcon}
+              alt="SlasshyVault logo"
               draggable={false}
               className="w-10 h-10 object-contain"
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">StreamVault</h1>
+            <h1 className="text-2xl font-bold text-white">SlasshyVault</h1>
             <p className="text-sm text-neutral-500">Your Personal Media Library</p>
           </div>
         </div>
@@ -149,9 +149,9 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           {/* Privacy Notice */}
           <p className="text-neutral-500 text-xs text-center mt-6 leading-relaxed">
             By signing in, you agree to our{' '}
-            <a href="https://streamvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
+            <a href="https://slasshyvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
             {' '}and{' '}
-            <a href="https://streamvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
+            <a href="https://slasshyvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
             <br />
             Your data is stored securely in your own Google Drive.
           </p>

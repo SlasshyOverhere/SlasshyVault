@@ -10,7 +10,6 @@ interface DdlMediaLibraryProps {
   onDownload?: (item: MediaItem) => void | Promise<void>
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
-  onAskAI?: (item: MediaItem) => void
 }
 
 export function DdlMediaLibrary({
@@ -20,7 +19,6 @@ export function DdlMediaLibrary({
   onDownload,
   onDelete,
   onWatchTogether,
-  onAskAI,
 }: DdlMediaLibraryProps) {
   const [tvShows, setTvShows] = useState<MediaItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,7 +61,6 @@ export function DdlMediaLibrary({
           onDownload={onDownload}
           onDelete={onDelete}
           onWatchTogether={onWatchTogether}
-          onAskAI={onAskAI}
         />
       ))}
     </div>

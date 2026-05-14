@@ -36,7 +36,7 @@ pub fn get_tmdb_proxy_base_url() -> String {
     }
 
     // Check config file for tmdb_proxy_url override
-    if let Some(app_data) = dirs::data_dir().map(|d| d.join("StreamVault").join("config.json")) {
+    if let Some(app_data) = dirs::data_dir().map(|d| d.join("SlasshyVault").join("config.json")) {
         if let Ok(contents) = std::fs::read_to_string(&app_data) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
                 if let Some(proxy_url) = config.get("tmdb_proxy_url").and_then(|v| v.as_str()) {
@@ -179,7 +179,7 @@ fn build_client() -> Result<reqwest::blocking::Client, Box<dyn std::error::Error
         .pool_max_idle_per_host(0)
         .tcp_keepalive(std::time::Duration::from_secs(20))
         .tcp_nodelay(true)
-        .user_agent("StreamVault/1.0")
+        .user_agent("SlasshyVault/1.0")
         .build()?)
 }
 
@@ -194,7 +194,7 @@ fn build_quick_client(
         .pool_max_idle_per_host(0)
         .tcp_keepalive(std::time::Duration::from_secs(15))
         .tcp_nodelay(true)
-        .user_agent("StreamVault/1.0");
+        .user_agent("SlasshyVault/1.0");
 
     if http1_only {
         builder = builder.http1_only();
@@ -654,7 +654,7 @@ pub fn search_multi_raw(
                 .tcp_keepalive(std::time::Duration::from_secs(20))
                 .tcp_nodelay(true)
                 .http1_only()
-                .user_agent("StreamVault/1.0")
+                .user_agent("SlasshyVault/1.0")
                 .build()?;
 
             tmdb_request(&fallback_client, &url, api_key).map_err(|fallback_error| {

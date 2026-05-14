@@ -17,7 +17,7 @@ struct GitHubAsset {
     size: i64,
 }
 
-const ALLOWED_REPO: &str = "SlasshyOverhere/StreamVault";
+const ALLOWED_REPO: &str = "SlasshyOverhere/SlasshyVault";
 
 fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
     if url.scheme() != "https" {
@@ -86,7 +86,7 @@ async fn test_check_for_updates() -> Result<(), String> {
     println!("TEST 1: Check for Updates (Real API Call)");
     println!("========================================\n");
 
-    let repo = "SlasshyOverhere/StreamVault";
+    let repo = "SlasshyOverhere/SlasshyVault";
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
 
     println!("API URL: {}", url);
@@ -100,7 +100,7 @@ async fn test_check_for_updates() -> Result<(), String> {
     println!("✅ API URL validation passed\n");
 
     let client = reqwest::Client::builder()
-        .user_agent("StreamVault-Updater-Test")
+        .user_agent("SlasshyVault-Updater-Test")
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 
@@ -251,11 +251,11 @@ async fn run_all_tests() -> Result<(), String> {
 
     // Fetch the actual release to get the dynamic download URL
     println!("\nFetching latest release to get actual download URL...");
-    let repo = "SlasshyOverhere/StreamVault";
+    let repo = "SlasshyOverhere/SlasshyVault";
     let api_url = format!("https://api.github.com/repos/{}/releases/latest", repo);
 
     let client = reqwest::Client::builder()
-        .user_agent("StreamVault-Updater-Test")
+        .user_agent("SlasshyVault-Updater-Test")
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 

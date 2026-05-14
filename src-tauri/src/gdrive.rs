@@ -30,9 +30,8 @@ fn get_auth_server_url() -> String {
 // Google Drive API
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
-const AI_CHAT_HISTORY_FILE_NAME: &str = "streamvault_ai_chat_history_v1.json";
-const WATCH_HISTORY_FILE_NAME: &str = "streamvault_watch_history_v1.json";
-const WATCHLIST_FILE_NAME: &str = "streamvault_watchlist_v1.json";
+const WATCH_HISTORY_FILE_NAME: &str = "slasshyvault_watch_history_v1.json";
+const WATCHLIST_FILE_NAME: &str = "slasshyvault_watchlist_v1.json";
 
 /// Stored OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -472,43 +471,6 @@ impl GoogleDriveClient {
             .ok_or_else(|| "Missing file id in create file response".to_string())
     }
 
-    pub async fn load_ai_chat_history(&self) -> Result<Option<String>, String> {
-        let file_id = match self
-            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
-            .await?
-        {
-            Some(id) => id,
-            None => return Ok(None),
-        };
-
-        let access_token = self.get_access_token().await?;
-        let response = self
-            .http_client
-            .get(format!(
-                "{}/files/{}?alt=media&supportsAllDrives=true",
-                DRIVE_API_BASE, file_id
-            ))
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download AI chat history: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "Drive API download AI chat history error: {}",
-                error_text
-            ));
-        }
-
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read AI chat history response: {}", e))?;
-
-        Ok(Some(text))
-    }
-
     pub async fn load_watch_history_snapshot(&self) -> Result<Option<String>, String> {
         let file_id = match self.find_sync_file_id(WATCH_HISTORY_FILE_NAME).await? {
             Some(id) => id,
@@ -541,43 +503,6 @@ impl GoogleDriveClient {
             .map_err(|e| format!("Failed to read watch history snapshot response: {}", e))?;
 
         Ok(Some(text))
-    }
-
-    pub async fn save_ai_chat_history(&self, history_json: &str) -> Result<(), String> {
-        serde_json::from_str::<serde_json::Value>(history_json)
-            .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
-
-        let file_id = match self
-            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
-            .await?
-        {
-            Some(id) => id,
-            None => self.create_sync_file(AI_CHAT_HISTORY_FILE_NAME, "application/json").await?,
-        };
-
-        let access_token = self.get_access_token().await?;
-        let response = self
-            .http_client
-            .patch(format!(
-                "{}/files/{}?uploadType=media",
-                DRIVE_UPLOAD_API_BASE, file_id
-            ))
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .body(history_json.to_string())
-            .send()
-            .await
-            .map_err(|e| format!("Failed to upload AI chat history: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "Drive API upload AI chat history error: {}",
-                error_text
-            ));
-        }
-
-        Ok(())
     }
 
     pub async fn save_watch_history_snapshot(&self, history_json: &str) -> Result<(), String> {
@@ -910,7 +835,7 @@ pub fn get_auth_url() -> String {
 }
 
 /// Parse tokens from deep link callback URL
-/// The backend sends tokens via: streamvault://oauth/callback?tokens=BASE64_ENCODED_JSON
+/// The backend sends tokens via: slasshyvault://oauth/callback?tokens=BASE64_ENCODED_JSON
 pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
     // Parse the URL to get the tokens parameter
     let url_parts: Vec<&str> = url.split('?').collect();
@@ -1028,7 +953,7 @@ pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
         <body>
             <div class="container">
                 <h1>✓ Authorization Successful!</h1>
-                <p>You can close this window and return to StreamVault.</p>
+                <p>You can close this window and return to SlasshyVault.</p>
             </div>
         </body>
         </html>

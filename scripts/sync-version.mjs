@@ -58,9 +58,9 @@ const cargoTomlNext = cargoToml.replace(
 writeText('src-tauri/Cargo.toml', cargoTomlNext);
 
 const cargoLock = readText('src-tauri/Cargo.lock');
-const cargoLockPattern = /(name = "streamvault"\r?\nversion = ")[^"]+(")/;
+const cargoLockPattern = /(name = "slasshyvault"\r?\nversion = ")[^"]+(")/;
 if (!cargoLockPattern.test(cargoLock)) {
-  throw new Error('Failed to find streamvault package entry in src-tauri/Cargo.lock');
+  throw new Error('Failed to find slasshyvault package entry in src-tauri/Cargo.lock');
 }
 const cargoLockNext = cargoLock.replace(
   cargoLockPattern,

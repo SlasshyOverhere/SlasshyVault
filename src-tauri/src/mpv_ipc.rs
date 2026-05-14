@@ -37,7 +37,7 @@ fn get_lua_script_content(progress_file: &str) -> String {
 
     format!(
         r#"
--- StreamVault Progress Tracker for MPV
+-- SlasshyVault Progress Tracker for MPV
 -- Saves playback position to a JSON file periodically and on quit
 
 local progress_file = "{}"
@@ -128,7 +128,7 @@ mp.register_event("file-loaded", function()
     mp.add_timeout(1, save_progress)
 end)
 
-mp.msg.info("StreamVault progress tracker loaded.")
+mp.msg.info("SlasshyVault progress tracker loaded.")
 "#,
         clean_path
     )
@@ -682,7 +682,7 @@ fn get_sync_lua_script_content(
 
     format!(
         r#"
--- StreamVault Watch Together Sync Script for MPV
+-- SlasshyVault Watch Together Sync Script for MPV
 -- Handles bidirectional sync: captures user actions and applies remote commands
 
 local progress_file = "{}"
@@ -846,7 +846,7 @@ mp.register_event("file-loaded", function()
     mp.add_timeout(1, save_progress)
 end)
 
-mp.msg.info("StreamVault Watch Together sync script loaded.")
+mp.msg.info("SlasshyVault Watch Together sync script loaded.")
 "#,
         clean_progress, clean_event, clean_command
     )

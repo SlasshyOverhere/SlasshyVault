@@ -210,7 +210,7 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
   isDeleting: boolean
   onSelect: () => void
 }) {
-  const posterUrl = item.poster_path ? getTmdbImageUrl(item.poster_path, 'w342') : null
+  const posterUrl = item.poster_path ? getTmdbImageUrl(item.poster_path, 'w300') : null
   const cat = classify(item)
 
   return (

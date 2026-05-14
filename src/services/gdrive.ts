@@ -53,32 +53,6 @@ export const getGDriveAccessToken = async (): Promise<string> => {
 };
 
 /**
- * Load AI chat history JSON from Google Drive hidden app folder (appDataFolder).
- */
-export const getGDriveAiChatHistory = async (): Promise<string> => {
-  try {
-    return await invoke<string>("gdrive_get_ai_chat_history");
-  } catch (error) {
-    console.error("[GDrive] Failed to load AI chat history:", error);
-    throw error;
-  }
-};
-
-/**
- * Save AI chat history JSON to Google Drive hidden app folder (appDataFolder).
- */
-export const saveGDriveAiChatHistory = async (
-  historyJson: string,
-): Promise<void> => {
-  try {
-    await invoke("gdrive_save_ai_chat_history", { historyJson });
-  } catch (error) {
-    console.error("[GDrive] Failed to save AI chat history:", error);
-    throw error;
-  }
-};
-
-/**
  * Get Google Drive account info (email, name, storage)
  */
 export const getGDriveAccountInfo =

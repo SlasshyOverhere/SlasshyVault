@@ -1,12 +1,12 @@
 [package]
-name = "streamvault"
+name = "slasshyvault"
 version = "3.0.39"
 description = "A Tauri Media Library App"
 authors = ["Suman Patgiri"]
 license = "MIT"
-repository = "https://github.com/SlasshyOverhere/StreamVault"
+repository = "https://github.com/SlasshyOverhere/SlasshyVault"
 edition = "2021"
-default-run = "streamvault"
+default-run = "slasshyvault"
 autobins = false
 
 [build-dependencies]
@@ -14,7 +14,7 @@ tauri-build = { version = "1", features = [] }
 dotenvy = "0.15"
 
 [dependencies]
-tauri = { version = "1.8", features = [ "window-all", "updater", "system-tray", "shell-open", "dialog-open", "fs-read-file", "fs-write-file", "fs-read-dir", "fs-create-dir", "fs-remove-file", "fs-rename-file", "fs-exists", "http-request", "protocol-asset", "notification"] }
+tauri = { version = "1.8", features = [ "updater", "window-all", "system-tray", "shell-open", "dialog-open", "fs-read-file", "fs-write-file", "fs-read-dir", "fs-create-dir", "fs-remove-file", "fs-rename-file", "fs-exists", "http-request", "protocol-asset", "notification"] }
 tauri-plugin-autostart = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1e407ed" }
 tauri-plugin-deep-link = "0.1"
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1e407ed" }
@@ -62,7 +62,7 @@ custom-protocol = ["tauri/custom-protocol"]
 wan-test = []
 
 [[bin]]
-name = "streamvault"
+name = "slasshyvault"
 path = "src/main.rs"
 
 [[bin]]

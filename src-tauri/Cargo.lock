@@ -2520,9 +2520,9 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "minisign-verify"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e856fdd13623a2f5f2f54676a4ee49502a96a80ef4a62bcedd23d52427c44d43"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
 
 [[package]]
 name = "miniz_oxide"
@@ -4166,6 +4166,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 
 [[package]]
+name = "slasshyvault"
+version = "3.0.39"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "crc32fast",
+ "dashmap",
+ "dirs 5.0.1",
+ "dotenvy",
+ "dunce",
+ "flate2",
+ "futures-util",
+ "http 1.4.0",
+ "lazy_static",
+ "notify-rust",
+ "oauth2",
+ "open 5.3.3",
+ "percent-encoding",
+ "rand 0.8.6",
+ "rar-stream",
+ "rayon",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-single-instance",
+ "thiserror 1.0.69",
+ "tiny_http",
+ "tokio",
+ "tokio-tungstenite",
+ "unrar",
+ "url",
+ "uuid",
+ "walkdir",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4249,51 +4294,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "streamvault"
-version = "3.0.39"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "chrono-tz",
- "crc32fast",
- "dashmap",
- "dirs 5.0.1",
- "dotenvy",
- "dunce",
- "flate2",
- "futures-util",
- "http 1.4.0",
- "lazy_static",
- "notify-rust",
- "oauth2",
- "open 5.3.3",
- "percent-encoding",
- "rand 0.8.6",
- "rar-stream",
- "rayon",
- "regex",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-deep-link",
- "tauri-plugin-single-instance",
- "thiserror 1.0.69",
- "tiny_http",
- "tokio",
- "tokio-tungstenite",
- "unrar",
- "url",
- "uuid",
- "walkdir",
- "windows-sys 0.52.0",
-]
 
 [[package]]
 name = "string_cache"

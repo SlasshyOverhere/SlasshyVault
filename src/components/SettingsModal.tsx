@@ -25,7 +25,6 @@ import {
   Activity,
   Shield,
   Archive,
-  Bot,
   Loader2,
 } from "lucide-react";
 import {
@@ -66,8 +65,6 @@ interface SettingsModalProps {
   onLogout?: () => void;
   betaEnabled?: boolean;
   onBetaToggle?: (enabled: boolean) => void;
-  unstableEnabled?: boolean;
-  onUnstableToggle?: (enabled: boolean) => void;
   autoCheckUpdate?: boolean;
   onSimulateUpdate?: () => void;
 }
@@ -92,8 +89,6 @@ export function SettingsModal({
   onLogout,
   betaEnabled = false,
   onBetaToggle,
-  unstableEnabled = false,
-  onUnstableToggle,
   autoCheckUpdate = false,
   onSimulateUpdate,
 }: SettingsModalProps) {
@@ -268,13 +263,13 @@ export function SettingsModal({
         await invoke("plugin:autostart|enable");
         toast({
           title: "Auto Startup Enabled",
-          description: "StreamVault will now start automatically.",
+          description: "SlasshyVault will now start automatically.",
         });
       } else {
         await invoke("plugin:autostart|disable");
         toast({
           title: "Auto Startup Disabled",
-          description: "StreamVault will not start automatically.",
+          description: "SlasshyVault will not start automatically.",
         });
       }
       setAutoStart(checked);
@@ -554,7 +549,7 @@ export function SettingsModal({
                                 Run on Startup
                               </Label>
                               <p className="text-sm text-muted-foreground">
-                                Automatically start StreamVault when you log in
+                                Automatically start SlasshyVault when you log in
                               </p>
                             </div>
                           </div>
@@ -737,56 +732,6 @@ export function SettingsModal({
                         </div>
                       </div>
 
-                      {/* Master Unstable Toggle */}
-                      <div className="p-4 rounded-xl bg-card border border-amber-500/30">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-lg bg-amber-500/20">
-                              <Bot className="w-5 h-5 text-amber-300" />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <Label className="text-base font-medium">
-                                  Enable Unstable Features
-                                </Label>
-                                <span
-                                  className={cn(
-                                    "px-1.5 py-0.5 text-[10px] font-semibold rounded",
-                                    unstableEnabled
-                                      ? "bg-amber-500/20 text-amber-300"
-                                      : "bg-muted text-muted-foreground",
-                                  )}
-                                >
-                                  {unstableEnabled ? "ON" : "OFF"}
-                                </span>
-                              </div>
-                              <p className="text-sm text-muted-foreground">
-                                Toggle paused and unfinished entry points separately
-                              </p>
-                            </div>
-                          </div>
-                          <Switch
-                            checked={unstableEnabled}
-                            onCheckedChange={(checked) => {
-                              if (checked) {
-                                // TODO: Replace browser confirm() with custom modal
-                                const confirmed = window.confirm(
-                                  "Unstable Features Warning\n\n" +
-                                    "These features may be paused, incomplete, or not usable yet:\n\n" +
-                                    "\u2022 AI Chat - Temporarily paused and unavailable for now\n\n" +
-                                    "Do you want to enable unstable features?",
-                                );
-                                if (confirmed) {
-                                  onUnstableToggle?.(true);
-                                }
-                              } else {
-                                onUnstableToggle?.(false);
-                              }
-                            }}
-                          />
-                        </div>
-                      </div>
-
                       {/* Warning Banner */}
                       <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                         <div className="flex items-start gap-2">
@@ -937,55 +882,6 @@ export function SettingsModal({
 
                       </div>
 
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-                          Unstable Features
-                        </Label>
-                        {/* AI Chat */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            unstableEnabled
-                              ? "border-amber-500/25 bg-amber-500/10"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                unstableEnabled ? "bg-amber-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Bot
-                                className={cn(
-                                  "w-5 h-5",
-                                  unstableEnabled
-                                    ? "text-amber-300"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  AI Chat
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/20 text-amber-300 rounded">
-                                  PAUSED
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-red-500/15 text-red-300 rounded">
-                                  UNSTABLE
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                AI Chat is temporarily disabled. New installs and updated apps keep it hidden by default.
-                                You can still enable unstable features from this page, but AI Chat itself will remain unavailable until it returns.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
                     </motion.div>
                   )}
 
@@ -1026,7 +922,7 @@ export function SettingsModal({
                           </div>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          This will sign you out of StreamVault, disconnect your Google Drive,
+                          This will sign you out of SlasshyVault, disconnect your Google Drive,
                           and clear all locally stored tokens. You'll need to sign in again
                           to access your library.
                         </p>

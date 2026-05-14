@@ -12,7 +12,7 @@
         // This page is loaded in a hidden iframe by the Tauri app
         // It reads localStorage progress and posts it back to the parent
 
-        const STORAGE_KEY = 'streamvault_streaming_progress';
+        const STORAGE_KEY = 'slasshyvault_streaming_progress';
 
         try {
             const stored = localStorage.getItem(STORAGE_KEY);
@@ -22,13 +22,13 @@
             if (window.parent !== window) {
                 try {
                     window.parent.postMessage({
-                        type: 'streamvault_progress_sync',
+                        type: 'slasshyvault_progress_sync',
                         data: progress
                     }, 'tauri://localhost');
                 } catch (e) {
                     console.warn('[Sync] postMessage to tauri://localhost failed, falling back to *:', e);
                     window.parent.postMessage({
-                        type: 'streamvault_progress_sync',
+                        type: 'slasshyvault_progress_sync',
                         data: progress
                     }, '*');
                 }
@@ -40,14 +40,14 @@
             if (window.parent !== window) {
                 try {
                     window.parent.postMessage({
-                        type: 'streamvault_progress_sync',
+                        type: 'slasshyvault_progress_sync',
                         data: {},
                         error: e.message
                     }, 'tauri://localhost');
                 } catch (e2) {
                     console.warn('[Sync] postMessage to tauri://localhost failed, falling back to *:', e2);
                     window.parent.postMessage({
-                        type: 'streamvault_progress_sync',
+                        type: 'slasshyvault_progress_sync',
                         data: {},
                         error: e.message
                     }, '*');

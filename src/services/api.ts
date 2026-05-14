@@ -866,10 +866,10 @@ export const setPlayerPreference = (preference: PlayerPreference): void => {
   localStorage.setItem("playerPreference", preference);
 };
 
-const SERIES_AUDIO_PREFERENCE_KEY = "streamvault_series_audio_preferences";
-const SERIES_SUBTITLE_PREFERENCE_KEY = "streamvault_series_subtitle_preferences";
-const AUDIO_TRACK_CACHE_KEY = "streamvault_detected_audio_tracks_v2";
-const SUBTITLE_TRACK_CACHE_KEY = "streamvault_detected_subtitle_tracks_v1";
+const SERIES_AUDIO_PREFERENCE_KEY = "slasshyvault_series_audio_preferences";
+const SERIES_SUBTITLE_PREFERENCE_KEY = "slasshyvault_series_subtitle_preferences";
+const AUDIO_TRACK_CACHE_KEY = "slasshyvault_detected_audio_tracks_v2";
+const SUBTITLE_TRACK_CACHE_KEY = "slasshyvault_detected_subtitle_tracks_v1";
 
 function readMapFromStorage<T>(key: string): Record<string, T> {
   try {
@@ -1572,7 +1572,7 @@ export const getTmdbImageUrl = (
 
 // ==================== ONBOARDING ====================
 
-const ONBOARDING_KEY = "streamvault_onboarding_completed";
+const ONBOARDING_KEY = "slasshyvault_onboarding_completed";
 const ONBOARDING_VERSION = "1"; // Increment to show onboarding again after major updates
 
 // Check if user has completed onboarding
@@ -1605,7 +1605,7 @@ export const resetOnboarding = (): void => {
 
 // ==================== TAB VISIBILITY ====================
 
-const TAB_VISIBILITY_KEY = "streamvault_tab_visibility";
+const TAB_VISIBILITY_KEY = "slasshyvault_tab_visibility";
 
 export interface TabVisibility {
   showLocal: boolean;
@@ -1637,14 +1637,8 @@ export const setTabVisibility = (visibility: TabVisibility): void => {
 
 // ==================== BETA FEATURES ====================
 
-const BETA_FEATURES_KEY = "streamvault_beta_features";
-const UNSTABLE_FEATURES_KEY = "streamvault_unstable_features";
-
+const BETA_FEATURES_KEY = "slasshyvault_beta_features";
 export interface BetaFeatures {
-  enabled: boolean;
-}
-
-export interface UnstableFeatures {
   enabled: boolean;
 }
 
@@ -1668,29 +1662,6 @@ export const setBetaEnabled = (enabled: boolean): void => {
     localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
   } catch (error) {
     console.error("Failed to save beta features state:", error);
-  }
-};
-
-// Check if unstable features are enabled
-export const isUnstableEnabled = (): boolean => {
-  try {
-    const stored = localStorage.getItem(UNSTABLE_FEATURES_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as UnstableFeatures;
-      return parsed.enabled === true;
-    }
-  } catch (error) {
-    console.error("Failed to get unstable features state:", error);
-  }
-  return false;
-};
-
-// Enable or disable unstable features
-export const setUnstableEnabled = (enabled: boolean): void => {
-  try {
-    localStorage.setItem(UNSTABLE_FEATURES_KEY, JSON.stringify({ enabled }));
-  } catch (error) {
-    console.error("Failed to save unstable features state:", error);
   }
 };
 

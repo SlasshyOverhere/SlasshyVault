@@ -21,7 +21,7 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
                 Create Compatible ZIP Archives
               </h2>
               <p className="text-sm text-muted-foreground">
-                StreamVault can index episodes directly inside ZIP archives.
+                SlasshyVault can index episodes directly inside ZIP archives.
                 Store archives open fastest, while Deflate archives are
                 extracted into a managed playback cache.
               </p>
@@ -73,7 +73,7 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
                 <Info className="mt-0.5 h-4 w-4 text-white" />
                 <p className="text-sm text-muted-foreground">
                   Larger Store ZIPs use more Google Drive space, but they start
-                  fastest because StreamVault can stream them directly without
+                  fastest because SlasshyVault can stream them directly without
                   extracting the whole episode first.
                 </p>
               </div>

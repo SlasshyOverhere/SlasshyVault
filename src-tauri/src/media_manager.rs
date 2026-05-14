@@ -1355,7 +1355,7 @@ mod tests {
         // Case 1: Recursive cleanup
         let mut temp_dir = env::temp_dir();
         let uuid = uuid::Uuid::new_v4().to_string();
-        temp_dir.push(format!("streamvault_test_{}", uuid));
+        temp_dir.push(format!("slasshyvault_test_{}", uuid));
 
         let parent = temp_dir.join("parent");
         let child = parent.join("child");
@@ -1379,7 +1379,7 @@ mod tests {
         // Case 2: Cleanup stops at non-empty dir
         let mut temp_dir2 = env::temp_dir();
         let uuid2 = uuid::Uuid::new_v4().to_string();
-        temp_dir2.push(format!("streamvault_test_2_{}", uuid2));
+        temp_dir2.push(format!("slasshyvault_test_2_{}", uuid2));
 
         let parent2 = temp_dir2.join("parent");
         let child2 = parent2.join("child");

@@ -48,8 +48,6 @@ import {
   markAsComplete,
   isBetaEnabled,
   setBetaEnabled,
-  isUnstableEnabled,
-  setUnstableEnabled,
   checkForUpdates,
   downloadUpdate,
   installUpdate,
@@ -70,9 +68,9 @@ import {
   openDownloadJobTarget,
 } from '@/services/api'
 import {
-  Search, Loader2, Play, Film, Tv, Clock,
+  Search, Loader2, Film, Tv,
   ChevronRight, LayoutGrid, List,
-  TrendingUp, BarChart3, Calendar, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
+  TrendingUp, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
   Maximize2, Minimize2, Archive
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -91,7 +89,7 @@ import {
   waitForMpvPlaybackStart,
   waitForZipLoadingOverlayPaint,
 } from '@/utils/zipPlayback'
-import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
+import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -102,18 +100,15 @@ import { Button } from '@/components/ui/button'
 const loadSettingsModal = () => import('@/components/SettingsModal')
 const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
 const loadSocialView = () => import('@/components/Social')
-const loadAIChatView = () => import('@/components/AI/AIChatView')
 const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
 const loadFixMatchModal = () => import('@/components/FixMatchModal')
 
 const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
 const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
 const SocialView = lazy(() => loadSocialView().then(module => ({ default: module.SocialView })))
-const AIChatView = lazy(() => loadAIChatView().then(module => ({ default: module.AIChatView })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 
-const AI_CHAT_PAUSED = import.meta.env.VITE_AI_CHAT_PAUSED === 'true'
 
 
 interface ScanProgressPayload {
@@ -182,7 +177,7 @@ interface AppNotificationItem {
   read: boolean
 }
 
-const NOTIFICATION_CENTER_STORAGE_KEY = 'streamvault.notification-center.v1'
+const NOTIFICATION_CENTER_STORAGE_KEY = 'slasshyvault.notification-center.v1'
 const MAX_NOTIFICATION_CENTER_ITEMS = 200
 const TV_EPISODE_NOTIFICATION_PATTERN = /\bS\d{1,2}E\d{1,3}\b/i
 
@@ -221,7 +216,7 @@ type MediaSubTab = 'movies' | 'tv'
 const LARGE_LIBRARY_THRESHOLD = 120
 const CLOUD_INITIAL_RENDER_COUNT = 48
 const CLOUD_CHUNK_RENDER_COUNT = 96
-const VIEW_MODE_STORAGE_KEY = 'streamvault.view_mode'
+const VIEW_MODE_STORAGE_KEY = 'slasshyvault.view_mode'
 
 const LoadingFallback = () => (
   <div className="flex h-full w-full items-center justify-center min-h-[50vh]">
@@ -230,6 +225,38 @@ const LoadingFallback = () => (
 )
 
 function App() {
+  // Migrate old localStorage keys
+  useEffect(() => {
+    if (localStorage.getItem('slasshyvault_migration_done')) return;
+
+    const keyMap: Record<string, string> = {
+      'streamvault.notification-center.v1': 'slasshyvault.notification-center.v1',
+      'streamvault.view_mode': 'slasshyvault.view_mode',
+      'streamvault_streaming_progress': 'slasshyvault_streaming_progress',
+      'streamvault_social': 'slasshyvault_social',
+      'streamvault_profile_cache': 'slasshyvault_profile_cache',
+      'streamvault_social_last_sync': 'slasshyvault_social_last_sync',
+      'streamvault_social_synced_activity_keys': 'slasshyvault_social_synced_activity_keys',
+      'streamvault_dev_settings': 'slasshyvault_dev_settings',
+      'streamvault_detected_audio_tracks_v2': 'slasshyvault_detected_audio_tracks_v2',
+      'streamvault_detected_subtitle_tracks_v1': 'slasshyvault_detected_subtitle_tracks_v1',
+      'streamvault_onboarding_completed': 'slasshyvault_onboarding_completed',
+      'streamvault_tab_visibility': 'slasshyvault_tab_visibility',
+      'streamvault_beta_features': 'slasshyvault_beta_features',
+
+    };
+
+    for (const [oldKey, newKey] of Object.entries(keyMap)) {
+      const value = localStorage.getItem(oldKey);
+      if (value !== null) {
+        localStorage.setItem(newKey, value);
+        localStorage.removeItem(oldKey);
+      }
+    }
+
+    localStorage.setItem('slasshyvault_migration_done', 'true');
+  }, [])
+
   // Search and View state
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [view, setView] = useState<string>('home')
@@ -347,8 +374,6 @@ function App() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
-  const [aiLaunchRequest, setAiLaunchRequest] = useState<{ item: MediaItem; nonce: number } | null>(null)
-
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
 
@@ -517,7 +542,6 @@ function App() {
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(false)
-  const [unstableEnabled, setUnstableEnabledState] = useState(false)
 
   // Update notification state
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -539,7 +563,6 @@ function App() {
   // Initialize beta features
   useEffect(() => {
     setBetaEnabledState(isBetaEnabled())
-    setUnstableEnabledState(isUnstableEnabled())
   }, [])
 
   const formatUpdateError = (error: unknown) => {
@@ -646,27 +669,6 @@ function App() {
         : "Watch Together and Social features are now hidden"
     })
   }
-
-  const handleUnstableToggle = (enabled: boolean) => {
-    setUnstableEnabled(enabled)
-    setUnstableEnabledState(enabled)
-    if (!enabled && view === 'ai') {
-      setView('home')
-    }
-    toast({
-      title: enabled ? "Unstable Features Enabled" : "Unstable Features Disabled",
-      description: enabled
-        ? "Paused AI Chat entry points are now visible"
-        : "AI Chat is now hidden again"
-    })
-  }
-
-  const handleAiChatPaused = useCallback(() => {
-    toast({
-      title: "AI Chat Paused",
-      description: "AI Chat is temporarily disabled and will return shortly in a future update.",
-    })
-  }, [toast])
 
   const handleOnboardingComplete = () => {
     completeOnboarding()
@@ -1207,7 +1209,7 @@ function App() {
   }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, loadDownloadQueue, runWatchHistorySync, pushNotification, toast])
 
   useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'stats' && view !== 'social' && view !== 'ai' && view !== 'reminders' && view !== 'downloads') {
+    if (view !== 'episodes' && view !== 'home' && view !== 'social' && view !== 'reminders' && view !== 'downloads') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
@@ -1468,27 +1470,11 @@ function App() {
     setFixMatchOpen(true)
   }, [])
 
-  const handleAskAiFromContent = useCallback((item: MediaItem) => {
-    if (!unstableEnabled || AI_CHAT_PAUSED) {
-      handleAiChatPaused()
-      return
-    }
-    setAiLaunchRequest({
-      item,
-      nonce: Date.now(),
-    })
-    setView('ai')
-    toast({
-      title: "Opening AI Chat",
-      description: `Fetching insights for "${item.title}"...`,
-    })
-  }, [unstableEnabled, handleAiChatPaused, toast])
-
   const handleStartDownload = useCallback(async (item: MediaItem) => {
     if (!item.is_cloud) {
       toast({
         title: 'Download unavailable',
-        description: 'Direct downloads are available for StreamVault cloud items.',
+        description: 'Direct downloads are available for SlasshyVault cloud items.',
         variant: 'destructive',
       })
       return
@@ -1569,12 +1555,6 @@ function App() {
       })
     }
   }, [toast])
-
-  useEffect(() => {
-    if (view === 'ai' && (!unstableEnabled || AI_CHAT_PAUSED)) {
-      setView('home')
-    }
-  }, [view, unstableEnabled])
 
   const handleFixMatchSuccess = useCallback(async () => {
     const fixedItem = itemToFix
@@ -1862,7 +1842,7 @@ function App() {
                 <Download className="w-5 h-5 text-neutral-200" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">Updating StreamVault</h2>
+                <h2 className="text-lg font-semibold text-white">Updating SlasshyVault</h2>
                 <p className="text-sm text-neutral-400">
                   {updateInfo?.latest_version ? `v${updateInfo.latest_version}` : 'Checking version...'}
                 </p>
@@ -1907,7 +1887,7 @@ function App() {
                     {updateGateStatus === 'error' ? 'Update Failed' : 'Update Available'}
                   </h2>
                   <p className="text-xs text-neutral-400">
-                    {updateInfo?.latest_version ? `v${updateInfo.latest_version}` : 'StreamVault update'}
+                    {updateInfo?.latest_version ? `v${updateInfo.latest_version}` : 'SlasshyVault update'}
                   </p>
                 </div>
                 <button
@@ -1985,13 +1965,13 @@ function App() {
               <div className="flex items-center gap-2 pl-3 select-none">
                 <img
                   data-tauri-drag-region
-                  src={streamvaultIcon}
+                  src={slasshyvaultIcon}
                   alt=""
                   draggable={false}
                   className="pointer-events-none h-4 w-4 object-contain"
                 />
                 <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
-                  StreamVault
+                  SlasshyVault
                 </span>
               </div>
               <div className="flex items-center gap-1 pr-1.5">
@@ -2116,10 +2096,7 @@ function App() {
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
             betaEnabled={betaEnabled}
-            unstableEnabled={unstableEnabled}
-            aiChatPaused={AI_CHAT_PAUSED}
             downloadJobCount={downloadJobs.filter((job) => job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled').length}
-            onAiChatClick={handleAiChatPaused}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
@@ -2309,37 +2286,19 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-            ) : (view === 'ai' && unstableEnabled && !AI_CHAT_PAUSED) || view === 'reminders' ? (
+            ) : view === 'reminders' ? (
               <div className="flex-1 overflow-hidden">
                 <div className="h-full min-h-0">
                   <AnimatePresence mode="wait">
-                    {view === 'ai' ? (
-                      <motion.div
-                        key="ai"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="h-full"
-                      >
-                        <Suspense fallback={<LoadingFallback />}>
-                          <AIChatView
-                            launchItem={aiLaunchRequest?.item || null}
-                            launchNonce={aiLaunchRequest?.nonce || 0}
-                            onLaunchHandled={() => setAiLaunchRequest(null)}
-                          />
-                        </Suspense>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="reminders"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="h-full"
-                      >
-                        <RemindersView />
-                      </motion.div>
-                    )}
+                    <motion.div
+                      key="reminders"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full"
+                    >
+                      <RemindersView />
+                    </motion.div>
                   </AnimatePresence>
                 </div>
               </div>
@@ -2627,199 +2586,6 @@ function App() {
                       </motion.div>
                     )}
 
-                    {/* Statistics View */}
-                    {view === 'stats' && (
-                      <motion.div
-                        key="stats"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="space-y-8"
-                      >
-                        {/* Stats Header */}
-                        <motion.div
-                          className="text-center mb-8"
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                        >
-                          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-white text-sm font-medium mb-3">
-                            <TrendingUp className="w-4 h-4" />
-                            <span>Your Activity</span>
-                          </div>
-                          <h2 className="text-2xl font-bold text-foreground">Library Overview</h2>
-                          <p className="text-muted-foreground mt-1">Track your watching progress</p>
-                        </motion.div>
-
-                        {/* Main Stats Grid */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                          {/* Movies */}
-                          <motion.div
-                            className="stat-card-enhanced"
-                            style={{ '--stat-color': 'hsl(0 0% 70%)' } as React.CSSProperties}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.1 }}
-                            whileHover={{ scale: 1.02 }}
-                          >
-                            <div className="flex items-start justify-between mb-3">
-                              <div
-                                className="stat-icon-wrapper"
-                                style={{ '--icon-color': 'hsl(0 0% 70%)' } as React.CSSProperties}
-                              >
-                                <Film className="w-6 h-6 text-white" />
-                              </div>
-                            </div>
-                            <div className="text-4xl font-bold text-foreground mb-1">{libraryStats.movies}</div>
-                            <div className="text-sm text-muted-foreground">Total Movies</div>
-                          </motion.div>
-
-                          {/* TV Shows */}
-                          <motion.div
-                            className="stat-card-enhanced"
-                            style={{ '--stat-color': 'hsl(0 0% 60%)' } as React.CSSProperties}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.15 }}
-                            whileHover={{ scale: 1.02 }}
-                          >
-                            <div className="flex items-start justify-between mb-3">
-                              <div
-                                className="stat-icon-wrapper"
-                                style={{ '--icon-color': 'hsl(0 0% 60%)' } as React.CSSProperties}
-                              >
-                                <Tv className="w-6 h-6 text-white" />
-                              </div>
-                            </div>
-                            <div className="text-4xl font-bold text-foreground mb-1">{libraryStats.shows}</div>
-                            <div className="text-sm text-muted-foreground">Total TV Shows</div>
-                          </motion.div>
-
-                          {/* In Progress */}
-                          <motion.div
-                            className="stat-card-enhanced"
-                            style={{ '--stat-color': 'hsl(0 0% 50%)' } as React.CSSProperties}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.2 }}
-                            whileHover={{ scale: 1.02 }}
-                          >
-                            <div className="flex items-start justify-between mb-3">
-                              <div
-                                className="stat-icon-wrapper"
-                                style={{ '--icon-color': 'hsl(0 0% 50%)' } as React.CSSProperties}
-                              >
-                                <Clock className="w-6 h-6 text-gray-400" />
-                              </div>
-                            </div>
-                            <div className="text-4xl font-bold text-foreground mb-1">{continueWatching.length}</div>
-                            <div className="text-sm text-muted-foreground">In Progress</div>
-                          </motion.div>
-
-                          {/* Items Watched */}
-                          <motion.div
-                            className="stat-card-enhanced"
-                            style={{ '--stat-color': 'hsl(0 0% 55%)' } as React.CSSProperties}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.25 }}
-                            whileHover={{ scale: 1.02 }}
-                          >
-                            <div className="flex items-start justify-between mb-3">
-                              <div
-                                className="stat-icon-wrapper"
-                                style={{ '--icon-color': 'hsl(0 0% 55%)' } as React.CSSProperties}
-                              >
-                                <TrendingUp className="w-6 h-6 text-gray-400" />
-                              </div>
-                            </div>
-                            <div className="text-4xl font-bold text-foreground mb-1">{items.length}</div>
-                            <div className="text-sm text-muted-foreground">Items Watched</div>
-                          </motion.div>
-                        </div>
-
-                        {/* Recent Activity */}
-                        {continueWatching.length > 0 && (
-                          <motion.section
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.3 }}
-                          >
-                            <div className="section-header">
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 rounded-xl bg-white/10">
-                                  <Calendar className="w-5 h-5 text-white" />
-                                </div>
-                                <div>
-                                  <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
-                                  <p className="text-xs text-muted-foreground">Your recent watches</p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="space-y-3">
-                              {continueWatching.slice(0, 5).map((item, index) => (
-                                <motion.div
-                                  key={item.id}
-                                  initial={{ opacity: 0, x: -20 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  transition={{ delay: 0.3 + index * 0.05 }}
-                                  onClick={() => handleItemClick(item)}
-                                  className="list-item-interactive group"
-                                >
-                                  <div className="w-14 h-20 rounded-lg bg-muted overflow-hidden flex-shrink-0">
-                                    {item.poster_path && (
-                                      <img
-                                        src={item.poster_path}
-                                        alt={item.title}
-                                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                                      />
-                                    )}
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <h4 className="font-semibold text-foreground truncate group-hover:text-white transition-colors">
-                                      {item.title}
-                                    </h4>
-                                    <div className="flex items-center gap-3 mt-1">
-                                      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden max-w-32">
-                                        <div
-                                          className="h-full bg-white rounded-full"
-                                          style={{ width: `${item.progress_percent || 0}%` }}
-                                        />
-                                      </div>
-                                      <span className="text-sm text-muted-foreground">
-                                        {Math.round(item.progress_percent || 0)}%
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="p-2 rounded-full bg-muted/50 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Play className="w-5 h-5 text-white" />
-                                  </div>
-                                </motion.div>
-                              ))}
-                            </div>
-                          </motion.section>
-                        )}
-
-                        {/* Empty state for stats */}
-                        {continueWatching.length === 0 && libraryStats.movies === 0 && libraryStats.shows === 0 && (
-                          <motion.div
-                            className="empty-state-enhanced flex flex-col items-center text-center min-h-[40vh] justify-center"
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                          >
-                            <div className="icon-wrapper mb-4">
-                              <div className="icon-bg">
-                                <BarChart3 className="w-10 h-10 text-muted-foreground" />
-                              </div>
-                            </div>
-                            <h3 className="text-xl font-semibold text-foreground mb-2 text-center">No activity yet</h3>
-                            <p className="text-muted-foreground max-w-sm text-center mx-auto">
-                              Start watching content to see your statistics here
-                            </p>
-                          </motion.div>
-                        )}
-                      </motion.div>
-                    )}
-
 
 
                     {/* Social View - Only visible when beta is enabled */}
@@ -2895,7 +2661,6 @@ function App() {
                           onDownload={handleStartDownload}
                           onDelete={handleDelete}
                           onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
-                          onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
                         />
                       </motion.div>
                     )}
@@ -2919,7 +2684,6 @@ function App() {
                               onClick={handleItemClick}
                               onFixMatch={handleFixMatch}
                               onDownload={handleStartDownload}
-                              onAskAI={unstableEnabled ? handleAskAiFromContent : undefined}
                               onDelete={handleDelete}
                               onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                             />
@@ -3110,8 +2874,6 @@ function App() {
               onLogout={handleLogout}
             betaEnabled={betaEnabled}
             onBetaToggle={handleBetaToggle}
-            unstableEnabled={unstableEnabled}
-            onUnstableToggle={handleUnstableToggle}
           />
           </Suspense>
 

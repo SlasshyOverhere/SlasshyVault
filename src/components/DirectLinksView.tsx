@@ -117,7 +117,6 @@ interface DirectLinksViewProps {
   onDownload?: (item: ApiMediaItem) => void | Promise<void>
   onDelete?: (item: ApiMediaItem) => void
   onWatchTogether?: (item: ApiMediaItem) => void
-  onAskAI?: (item: ApiMediaItem) => void
 }
 
 export default function DirectLinksView({
@@ -128,7 +127,6 @@ export default function DirectLinksView({
   onDownload,
   onDelete,
   onWatchTogether,
-  onAskAI,
 }: DirectLinksViewProps) {
   const { toast } = useToast()
   const [sources, setSources] = useState<DdlSource[]>([])
@@ -496,7 +494,6 @@ export default function DirectLinksView({
             onDownload={onDownload}
             onDelete={onDelete}
             onWatchTogether={onWatchTogether}
-            onAskAI={onAskAI}
           />
         </div>
       </div>

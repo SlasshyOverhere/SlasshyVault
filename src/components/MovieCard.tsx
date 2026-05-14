@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Download } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
 import { motion } from "framer-motion"
@@ -19,7 +19,6 @@ export interface MovieCardProps {
   onRemoveFromHistory?: (item: MediaItem) => void
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
-  onAskAI?: (item: MediaItem) => void
   onDownload?: (item: MediaItem) => void
   showNewBadge?: boolean
   disableEntryAnimation?: boolean
@@ -48,7 +47,6 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     prev.onRemoveFromHistory !== next.onRemoveFromHistory ||
     prev.onDelete !== next.onDelete ||
     prev.onWatchTogether !== next.onWatchTogether ||
-    prev.onAskAI !== next.onAskAI ||
     prev.onDownload !== next.onDownload ||
     prev.showNewBadge !== next.showNewBadge ||
     prev.disableEntryAnimation !== next.disableEntryAnimation
@@ -93,7 +91,6 @@ function MovieCardBase({
   onRemoveFromHistory,
   onDelete,
   onWatchTogether,
-  onAskAI,
   onDownload,
   showNewBadge = false,
   disableEntryAnimation = false,
@@ -290,19 +287,6 @@ function MovieCardBase({
               </div>
               <span>Fix Match</span>
             </ContextMenuItem>
-
-            {onAskAI && item.is_cloud && (
-              <ContextMenuItem
-                onClick={() => onAskAI(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
-                aria-label="Ask AI about this title"
-              >
-                <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-amber-300" />
-                </div>
-                <span>Ask AI (New)</span>
-              </ContextMenuItem>
-            )}
 
             {onDownload && item.is_cloud && (
               <ContextMenuItem
@@ -554,28 +538,6 @@ function MovieCardBase({
                       <Download className="w-4 h-4" />
                     </button>
                   )}
-                  {onAskAI && item.is_cloud && (
-                    <button
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onAskAI(item);
-                      }}
-                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-white/45 text-amber-200 hover:text-amber-100 hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
-                      title="Ask AI about this title"
-                      aria-label={`Ask AI about ${item.title}`}
-                    >
-                      <Bot className="w-4 h-4" />
-                    </button>
-                  )}
                 </motion.div>
               </div>
 
@@ -674,19 +636,6 @@ function MovieCardBase({
           </div>
           <span>Fix Match</span>
         </ContextMenuItem>
-
-        {onAskAI && item.is_cloud && (
-          <ContextMenuItem
-            onClick={() => onAskAI(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
-            aria-label="Ask AI about this title"
-          >
-            <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
-              <Bot className="w-4 h-4 text-amber-300" />
-            </div>
-            <span>Ask AI (New)</span>
-          </ContextMenuItem>
-        )}
 
         {onDownload && item.is_cloud && (
           <ContextMenuItem
