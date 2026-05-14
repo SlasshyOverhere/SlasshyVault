@@ -415,11 +415,8 @@ function MovieCardBase({
               isHovered && "border-white/30"
             )}
             animate={enableMotionEffects
-              ? {
-                y: isHovered ? -6 : 0,
-              }
+              ? {}
               : undefined}
-            transition={enableMotionEffects ? { duration: 0.4, ease: [0.22, 1, 0.36, 1] } : undefined}
             style={{
               boxShadow: isHovered
                 ? '0 20px 42px -14px rgba(0,0,0,0.58), 0 0 32px -12px rgba(255, 255, 255, 0.16)'
@@ -848,7 +845,6 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
           isHovered && "border-white/25"
         )}
         animate={{
-          y: isHovered ? -6 : 0,
           scale: isHovered ? 1.02 : 1,
         }}
         transition={{ duration: 0.35 }}

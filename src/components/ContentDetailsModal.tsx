@@ -1084,6 +1084,7 @@ export function ContentDetailsModal({
         />
       </DialogPortal>
       <DialogContent
+        onInteractOutside={(e) => e.preventDefault()}
         className="max-w-[1080px] w-[96vw] max-h-[92vh] h-auto bg-[#090a0d] border-white/10 text-white p-0 overflow-hidden flex flex-col shadow-2xl [&>button]:z-[100] [&>button]:bg-black/50 [&>button]:rounded-full [&>button]:p-1.5 [&>button]:hover:bg-black/80"
       >
         <DialogTitle className="sr-only">{displayTitle}</DialogTitle>
@@ -1096,11 +1097,14 @@ export function ContentDetailsModal({
           {/* Hero Backdrop */}
           <div className="absolute inset-0 z-0">
             {heroImageUrl ? (
-              <img 
-                src={heroImageUrl} 
-                alt={displayTitle + " poster"}
-                className="w-full h-full object-cover opacity-60 transition-opacity duration-500" 
-              />
+              <>
+                <img 
+                  src={heroImageUrl} 
+                  alt={displayTitle + " poster"}
+                  className="w-full h-full object-cover transition-opacity duration-500" 
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#090a0d] via-[#090a0d]/85 to-black/60 backdrop-blur-[1px]" />
+              </>
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-[#11141d] to-[#07080b]" />
             )}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Cloud, LogIn, LogOut, Loader2, CheckCircle2, HardDrive, User, AlertCircle } from 'lucide-react'
+import { Cloud, LogIn, LogOut, Loader2, CheckCircle2, HardDrive, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -222,20 +222,6 @@ export function GoogleDriveSettings() {
                 </div>
             </motion.div>
 
-            {/* Info Note */}
-            {isConnected && (
-                <div className="flex items-start gap-3 p-4 rounded-xl bg-white/5 border border-white/20">
-                    <AlertCircle className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
-                    <div className="text-sm text-muted-foreground">
-                        <p className="font-medium text-white mb-1">How to index your drive</p>
-                        <ul className="list-disc list-inside space-y-1">
-                            <li>Click "Index Drive" in the sidebar to scan your entire Google Drive</li>
-                            <li>Movies and TV shows will be automatically detected</li>
-                            <li>Videos are streamed directly - no downloads needed</li>
-                        </ul>
-                    </div>
-                </div>
-            )}
         </div>
     )
 }

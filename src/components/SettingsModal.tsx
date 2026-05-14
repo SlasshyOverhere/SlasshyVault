@@ -26,6 +26,7 @@ import {
   Shield,
   Archive,
   Bot,
+  Loader2,
 } from "lucide-react";
 import {
   Config,
@@ -73,6 +74,7 @@ interface SettingsModalProps {
 
 type SettingsSection =
   | "general"
+  | "account"
   | "beta"
   | "updates"
   | "cloud"
@@ -114,6 +116,8 @@ export function SettingsModal({
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("general");
   const [appVersion, setAppVersion] = useState<string>("");
@@ -439,13 +443,18 @@ export function SettingsModal({
   }[] = [
     { id: "general", label: "General", icon: <Settings className="w-4 h-4" /> },
     {
+      id: "account",
+      label: "Account",
+      icon: <Power className="w-4 h-4" />,
+    },
+    {
       id: "updates",
       label: "Updates",
       icon: <Shield className="w-4 h-4" />,
     },
     {
       id: "cloud",
-      label: "Cloud Storage",
+      label: "Cache & Storage",
       icon: <Cloud className="w-4 h-4" />,
     },
     { id: "api", label: "API Keys", icon: <Key className="w-4 h-4" /> },
@@ -470,7 +479,7 @@ export function SettingsModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <>
-        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden">
+        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
           <div className="flex flex-1 min-h-0">
             {/* Sidebar */}
             <div className="w-40 sm:w-48 md:w-56 flex-shrink-0 bg-card/50 border-r border-border p-3 sm:p-4 overflow-y-auto">
@@ -980,6 +989,105 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
+                  {/* ===== Account ===== */}
+                  {activeSection === "account" && (
+                    <motion.div
+                      key="account"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Account
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Manage your Google account connection
+                        </p>
+                      </div>
+
+                      {/* Google Drive connection card */}
+                      <GoogleDriveSettings />
+
+                      {/* Logout */}
+                      <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-red-500/20">
+                            <Power className="w-5 h-5 text-red-400" />
+                          </div>
+                          <div>
+                            <p className="text-base font-medium">
+                              Sign Out
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              Disconnect your Google account and clear all stored data
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          This will sign you out of StreamVault, disconnect your Google Drive,
+                          and clear all locally stored tokens. You'll need to sign in again
+                          to access your library.
+                        </p>
+
+                        {!showLogoutConfirm ? (
+                          <Button
+                            variant="destructive"
+                            onClick={() => setShowLogoutConfirm(true)}
+                            className="w-full"
+                          >
+                            <Power className="mr-2 h-4 w-4" />
+                            Sign Out
+                          </Button>
+                        ) : (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-medium text-destructive text-center">
+                              Are you sure you want to sign out? This will clear all
+                              locally stored credentials.
+                            </p>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => setShowLogoutConfirm(false)}
+                                className="flex-1"
+                                disabled={loggingOut}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={async () => {
+                                  setLoggingOut(true)
+                                  try {
+                                    if (onLogout) {
+                                      onLogout()
+                                      onOpenChange(false)
+                                    }
+                                  } finally {
+                                    setLoggingOut(false)
+                                    setShowLogoutConfirm(false)
+                                  }
+                                }}
+                                className="flex-1"
+                                disabled={loggingOut}
+                              >
+                                {loggingOut ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    Signing Out...
+                                  </>
+                                ) : (
+                                  "Yes, Sign Out"
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
                   {/* ===== Updates & Security ===== */}
                   {activeSection === "updates" && (
                     <motion.div
@@ -1086,7 +1194,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* ===== Cloud Storage ===== */}
+                  {/* ===== Cache and Storage ===== */}
                   {activeSection === "cloud" && (
                     <motion.div
                       key="cloud"
@@ -1095,8 +1203,6 @@ export function SettingsModal({
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <GoogleDriveSettings />
-
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
@@ -1121,12 +1227,6 @@ export function SettingsModal({
                               })
                             }
                           />
-                        </div>
-
-                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
-                          Store and Deflate ZIP entries are supported.
-                          Compressed episodes are extracted into a bounded cache
-                          for faster replay and stable seeking in MPV.
                         </div>
 
                         <div className="grid gap-4 md:grid-cols-2">
@@ -1205,15 +1305,6 @@ export function SettingsModal({
                             </p>
                           </div>
                         </div>
-
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowZipGuide(true)}
-                          className="gap-2"
-                        >
-                          <Archive className="w-4 h-4" />
-                          View ZIP Creation Guide
-                        </Button>
                       </div>
                     </motion.div>
                   )}

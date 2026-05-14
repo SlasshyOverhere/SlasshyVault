@@ -83,14 +83,12 @@
     letter-spacing: -0.01em;
   }
 
-  body:not(.app-window-maximized),
-  body:not(.app-window-maximized) #root {
+  body:not(.app-window-maximized) {
     border-radius: 10px;
     clip-path: inset(0 round 10px);
   }
 
-  body.app-window-maximized,
-  body.app-window-maximized #root {
+  body.app-window-maximized {
     border-radius: 0;
     clip-path: none;
   }

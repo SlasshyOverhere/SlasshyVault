@@ -413,7 +413,7 @@ function App() {
   } | null>(null)
 
   // Authentication state
-  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, nickname, nicknameLoaded, updateNickname } = useAuth()
+  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, nickname, nicknameLoaded, updateNickname, showIndexingPrompt, isIndexing, confirmIndexing, declineIndexing } = useAuth()
   const [showNicknameModal, setShowNicknameModal] = useState(false)
   const [tempNickname, setTempNickname] = useState('')
 
@@ -1811,6 +1811,49 @@ function App() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Indexing confirmation dialog for first-time users */}
+      <Dialog open={showIndexingPrompt} onOpenChange={declineIndexing}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Index Your Google Drive?</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-muted-foreground">
+              Would you like to scan your Google Drive and index all media files
+              (movies, TV shows)? This will add them to your library so you can
+              browse and stream them directly.
+            </p>
+            <p className="text-xs text-muted-foreground/70">
+              You can always index your Drive later from Settings &rarr; Cloud Storage.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={declineIndexing}
+                disabled={isIndexing}
+              >
+                Skip
+              </Button>
+              <Button
+                onClick={confirmIndexing}
+                disabled={isIndexing}
+                className="gap-2"
+              >
+                {isIndexing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Indexing...
+                  </>
+                ) : (
+                  "Yes, Index My Drive"
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {isUpdateGateActive && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-lg mx-4 rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-6">

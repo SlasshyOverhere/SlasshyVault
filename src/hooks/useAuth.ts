@@ -37,6 +37,8 @@ export function useAuth() {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [nickname, setNickname] = useState<string | null>(null)
   const [nicknameLoaded, setNicknameLoaded] = useState(false)
+  const [showIndexingPrompt, setShowIndexingPrompt] = useState(false)
+  const [isIndexing, setIsIndexing] = useState(false)
   const isMountedRef = useRef(true)
   const initialScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
@@ -163,18 +165,32 @@ export function useAuth() {
 
           void autoDetectMpvIfUnconfigured()
 
-          // Trigger initial cloud scan to set up folders
-          if (initialScanTimeoutRef.current) {
-            clearTimeout(initialScanTimeoutRef.current)
-          }
-          initialScanTimeoutRef.current = setTimeout(async () => {
-            try {
-              const { scanCloudFolder } = await import('@/services/gdrive')
-              await scanCloudFolder('root', 'My Drive')
-            } catch (scanError) {
-              console.warn('[useAuth] Initial scan failed:', scanError)
+          // Check if first-time user (no cloud folders tracked)
+          try {
+            const { getCloudFolders } = await import('@/services/gdrive')
+            const folders = await getCloudFolders()
+            if (folders.length === 0) {
+              // First-time user — show indexing prompt
+              if (isMountedRef.current) {
+                setShowIndexingPrompt(true)
+              }
+            } else {
+              // Returning user — trigger initial cloud scan
+              if (initialScanTimeoutRef.current) {
+                clearTimeout(initialScanTimeoutRef.current)
+              }
+              initialScanTimeoutRef.current = setTimeout(async () => {
+                try {
+                  const { scanCloudFolder } = await import('@/services/gdrive')
+                  await scanCloudFolder('root', 'My Drive')
+                } catch (scanError) {
+                  console.warn('[useAuth] Initial scan failed:', scanError)
+                }
+              }, 1000)
             }
-          }, 1000)
+          } catch (checkError) {
+            console.warn('[useAuth] Failed to check cloud folders:', checkError)
+          }
         } else {
           throw new Error('OAuth completed but GDrive not connected')
         }
@@ -218,6 +234,44 @@ export function useAuth() {
     }
   }
 
+  const confirmIndexing = async () => {
+    setIsIndexing(true)
+    try {
+      const { scanCloudFolder } = await import('@/services/gdrive')
+      const result = await scanCloudFolder('root', 'My Drive')
+      if (isMountedRef.current) {
+        toast({
+          title: "Drive Indexed",
+          description: result.message || `Indexed ${result.indexed_count} files`
+        })
+      }
+    } catch (error) {
+      console.error('[useAuth] Indexing failed:', error)
+      if (isMountedRef.current) {
+        toast({
+          title: "Indexing Failed",
+          description: "Could not index your Google Drive",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsIndexing(false)
+        setShowIndexingPrompt(false)
+      }
+    }
+  }
+
+  const declineIndexing = () => {
+    if (isMountedRef.current) {
+      setShowIndexingPrompt(false)
+      toast({
+        title: "Skipped",
+        description: "You can index your Drive later from Settings"
+      })
+    }
+  }
+
   useEffect(() => {
     if (!isAuthenticated) {
       setNickname(null)
@@ -256,6 +310,10 @@ export function useAuth() {
     logout,
     nickname,
     nicknameLoaded,
-    updateNickname
+    updateNickname,
+    showIndexingPrompt,
+    isIndexing,
+    confirmIndexing,
+    declineIndexing
   }
 }
