@@ -697,6 +697,31 @@ async fn gdrive_get_file_metadata(
     state.gdrive_client.get_file_metadata(&file_id).await
 }
 
+/// Share a Google Drive file with a user by email
+#[derive(serde::Serialize)]
+struct ShareResult {
+    success: bool,
+    message: String,
+}
+
+#[tauri::command]
+async fn gdrive_share_file(
+    state: State<'_, AppState>,
+    file_id: String,
+    email: String,
+    role: Option<String>,
+) -> Result<ShareResult, String> {
+    let role = role.unwrap_or_else(|| "reader".to_string());
+    state
+        .gdrive_client
+        .create_permission(&file_id, &email, &role)
+        .await?;
+    Ok(ShareResult {
+        success: true,
+        message: format!("Successfully shared with {}", email),
+    })
+}
+
 /// Cloud folder info for indexing
 #[derive(serde::Deserialize)]
 struct CloudFolderInfo {
@@ -13200,6 +13225,7 @@ fn main() {
             gdrive_list_video_files,
             gdrive_get_stream_url,
             gdrive_get_file_metadata,
+            gdrive_share_file,
             gdrive_scan_folder,
             gdrive_delete_folder_media,
             // Cloud folder management

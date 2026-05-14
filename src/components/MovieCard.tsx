@@ -265,19 +265,6 @@ function MovieCardBase({
           {/* Context Menu */}
           <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <ContextMenuItem
-              onClick={() => onClick(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-              aria-label="Open details"
-            >
-              <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-                <Play className="w-4 h-4 text-white" />
-              </div>
-              <span>Open Details</span>
-            </ContextMenuItem>
-
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-
-            <ContextMenuItem
               onClick={() => onFixMatch(item)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
               aria-label="Fix match"
@@ -500,45 +487,8 @@ function MovieCardBase({
                   )}
                 </div>
 
-                {/* Options button on hover - REMOVED 3-DOT AS PER USER REQUEST */}
-                <motion.div
-                  initial={enableMotionEffects ? { opacity: 0, scale: 0.5 } : false}
-                  animate={enableMotionEffects
-                    ? {
-                      opacity: isHovered ? 1 : 0,
-                      scale: isHovered ? 1 : 0.5
-                    }
-                    : undefined}
-                  transition={enableMotionEffects ? { duration: 0.2 } : undefined}
-                  className="ml-auto flex items-center gap-1.5"
-                  style={!enableMotionEffects ? {
-                    opacity: isHovered ? 1 : 0,
-                    transform: isHovered ? 'scale(1)' : 'scale(0.9)',
-                  } : undefined}
-                >
-                  {onDownload && item.is_cloud && (
-                    <button
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onDownload(item);
-                      }}
-                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-amber-300/40 text-amber-200 hover:text-white hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
-                      title="Download this title"
-                      aria-label={`Download ${item.title}`}
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                  )}
-                </motion.div>
+                {/* Removed download button on hover as per user request */}
+                <div className="ml-auto" />
               </div>
 
               {/* Progress Bar */}
@@ -613,19 +563,6 @@ function MovieCardBase({
 
       {/* Context Menu */}
         <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <ContextMenuItem
-          onClick={() => onClick(item)}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-          aria-label="Open details"
-        >
-          <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-            <Play className="w-4 h-4 text-white" />
-          </div>
-          <span>Open Details</span>
-        </ContextMenuItem>
-
-        <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-
         <ContextMenuItem
           onClick={() => onFixMatch(item)}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"

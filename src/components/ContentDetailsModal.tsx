@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download } from "lucide-react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2 } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
   searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { isMediaMarkedWatched } from "@/utils/playbackProgress"
 import { useToast } from "@/components/ui/use-toast"
+import { ShareDialog } from "@/components/ShareDialog"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -280,6 +281,8 @@ export function ContentDetailsModal({
   const [selectedSubtitlePreference, setSelectedSubtitlePreference] = useState<string>(AUTO_SUBTITLE_VALUE)
   const [customSubtitlePreference, setCustomSubtitlePreference] = useState("")
   const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false)
+  const [shareFileId, setShareFileId] = useState<string | null>(null)
+  const [shareFileName, setShareFileName] = useState<string>("")
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
@@ -1120,76 +1123,120 @@ export function ContentDetailsModal({
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/50 mb-2">
-                    {isShow ? "TV Series" : isEpisode ? "TV Episode" : "Movie"}
-                  </p>
-                  <h2 className={cn(
-                    "font-bold leading-tight tracking-tight text-white",
-                    isShow ? "text-3xl sm:text-5xl mb-2" : "text-4xl sm:text-6xl mb-4"
-                  )}>{displayTitle}</h2>
-                  
-                  <div className={cn(
-                    "flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-white/90",
-                    isShow ? "mb-2" : "mb-5"
-                  )}>
-                    <span className="flex items-center gap-2"><Calendar className="w-4 h-4 text-white/60" />{displayItem.year || "N/A"}</span>
-                    {!isShow && <span className="flex items-center gap-2"><Clock className="w-4 h-4 text-white/60" />{runtimeLabel}</span>}
-                    {isShow && <span className="flex items-center gap-2"><Tv className="w-4 h-4 text-white/60" />{seasons.length} Seasons</span>}
-                    {zipCompressionLabel && (
-                      <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
-                        ZIP: {zipCompressionLabel}
-                      </span>
-                    )}
+                  <div className="flex items-center gap-2.5 mb-2.5">
+                    <span className="px-2 py-0.5 rounded bg-white/5 text-[8px] font-bold uppercase tracking-[0.3em] text-white/40 backdrop-blur-md border border-white/5">
+                      {isShow ? "TV Series" : isEpisode ? "TV Episode" : "Movie"}
+                    </span>
                     {mediaFormatParts.length > 0 && !isShow && (
-                      <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
-                        {technicalDetails?.sampleFromEpisode ? "Sample:" : "Media:"} {mediaFormatParts.join(" · ")}
-                      </span>
-                    )}
-                    {(director || creator) && (
-                      <span className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-white/90">
-                        <User className="w-4 h-4 text-white/60" />
-                        {isShow ? `Created by ${creator}` : `Director: ${director}`}
+                      <span className="text-[9px] font-medium text-white/20 uppercase tracking-widest flex items-center gap-1.5">
+                        <div className="w-0.5 h-0.5 rounded-full bg-white/10" />
+                        {mediaFormatParts.join(" · ")}
                       </span>
                     )}
                   </div>
                   
+                  <h2 className={cn(
+                    "leading-[1.1] tracking-tight text-white mb-5 italic",
+                    isShow ? "text-3xl sm:text-5xl" : "text-4xl sm:text-6xl"
+                  )} style={{ fontFamily: 'Georgia, serif' }}>{displayTitle}</h2>
+                  
+                  <div className={cn(
+                    "flex flex-wrap items-center gap-x-6 gap-y-3 text-[11.5px] font-semibold text-white/40",
+                    isShow ? "mb-6" : "mb-8"
+                  )}>
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-3.5 h-3.5 text-white/25" />
+                      <span className="text-white/80">{displayItem.year || "N/A"}</span>
+                    </div>
+                    {!isShow && (
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-white/25" />
+                        <span className="text-white/80">{runtimeLabel}</span>
+                      </div>
+                    )}
+                    {isShow && (
+                      <div className="flex items-center gap-2">
+                        <Tv className="w-3.5 h-3.5 text-white/25" />
+                        <span className="text-white/80">{seasons.length} Seasons</span>
+                      </div>
+                    )}
+                    {(director || creator) && (
+                      <div className="flex items-center gap-2">
+                        <User className="w-3.5 h-3.5 text-white/25" />
+                        <span className="text-white/80">{isShow ? creator : director}</span>
+                        <span className="text-[9px] uppercase tracking-widest opacity-25">{isShow ? "Creator" : "Director"}</span>
+                      </div>
+                    )}
+                    {zipCompressionLabel && (
+                      <div className="px-2.5 py-1 rounded bg-white/5 border border-white/5 text-[9px] font-bold text-white/50 tracking-widest ml-1">
+                        ZIP: {zipCompressionLabel}
+                      </div>
+                    )}
+                  </div>
+                  
                   {!isShow && castList.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {castList.map(name => (
-                        <span key={name} className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-medium text-white/70 hover:bg-white/10 hover:text-white transition-colors cursor-default">
-                          {name}
-                        </span>
-                      ))}
+                    <div className="flex flex-col gap-2.5 mb-8">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20">Cast</p>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+                        {castList.slice(0, 8).map(name => (
+                          <span key={name} className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-default">
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!isShow && (
+                    <div className="shrink-0 mb-2 flex items-center gap-6">
+                      <Button 
+                        onClick={() => onPrimaryAction(displayItem)} 
+                        className="h-14 px-10 rounded-full text-base font-bold tracking-tight shadow-[0_15px_40px_rgba(255,255,255,0.1)] hover:shadow-[0_20px_50px_rgba(255,255,255,0.15)] hover:scale-[1.02] active:scale-95 transition-all duration-500 bg-white text-black hover:bg-white"
+                      >
+                        <Play className="w-4 h-4 mr-2.5 fill-current" /> Play Now
+                      </Button>
                     </div>
                   )}
                 </div>
 
+                {/* The DOCK - Vertical Floating Action Sidebar */}
                 {!isShow && (
-                  <div className="shrink-0 mb-2 flex flex-wrap gap-3">
-                    {onSecondaryAction && secondaryActionLabel && (
-                      <Button
-                        onClick={() => onSecondaryAction(displayItem)}
-                        variant="outline"
-                        className="h-16 px-8 rounded-2xl text-base font-bold border-white/15 text-white/85 bg-white/8 hover:bg-white/14 hover:text-white"
-                      >
-                        <Check className="w-5 h-5 mr-3" /> {secondaryActionLabel}
-                      </Button>
-                    )}
-                    {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
-                      <Button
-                        onClick={() => onDownloadAction(displayItem)}
-                        variant="outline"
-                        className="h-16 px-8 rounded-2xl text-base font-bold border-cyan-300/20 text-cyan-100 bg-cyan-400/10 hover:bg-cyan-400/16 hover:text-white"
-                      >
-                        <Download className="w-5 h-5 mr-3" /> {downloadActionLabel}
-                      </Button>
-                    )}
-                    <Button 
-                      onClick={() => onPrimaryAction(displayItem)} 
-                      className="h-16 px-12 rounded-2xl text-lg font-bold shadow-glow hover:scale-105 active:scale-95 transition-all duration-300 bg-white text-black hover:bg-white/90"
-                    >
-                      <Play className="w-6 h-6 mr-3 fill-current" /> Play Now
-                    </Button>
+                  <div className="absolute right-5 top-1/2 -translate-y-1/2 z-30 hidden sm:flex flex-col gap-2.5">
+                    <div className="flex flex-col p-1.5 gap-2 rounded-full bg-black/40 backdrop-blur-3xl border border-white/5 shadow-2xl">
+                      {displayItem.is_cloud && displayItem.cloud_file_id && (
+                        <button
+                          onClick={() => {
+                            setShareFileId(displayItem.cloud_file_id || null)
+                            setShareFileName(displayItem.title)
+                          }}
+                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                          title="Share"
+                        >
+                          <Share2 className="w-4 h-4" />
+                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Share</span>
+                        </button>
+                      )}
+                      {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
+                        <button
+                          onClick={() => onDownloadAction(displayItem)}
+                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                          title="Download"
+                        >
+                          <Download className="w-4 h-4" />
+                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Download</span>
+                        </button>
+                      )}
+                      {onSecondaryAction && secondaryActionLabel && (
+                        <button
+                          onClick={() => onSecondaryAction(displayItem)}
+                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                          title={secondaryActionLabel}
+                        >
+                          <Check className="w-4 h-4" />
+                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">{secondaryActionLabel}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1345,6 +1392,19 @@ export function ContentDetailsModal({
                                         Download
                                       </button>
                                     ) : null}
+                                    {ep.is_cloud && ep.cloud_file_id ? (
+                                      <button
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          setShareFileId(ep.cloud_file_id || null)
+                                          setShareFileName(ep.episode_title || ep.title)
+                                        }}
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/18 bg-violet-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-violet-100 transition-colors hover:bg-violet-400/16 hover:border-violet-300/35"
+                                      >
+                                        <Share2 className="w-3.5 h-3.5" />
+                                        Share
+                                      </button>
+                                    ) : null}
                                     {rating && rating > 0 && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
                                         <Star className="w-3 h-3 fill-current text-yellow-500" />
@@ -1413,6 +1473,15 @@ export function ContentDetailsModal({
                 {audioControls}
               </div>
             </div>
+          )}
+
+          {shareFileId && (
+            <ShareDialog
+              open={true}
+              onOpenChange={() => setShareFileId(null)}
+              fileId={shareFileId}
+              fileName={shareFileName}
+            />
           )}
         </section>
       </DialogContent>

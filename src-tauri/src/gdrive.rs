@@ -635,6 +635,46 @@ impl GoogleDriveClient {
             .map_err(|e| format!("Failed to parse response: {}", e))
     }
 
+    /// Create a permission (share) for a file with a specific user
+    pub async fn create_permission(
+        &self,
+        file_id: &str,
+        email: &str,
+        role: &str,
+    ) -> Result<(), String> {
+        let access_token = self.get_access_token().await?;
+
+        let url = format!(
+            "{}/files/{}/permissions?supportsAllDrives=true&sendNotificationEmail=true",
+            DRIVE_API_BASE, file_id
+        );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "type": "user",
+                "role": role,
+                "emailAddress": email
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to share file: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API share error: {}", error_text));
+        }
+
+        println!(
+            "[GDRIVE] Successfully shared file {} with {} (role: {})",
+            file_id, email, role
+        );
+        Ok(())
+    }
+
     /// Delete a file from Google Drive
     pub async fn delete_file(&self, file_id: &str) -> Result<(), String> {
         let access_token = self.get_access_token().await?;

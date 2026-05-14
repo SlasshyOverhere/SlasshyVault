@@ -261,6 +261,27 @@ export const getGDriveStreamUrl = async (
 };
 
 /**
+ * Share a file with a user by email (Google Drive native share)
+ */
+export interface ShareResult {
+  success: boolean;
+  message: string;
+}
+
+export const shareGDriveFile = async (
+  fileId: string,
+  email: string,
+  role?: string,
+): Promise<ShareResult> => {
+  try {
+    return await invoke<ShareResult>("gdrive_share_file", { fileId, email, role: role ?? null });
+  } catch (error) {
+    console.error("[GDrive] Failed to share file:", error);
+    throw error;
+  }
+};
+
+/**
  * Get file metadata
  */
 export const getGDriveFileMetadata = async (
