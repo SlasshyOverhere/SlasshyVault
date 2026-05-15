@@ -14,7 +14,7 @@ jobs:
       matrix:
         platform: [windows-latest]
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-2022
 
     steps:
       - name: Checkout repository
@@ -87,11 +87,22 @@ jobs:
           $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Install working NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          $nsisCache = "$env:LOCALAPPDATA\tauri\NsisUser-x86_64"
+          New-Item -ItemType Directory -Force -Path $nsisCache | Out-Null
+          Copy-Item "${env:ProgramFiles(x86)}\NSIS\*" $nsisCache -Recurse -Force
+
+      - name: Build auxiliary Tauri binaries
+        run: cargo build --release --features custom-protocol,wan-test --bin wt_tauri_wan_test --bin test_autoupdate --manifest-path src-tauri/Cargo.toml
+
       - name: Build Tauri app
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: npx tauri build --bundles msi
+        run: npx tauri build --bundles nsis,updater
 
       - name: Create Release
         shell: pwsh
