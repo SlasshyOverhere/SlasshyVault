@@ -90,6 +90,11 @@ fn event_name(event: &WatchEvent) -> &'static str {
         WatchEvent::Error { .. } => "error",
         WatchEvent::Disconnected => "disconnected",
         WatchEvent::StateUpdate { .. } => "state_update",
+        WatchEvent::Prepare { .. } => "prepare",
+        WatchEvent::PlayAt { .. } => "play_at",
+        WatchEvent::SyncResume { .. } => "sync_resume",
+        WatchEvent::Pause { .. } => "pause",
+        WatchEvent::ShowOsd { .. } => "show_osd",
     }
 }
 
