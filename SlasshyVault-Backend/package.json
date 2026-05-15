@@ -1,6 +1,6 @@
 {
   "name": "streamvault-auth-server",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "OAuth proxy server for StreamVault with Watch Together and Social features",
   "main": "server.js",
   "scripts": {

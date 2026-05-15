@@ -1084,8 +1084,8 @@ setInterval(async () => {
 // Root - simple response
 app.get('/', (req, res) => {
   res.json({
-    service: 'StreamVault Auth Server',
-    version: '1.2.0',
+    service: 'SlasshyVault Auth Server',
+    version: '1.2.1',
   });
 });
 
