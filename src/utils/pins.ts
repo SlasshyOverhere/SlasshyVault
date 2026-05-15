@@ -9,22 +9,23 @@ export function getPinnedIds(): Set<string> {
   }
 }
 
-export function togglePin(id: string): boolean {
+export function togglePin(id: string | number): boolean {
+  const strId = String(id)
   const ids = getPinnedIds()
-  if (ids.has(id)) ids.delete(id); else ids.add(id)
+  if (ids.has(strId)) ids.delete(strId); else ids.add(strId)
   localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]))
-  return ids.has(id)
+  return ids.has(strId)
 }
 
-export function isPinned(id: string): boolean {
-  return getPinnedIds().has(id)
+export function isPinned(id: string | number): boolean {
+  return getPinnedIds().has(String(id))
 }
 
-export function sortPinnedFirst<T extends { id: string }>(items: T[]): T[] {
+export function sortPinnedFirst<T extends { id: string | number }>(items: T[]): T[] {
   const pinned = getPinnedIds()
   return [...items].sort((a, b) => {
-    const aPinned = pinned.has(a.id) ? 1 : 0
-    const bPinned = pinned.has(b.id) ? 1 : 0
+    const aPinned = pinned.has(String(a.id)) ? 1 : 0
+    const bPinned = pinned.has(String(b.id)) ? 1 : 0
     return bPinned - aPinned
   })
 }

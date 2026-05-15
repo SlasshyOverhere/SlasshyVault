@@ -42,6 +42,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { open as openDialog } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api/tauri";
+import { emit } from "@tauri-apps/api/event";
 import { Switch } from "@/components/ui/switch";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -83,7 +84,7 @@ export function SettingsModal({
   betaEnabled = false,
   onBetaToggle,
   autoCheckUpdate = false,
-  onSimulateUpdate,
+  onSimulateUpdate: _onSimulateUpdate,
 }: SettingsModalProps) {
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
@@ -1321,6 +1322,69 @@ export function SettingsModal({
                         <p className="text-xs text-muted-foreground">
                           Leave empty and save to use production defaults.
                         </p>
+                      </div>
+
+                      {/* Test ZIP notification flow */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-medium">Test ZIP Notifications</h4>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Simulate ZIP detection and indexing events to test the notification popup.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'detected',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: null,
+                                message: 'Archive detected in Test Folder. Processing episode entries...',
+                              })
+                            }}
+                          >
+                            ZIP Detected
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'complete',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: 12,
+                                message: 'Finished processing Test Archive.zip. Indexed 12 episode(s).',
+                              })
+                            }}
+                          >
+                            ZIP Complete
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'error',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: null,
+                                message: 'ZIP processing failed: Unsupported format',
+                              })
+                            }}
+                          >
+                            ZIP Error
+                          </Button>
+                        </div>
                       </div>
                     </motion.div>
                   )}

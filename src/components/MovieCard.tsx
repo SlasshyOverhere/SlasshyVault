@@ -116,7 +116,7 @@ function MovieCardBase({
   const leadActor = item.cast_names?.split(',')[0]?.trim()
 
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(getPinnedIds);
-  const isPinned = pinnedIds.has(item.id);
+  const isPinned = pinnedIds.has(String(item.id));
   const togglePin = () => {
     togglePinStorage(item.id);
     setPinnedIds(getPinnedIds());

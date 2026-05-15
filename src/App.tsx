@@ -1034,18 +1034,8 @@ function App() {
 
         if (payload.phase === 'detected') {
           setIsCloudIndexing(true)
-          toast({
-            title: payload.archiveCount > 1 ? 'ZIP archives detected' : 'ZIP archive detected',
-            description: payload.message,
-          })
           return
         }
-
-        toast({
-          title: payload.phase === 'complete' ? 'ZIP processing complete' : 'ZIP processing failed',
-          description: payload.message,
-          variant: payload.phase === 'error' ? 'destructive' : 'default',
-        })
 
         zipProcessingPopupTimeoutRef.current = window.setTimeout(() => {
           setZipProcessingPopup(null)
@@ -2067,60 +2057,43 @@ function App() {
           <AnimatePresence>
             {zipProcessingPopup && (
               <motion.div
-                initial={{ opacity: 0, y: 24, scale: 0.96 }}
+                initial={{ opacity: 0, y: 12, scale: 0.9 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 16, scale: 0.98 }}
-                className="fixed right-5 top-14 z-[230] w-[min(92vw,390px)] rounded-[24px] border border-white/10 bg-[#11141b]/94 p-4 shadow-2xl shadow-black/45 backdrop-blur-xl"
+                exit={{ opacity: 0, y: 6, scale: 0.9 }}
+                className="fixed right-4 top-14 z-[230] flex items-center gap-2 rounded-full border border-white/10 bg-black/90 px-3 py-1.5 shadow-lg shadow-black/50 backdrop-blur-xl"
               >
-                <div className="flex items-start gap-3">
-                  <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${
-                    zipProcessingPopup.phase === 'complete'
-                      ? 'border-emerald-400/25 bg-emerald-400/10'
-                      : zipProcessingPopup.phase === 'error'
-                        ? 'border-red-400/25 bg-red-400/10'
-                        : 'border-white/10 bg-white/5'
-                  }`}>
-                    {zipProcessingPopup.phase === 'complete' ? (
-                      <span className="text-lg text-emerald-300">✓</span>
-                    ) : zipProcessingPopup.phase === 'error' ? (
-                      <span className="text-lg text-red-300">!</span>
-                    ) : (
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
-                      >
-                        <Archive className="h-5 w-5 text-white/80" />
-                      </motion.div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/40">
-                        {zipProcessingPopup.phase === 'complete'
-                          ? 'ZIP Ready'
-                          : zipProcessingPopup.phase === 'error'
-                            ? 'ZIP Error'
-                            : 'ZIP Detected'}
-                      </span>
-                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60">
-                        {zipProcessingPopup.archiveCount} archive{zipProcessingPopup.archiveCount === 1 ? '' : 's'}
-                      </span>
-                    </div>
-                    <p className="line-clamp-2 text-sm font-medium leading-relaxed text-white/85">
-                      {zipProcessingPopup.message}
-                    </p>
-                    {zipProcessingPopup.archiveName && (
-                      <p className="mt-2 line-clamp-1 text-xs text-white/45">
-                        {zipProcessingPopup.archiveName}
-                      </p>
-                    )}
-                    {typeof zipProcessingPopup.episodesIndexed === 'number' && zipProcessingPopup.phase === 'complete' && (
-                      <p className="mt-2 text-xs text-emerald-200/80">
-                        Indexed {zipProcessingPopup.episodesIndexed} episode{zipProcessingPopup.episodesIndexed === 1 ? '' : 's'}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                {zipProcessingPopup.phase === 'complete' ? (
+                  <span className="text-[10px] text-white/60">✓</span>
+                ) : zipProcessingPopup.phase === 'error' ? (
+                  <span className="text-[10px] text-white/60">!</span>
+                ) : (
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
+                    className="flex"
+                  >
+                    <Archive className="h-3 w-3 text-white/50" />
+                  </motion.div>
+                )}
+                <span className="text-[11px] font-medium text-white/70">
+                  {zipProcessingPopup.phase === 'complete'
+                    ? 'ZIP Indexed'
+                    : zipProcessingPopup.phase === 'error'
+                      ? 'ZIP Error'
+                      : 'ZIP Detected'}
+                </span>
+                <span className="text-[10px] text-white/40">·</span>
+                <span className="truncate text-[10px] text-white/50 max-w-[140px]">
+                  {zipProcessingPopup.archiveName || zipProcessingPopup.message}
+                </span>
+                {typeof zipProcessingPopup.episodesIndexed === 'number' && zipProcessingPopup.phase === 'complete' && (
+                  <>
+                    <span className="text-[10px] text-white/40">·</span>
+                    <span className="text-[10px] text-white/50">
+                      {zipProcessingPopup.episodesIndexed}ep
+                    </span>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -2164,50 +2137,6 @@ function App() {
                   <span className="text-white text-sm font-semibold">
                     Scanning {scanProgress.current}/{scanProgress.total}
                   </span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Floating Cloud Indexing Indicator */}
-            <AnimatePresence>
-              {isCloudIndexing && !isScanning && view !== 'cloud' && (
-                <motion.div
-                  initial={{ opacity: 0, y: -20, scale: 0.9 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                  className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-card/95 backdrop-blur-xl border border-gray-500/30 shadow-glow"
-                >
-                  <div className="relative">
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                    >
-                      <Cloud className="h-4 w-4 text-gray-400" />
-                    </motion.div>
-                    <div className="absolute inset-0 rounded-full bg-gray-400/40 blur-md animate-pulse" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-gray-400 text-sm font-semibold">
-                      {cloudIndexingProgress
-                        ? `Scanning folder ${cloudIndexingProgress.currentFolder}/${cloudIndexingProgress.totalFolders}`
-                        : 'Indexing cloud files...'
-                      }
-                    </span>
-                    {cloudIndexingProgress && cloudIndexingProgress.filesFound > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        Found {cloudIndexingProgress.filesFound} files ({cloudIndexingProgress.moviesFound} movies, {cloudIndexingProgress.tvFound} TV)
-                      </span>
-                    )}
-                  </div>
-                  {cloudIndexingProgress && (
-                    <div className="w-16 h-1.5 bg-muted/30 rounded-full overflow-hidden">
-                      <motion.div
-                        className="h-full bg-gradient-to-r from-gray-500 to-gray-400 rounded-full"
-                        animate={{ width: `${(cloudIndexingProgress.currentFolder / cloudIndexingProgress.totalFolders) * 100}%` }}
-                        transition={{ duration: 0.3 }}
-                      />
-                    </div>
-                  )}
                 </motion.div>
               )}
             </AnimatePresence>

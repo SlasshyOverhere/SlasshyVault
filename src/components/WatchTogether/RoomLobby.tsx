@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useState } from 'react';
 import { WatchRoom, wtSetReady, wtStartPlayback } from '@/services/api';
 import { ParticipantList } from './ParticipantList';
 import { Button } from '@/components/ui/button';

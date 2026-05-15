@@ -35,7 +35,7 @@ export function Sidebar({
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
-  betaEnabled = false,
+  betaEnabled: _betaEnabled = false,
   downloadJobCount = 0,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
