@@ -5,6 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
+use dirs;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, protocol::Message},
@@ -21,17 +22,19 @@ fn get_relay_server_url() -> String {
     }
 
     // Check media_config.json for dev_backend_url override
-    let config_path = crate::database::get_app_data_dir().join("media_config.json");
-    if let Ok(contents) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
-                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
-                if !trimmed.is_empty() {
-                    // Convert http:// -> ws:// and https:// -> wss://
-                    let ws_url = trimmed
-                        .replace("https://", "wss://")
-                        .replace("http://", "ws://");
-                    return format!("{}/ws/watchtogether", ws_url);
+    let config_dir = if cfg!(debug_assertions) { "SlasshyVault-Dev" } else { "SlasshyVault" };
+    if let Some(config_path) = dirs::data_dir().map(|d| d.join(config_dir).join("media_config.json")) {
+        if let Ok(contents) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                    let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                    if !trimmed.is_empty() {
+                        // Convert http:// -> ws:// and https:// -> wss://
+                        let ws_url = trimmed
+                            .replace("https://", "wss://")
+                            .replace("http://", "ws://");
+                        return format!("{}/ws/watchtogether", ws_url);
+                    }
                 }
             }
         }
