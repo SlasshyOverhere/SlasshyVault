@@ -51,12 +51,6 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      - name: Prebuild WAN test binary
-        run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin wt_tauri_wan_test --features wan-test
-
-      - name: Run WAN test binary
-        run: cargo run --manifest-path src-tauri/Cargo.toml --release --bin wt_tauri_wan_test --features wan-test
-
       - name: Generate release notes
         id: release_notes
         shell: pwsh
