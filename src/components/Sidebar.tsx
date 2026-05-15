@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Clapperboard, Download, Link2
+  Home, RotateCw, Cloud, Clapperboard, Download, Link2
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -102,7 +102,6 @@ export function Sidebar({
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "directlinks", label: "Direct Links", icon: Link2 },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
-    { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);
 
@@ -168,7 +167,7 @@ export function Sidebar({
                       />
                       <motion.div
                         layoutId="active-pill"
-                        className="absolute left-0 inset-y-0 my-auto w-1 h-8 bg-white rounded-r-full shadow-[0_0_20px_rgba(255,255,255,0.8)]"
+                        className="absolute left-1 inset-y-0 my-auto w-1 h-6 bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.6)] z-10"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
                     </>

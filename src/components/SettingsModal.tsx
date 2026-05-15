@@ -20,9 +20,7 @@ import {
   RefreshCw,
   Code,
   FlaskConical,
-  Users,
   Radio,
-  Activity,
   Shield,
   Archive,
   Loader2,
@@ -40,12 +38,7 @@ import {
   UpdateInfo,
   autoDetectMpv,
 } from "@/services/api";
-import {
-  getDevSettings,
-  setDevSettings,
-  getDefaultAuthServerUrl,
-} from "@/services/social";
-import { isDev } from "@/config/social";
+
 import { useToast } from "@/components/ui/use-toast";
 import { open as openDialog } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -120,7 +113,6 @@ export function SettingsModal({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [devAuthServerUrl, setDevAuthServerUrl] = useState("");
   const [detectingMpv, setDetectingMpv] = useState(false);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
@@ -148,11 +140,6 @@ export function SettingsModal({
       loadAppVersion();
       setActiveSection(initialTab || "general");
       setShowResetConfirm(false);
-      // Load dev settings
-      if (isDev) {
-        const devSettings = getDevSettings();
-        setDevAuthServerUrl(devSettings.authServerUrl);
-      }
     }
   }, [open, initialTab]);
 
@@ -383,24 +370,6 @@ export function SettingsModal({
     }
   };
 
-  const handleSaveDevSettings = () => {
-    setDevSettings({ authServerUrl: devAuthServerUrl });
-    toast({
-      title: "Dev Settings Saved",
-      description: "Backend URL updated. Social connections will reconnect.",
-    });
-  };
-
-  const handleResetDevSettings = () => {
-    const defaultUrl = getDefaultAuthServerUrl();
-    setDevAuthServerUrl(defaultUrl);
-    setDevSettings({ authServerUrl: defaultUrl });
-    toast({
-      title: "Dev Settings Reset",
-      description: "Backend URL reset to default.",
-    });
-  };
-
   const handleAutoDetectMpv = async () => {
     setDetectingMpv(true);
     try {
@@ -459,16 +428,6 @@ export function SettingsModal({
       icon: <AlertTriangle className="w-4 h-4" />,
     },
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
-    // Dev section only visible in development mode
-    ...(isDev
-      ? [
-          {
-            id: "dev" as SettingsSection,
-            label: "Developer",
-            icon: <Code className="w-4 h-4" />,
-          },
-        ]
-      : []),
   ];
 
   return (
@@ -791,90 +750,6 @@ export function SettingsModal({
                               <p className="text-xs text-muted-foreground">
                                 Watch movies and shows in sync with friends.
                                 Create or join rooms for synchronized playback.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Social - Friends & Chat */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            betaEnabled
-                              ? "bg-card border-purple-500/20"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                betaEnabled ? "bg-purple-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Users
-                                className={cn(
-                                  "w-5 h-5",
-                                  betaEnabled
-                                    ? "text-purple-400"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  Social - Friends & Chat
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">
-                                  BETA
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                Add friends, send messages, and see what others
-                                are watching. Social tab appears in the sidebar.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Activity Feed */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            betaEnabled
-                              ? "bg-card border-purple-500/20"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                betaEnabled ? "bg-purple-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Activity
-                                className={cn(
-                                  "w-5 h-5",
-                                  betaEnabled
-                                    ? "text-purple-400"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  Activity Feed
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">
-                                  BETA
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                See what your friends are watching in real-time.
-                                Activity updates show on the Social page.
                               </p>
                             </div>
                           </div>
@@ -1443,236 +1318,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* ===== Developer Settings ===== */}
-                  {activeSection === "dev" && isDev && (
-                    <motion.div
-                      key="dev"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      className="space-y-6"
-                    >
-                      <div>
-                        <h3 className="text-lg font-semibold text-foreground mb-1">
-                          Developer Settings
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          These settings are only available in development mode
-                        </p>
-                      </div>
 
-                      {/* Dev Mode Indicator */}
-                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                        <div className="flex items-center gap-2 text-yellow-500">
-                          <Code className="w-4 h-4" />
-                          <span className="text-sm font-medium">
-                            Development Mode Active
-                          </span>
-                        </div>
-                        <p className="text-xs text-yellow-500/70 mt-1">
-                          These options are hidden in production builds
-                        </p>
-                      </div>
-
-                      {/* Backend URL Configuration */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-purple-500/20">
-                            <Zap className="w-5 h-5 text-purple-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Auth Server URL
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Override the backend server URL for social
-                              features
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <Input
-                            value={devAuthServerUrl}
-                            onChange={(e) =>
-                              setDevAuthServerUrl(e.target.value)
-                            }
-                            placeholder="https://your-server.com"
-                            className="font-mono text-sm"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleResetDevSettings}
-                              className="flex-1"
-                            >
-                              <RefreshCw className="w-4 h-4 mr-2" />
-                              Reset to Default
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={handleSaveDevSettings}
-                              className="flex-1 bg-purple-600 hover:bg-purple-700"
-                            >
-                              <Save className="w-4 h-4 mr-2" />
-                              Apply URL
-                            </Button>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Default: {getDefaultAuthServerUrl()}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Quick Actions */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
-                        <Label className="text-base font-medium">
-                          Quick Actions
-                        </Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDevAuthServerUrl("http://localhost:3000");
-                              setDevSettings({
-                                authServerUrl: "http://localhost:3000",
-                              });
-                              toast({ title: "Set to localhost:3000" });
-                            }}
-                          >
-                            Use localhost:3000
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDevAuthServerUrl("http://localhost:8080");
-                              setDevSettings({
-                                authServerUrl: "http://localhost:8080",
-                              });
-                              toast({ title: "Set to localhost:8080" });
-                            }}
-                          >
-                            Use localhost:8080
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* MPV Auto-Detection */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-green-500/20">
-                            <MonitorPlay className="w-5 h-5 text-green-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              MPV Auto-Detection
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Search the entire PC for mpv.exe
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Searches common installation paths (Program Files,
-                          Scoop, Chocolatey, etc.) and the system PATH for
-                          mpv.exe. If found, it will be automatically
-                          configured.
-                        </p>
-                        {config.mpv_path && (
-                          <div className="p-2 rounded-lg bg-muted/50 text-xs font-mono text-muted-foreground truncate">
-                            Current: {config.mpv_path}
-                          </div>
-                        )}
-                        <Button
-                          variant="outline"
-                          onClick={handleAutoDetectMpv}
-                          disabled={detectingMpv}
-                          className="w-full gap-2 border-green-500/30 hover:bg-green-500/10"
-                        >
-                          <MonitorPlay
-                            className={cn(
-                              "w-4 h-4",
-                              detectingMpv && "animate-pulse",
-                            )}
-                          />
-                          {detectingMpv ? "Searching PC..." : "Auto-Detect MPV"}
-                        </Button>
-                      </div>
-
-                      {/* Simulate Update Notification */}
-                      <div className="p-4 rounded-xl bg-card border border-violet-500/30 space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-violet-500/20">
-                            <Download className="w-5 h-5 text-violet-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Simulate Update
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Trigger a fake update notification to test the
-                              flow
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          This will show the in-app update notification banner
-                          with fake data so you can test the full update
-                          workflow without a real update being available.
-                        </p>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            if (onSimulateUpdate) {
-                              onSimulateUpdate();
-                              onOpenChange(false);
-                            }
-                          }}
-                          className="w-full gap-2 border-violet-500/30 hover:bg-violet-500/10 text-violet-400 hover:text-violet-300"
-                        >
-                          <Download className="w-4 h-4" />
-                          Simulate Update Notification
-                        </Button>
-                      </div>
-
-                      {/* Logout Button for Testing */}
-                      <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-red-500/20">
-                            <Power className="w-5 h-5 text-red-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Test Login Screen
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Sign out to test the login screen
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          This will sign you out and show the login screen.
-                          You'll need to sign in again with Google.
-                        </p>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            if (onLogout) {
-                              onLogout();
-                              onOpenChange(false);
-                            }
-                          }}
-                          className="w-full gap-2 border-red-500/30 hover:bg-red-500/10 text-red-400 hover:text-red-300"
-                        >
-                          <Power className="w-4 h-4" />
-                          Sign Out (Test Login Screen)
-                        </Button>
-                      </div>
-                    </motion.div>
-                  )}
                 </AnimatePresence>
               </div>
             </div>

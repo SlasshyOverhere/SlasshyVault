@@ -77,6 +77,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '@/hooks/useAuth'
 import { sortMediaItems } from '@/utils/sorting'
+import { sortPinnedFirst } from '@/utils/pins'
 import {
   getMediaProgressPercent,
   isProgressPastAutoCompleteThreshold,
@@ -99,13 +100,11 @@ import { Button } from '@/components/ui/button'
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
 const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
-const loadSocialView = () => import('@/components/Social')
 const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
 const loadFixMatchModal = () => import('@/components/FixMatchModal')
 
 const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
 const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
-const SocialView = lazy(() => loadSocialView().then(module => ({ default: module.SocialView })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 
@@ -233,10 +232,7 @@ function App() {
       'streamvault.notification-center.v1': 'slasshyvault.notification-center.v1',
       'streamvault.view_mode': 'slasshyvault.view_mode',
       'streamvault_streaming_progress': 'slasshyvault_streaming_progress',
-      'streamvault_social': 'slasshyvault_social',
       'streamvault_profile_cache': 'slasshyvault_profile_cache',
-      'streamvault_social_last_sync': 'slasshyvault_social_last_sync',
-      'streamvault_social_synced_activity_keys': 'slasshyvault_social_synced_activity_keys',
       'streamvault_dev_settings': 'slasshyvault_dev_settings',
       'streamvault_detected_audio_tracks_v2': 'slasshyvault_detected_audio_tracks_v2',
       'streamvault_detected_subtitle_tracks_v1': 'slasshyvault_detected_subtitle_tracks_v1',
@@ -381,7 +377,6 @@ function App() {
     const preloadTimer = window.setTimeout(() => {
       void loadSettingsModal()
       void loadEpisodeBrowser()
-      void loadSocialView()
       void loadWatchTogetherModal()
       void loadFixMatchModal()
     }, 1500)
@@ -659,14 +654,14 @@ function App() {
   const handleBetaToggle = (enabled: boolean) => {
     setBetaEnabled(enabled)
     setBetaEnabledState(enabled)
-    if (!enabled && view === 'social') {
+    if (!enabled) {
       setView('home')
     }
     toast({
       title: enabled ? "Beta Features Enabled" : "Beta Features Disabled",
       description: enabled
-        ? "Watch Together and Social features are now available"
-        : "Watch Together and Social features are now hidden"
+        ? "Watch Together features are now available"
+        : "Watch Together features are now hidden"
     })
   }
 
@@ -1209,7 +1204,7 @@ function App() {
   }, [view, selectedShow, fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, loadDownloadQueue, runWatchHistorySync, pushNotification, toast])
 
   useEffect(() => {
-    if (view !== 'episodes' && view !== 'home' && view !== 'social' && view !== 'reminders' && view !== 'downloads') {
+    if (view !== 'episodes' && view !== 'home' && view !== 'reminders' && view !== 'downloads') {
       // Fetch immediately on tab switch; only debounce active typing.
       const delayMs = searchQuery.trim() ? 180 : 0
       const timer = window.setTimeout(() => {
@@ -1749,7 +1744,7 @@ function App() {
   }, [betaEnabled])
 
   // Watch Together session change handler
-  const handleWtSessionChange = (room: WatchRoom | null, sessionId: string, isPlaying: boolean, media?: MediaItem) => {
+  const handleWtSessionChange = useCallback((room: WatchRoom | null, sessionId: string, isPlaying: boolean, media?: MediaItem) => {
     setWtActiveRoom(room)
     setWtSessionId(sessionId)
     setWtIsPlaying(isPlaying)
@@ -1758,8 +1753,9 @@ function App() {
     }
     if (!room) {
       setWtSessionMedia(null)
+      setWatchTogetherMedia(null)
     }
-  }
+  }, [])
 
   const handleWtLeave = () => {
     setWtActiveRoom(null)
@@ -2304,7 +2300,7 @@ function App() {
               </div>
             ) : (
               <ScrollArea className="flex-1">
-                <div className={`content-container ${view === 'home' ? '!py-0' : ''} ${view === 'social' ? 'h-full min-h-0' : ''}`}>
+                <div className={`content-container ${view === 'home' ? '!py-0' : ''}`}>
                   <AnimatePresence mode="wait">
                     {/* Home View */}
                     {view === 'home' && (
@@ -2402,7 +2398,7 @@ function App() {
 
                                 {homeSearchResults.length > 0 ? (
                                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-5 overflow-y-auto max-h-full pb-4 no-scrollbar">
-                                    {homeSearchResults.slice(0, 16).map((item, index) => (
+                                    {sortPinnedFirst(homeSearchResults).slice(0, 16).map((item, index) => (
                                       <MovieCard
                                         key={item.id}
                                         item={item}
@@ -2477,7 +2473,7 @@ function App() {
                                     </div>
                                     <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-5">
                                       {/* One row of larger items */}
-                                      {recentlyAdded.slice(0, 8).map((item, index) => (
+                                      {sortPinnedFirst(recentlyAdded).slice(0, 8).map((item, index) => (
                                         <motion.div
                                           key={item.id}
                                           initial={{ opacity: 0, scale: 0.9 }}
@@ -2588,22 +2584,6 @@ function App() {
 
 
 
-                    {/* Social View - Only visible when beta is enabled */}
-                    {view === 'social' && betaEnabled && (
-                      <motion.div
-                        key="social"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="h-full"
-                      >
-                        <Suspense fallback={<LoadingFallback />}>
-                          <SocialView />
-                        </Suspense>
-                      </motion.div>
-                    )}
-
-
 
                     {/* History View */}
                     {view === 'history' && (
@@ -2675,7 +2655,7 @@ function App() {
                         className="pt-24"
                       >
                         <div className={viewMode === 'grid' ? 'grid-media' : 'list-media'}>
-                          {cloudItemsToRender.map((item, index) => (
+                          {sortPinnedFirst(cloudItemsToRender).map((item, index) => (
                             <MovieCard
                               key={item.id}
                               item={item}
@@ -2943,7 +2923,7 @@ function App() {
           )}
 
           {/* Watch Together Modal */}
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><span className="text-zinc-400">Loading...</span></div>}>
             <WatchTogetherModal
               isOpen={watchTogetherOpen}
               onClose={() => {

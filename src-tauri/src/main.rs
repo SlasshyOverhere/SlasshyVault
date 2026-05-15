@@ -9,7 +9,6 @@ mod download_manager;
 mod gdrive;
 mod media_manager;
 mod mpv_ipc;
-mod social_auth;
 mod tmdb;
 mod transcoder;
 mod watch_together;
@@ -74,7 +73,6 @@ pub struct AppState {
     pub active_zip_streams: Mutex<HashMap<i64, ActiveZipStream>>,
     pub download_manager: download_manager::DownloadManager,
     pub gdrive_client: gdrive::GoogleDriveClient,
-    pub social_auth_client: social_auth::SocialAuthClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
 }
@@ -577,61 +575,6 @@ async fn gdrive_disconnect(state: State<'_, AppState>) -> Result<ApiResponse, St
     state.gdrive_client.clear_tokens()?;
     Ok(ApiResponse {
         message: "Disconnected from Google Drive".to_string(),
-    })
-}
-
-/// Check if Social auth is connected
-#[tauri::command]
-async fn social_is_connected(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.social_auth_client.is_authenticated())
-}
-
-/// Get Social auth access token
-#[tauri::command]
-async fn social_get_access_token(
-    state: State<'_, AppState>,
-    server_url: Option<String>,
-) -> Result<String, String> {
-    state
-        .social_auth_client
-        .get_access_token(server_url.as_deref())
-        .await
-}
-
-/// Start Social Google OAuth flow
-#[tauri::command]
-async fn social_start_auth(server_url: Option<String>) -> Result<String, String> {
-    let auth_url = social_auth::get_auth_url(server_url.as_deref());
-
-    if let Err(e) = open::that(&auth_url) {
-        println!("[SOCIAL AUTH] Failed to open browser: {}", e);
-    }
-
-    Ok(auth_url)
-}
-
-/// Wait for OAuth callback and complete Social authentication
-#[tauri::command]
-async fn social_complete_auth(
-    state: State<'_, AppState>,
-) -> Result<gdrive::DriveAccountInfo, String> {
-    println!("[SOCIAL AUTH] Waiting for OAuth callback...");
-
-    let tokens = gdrive::wait_for_oauth_callback().await?;
-    println!("[SOCIAL AUTH] Received tokens from backend");
-
-    state.social_auth_client.store_tokens(tokens)?;
-    println!("[SOCIAL AUTH] Tokens stored successfully");
-
-    state.social_auth_client.get_account_info().await
-}
-
-/// Disconnect Social auth
-#[tauri::command]
-async fn social_disconnect(state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    state.social_auth_client.clear_tokens()?;
-    Ok(ApiResponse {
-        message: "Disconnected from Social auth".to_string(),
     })
 }
 
@@ -11693,6 +11636,18 @@ async fn wt_create_room(
                     }
                 });
             }
+            // Show OSD messages directly inside MPV (like Syncplay)
+            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+                let msg = message.clone();
+                let dur = *duration_ms;
+                let ctrl = wt_ctrl.clone();
+                tokio::spawn(async move {
+                    let ctrl_guard = ctrl.lock().await;
+                    if let Some(ref controller) = *ctrl_guard {
+                        let _ = controller.show_osd(&msg, dur).await;
+                    }
+                });
+            }
             let _ = window_clone.emit("wt-event", &event);
         })
         .await;
@@ -11770,6 +11725,18 @@ async fn wt_join_room(
                             }
                             _ => {}
                         }
+                    }
+                });
+            }
+            // Show OSD messages directly inside MPV (like Syncplay)
+            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+                let msg = message.clone();
+                let dur = *duration_ms;
+                let ctrl = wt_ctrl.clone();
+                tokio::spawn(async move {
+                    let ctrl_guard = ctrl.lock().await;
+                    if let Some(ref controller) = *ctrl_guard {
+                        let _ = controller.show_osd(&msg, dur).await;
                     }
                 });
             }
@@ -12860,7 +12827,6 @@ fn main() {
         active_zip_streams: Mutex::new(HashMap::new()),
         download_manager: download_manager::DownloadManager::default(),
         gdrive_client: gdrive::GoogleDriveClient::new(),
-        social_auth_client: social_auth::SocialAuthClient::new(),
         watch_together: Arc::new(tokio::sync::Mutex::new(
             watch_together::WatchTogetherManager::new(),
         )),
@@ -13215,11 +13181,6 @@ fn main() {
             gdrive_complete_auth,
             gdrive_auth_with_code,
             gdrive_disconnect,
-            social_is_connected,
-            social_get_access_token,
-            social_start_auth,
-            social_complete_auth,
-            social_disconnect,
             gdrive_list_folders,
             gdrive_list_files,
             gdrive_list_video_files,

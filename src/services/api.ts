@@ -512,7 +512,7 @@ export const getConfig = async (): Promise<Config> => {
 // Save configuration
 export const saveConfig = async (config: Config): Promise<void> => {
   try {
-    await invoke("save_config", { newConfig: config });
+    await invoke("save_config", { newConfig: config, confirmed: true });
   } catch (error) {
     console.error("Failed to save config:", error);
     throw error;
@@ -1957,15 +1957,18 @@ export const wtGetClientId = async (): Promise<string> => {
 };
 
 // Launch MPV in Watch Together sync mode
+// Always uses the client ID from wtGetClientId() — ignores passed sessionId
+// to prevent callers from mistakenly passing a room code.
 export const wtLaunchMpv = async (
   mediaId: number,
-  sessionId: string,
+  _sessionId: string,
   startPosition: number = 0,
 ): Promise<number> => {
   try {
+    const effectiveSessionId = await wtGetClientId();
     return await invoke<number>("wt_launch_mpv", {
       mediaId,
-      sessionId,
+      sessionId: effectiveSessionId,
       startPosition,
     });
   } catch (error) {

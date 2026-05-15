@@ -6,10 +6,7 @@ import {
   saveConfig,
   autoDetectMpv,
 } from '@/services/api'
-import {
-  restoreSocialConnection,
-  disconnectSocial,
-} from '@/services/social'
+
 
 const AUTH_CHECK_TIMEOUT_MS = 8000
 
@@ -117,11 +114,6 @@ export function useAuth() {
       // Non-critical boot tasks run after auth loading is cleared.
       if (isMountedRef.current && connected) {
         void autoDetectMpvIfUnconfigured()
-
-        // Restore social connection in background (don't block UI)
-        restoreSocialConnection().catch(err => {
-          console.warn('[useAuth] Social restore failed:', err)
-        })
       }
     }
     checkAuth()
@@ -157,11 +149,6 @@ export function useAuth() {
               description: `Signed in as ${accountInfo.email}`
             })
           }
-
-          // Initialize social connection with new tokens in background
-          restoreSocialConnection().catch((socialError) => {
-            console.warn('[useAuth] Social init failed:', socialError)
-          })
 
           void autoDetectMpvIfUnconfigured()
 
@@ -214,12 +201,8 @@ export function useAuth() {
   // Handle logout
   const logout = async () => {
     try {
-      const { disconnectGDrive, disconnectSocialAuth } = await import('@/services/gdrive')
+      const { disconnectGDrive } = await import('@/services/gdrive')
       await disconnectGDrive()
-      await disconnectSocialAuth().catch((error) => {
-        console.warn('[useAuth] Social auth disconnect failed:', error)
-      })
-      disconnectSocial()
       if (isMountedRef.current) {
         setIsAuthenticated(false)
         setNickname(null)

@@ -33,7 +33,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
           justifyContent: 'center',
           height: '100vh',
           width: '100vw',
-          background: '#030014',
+          background: '#000',
           color: '#fff',
           fontFamily: "'Inter', sans-serif",
           padding: '20px',
@@ -43,14 +43,14 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
             width: '72px',
             height: '72px',
             borderRadius: '50%',
-            background: 'rgba(239, 68, 68, 0.2)',
+            background: 'rgba(255, 255, 255, 0.1)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: '24px',
-            boxShadow: '0 0 40px rgba(239, 68, 68, 0.2)',
+            boxShadow: '0 0 40px rgba(255, 255, 255, 0.1)',
           }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="#f87171" strokeWidth="2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="#fff" strokeWidth="2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
@@ -67,12 +67,12 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
               padding: '12px 24px',
               borderRadius: '12px',
               border: 'none',
-              background: 'linear-gradient(135deg, #8b5cf6, #06b6d4)',
-              color: '#fff',
+              background: '#fff',
+              color: '#000',
               fontSize: '14px',
               fontWeight: 600,
               cursor: 'pointer',
-              boxShadow: '0 8px 32px rgba(139, 92, 246, 0.4)',
+              boxShadow: '0 8px 32px rgba(255, 255, 255, 0.15)',
             }}
           >
             Reload App

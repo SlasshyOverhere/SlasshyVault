@@ -2,9 +2,12 @@ import { WatchRoom, wtLeaveRoom } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { Users, X, Play } from 'lucide-react';
 
+type BannerSyncPhase = 'lobby' | 'loading' | 'playing' | 'paused';
+
 interface WatchTogetherBannerProps {
     room: WatchRoom;
     isPlaying: boolean;
+    syncPhase?: BannerSyncPhase;
     onOpenModal: () => void;
     onLeave: () => void;
 }
@@ -12,15 +15,17 @@ interface WatchTogetherBannerProps {
 export function WatchTogetherBanner({
     room,
     isPlaying,
+    syncPhase = 'lobby',
     onOpenModal,
     onLeave,
 }: WatchTogetherBannerProps) {
     const handleLeave = async () => {
         try {
             await wtLeaveRoom();
-            onLeave();
         } catch (error) {
             console.error('Failed to leave room:', error);
+        } finally {
+            onLeave();
         }
     };
 
@@ -32,6 +37,18 @@ export function WatchTogetherBanner({
             {isPlaying && (
                 <div className="flex items-center gap-1 text-green-300">
                     <Play className="w-3 h-3 fill-current" />
+                </div>
+            )}
+            {syncPhase === 'paused' && (
+                <div className="flex items-center gap-2 text-amber-400 text-sm">
+                    <span className="animate-pulse">●</span>
+                    Syncing — waiting for all participants...
+                </div>
+            )}
+            {syncPhase === 'loading' && (
+                <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                    <span className="animate-spin">⟳</span>
+                    Pre-buffering for smooth playback...
                 </div>
             )}
                 <Button

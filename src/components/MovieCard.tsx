@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download } from "lucide-react"
+import { useState, useEffect, useRef, useCallback, memo } from "react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download, Pin, PinOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
+import { getPinnedIds, togglePin as togglePinStorage } from "@/utils/pins"
 import { motion } from "framer-motion"
 import { getMediaProgressPercent, isProgressPastAutoCompleteThreshold } from "@/utils/playbackProgress"
 import {
@@ -113,7 +114,37 @@ function MovieCardBase({
   const isGroupedHistorySeries = (item.history_group_count || 0) > 1
   const historyLatestLabel = item.history_group_latest_label?.trim()
   const leadActor = item.cast_names?.split(',')[0]?.trim()
+
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(getPinnedIds);
+  const isPinned = pinnedIds.has(item.id);
+  const togglePin = () => {
+    togglePinStorage(item.id);
+    setPinnedIds(getPinnedIds());
+  };
   const directorName = item.director?.trim()
+  const [isLightArea, setIsLightArea] = useState<boolean | null>(null)
+  const samplePosterLuminance = useCallback((img: HTMLImageElement) => {
+    try {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      const size = 8
+      canvas.width = size
+      canvas.height = size
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      if (!w || !h) return
+      ctx.drawImage(img, w * 0.7, 0, w * 0.3, h * 0.2, 0, 0, size, size)
+      const data = ctx.getImageData(0, 0, size, size).data
+      let r = 0, g = 0, b = 0
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i]; g += data[i + 1]; b += data[i + 2]
+      }
+      const n = data.length / 4
+      const lum = (0.299 * (r / n) + 0.587 * (g / n) + 0.114 * (b / n)) / 255
+      setIsLightArea(lum > 0.45)
+    } catch { setIsLightArea(null) }
+  }, [])
 
   useEffect(() => {
     if (shouldLoadPoster) return
@@ -208,12 +239,17 @@ function MovieCardBase({
                     src={imageSrc}
                     alt={item.title}
                     loading="lazy"
-                    onLoad={() => setImageLoaded(true)}
+                    onLoad={(e) => { setImageLoaded(true); samplePosterLuminance(e.currentTarget); }}
                     className={cn(
                       "media-list-image",
                       imageLoaded ? "opacity-100" : "opacity-0"
                     )}
                   />
+                  {isPinned && (
+                    <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-md bg-black/70 backdrop-blur-md border-2 border-white/80 flex items-center justify-center shadow-lg">
+                      <Pin className="w-3 h-3 text-white" />
+                    </div>
+                  )}
                 </div>
 
                 <div className="media-list-info">
@@ -263,42 +299,31 @@ function MovieCardBase({
           </ContextMenuTrigger>
 
           {/* Context Menu */}
-          <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <ContextMenuItem
-              onClick={() => onFixMatch(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-              aria-label="Fix match"
-            >
-              <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                <Edit className="w-4 h-4 text-muted-foreground" />
-              </div>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
+              <Play className="w-4 h-4 text-foreground/70" />
+              <span>Open Details</span>
+            </ContextMenuItem>
+
+            <ContextMenuSeparator />
+
+            <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
+              <Edit className="w-4 h-4 text-foreground/40" />
               <span>Fix Match</span>
             </ContextMenuItem>
 
             {onDownload && item.is_cloud && (
-              <ContextMenuItem
-                onClick={() => onDownload(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
-                aria-label="Download"
-              >
-                <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
-                  <Download className="w-4 h-4 text-amber-200" />
-                </div>
+              <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
+                <Download className="w-4 h-4 text-foreground/70" />
                 <span>Download</span>
               </ContextMenuItem>
             )}
 
             {onWatchTogether && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onWatchTogether(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-                  aria-label="Watch together"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                    <Users className="w-4 h-4 text-white" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
+                  <Users className="w-4 h-4 text-foreground/70" />
                   <span>Watch Together</span>
                 </ContextMenuItem>
               </>
@@ -306,31 +331,30 @@ function MovieCardBase({
 
             {onRemoveFromHistory && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onRemoveFromHistory(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-                  aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}
-                >
-                  <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
+                  <X className="w-4 h-4 text-foreground/40" />
                   <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
                 </ContextMenuItem>
               </>
             )}
 
+            <ContextMenuSeparator />
+
+            <ContextMenuItem onClick={togglePin}>
+              {isPinned ? (
+                <PinOff className="w-4 h-4 text-foreground/70" />
+              ) : (
+                <Pin className="w-4 h-4 text-foreground/70" />
+              )}
+              <span>{isPinned ? 'Unpin' : 'Pin'}</span>
+            </ContextMenuItem>
+
             {onDelete && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onDelete(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
-                  aria-label="Delete from drive"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
-                    <Trash2 className="w-4 h-4 text-red-400" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+                  <Trash2 className="w-4 h-4 text-red-400/70" />
                   <span>Delete from Drive</span>
                 </ContextMenuItem>
               </>
@@ -409,7 +433,7 @@ function MovieCardBase({
                 src={imageSrc}
                 alt={item.title}
                 loading="lazy"
-                onLoad={() => setImageLoaded(true)}
+                onLoad={(e) => { setImageLoaded(true); samplePosterLuminance(e.currentTarget); }}
                 className={cn(
                   "w-full h-full object-cover",
                   "transition-all duration-700 ease-out will-change-transform",
@@ -487,8 +511,28 @@ function MovieCardBase({
                   )}
                 </div>
 
-                {/* Removed download button on hover as per user request */}
-                <div className="ml-auto" />
+                <div className="ml-auto flex items-center gap-1.5">
+                  {isPinned && (
+                    <div className={cn(
+                      "p-1.5 rounded-lg backdrop-blur-xl border-2 shadow-xl transition-all duration-300",
+                      isLightArea === null
+                        ? "bg-white/10 border-white/20"
+                        : isLightArea
+                          ? "bg-black/75 border-white/90"
+                          : "bg-white/90 border-black/40"
+                    )}>
+                      <Pin className={cn(
+                        "w-3.5 h-3.5 transition-colors duration-300",
+                        isLightArea === null
+                          ? "text-white/80"
+                          : isLightArea
+                            ? "text-white"
+                            : "text-black"
+                      )} />
+                    </div>
+                  )}
+
+                </div>
               </div>
 
               {/* Progress Bar */}
@@ -562,42 +606,31 @@ function MovieCardBase({
         </ContextMenuTrigger>
 
       {/* Context Menu */}
-        <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <ContextMenuItem
-          onClick={() => onFixMatch(item)}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-          aria-label="Fix match"
-        >
-          <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-            <Edit className="w-4 h-4 text-muted-foreground" />
-          </div>
+        <ContextMenuContent>
+        <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
+          <Play className="w-4 h-4 text-foreground/70" />
+          <span>Open Details</span>
+        </ContextMenuItem>
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
+          <Edit className="w-4 h-4 text-foreground/40" />
           <span>Fix Match</span>
         </ContextMenuItem>
 
         {onDownload && item.is_cloud && (
-          <ContextMenuItem
-            onClick={() => onDownload(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
-            aria-label="Download"
-          >
-            <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
-              <Download className="w-4 h-4 text-amber-200" />
-            </div>
+          <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
+            <Download className="w-4 h-4 text-foreground/70" />
             <span>Download</span>
           </ContextMenuItem>
         )}
 
         {onWatchTogether && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onWatchTogether(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-              aria-label="Watch together"
-            >
-              <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                <Users className="w-4 h-4 text-white" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
+              <Users className="w-4 h-4 text-foreground/70" />
               <span>Watch Together</span>
             </ContextMenuItem>
           </>
@@ -605,15 +638,9 @@ function MovieCardBase({
 
         {onRemoveFromHistory && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onRemoveFromHistory(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-              aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}
-            >
-              <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                <X className="w-4 h-4 text-muted-foreground" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
+              <X className="w-4 h-4 text-foreground/40" />
               <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
             </ContextMenuItem>
           </>
@@ -621,19 +648,24 @@ function MovieCardBase({
 
         {onDelete && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onDelete(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
-              aria-label="Delete from drive"
-            >
-              <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
-                <Trash2 className="w-4 h-4 text-red-400" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+              <Trash2 className="w-4 h-4 text-red-400/70" />
               <span>Delete from Drive</span>
             </ContextMenuItem>
           </>
         )}
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={togglePin}>
+          {isPinned ? (
+            <PinOff className="w-4 h-4 text-foreground/70" />
+          ) : (
+            <Pin className="w-4 h-4 text-foreground/70" />
+          )}
+          <span>{isPinned ? 'Unpin' : 'Pin'}</span>
+        </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
 

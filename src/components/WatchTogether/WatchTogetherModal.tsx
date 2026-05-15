@@ -42,24 +42,24 @@ function buildMediaMatchKey(media?: MediaItem): string | undefined {
     const tokens: string[] = [];
 
     if (media.cloud_file_id?.trim()) {
-        tokens.push(`cloud:${media.cloud_file_id.trim().toLowerCase()}`);
+        tokens.push(`cloud:${encodeURIComponent(media.cloud_file_id.trim().toLowerCase())}`);
     }
 
     if (media.file_path?.trim()) {
         const normalizedPath = media.file_path.replace(/\\/g, '/');
         const fileName = normalizedPath.split('/').pop()?.trim();
         if (fileName) {
-            tokens.push(`file:${fileName.toLowerCase()}`);
+            tokens.push(`file:${encodeURIComponent(fileName.toLowerCase())}`);
         }
     }
 
     if (media.tmdb_id?.trim()) {
-        tokens.push(`tmdb:${media.tmdb_id.trim().toLowerCase()}`);
+        tokens.push(`tmdb:${encodeURIComponent(media.tmdb_id.trim().toLowerCase())}`);
     }
 
     const title = media.title?.trim();
     if (title) {
-        tokens.push(`title:${title.toLowerCase()}`);
+        tokens.push(`title:${encodeURIComponent(title.toLowerCase())}`);
     }
 
     if (tokens.length === 0) {
@@ -67,7 +67,7 @@ function buildMediaMatchKey(media?: MediaItem): string | undefined {
     }
 
     // Send all available keys; server accepts join if any token overlaps.
-    return Array.from(new Set(tokens)).join('|');
+    return Array.from(new Set(tokens)).map(t => encodeURIComponent(t)).join('|');
 }
 
 export function WatchTogetherModal({
@@ -84,15 +84,19 @@ export function WatchTogetherModal({
     const [roomCode, setRoomCode] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [isConnected, setIsConnected] = useState(true);
+    const [isConnected, setIsConnected] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<number | undefined>();
     const [currentUserId, setCurrentUserId] = useState('');
+    const [syncPhase, setSyncPhase] = useState<'lobby' | 'loading' | 'playing' | 'paused'>('lobby');
+    const [participantStatus, setParticipantStatus] = useState<Map<string, {state: string; loadProgress: number}>>(new Map());
 
     // Use refs to avoid stale closures in event listeners
     const selectedMediaRef = useRef(selectedMedia);
     const sessionIdRef = useRef(sessionId);
     const activeRoomRef = useRef(activeRoom);
     const mpvLaunchedRef = useRef(false); // Track if we already launched MPV
+    const sessionCounterRef = useRef(0); // Increment on each room join to scope event listeners
+    const handleCloseRef = useRef(false); // Prevent double invocation of handleClose
 
     // Keep refs updated
     useEffect(() => {
@@ -119,10 +123,13 @@ export function WatchTogetherModal({
         if (isOpen) {
             if (isPlaying) {
                 setView('playing');
+                setSyncPhase('playing');
             } else if (activeRoom) {
                 setView('lobby');
+                setSyncPhase('lobby');
             } else {
                 setView('menu');
+                setSyncPhase('lobby');
             }
         }
     }, [isOpen, activeRoom, isPlaying]);
@@ -165,16 +172,21 @@ export function WatchTogetherModal({
         } catch (err) {
             console.error('[WT] Failed to launch MPV:', err);
             setError(err instanceof Error ? err.message : 'Failed to launch player');
+            setIsConnected(false);
             mpvLaunchedRef.current = false;
         }
     }, []);
 
     // Listen for Watch Together events - runs always, not just when modal is open
     useEffect(() => {
+        const currentSession = sessionCounterRef.current;
         const unlisten = listen<WatchEvent>('wt-event', (event) => {
             const data = event.payload;
 
-            switch (data.type) {
+            // Ignore stale events from previous room sessions
+            if (sessionCounterRef.current !== currentSession) return;
+
+            switch (data.type as string) {
                 case 'room_updated':
                 case 'participant_changed':
                     if (data.room) {
@@ -192,10 +204,40 @@ export function WatchTogetherModal({
                     break;
                 case 'playback_started':
                     setView('playing');
+                    setSyncPhase('playing');
                     setLastSyncTime(Date.now());
                     setIsConnected(true);
+                    selectedMediaRef.current = selectedMedia;
+                    sessionIdRef.current = sessionId;
                     onSessionChange(activeRoomRef.current, sessionIdRef.current, true, selectedMediaRef.current || undefined);
                     launchMpv(data.position || 0);
+                    break;
+                case 'prepare':
+                    setSyncPhase('loading');
+                    setLastSyncTime(Date.now());
+                    break;
+                case 'play_at':
+                case 'sync_resume':
+                    setSyncPhase('playing');
+                    setView('playing');
+                    setLastSyncTime(Date.now());
+                    onSessionChange(activeRoomRef.current, sessionIdRef.current, true, selectedMediaRef.current || undefined);
+                    launchMpv();
+                    break;
+                case 'pause':
+                    if ((event.payload as any).reason === 'buffering') {
+                        setSyncPhase('paused');
+                    }
+                    break;
+                case 'participant_status':
+                    setParticipantStatus(prev => {
+                        const next = new Map(prev);
+                        next.set((event.payload as any).participantId, {
+                            state: (event.payload as any).state,
+                            loadProgress: (event.payload as any).loadProgress || 0,
+                        });
+                        return next;
+                    });
                     break;
                 case 'error':
                     console.error('[WT] Error event:', data.message);
@@ -205,7 +247,10 @@ export function WatchTogetherModal({
                     setIsConnected(false);
                     setCurrentUserId('');
                     setLastSyncTime(undefined);
+                    setSyncPhase('lobby');
+                    setParticipantStatus(new Map());
                     mpvLaunchedRef.current = false;
+                    // TODO: Call wtStopMpv() if backend exposes it to kill MPV on disconnect
                     onSessionChange(null, '', false);
                     setView('menu');
                     break;
@@ -215,7 +260,7 @@ export function WatchTogetherModal({
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [launchMpv, onSessionChange]);
+    }, [launchMpv, onSessionChange, sessionId, selectedMedia]);
 
     // Listen for MPV ended event
     useEffect(() => {
@@ -225,8 +270,17 @@ export function WatchTogetherModal({
             onSessionChange(activeRoomRef.current, sessionIdRef.current, false, selectedMediaRef.current || undefined);
         });
 
+        // Fallback: if mpvLaunchedRef stays true for 30 seconds after a playback start
+        // without receiving wt-mpv-ended, reset it (handles MPV crash without event)
+        const fallbackInterval = setInterval(() => {
+            if (mpvLaunchedRef.current) {
+                mpvLaunchedRef.current = false;
+            }
+        }, 30000);
+
         return () => {
             unlisten.then((fn) => fn());
+            clearInterval(fallbackInterval);
         };
     }, [onSessionChange]);
 
@@ -238,20 +292,22 @@ export function WatchTogetherModal({
 
         setIsLoading(true);
         setError(null);
-        localStorage.setItem('wt_nickname', nickname);
+        const sanitizedNickname = nickname.trim().slice(0, 30).replace(/<[^>]*>/g, '');
+        localStorage.setItem('wt_nickname', sanitizedNickname);
 
         try {
             const newRoom = await wtCreateRoom(
                 selectedMedia.id,
                 selectedMedia.title,
                 buildMediaMatchKey(selectedMedia),
-                nickname.trim()
+                sanitizedNickname
             );
             const localClientId = await wtGetClientId();
             if (localClientId) {
                 setCurrentUserId(localClientId);
             }
             mpvLaunchedRef.current = false;
+            sessionCounterRef.current += 1;
             setIsConnected(true);
             // Pass the media along with the session change
             onSessionChange(newRoom, newRoom.code, false, selectedMedia);
@@ -272,7 +328,8 @@ export function WatchTogetherModal({
 
         setIsLoading(true);
         setError(null);
-        localStorage.setItem('wt_nickname', nickname);
+        const sanitizedNickname = nickname.trim().slice(0, 30).replace(/<[^>]*>/g, '');
+        localStorage.setItem('wt_nickname', sanitizedNickname);
 
         try {
             const joinedRoom = await wtJoinRoom(
@@ -280,7 +337,7 @@ export function WatchTogetherModal({
                 selectedMedia.id,
                 selectedMedia.title,
                 buildMediaMatchKey(selectedMedia),
-                nickname.trim()
+                sanitizedNickname
             );
             const localClientId = await wtGetClientId();
             if (localClientId) {
@@ -288,6 +345,7 @@ export function WatchTogetherModal({
             }
             const roomIsPlaying = joinedRoom.is_playing || joinedRoom.state === 'playing';
             mpvLaunchedRef.current = false;
+            sessionCounterRef.current += 1;
             setIsConnected(true);
             onSessionChange(joinedRoom, joinedRoom.code, roomIsPlaying, selectedMedia);
 
@@ -306,9 +364,12 @@ export function WatchTogetherModal({
     };
 
     const handleClose = () => {
+        if (handleCloseRef.current) return;
+        handleCloseRef.current = true;
         setError(null);
         setRoomCode('');
         onClose();
+        setTimeout(() => { handleCloseRef.current = false; }, 300);
     };
 
     const handleLeave = async () => {
@@ -318,6 +379,7 @@ export function WatchTogetherModal({
             console.error('Failed to leave room:', error);
         }
         mpvLaunchedRef.current = false;
+        // TODO: Call wtStopMpv() if backend exposes it to kill MPV on leave
         setCurrentUserId('');
         setLastSyncTime(undefined);
         setIsConnected(false);
@@ -325,7 +387,7 @@ export function WatchTogetherModal({
         setView('menu');
     };
 
-    const handlePlaybackStart = () => {
+    const handlePlaybackViewUpdate = () => {
         setView('playing');
         onSessionChange(activeRoom, sessionId, true, selectedMedia);
     };
@@ -338,10 +400,10 @@ export function WatchTogetherModal({
     return (
         <>
             <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-                <DialogContent className="sm:max-w-md bg-zinc-900 border-zinc-800">
+                <DialogContent className="sm:max-w-md bg-card border-border/50">
                     <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2 text-white">
-                            <Users className="w-5 h-5 text-purple-500" />
+                        <DialogTitle className="flex items-center gap-2">
+                            <Users className="w-5 h-5" />
                             Watch Together
                         </DialogTitle>
                     </DialogHeader>
@@ -349,41 +411,37 @@ export function WatchTogetherModal({
                     {view === 'menu' && (
                         <div className="space-y-4">
                             {selectedMedia ? (
-                                <div className="bg-zinc-800/50 rounded-lg p-3">
-                                    <p className="text-xs text-zinc-400">Selected media</p>
-                                    <p className="text-sm font-medium text-white truncate">
-                                        {selectedMedia.title}
-                                    </p>
+                                <div className="bg-secondary/50 rounded-xl p-3 border border-border/30">
+                                    <p className="text-xs text-muted-foreground">Selected media</p>
+                                    <p className="text-sm font-medium truncate">{selectedMedia.title}</p>
                                 </div>
                             ) : (
-                                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                                    <p className="text-sm text-red-400">No media selected. Please select a movie or episode first.</p>
+                                <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-3">
+                                    <p className="text-sm text-destructive">No media selected. Please select a movie or episode first.</p>
                                 </div>
                             )}
 
-                            <div className="space-y-3">
-                                <Input
-                                    placeholder="Your nickname"
-                                    value={nickname}
-                                    onChange={(e) => setNickname(e.target.value)}
-                                    className="bg-zinc-800 border-zinc-700 text-white"
-                                />
-                            </div>
+                            <Input
+                                placeholder="Your nickname"
+                                value={nickname}
+                                onChange={(e) => setNickname(e.target.value)}
+                                className="input-modern"
+                            />
 
                             <Tabs defaultValue="create" className="w-full">
-                                <TabsList className="grid w-full grid-cols-2 bg-zinc-800">
-                                    <TabsTrigger value="create" aria-label="Create room tab">Create Room</TabsTrigger>
-                                    <TabsTrigger value="join" aria-label="Join room tab">Join Room</TabsTrigger>
+                                <TabsList className="grid w-full grid-cols-2">
+                                    <TabsTrigger value="create">Create Room</TabsTrigger>
+                                    <TabsTrigger value="join">Join Room</TabsTrigger>
                                 </TabsList>
 
                                 <TabsContent value="create" className="space-y-4 mt-4">
-                                    <p className="text-sm text-zinc-400">
+                                    <p className="text-sm text-muted-foreground">
                                         Create a new room and invite friends to watch together.
                                     </p>
                                     <Button
                                         onClick={handleCreateRoom}
                                         disabled={!nickname.trim() || !selectedMedia || isLoading}
-                                        className="w-full bg-purple-600 hover:bg-purple-700"
+                                        className="btn-primary w-full"
                                         aria-label="Create a watch together room"
                                     >
                                         {isLoading ? (
@@ -401,12 +459,12 @@ export function WatchTogetherModal({
                                         value={roomCode}
                                         onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                                         maxLength={6}
-                                        className="bg-zinc-800 border-zinc-700 text-white text-center text-lg tracking-widest font-mono"
+                                        className="input-modern text-center text-lg tracking-widest font-mono"
                                     />
                                     <Button
                                         onClick={handleJoinRoom}
                                         disabled={!nickname.trim() || !roomCode.trim() || !selectedMedia || isLoading}
-                                        className="w-full bg-purple-600 hover:bg-purple-700"
+                                        className="btn-primary w-full"
                                         aria-label="Join a watch together room"
                                     >
                                         {isLoading ? (
@@ -420,8 +478,8 @@ export function WatchTogetherModal({
                             </Tabs>
 
                             {error && (
-                                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                                    <p className="text-sm text-red-400">{error}</p>
+                                <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-3">
+                                    <p className="text-sm text-destructive">{error}</p>
                                 </div>
                             )}
                         </div>
@@ -433,33 +491,34 @@ export function WatchTogetherModal({
                             isHost={isHost}
                             currentUserId={resolvedCurrentUserId}
                             mediaDuration={selectedMedia?.duration_seconds}
-                            onPlaybackStart={handlePlaybackStart}
+                            onPlaybackStart={handlePlaybackViewUpdate}
                             onLaunchMpv={launchMpv}
                             onLeave={handleLeave}
+                            syncPhase={syncPhase}
+                            participantStatus={participantStatus}
+                            onSyncPhaseChange={setSyncPhase}
                         />
                     )}
 
                     {view === 'playing' && (
                         <div className="text-center py-8">
-                            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/20 flex items-center justify-center">
-                                <Users className="w-8 h-8 text-purple-500" />
+                            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
+                                <Users className="w-8 h-8" />
                             </div>
-                            <p className="text-lg font-medium text-white mb-2">
-                                Watching Together
-                            </p>
-                            <p className="text-sm text-zinc-400 mb-6">
+                            <p className="text-lg font-bold mb-2">Watching Together</p>
+                            <p className="text-sm text-muted-foreground mb-8">
                                 Your playback is synchronized with {activeRoom?.participants.length || 0} participants
                             </p>
                             {error && (
-                                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4">
-                                    <p className="text-sm text-red-400">{error}</p>
+                                <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-3 mb-4">
+                                    <p className="text-sm text-destructive">{error}</p>
                                 </div>
                             )}
                             <div className="flex flex-col gap-2">
                                 <Button
                                     variant="outline"
                                     onClick={handleClose}
-                                    className="border-zinc-700"
+                                    className="btn-secondary"
                                     aria-label="Close modal but stay in room"
                                 >
                                     <X className="w-4 h-4 mr-2" />
@@ -468,7 +527,7 @@ export function WatchTogetherModal({
                                 <Button
                                     variant="ghost"
                                     onClick={handleLeave}
-                                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                    className="text-destructive/70 hover:text-destructive hover:bg-destructive/10"
                                     aria-label="Leave watch together room"
                                 >
                                     Leave Room
@@ -480,10 +539,11 @@ export function WatchTogetherModal({
             </Dialog>
 
             {/* Sync status overlay during playback */}
-            {isPlaying && (
+            {(isPlaying || syncPhase === 'loading' || syncPhase === 'paused') && (
                 <SyncStatusIndicator
                     isConnected={isConnected}
                     lastSyncTime={lastSyncTime}
+                    syncPhase={syncPhase}
                 />
             )}
         </>

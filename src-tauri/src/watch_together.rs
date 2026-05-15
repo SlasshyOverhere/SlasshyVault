@@ -27,8 +27,9 @@ const CODE_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// Generate a 6-character room code
 pub fn generate_room_code() -> String {
+    use rand::rngs::OsRng;
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = OsRng;
     (0..6)
         .map(|_| {
             let idx = rng.gen_range(0..CODE_CHARS.len());
@@ -108,6 +109,9 @@ pub enum ClientMessage {
     /// Pong response for RTT measurement
     #[serde(rename = "pong_report")]
     PongReport { ping_id: String, rtt: f64 },
+    /// LBAS: Client reports buffering state
+    #[serde(rename = "buffering_started")]
+    BufferingStarted { position: f64 },
 }
 
 /// Participant sync info from server state_update
@@ -176,6 +180,18 @@ pub enum ServerMessage {
     },
     #[serde(rename = "heartbeat_ack")]
     HeartbeatAck { timestamp: i64 },
+    /// LBAS: Server instructs all clients to prepare for playback
+    #[serde(rename = "prepare")]
+    Prepare { position: f64, pre_buffer_target: u32 },
+    /// LBAS: Server schedules collective resume at a specific timestamp
+    #[serde(rename = "play_at")]
+    PlayAt { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server resumes playback after all participants recovered from buffering
+    #[serde(rename = "sync_resume")]
+    SyncResume { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server pauses playback due to a buffering participant
+    #[serde(rename = "pause")]
+    Pause { reason: String, triggered_by: String },
 }
 
 /// Watch session state
@@ -254,6 +270,21 @@ pub enum WatchEvent {
         your_rtt: f64,
         participants: Vec<ParticipantSyncInfo>,
     },
+    /// LBAS: Server instructs client to prepare for playback
+    #[serde(rename = "prepare")]
+    Prepare { position: f64, pre_buffer_target: u32 },
+    /// LBAS: Server schedules collective resume
+    #[serde(rename = "play_at")]
+    PlayAt { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server resumes after buffering recovery
+    #[serde(rename = "sync_resume")]
+    SyncResume { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server pauses due to buffering
+    #[serde(rename = "pause")]
+    Pause { reason: String, triggered_by: String },
+    /// Show OSD message inside MPV player (like Syncplay)
+    #[serde(rename = "show_osd")]
+    ShowOsd { message: String, duration_ms: u64 },
 }
 
 impl WatchTogetherManager {
@@ -343,7 +374,7 @@ impl WatchTogetherManager {
             media_title: media_title.clone(),
             media_id,
             media_match_key,
-            nickname,
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
         };
 
@@ -435,6 +466,12 @@ impl WatchTogetherManager {
                         ping_counter += 1;
                         let ping_id = format!("client-{}", ping_counter);
                         ping_times.lock().await.insert(ping_id.clone(), std::time::Instant::now());
+                        // Cleanup ping entries older than 30s
+                        {
+                            let mut times = ping_times.lock().await;
+                            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
+                            times.retain(|_, v| *v > cutoff);
+                        }
                         // Send ping as raw JSON (not through ClientMessage enum to keep it simple)
                         let ping_json = serde_json::json!({
                             "type": "ping",
@@ -444,6 +481,9 @@ impl WatchTogetherManager {
                     }
                     // Handle shutdown
                     _ = shutdown_rx.recv() => {
+                        // Send Leave before Close to ensure clean server-side departure
+                        let leave_json = serde_json::json!({"type": "leave"});
+                        let _ = write.send(Message::Text(leave_json.to_string())).await;
                         let _ = write.send(Message::Close(None)).await;
                         break;
                     }
@@ -503,7 +543,7 @@ impl WatchTogetherManager {
         // Send join message
         let join_msg = ClientMessage::Join {
             room_code: room_code.to_uppercase(),
-            nickname,
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
             media_id,
             media_title,
@@ -596,6 +636,12 @@ impl WatchTogetherManager {
                         ping_counter += 1;
                         let ping_id = format!("client-{}", ping_counter);
                         ping_times.lock().await.insert(ping_id.clone(), std::time::Instant::now());
+                        // Cleanup ping entries older than 30s
+                        {
+                            let mut times = ping_times.lock().await;
+                            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
+                            times.retain(|_, v| *v > cutoff);
+                        }
                         let ping_json = serde_json::json!({
                             "type": "ping",
                             "ping_id": ping_id,
@@ -603,6 +649,9 @@ impl WatchTogetherManager {
                         let _ = write.send(Message::Text(ping_json.to_string())).await;
                     }
                     _ = shutdown_rx.recv() => {
+                        // Send Leave before Close to ensure clean server-side departure
+                        let leave_json = serde_json::json!({"type": "leave"});
+                        let _ = write.send(Message::Text(leave_json.to_string())).await;
                         let _ = write.send(Message::Close(None)).await;
                         break;
                     }
@@ -748,6 +797,42 @@ impl WatchTogetherManager {
             }
             ServerMessage::Error { message } => {
                 emit(WatchEvent::Error { message }).await;
+            }
+            ServerMessage::Prepare { position, pre_buffer_target } => {
+                emit(WatchEvent::Prepare { position, pre_buffer_target }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: format!("Pre-buffering {}s for smooth playback...", pre_buffer_target),
+                    duration_ms: 3000,
+                }).await;
+            }
+            ServerMessage::PlayAt { position, play_at_timestamp } => {
+                emit(WatchEvent::PlayAt { position, play_at_timestamp }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: "Starting synchronized playback".to_string(),
+                    duration_ms: 3000,
+                }).await;
+            }
+            ServerMessage::SyncResume { position, play_at_timestamp } => {
+                emit(WatchEvent::SyncResume { position, play_at_timestamp }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: "Resuming sync — all participants ready".to_string(),
+                    duration_ms: 2000,
+                }).await;
+            }
+            ServerMessage::Pause { reason, triggered_by } => {
+                let tid = triggered_by.clone();
+                let nickname = {
+                    let info = room_info.read().await;
+                    info.as_ref().and_then(|r| r.participants.iter().find(|p| p.id == tid).map(|p| p.nickname.clone()))
+                        .unwrap_or_else(|| triggered_by.clone())
+                };
+                if reason == "buffering" {
+                    emit(WatchEvent::ShowOsd {
+                        message: format!("{} is buffering...", nickname),
+                        duration_ms: 3000,
+                    }).await;
+                }
+                emit(WatchEvent::Pause { reason, triggered_by }).await;
             }
             _ => {}
         }

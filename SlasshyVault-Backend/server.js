@@ -21,6 +21,9 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 // Auto-detect redirect URI from request if not set
 const getRedirectUri = (req) => {
+  if (process.env.OAUTH_REDIRECT_URL) {
+    return process.env.OAUTH_REDIRECT_URL;
+  }
   if (process.env.REDIRECT_URI) {
     return process.env.REDIRECT_URI;
   }
@@ -109,6 +112,12 @@ const runtimeAuthByIp = new Map();
 const tokenCache = new Map(); // accessToken -> { userInfo, expiresAt }
 const TOKEN_CACHE_TTL = 60 * 1000; // 60 seconds
 const TOKEN_CACHE_MAX_SIZE = 500;
+
+const oauthSessionStore = new Map(); // sessionId -> { tokens, createdAt }
+const oauthStateStore = new Map(); // state -> createdAt
+const OAUTH_SESSION_TTL = 30000; // 30 seconds
+
+const rateLimiterMap = new Map(); // IP -> { count, resetAt }
 
 function wtDebugLog(...args) {
   if (!WT_LIVE_LOGS_ENABLED) return;
@@ -330,6 +339,45 @@ setInterval(() => {
   }
 
 }, Math.max(60 * 1000, RUNTIME_SECURITY_CLEANUP_MS)).unref?.();
+
+// Clean up expired OAuth sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of oauthSessionStore) {
+    if (now - entry.createdAt > OAUTH_SESSION_TTL) {
+      oauthSessionStore.delete(id);
+    }
+  }
+  for (const [state, createdAt] of oauthStateStore) {
+    if (now - createdAt > OAUTH_SESSION_TTL) {
+      oauthStateStore.delete(state);
+    }
+  }
+  for (const [ip, entry] of rateLimiterMap) {
+    if (now > entry.resetAt) {
+      rateLimiterMap.delete(ip);
+    }
+  }
+}, 30000).unref?.();
+
+function createRateLimiter(windowMs, maxRequests) {
+  return (req, res, next) => {
+    const ip = getClientIp(req);
+    const now = Date.now();
+    let entry = rateLimiterMap.get(ip);
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 1, resetAt: now + windowMs };
+      rateLimiterMap.set(ip, entry);
+      return next();
+    }
+    entry.count += 1;
+    if (entry.count > maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    }
+    return next();
+  };
+}
+const socialRateLimiter = createRateLimiter(60000, 100);
 
 function tmdbLog(level, requestId, message, meta = null) {
   if (!TMDB_PROXY_LOGS_ENABLED) return;
@@ -736,7 +784,7 @@ function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No I, O, 0, 1
   let code = '';
   for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+    code += chars[crypto.randomInt(chars.length)];
   }
   return code;
 }
@@ -781,11 +829,11 @@ function normalizeSyncAction(action) {
 function normalizeSyncPosition(position, fallback = 0) {
   const parsed = Number(position);
   if (Number.isFinite(parsed)) {
-    return Math.max(0, parsed);
+    return Math.min(1000000, Math.max(0, parsed));
   }
   const fallbackNumber = Number(fallback);
   if (Number.isFinite(fallbackNumber)) {
-    return Math.max(0, fallbackNumber);
+    return Math.min(1000000, Math.max(0, fallbackNumber));
   }
   return 0;
 }
@@ -830,6 +878,7 @@ function buildPersistedRoomState(room) {
     media_title: room.media_title,
     media_match_key: room.media_match_key || '',
     host_id: room.host_id,
+    host_google_id: room.host_google_id,
     state: room.state,
     current_position: getServerPosition(room),
     is_paused: !!room.is_paused,
@@ -880,6 +929,7 @@ function hydrateRecoveredRoom(roomData) {
     media_title: roomData.media_title,
     media_match_key: normalizeMediaMatchKey(roomData.media_match_key),
     host_id: roomData.host_id,
+    host_google_id: roomData.host_google_id,
     state: roomData.state || 'waiting',
     current_position: normalizeSyncPosition(roomData.current_position, 0),
     is_paused: roomData.is_paused !== false,
@@ -891,7 +941,14 @@ function hydrateRecoveredRoom(roomData) {
     last_sync_from: roomData.last_sync_from || roomData.host_id || null,
     last_sync_at: Number(roomData.last_sync_at) || Date.now(),
     syncInterval: null,
-    pingInterval: null
+    pingInterval: null,
+    syncState: {
+      phase: 'idle',
+      participantsReady: new Map(),
+      pendingPause: null,
+      bufferingParticipants: new Set(),
+      lastResumeAt: null,
+    },
   };
 
   return room;
@@ -933,9 +990,10 @@ async function removeRoomParticipantFromRedis(roomCode, participantId) {
   return redis.setRoomParticipant(roomCode, participantId, false);
 }
 
+// Disabled to preserve free Upstash Redis quota.
+// Enable via WT_EVENT_LOGGING=true if needed.
 async function logRoomEvent(roomCode, event) {
-  if (!redis.isConnected() || !roomCode || !event) return false;
-  return redis.logSyncEvent(roomCode, event);
+  return false;
 }
 
 async function deletePersistedRoom(roomCode) {
@@ -1045,7 +1103,7 @@ app.get('/health/runtime', runtimeMetricsAuth, (req, res) => {
   const now = Date.now();
   res.json({
     activeRooms: rooms.size,
-    onlineUsers: social.onlineUsers.size,
+    onlineUsers: social.getOnlineUsers().size,
     tmdbCredentials: tmdbCredentials.length,
     tmdbPool: tmdbCredentials.map((credential, index) => ({
       id: credential.id,
@@ -1114,6 +1172,9 @@ app.get('/api/tmdb/*tmdbPath', async (req, res) => {
   if (cacheControl) res.set('Cache-Control', cacheControl);
   res.status(response.status).send(payload);
 });
+
+app.use('/api/social', socialRateLimiter);
+app.use('/api/watchtogether', socialRateLimiter);
 
 // ============================================
 // Social API Endpoints
@@ -1264,7 +1325,7 @@ app.post('/api/social/friends/request', socialAuth, async (req, res) => {
     const profile = await social.getProfile(req.googleId, req.accessToken);
 
     // Get target user's access token from cache
-    const targetProfile = social.userProfiles.get(targetUserId);
+    const targetProfile = social.getUserProfiles().get(targetUserId);
     if (!targetProfile) {
       return res.status(404).json({ error: 'User not found or not online' });
     }
@@ -1479,8 +1540,24 @@ app.post('/api/social/chat/:friendId', socialAuth, async (req, res) => {
   }
 });
 
+// Token session retrieval endpoint
+app.get('/auth/session/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = oauthSessionStore.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found or expired' });
+  }
+  oauthSessionStore.delete(sessionId);
+  res.json({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_in: session.expires_in,
+    token_type: session.token_type,
+  });
+});
+
 // Create a new Watch Together room
-app.post('/api/watchtogether/rooms', async (req, res) => {
+app.post('/api/watchtogether/rooms', socialAuth, async (req, res) => {
   try {
     const { media_id, media_title, media_match_key, host_nickname } = req.body;
 
@@ -1497,6 +1574,7 @@ app.post('/api/watchtogether/rooms', async (req, res) => {
       media_title,
       media_match_key: normalizeMediaMatchKey(media_match_key),
       host_id: hostId,
+      host_google_id: req.googleId,
       state: 'waiting',
       current_position: 0,
       is_paused: true,
@@ -1509,6 +1587,13 @@ app.post('/api/watchtogether/rooms', async (req, res) => {
       last_sync_at: now,
       syncInterval: null,
       pingInterval: null,
+      syncState: {
+        phase: 'idle',
+        participantsReady: new Map(),
+        pendingPause: null,
+        bufferingParticipants: new Set(),
+        lastResumeAt: null,
+      },
     };
 
     room.participants.set(hostId, {
@@ -1558,7 +1643,7 @@ app.post('/api/watchtogether/rooms', async (req, res) => {
 });
 
 // Get room info
-app.get('/api/watchtogether/rooms/:code', async (req, res) => {
+app.get('/api/watchtogether/rooms/:code', socialAuth, async (req, res) => {
   const { code } = req.params;
   const normalizedCode = code.toUpperCase();
   let room = rooms.get(normalizedCode);
@@ -1595,7 +1680,7 @@ app.get('/api/watchtogether/rooms/:code', async (req, res) => {
 });
 
 // Delete/close a room
-app.delete('/api/watchtogether/rooms/:code', async (req, res) => {
+app.delete('/api/watchtogether/rooms/:code', socialAuth, async (req, res) => {
   const { code } = req.params;
   const normalizedCode = code.toUpperCase();
   const room = rooms.get(normalizedCode);
@@ -1603,6 +1688,11 @@ app.delete('/api/watchtogether/rooms/:code', async (req, res) => {
   if (!room) {
     await deletePersistedRoom(normalizedCode);
     return res.status(404).json({ error: 'Room not found' });
+  }
+
+  // Verify the authenticated user owns this room
+  if (room.host_google_id && room.host_google_id !== req.googleId) {
+    return res.status(403).json({ error: 'Only the host can delete this room' });
   }
 
   // Close all WebSocket connections
@@ -1622,12 +1712,14 @@ app.delete('/api/watchtogether/rooms/:code', async (req, res) => {
 
 function redirectToGoogleAuth(req, res, scopes) {
   const redirectUri = getRedirectUri(req);
-  const state = req.query.state || 'default';
 
   // Check if credentials are configured
   if (!GOOGLE_CLIENT_ID) {
     return res.status(500).json({ error: 'GOOGLE_CLIENT_ID not configured' });
   }
+
+  const state = crypto.randomUUID();
+  oauthStateStore.set(state, Date.now());
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
@@ -1655,11 +1747,17 @@ app.get('/auth/google/social', (req, res) => {
 // Step 2: Handle Google callback
 app.get('/auth/callback', async (req, res) => {
   const redirectUri = getRedirectUri(req);
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
 
   if (error) {
     return res.redirect(`http://localhost:8085/callback?error=${encodeURIComponent(error)}`);
   }
+
+  // Validate state
+  if (!state || !oauthStateStore.has(state)) {
+    return res.redirect(`http://localhost:8085/callback?error=invalid_state`);
+  }
+  oauthStateStore.delete(state);
 
   if (!code) {
     return res.redirect(`http://localhost:8085/callback?error=no_code`);
@@ -1691,16 +1789,18 @@ app.get('/auth/callback', async (req, res) => {
       return res.redirect(`http://localhost:8085/callback?error=${encodeURIComponent(tokens.error_description || tokens.error)}`);
     }
 
-    // Encode tokens as base64 to pass via URL safely
-    const tokenData = Buffer.from(JSON.stringify({
+    // Store tokens server-side with session ID
+    const sessionId = crypto.randomUUID();
+    oauthSessionStore.set(sessionId, {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expires_in: tokens.expires_in,
       token_type: tokens.token_type,
-    })).toString('base64');
+      createdAt: Date.now()
+    });
 
-    // Redirect to app's localhost callback with tokens
-    res.redirect(`http://localhost:8085/callback?tokens=${tokenData}`);
+    // Redirect with only session ID
+    res.redirect(`http://localhost:8085/callback?session_id=${sessionId}`);
 
   } catch (err) {
     console.error('Token exchange error:', err);
@@ -1830,8 +1930,11 @@ socialWss.on('connection', async (ws, req) => {
 
 wss.on('connection', (ws, req) => {
   // Extract room code from URL: /ws/watchtogether/ROOMCODE or just /ws/watchtogether for create
-  const urlParts = req.url.split('/');
-  let roomCode = urlParts[urlParts.length - 1]?.split('?')[0]?.toUpperCase();
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const urlParts = url.pathname.split('/');
+  const accessToken = url.searchParams.get('token');
+  let roomCode = urlParts[urlParts.length - 1]?.toUpperCase() || '';
+  if (roomCode.includes('?')) roomCode = roomCode.split('?')[0];
 
   // If roomCode is "watchtogether", it means no room code was provided (creating new room)
   if (roomCode === 'WATCHTOGETHER' || roomCode === '') {
@@ -1840,8 +1943,37 @@ wss.on('connection', (ws, req) => {
 
   let participantId = null;
   let currentRoom = null;
+  let authenticatedGoogleId = null;
+
+  // Validate token if provided
+  if (accessToken) {
+    resolveGoogleUserFromAccessToken(accessToken).then((userInfo) => {
+      if (userInfo) {
+        authenticatedGoogleId = userInfo.id;
+      }
+    }).catch(() => {});
+  }
 
   wtDebugLog(`[WT] WebSocket connection, room code: ${roomCode || 'none (will create)'}`);
+
+  // WS ping/pong heartbeat (30s interval, 10s grace)
+  let alive = true;
+  let pingTimeout;
+  const heartbeatInterval = setInterval(() => {
+    if (!alive) {
+      ws.terminate();
+      return;
+    }
+    alive = false;
+    try { ws.ping(); } catch { /* ignore */ }
+    pingTimeout = setTimeout(() => {
+      try { ws.terminate(); } catch { /* ignore */ }
+    }, 10000);
+  }, 30000);
+  ws.on('pong', () => {
+    alive = true;
+    clearTimeout(pingTimeout);
+  });
 
   ws.on('message', async (data) => {
     try {
@@ -1849,7 +1981,7 @@ wss.on('connection', (ws, req) => {
 
       // Handle room creation first (no room code needed)
       if (message.type === 'create') {
-        const { media_title, media_id, media_match_key, nickname, client_id } = message;
+        const { media_title, media_id, media_match_key, nickname } = message;
 
         if (!media_id || !media_title || !nickname) {
           ws.send(JSON.stringify({ type: 'error', message: 'media_id, media_title, and nickname required' }));
@@ -1857,7 +1989,7 @@ wss.on('connection', (ws, req) => {
         }
 
         const newCode = await generateUniqueRoomCode();
-        const hostId = client_id || uuidv4();
+        const hostId = authenticatedGoogleId || uuidv4();
         const now = Date.now();
         const room = {
           code: newCode,
@@ -1865,6 +1997,7 @@ wss.on('connection', (ws, req) => {
           media_title,
           media_match_key: normalizeMediaMatchKey(media_match_key),
           host_id: hostId,
+          host_google_id: authenticatedGoogleId,
           state: 'waiting',
           current_position: 0,
           is_paused: true,
@@ -1877,6 +2010,13 @@ wss.on('connection', (ws, req) => {
           last_sync_at: now,
           syncInterval: null, // Will hold the periodic state broadcast timer
           pingInterval: null, // Will hold the periodic ping timer
+          syncState: {
+            phase: 'idle',
+            participantsReady: new Map(),
+            pendingPause: null,
+            bufferingParticipants: new Set(),
+            lastResumeAt: null,
+          },
         };
 
         // Add host as first participant
@@ -1967,12 +2107,13 @@ wss.on('connection', (ws, req) => {
 
       switch (message.type) {
         case 'join': {
-          // Join room with nickname and client_id
-          const { nickname, client_id, media_id, media_title, media_match_key } = message;
+          // Join room with nickname
+          const { nickname, media_id, media_title, media_match_key } = message;
           const normalizedNickname = (nickname || '').toString().trim();
+          const joinClientId = authenticatedGoogleId || message.client_id;
 
-          if (!client_id || !normalizedNickname) {
-            ws.send(JSON.stringify({ type: 'error', message: 'client_id and nickname are required to join' }));
+          if (!joinClientId || !normalizedNickname) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Authentication required to join' }));
             break;
           }
 
@@ -2008,7 +2149,7 @@ wss.on('connection', (ws, req) => {
           }
 
           // Check if this is an existing participant reconnecting
-          let participant = room.participants.get(client_id);
+          let participant = room.participants.get(joinClientId);
           let isReconnect = false;
 
           if (participant) {
@@ -2021,10 +2162,10 @@ wss.on('connection', (ws, req) => {
             participant.disconnected_at = null;
             participant.ws = ws;
             participant.nickname = normalizedNickname;
-            participantId = client_id;
+            participantId = joinClientId;
           } else {
             // New participant
-            participantId = client_id || uuidv4();
+            participantId = joinClientId;
             participant = {
               id: participantId,
               nickname: normalizedNickname,
@@ -2150,34 +2291,37 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          if (participant && participant.is_host) {
-            const now = Date.now();
-            room.state = 'playing';
-            room.is_paused = false;
-            room.current_position = normalizeSyncPosition(message.position, 0);
-            room.position_updated_at = now;
-            room.lastActivity = now;
-            room.last_sync_from = participantId;
-            room.last_sync_at = now;
-            participant.lastPosition = room.current_position;
-            participant.lastPaused = false;
-            participant.lastStateReport = now;
-
-            wtDebugLog(`[WT] Playback started in room ${room.code}`);
-
-            broadcastToRoom(room, {
-              type: 'playback_started',
-              position: room.current_position,
-              timestamp: now
-            });
-
-            await persistRoomState(room);
-            await logRoomEvent(room.code, {
-              type: 'playback_started',
-              participant_id: participantId,
-              position: room.current_position
-            });
+          // LBAS: Set phase to loading and broadcast prepare
+          room.syncState.phase = 'loading';
+          room.syncState.participantsReady = new Map();
+          for (const [id] of room.participants) {
+            room.syncState.participantsReady.set(id, false);
           }
+
+          const now = Date.now();
+          room.current_position = normalizeSyncPosition(message.position, 0);
+          room.position_updated_at = now;
+          room.lastActivity = now;
+          room.last_sync_from = participantId;
+          room.last_sync_at = now;
+          participant.lastPosition = room.current_position;
+          participant.lastPaused = false;
+          participant.lastStateReport = now;
+
+          wtDebugLog(`[WT][LBAS] Preparing playback in room ${room.code}, phase=loading`);
+
+          broadcastToRoom(room, {
+            type: 'prepare',
+            position: room.current_position,
+            pre_buffer_target: 30,
+          });
+
+          await persistRoomState(room);
+          await logRoomEvent(room.code, {
+            type: 'playback_started',
+            participant_id: participantId,
+            position: room.current_position
+          });
           break;
         }
 
@@ -2188,8 +2332,7 @@ wss.on('connection', (ws, req) => {
           const participant = room.participants.get(participantId);
 
           if (!participant) break;
-          if (room.sync_mode === 'host_only' && !participant.is_host) {
-            // Ignore non-host sync attempts in host-only mode
+          if (!canParticipantDriveRoomState(room, participantId, participant, Date.now())) {
             break;
           }
 
@@ -2239,6 +2382,17 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // LBAS: Track seek for sync state machine
+          if (normalizedAction === 'seek') {
+            room.syncState.phase = 'syncing';
+            room.syncState.participantsReady = new Map();
+            for (const [id] of room.participants) {
+              room.syncState.participantsReady.set(id, false);
+            }
+            room.syncState.participantsReady.set(participantId, true); // Initiator is ready
+            wtDebugLog(`[WT][LBAS] Seek initiated, phase=syncing in room ${room.code}`);
+          }
+
           await persistRoomState(room);
           await logRoomEvent(room.code, {
             type: 'sync',
@@ -2251,35 +2405,123 @@ wss.on('connection', (ws, req) => {
 
         case 'state_report': {
           // Continuous state report from client (sent every ~1s)
-          // This is the Syncplay-style "State" message
+          // Extended for LBAS: includes state, load_progress, buffered_range, play_at_ack
           const participant = room.participants.get(participantId);
-          if (participant) {
-            const now = Date.now();
-            room.lastActivity = now;
-            const reportPosition = Number(message.position);
-            const hasPosition = Number.isFinite(reportPosition);
-            const normalizedPosition = hasPosition
-              ? normalizeSyncPosition(reportPosition, participant.lastPosition)
-              : participant.lastPosition;
-            const reportPaused = message.paused !== undefined ? !!message.paused : participant.lastPaused;
+          if (!participant) break;
 
-            participant.lastPosition = normalizedPosition;
-            participant.lastPaused = reportPaused;
-            participant.lastStateReport = now;
+          const now = Date.now();
+          room.lastActivity = now;
+          const reportPosition = Number(message.position);
+          const hasPosition = Number.isFinite(reportPosition);
+          const normalizedPosition = hasPosition
+            ? normalizeSyncPosition(reportPosition, participant.lastPosition)
+            : participant.lastPosition;
+          const reportPaused = message.paused !== undefined ? !!message.paused : participant.lastPaused;
+          const reportState = message.state || (reportPaused ? 'paused' : 'playing');
 
-            if ((room.state === 'playing' || room.state === 'paused')
-              && canParticipantDriveRoomState(room, participantId, participant, now)) {
-              const serverPos = getServerPosition(room);
-              const drift = Math.abs(serverPos - normalizedPosition);
-              if (drift > STATE_REPORT_CORRECTION_THRESHOLD || room.is_paused !== reportPaused) {
-                room.current_position = normalizedPosition;
-                room.position_updated_at = now;
-                room.is_paused = reportPaused;
-                room.state = reportPaused ? 'paused' : 'playing';
-                await persistRoomState(room);
+          participant.lastPosition = normalizedPosition;
+          participant.lastPaused = reportPaused;
+          participant.lastStateReport = now;
+
+          // LBAS: Handle state transitions
+          if (reportState === 'ready') {
+            room.syncState.participantsReady.set(participantId, true);
+            const allReady = Array.from(room.syncState.participantsReady.values()).every(v => v);
+
+            if (allReady && (room.syncState.phase === 'loading' || room.syncState.phase === 'syncing')) {
+              let maxRtt = 0;
+              for (const [, p] of room.participants) {
+                if (p.rttAvg > maxRtt) maxRtt = p.rttAvg;
               }
+              const T = Date.now() + maxRtt + 200;
+              room.syncState.phase = 'playing';
+              room.syncState.lastResumeAt = T;
+              room.state = 'playing';
+              room.is_paused = false;
+
+              broadcastToRoom(room, {
+                type: 'play_at',
+                position: room.current_position,
+                play_at_timestamp: T,
+              });
+
+              wtDebugLog(`[WT][LBAS] All ready (phase=${room.syncState.phase}), scheduling play_at at T=${T}, maxRTT=${maxRtt}`);
             }
           }
+
+          // LBAS: Handle previously-buffering participant now playing
+          if (reportState === 'playing' && room.syncState.bufferingParticipants.has(participantId)) {
+            room.syncState.bufferingParticipants.delete(participantId);
+            wtDebugLog(`[WT][LBAS] Participant ${participant.nickname} recovered from buffering`);
+
+            if (room.syncState.bufferingParticipants.size === 0 && room.syncState.phase === 'paused') {
+              const roomAtTime = room;
+              setTimeout(() => {
+                if (roomAtTime.syncState.bufferingParticipants.size > 0 || roomAtTime.syncState.phase !== 'paused') return;
+
+                let maxRtt = 0;
+                for (const [, p] of roomAtTime.participants) {
+                  if (p.rttAvg > maxRtt) maxRtt = p.rttAvg;
+                }
+                const T = Date.now() + maxRtt + 200;
+                roomAtTime.syncState.phase = 'playing';
+                roomAtTime.syncState.lastResumeAt = T;
+                roomAtTime.state = 'playing';
+                roomAtTime.is_paused = false;
+
+                broadcastToRoom(roomAtTime, {
+                  type: 'sync_resume',
+                  position: roomAtTime.current_position,
+                  play_at_timestamp: T,
+                });
+
+                wtDebugLog(`[WT][LBAS] All recovered from buffering, scheduling sync_resume at T=${T}`);
+              }, 300);
+            }
+          }
+
+          if ((room.state === 'playing' || room.state === 'paused')
+            && canParticipantDriveRoomState(room, participantId, participant, now)) {
+            const serverPos = getServerPosition(room);
+            const drift = Math.abs(serverPos - normalizedPosition);
+            if (drift > STATE_REPORT_CORRECTION_THRESHOLD || room.is_paused !== reportPaused) {
+              room.current_position = normalizedPosition;
+              room.position_updated_at = now;
+              room.is_paused = reportPaused;
+              room.state = reportPaused ? 'paused' : 'playing';
+              await persistRoomState(room);
+            }
+          }
+          break;
+        }
+
+        case 'buffering_started': {
+          const participant = room.participants.get(participantId);
+          if (!participant) break;
+
+          room.syncState.bufferingParticipants.add(participantId);
+          wtDebugLog(`[WT][LBAS] ${participant.nickname} started buffering at position ${message.position}`);
+
+          if (room.syncState.phase === 'playing' || room.syncState.phase === 'idle') {
+            room.syncState.phase = 'paused';
+            room.syncState.pendingPause = {
+              triggered_by: participantId,
+              position: message.position,
+            };
+
+            broadcastToRoom(room, {
+              type: 'pause',
+              reason: 'buffering',
+              triggered_by: participantId,
+            });
+
+            room.is_paused = true;
+            room.state = 'paused';
+
+            wtDebugLog(`[WT][LBAS] Pausing room due to buffering from ${participant.nickname}`);
+          }
+
+          await persistRoomState(room);
           break;
         }
 
@@ -2341,10 +2583,14 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', async () => {
+  ws.on('close', () => {
+    clearInterval(heartbeatInterval);
+    clearTimeout(pingTimeout);
     wtDebugLog(`[WT] WebSocket closed for participant: ${participantId}`);
     if (currentRoom && participantId) {
-      await handleSocketClose(currentRoom, participantId, ws);
+      handleSocketClose(currentRoom, participantId, ws).catch((err) => {
+        console.error('[WT] Close handler error:', err);
+      });
     }
   });
 
@@ -2486,6 +2732,42 @@ async function handleParticipantLeave(room, participantId) {
   if (room.last_sync_from === participantId) {
     room.last_sync_from = null;
     room.last_sync_at = Date.now();
+  }
+
+  // LBAS: Clean up syncState
+  if (room.syncState) {
+    room.syncState.participantsReady.delete(participantId);
+    room.syncState.bufferingParticipants.delete(participantId);
+
+    // If we're in loading phase, check if remaining participants are all ready
+    if (room.syncState.phase === 'loading') {
+      const remainingReady = Array.from(room.syncState.participantsReady.values()).every(v => v);
+      if (remainingReady && room.participants.size > 0) {
+        let maxRtt = 0;
+        for (const [, p] of room.participants) {
+          if (p.rttAvg > maxRtt) maxRtt = p.rttAvg;
+        }
+        const T = Date.now() + maxRtt + 200;
+        room.syncState.phase = 'playing';
+        room.syncState.lastResumeAt = T;
+        room.state = 'playing';
+        room.is_paused = false;
+
+        broadcastToRoom(room, {
+          type: 'play_at',
+          position: room.current_position,
+          play_at_timestamp: T,
+        });
+      }
+    }
+
+    // If room has < 2 participants, reset state machine
+    if (room.participants.size < 2) {
+      room.syncState.phase = 'idle';
+      room.syncState.pendingPause = null;
+      room.syncState.bufferingParticipants.clear();
+      room.syncState.lastResumeAt = null;
+    }
   }
 
   wtDebugLog(`[WT] ${participant.nickname} left room ${room.code}`);
