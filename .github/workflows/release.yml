@@ -87,11 +87,19 @@ jobs:
           $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Install working NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          $nsisCache = "$env:LOCALAPPDATA\tauri\NsisUser-x86_64"
+          New-Item -ItemType Directory -Force -Path $nsisCache | Out-Null
+          Copy-Item "${env:ProgramFiles(x86)}\NSIS\*" $nsisCache -Recurse -Force
+
       - name: Build Tauri app
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: npx tauri build --bundles msi,updater
+        run: npx tauri build --bundles nsis,updater
 
       - name: Create Release
         shell: pwsh
