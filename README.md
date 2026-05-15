@@ -99,9 +99,7 @@ Installers are generated under `src-tauri/target/release/bundle/`.
 
 ## Backend / Self-Hosting
 
-Official backend repository:
 
-- [SlasshyVault-Backend](https://github.com/SlasshyOverhere/SlasshyVault-Backend)
 
 If you want to use your own backend:
 
