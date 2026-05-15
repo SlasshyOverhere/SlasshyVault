@@ -151,7 +151,10 @@ impl GoogleDriveClient {
         let tokens = load_tokens().ok();
         Self {
             tokens: Arc::new(Mutex::new(tokens)),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .user_agent("SlasshyVault/3.0.40")
+                .build()
+                .expect("Failed to build reqwest client"),
         }
     }
 

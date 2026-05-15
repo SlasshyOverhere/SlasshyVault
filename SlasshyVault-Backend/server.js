@@ -106,6 +106,33 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
+// User-Agent guard: only allow known clients
+// Set SKIP_UA_CHECK=1 to disable (e.g., for monitoring services)
+app.use((req, res, next) => {
+  if (process.env.SKIP_UA_CHECK === '1') return next();
+
+  const ua = (req.headers['user-agent'] || '').toLowerCase();
+  const path = req.path;
+
+  // Always allow OAuth callback paths (Google redirects here)
+  if (path.startsWith('/auth/')) return next();
+  // Allow health checks
+  if (path === '/' || path === '/health') return next();
+
+  // Allow if User-Agent contains "slasshyvault"
+  if (ua.includes('slasshyvault')) return next();
+
+  // Allow if the correct app header is present
+  if (req.headers['x-app-name'] === 'SlasshyVault') return next();
+
+  // Allow localhost / dev requests
+  const ip = getClientIp(req);
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+
+  console.warn(`[UA Guard] Blocked request from ${ip} — UA: "${req.headers['user-agent'] || 'none'}" path: ${path}`);
+  res.status(403).json({ error: 'Forbidden' });
+});
+
 const runtimeRateByIp = new Map();
 const runtimeAuthByIp = new Map();
 
