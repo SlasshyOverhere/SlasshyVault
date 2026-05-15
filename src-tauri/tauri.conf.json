@@ -46,7 +46,7 @@
         "scope": [
           "https://api.themoviedb.org/**",
           "https://www.googleapis.com/**",
-          "https://streamvault-backend-server.onrender.com/**",
+          "https://slasshyvault.onrender.com/**",
           "http://localhost:3000/**",
           "http://127.0.0.1:3000/**"
         ]
@@ -90,7 +90,7 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self'; script-src 'self'; connect-src 'self' https://api.themoviedb.org https://www.googleapis.com https://streamvault-backend-server.onrender.com ws://streamvault-backend-server.onrender.com wss://streamvault-backend-server.onrender.com http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self'; script-src 'self'; connect-src 'self' https://api.themoviedb.org https://www.googleapis.com https://slasshyvault.onrender.com ws://slasshyvault.onrender.com wss://slasshyvault.onrender.com http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
     },
     "updater": {
       "active": true,

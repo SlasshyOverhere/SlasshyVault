@@ -17,7 +17,7 @@ fn get_relay_server_url() -> String {
         if cfg!(debug_assertions) {
             "ws://localhost:3001/ws/watchtogether".to_string()
         } else {
-            "wss://streamvault-backend-server.onrender.com/ws/watchtogether".to_string()
+            "wss://slasshyvault.onrender.com/ws/watchtogether".to_string()
         }
     })
 }

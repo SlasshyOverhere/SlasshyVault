@@ -11,7 +11,7 @@ const MAX_DELAY_MS: u64 = 10000;
 // Special marker used when we should call the backend TMDB proxy
 const BACKEND_PROXY_CREDENTIAL: &str = "__TMDB_BACKEND_PROXY__";
 const DEFAULT_TMDB_PROXY_BASE_URL: &str =
-    "https://streamvault-backend-server.onrender.com/api/tmdb";
+    "https://slasshyvault.onrender.com/api/tmdb";
 
 pub fn get_tmdb_proxy_base_url() -> String {
     if let Ok(proxy_url) = std::env::var("STREAMVAULT_TMDB_PROXY_URL") {

@@ -15,7 +15,7 @@ use crate::database::get_app_data_dir;
 
 // Backend auth server URL (handles OAuth securely)
 // This keeps client_id and client_secret on the server
-const AUTH_SERVER_URL: &str = "https://streamvault-backend-server.onrender.com";
+const AUTH_SERVER_URL: &str = "https://slasshyvault.onrender.com";
 
 fn get_auth_server_url() -> String {
     if let Ok(env_url) = std::env::var("STREAMVAULT_AUTH_SERVER_URL") {
