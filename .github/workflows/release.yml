@@ -95,6 +95,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $nsisCache | Out-Null
           Copy-Item "${env:ProgramFiles(x86)}\NSIS\*" $nsisCache -Recurse -Force
 
+      - name: Build auxiliary Tauri binaries
+        run: cargo build --release --features custom-protocol,wan-test --bin wt_tauri_wan_test --bin test_autoupdate --manifest-path src-tauri/Cargo.toml
+
       - name: Build Tauri app
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
