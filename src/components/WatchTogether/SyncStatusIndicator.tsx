@@ -1,16 +1,20 @@
 import { useState, useEffect } from 'react';
 import { Wifi, WifiOff, AlertCircle } from 'lucide-react';
 
+type SyncPhase = 'lobby' | 'loading' | 'playing' | 'paused';
+
 interface SyncStatusIndicatorProps {
     isConnected: boolean;
     lastSyncTime?: number;
     positionDrift?: number; // seconds of drift from host
+    syncPhase?: SyncPhase;
 }
 
 export function SyncStatusIndicator({
     isConnected,
     lastSyncTime,
     positionDrift = 0,
+    syncPhase = 'lobby',
 }: SyncStatusIndicatorProps) {
     const [timeSinceSync, setTimeSinceSync] = useState(0);
 
@@ -24,8 +28,33 @@ export function SyncStatusIndicator({
         return () => clearInterval(interval);
     }, [lastSyncTime]);
 
-    // Determine sync health
+    // Show protocol-based state when active
+    if (syncPhase === 'loading') {
+        return (
+            <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full bg-amber-500/20 backdrop-blur-sm">
+                <span className="animate-spin text-xs text-amber-400">⟳</span>
+                <span className="text-xs font-medium text-amber-400">
+                    Pre-buffering...
+                </span>
+            </div>
+        );
+    }
+
+    if (syncPhase === 'paused') {
+        return (
+            <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full bg-amber-500/20 backdrop-blur-sm">
+                <span className="animate-pulse text-xs text-amber-400">●</span>
+                <span className="text-xs font-medium text-amber-400">
+                    Syncing...
+                </span>
+            </div>
+        );
+    }
+
+    // Determine sync health for playing state
     const getSyncHealth = () => {
+        if (syncPhase === 'lobby') return 'unknown';
+        if (lastSyncTime === undefined) return 'unknown';
         if (!isConnected) return 'disconnected';
         if (Math.abs(positionDrift) > 5) return 'poor';
         if (Math.abs(positionDrift) > 2 || timeSinceSync > 15) return 'fair';
@@ -58,6 +87,12 @@ export function SyncStatusIndicator({
             bgColor: 'bg-zinc-500/20',
             icon: WifiOff,
             label: 'Disconnected',
+        },
+        unknown: {
+            color: 'text-zinc-400',
+            bgColor: 'bg-zinc-400/20',
+            icon: Wifi,
+            label: 'Connecting...',
         },
     };
 

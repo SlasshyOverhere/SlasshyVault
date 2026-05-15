@@ -4,9 +4,18 @@ import { User, Crown, Check, Clock } from 'lucide-react';
 interface ParticipantListProps {
     participants: WatchParticipant[];
     currentUserId?: string;
+    syncStates?: Map<string, string>;
 }
 
-export function ParticipantList({ participants, currentUserId }: ParticipantListProps) {
+export function ParticipantList({ participants, currentUserId, syncStates }: ParticipantListProps) {
+    if (!participants || participants.length === 0) {
+        return (
+            <div className="text-center py-6 text-zinc-500 text-sm">
+                No participants
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-2">
             {participants.map((participant) => (
@@ -51,6 +60,18 @@ export function ParticipantList({ participants, currentUserId }: ParticipantList
                                 <Clock className="w-4 h-4" />
                                 <span className="text-xs">Waiting</span>
                             </div>
+                        )}
+                        {syncStates?.get(participant.id) === 'loading' && (
+                            <span className="text-xs text-amber-400">buffering...</span>
+                        )}
+                        {syncStates?.get(participant.id) === 'ready' && (
+                            <span className="text-xs text-emerald-400">ready</span>
+                        )}
+                        {syncStates?.get(participant.id) === 'paused' && (
+                            <span className="text-xs text-amber-400">syncing</span>
+                        )}
+                        {(!syncStates?.get(participant.id) || syncStates.get(participant.id) === 'playing') && (
+                            <span className="w-2 h-2 rounded-full bg-green-500" />
                         )}
                     </div>
                 </div>

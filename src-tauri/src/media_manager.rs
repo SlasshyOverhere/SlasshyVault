@@ -95,12 +95,12 @@ pub fn cleanup_orphaned_media(db: &Database, image_cache_dir: &str) -> usize {
                     }
                 } else {
                     // For real folder paths, check if the folder exists
-                    let path = Path::new(file_path);
+                    let path = std::fs::canonicalize(file_path).unwrap_or_else(|_| Path::new(file_path).to_path_buf());
                     !path.is_dir() && !path.exists()
                 }
             } else {
                 // For movie/tvepisode entries, check if the file exists
-                let path = Path::new(file_path);
+                let path = std::fs::canonicalize(file_path).unwrap_or_else(|_| Path::new(file_path).to_path_buf());
                 !path.is_file()
             };
 
@@ -215,25 +215,7 @@ fn cleanup_image_directory(
     }
 }
 
-// Local folder scanning removed - app is now cloud-only
-// Optimized function with parallel file discovery and batched processing
-#[allow(dead_code)]
-pub fn scan_media_folders_with_events(
-    _db: &Database,
-    _config: &Config,
-    _image_cache_dir: &str,
-    _window: &tauri::Window,
-) {
-    // No-op: Local scanning removed, app uses cloud storage only
-    println!("[SCAN] Local scanning is disabled. Use cloud storage.");
-}
 
-// Local folder scanning removed - app is now cloud-only
-#[allow(dead_code)]
-pub fn scan_media_folders(_db: &Database, _config: &Config, _image_cache_dir: &str) {
-    // No-op: Local scanning removed, app uses cloud storage only
-    println!("[SCAN] Local scanning is disabled. Use cloud storage.");
-}
 
 pub fn process_movie(
     db: &Database,
@@ -599,63 +581,6 @@ fn fetch_single_episode_metadata(
     }
 
     Ok(None)
-}
-
-/// Pre-fetch and cache all episode metadata for a TV series (legacy - kept for manual refresh)
-fn prefetch_series_episodes(
-    db: &Database,
-    api_key: &str,
-    tmdb_id: &str,
-    series_title: &str,
-    image_cache_dir: &str,
-) {
-    println!(
-        "[TV] Pre-fetching episode metadata for series: {} (TMDB ID: {})",
-        series_title, tmdb_id
-    );
-
-    // Check if we already have cached metadata for this series
-    if let Ok(true) = db.has_cached_metadata_for_series(tmdb_id) {
-        println!(
-            "[TV] Episode metadata already cached for series {}",
-            tmdb_id
-        );
-        return;
-    }
-
-    // Fetch all episodes from TMDB
-    match tmdb::fetch_all_series_episodes(api_key, tmdb_id, series_title, image_cache_dir) {
-        Ok(seasons) => {
-            let mut total_cached = 0;
-            for season in seasons {
-                for ep in season.episodes {
-                    if let Err(e) = db.save_cached_episode_metadata(
-                        tmdb_id,
-                        ep.season_number,
-                        ep.episode_number,
-                        Some(&ep.name),
-                        ep.overview.as_deref(),
-                        ep.still_path.as_deref(),
-                        ep.air_date.as_deref(),
-                    ) {
-                        println!(
-                            "[TV] Warning: Failed to cache episode S{:02}E{:02}: {}",
-                            ep.season_number, ep.episode_number, e
-                        );
-                    } else {
-                        total_cached += 1;
-                    }
-                }
-            }
-            println!(
-                "[TV] Cached metadata for {} episodes of {}",
-                total_cached, series_title
-            );
-        }
-        Err(e) => {
-            println!("[TV] Warning: Failed to pre-fetch episode metadata: {}", e);
-        }
-    }
 }
 
 pub fn parse_filename(path: &Path) -> ParsedMedia {
@@ -1430,7 +1355,7 @@ mod tests {
         // Case 1: Recursive cleanup
         let mut temp_dir = env::temp_dir();
         let uuid = uuid::Uuid::new_v4().to_string();
-        temp_dir.push(format!("streamvault_test_{}", uuid));
+        temp_dir.push(format!("slasshyvault_test_{}", uuid));
 
         let parent = temp_dir.join("parent");
         let child = parent.join("child");
@@ -1454,7 +1379,7 @@ mod tests {
         // Case 2: Cleanup stops at non-empty dir
         let mut temp_dir2 = env::temp_dir();
         let uuid2 = uuid::Uuid::new_v4().to_string();
-        temp_dir2.push(format!("streamvault_test_2_{}", uuid2));
+        temp_dir2.push(format!("slasshyvault_test_2_{}", uuid2));
 
         let parent2 = temp_dir2.join("parent");
         let child2 = parent2.join("child");

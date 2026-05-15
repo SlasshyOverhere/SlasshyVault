@@ -223,12 +223,17 @@ impl TurboProxyState {
     fn start_prewarm(&self) {
         let turbo = self.clone();
         thread::spawn(move || {
-            if turbo.cache_spec.start_delay_ms > 0 {
-                thread::sleep(Duration::from_millis(turbo.cache_spec.start_delay_ms));
-            }
-            turbo.schedule_prefetch_from(0, true);
-            for chunk_index in 0..turbo.prewarm_chunks.min(turbo.total_chunks) {
-                let _ = turbo.get_chunk(chunk_index);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if turbo.cache_spec.start_delay_ms > 0 {
+                    thread::sleep(Duration::from_millis(turbo.cache_spec.start_delay_ms));
+                }
+                turbo.schedule_prefetch_from(0, true);
+                for chunk_index in 0..turbo.prewarm_chunks.min(turbo.total_chunks) {
+                    let _ = turbo.get_chunk(chunk_index);
+                }
+            }));
+            if let Err(panic_err) = result {
+                println!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
             }
         });
     }
@@ -335,7 +340,12 @@ impl TurboProxyState {
 
             let turbo = self.clone();
             thread::spawn(move || {
-                turbo.fetch_chunk_worker(next_chunk);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    turbo.fetch_chunk_worker(next_chunk);
+                }));
+                if let Err(panic_err) = result {
+                    println!("[ZIP PROXY] Fetch worker panicked: {:?}", panic_err);
+                }
             });
 
             if self.cache_spec.throttle_delay_ms > 0 {
@@ -560,8 +570,8 @@ impl TurboProxyState {
     }
 
     fn chunk_relative_bounds(&self, chunk_index: u64) -> (u64, u64) {
-        let start = chunk_index * TURBO_CHUNK_BYTES;
-        let end = (start + TURBO_CHUNK_BYTES - 1).min(self.total_length - 1);
+        let start = chunk_index.saturating_mul(TURBO_CHUNK_BYTES);
+        let end = start.saturating_add(TURBO_CHUNK_BYTES).saturating_sub(1).min(self.total_length.saturating_sub(1));
         (start, end)
     }
 }
@@ -648,62 +658,72 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
     }
 
     let join_handle = thread::spawn(move || {
-        let client = match Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(300))
-            .tcp_nodelay(true)
-            .build()
-        {
-            Ok(client) => client,
-            Err(error) => {
-                println!("[ZIP PROXY] Failed to build HTTP client: {}", error);
-                return;
-            }
-        };
-
-        loop {
-            if stop_flag_for_server.load(Ordering::Relaxed) || shutdown_rx.try_recv().is_ok() {
-                server_for_thread.unblock();
-                break;
-            }
-
-            let request = match server_for_thread.recv_timeout(Duration::from_millis(250)) {
-                Ok(Some(request)) => request,
-                Ok(None) => continue,
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let client = match Client::builder()
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(300))
+                .tcp_nodelay(true)
+                .build()
+            {
+                Ok(client) => client,
                 Err(error) => {
-                    println!("[ZIP PROXY] Server receive error: {}", error);
-                    break;
+                    println!("[ZIP PROXY] Failed to build HTTP client: {}", error);
+                    return;
                 }
             };
 
-            let client_for_request = client.clone();
-            let spec_for_request = spec_for_server.clone();
-            let stop_flag_for_request = stop_flag_for_server.clone();
-            let turbo_for_request = turbo_state.clone();
-
-            thread::spawn(move || {
-                if stop_flag_for_request.load(Ordering::Relaxed) {
-                    return;
+            loop {
+                if stop_flag_for_server.load(Ordering::Relaxed) || shutdown_rx.try_recv().is_ok() {
+                    server_for_thread.unblock();
+                    break;
                 }
 
-                let auth_runtime = match build_auth_runtime(&spec_for_request.auth) {
-                    Ok(runtime) => runtime,
+                let request = match server_for_thread.recv_timeout(Duration::from_millis(250)) {
+                    Ok(Some(request)) => request,
+                    Ok(None) => continue,
                     Err(error) => {
-                        println!("[ZIP PROXY] Failed to build auth runtime: {}", error);
-                        return;
+                        println!("[ZIP PROXY] Server receive error: {}", error);
+                        break;
                     }
                 };
 
-                if let Err(error) = handle_request(
-                    request,
-                    &client_for_request,
-                    &spec_for_request,
-                    &auth_runtime,
-                    turbo_for_request.as_ref(),
-                ) {
-                    println!("[ZIP PROXY] Request failed: {}", error);
-                }
-            });
+                let client_for_request = client.clone();
+                let spec_for_request = spec_for_server.clone();
+                let stop_flag_for_request = stop_flag_for_server.clone();
+                let turbo_for_request = turbo_state.clone();
+
+                thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if stop_flag_for_request.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let auth_runtime = match build_auth_runtime(&spec_for_request.auth) {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                println!("[ZIP PROXY] Failed to build auth runtime: {}", error);
+                                return;
+                            }
+                        };
+
+                        if let Err(error) = handle_request(
+                            request,
+                            &client_for_request,
+                            &spec_for_request,
+                            &auth_runtime,
+                            turbo_for_request.as_ref(),
+                        ) {
+                            println!("[ZIP PROXY] Request failed: {}", error);
+                        }
+                    }));
+                    if let Err(panic_err) = result {
+                        println!("[ZIP PROXY] Request handler panicked: {:?}", panic_err);
+                    }
+                });
+            }
+        }));
+        if let Err(panic_err) = result {
+            println!("[ZIP PROXY] Server thread panicked: {:?}", panic_err);
         }
     });
 

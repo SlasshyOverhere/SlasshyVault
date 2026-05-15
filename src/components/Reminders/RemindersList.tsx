@@ -94,7 +94,7 @@ export function RemindersList({
           </div>
         </div>
         <div className="space-y-2 max-w-sm">
-          <h2 className="text-xl font-black text-white tracking-tight">Your Reminders queue is empty</h2>
+          <h2 className="text-xl font-black text-white tracking-tight">No reminders yet</h2>
           <p className="text-sm text-white/40 leading-relaxed font-medium px-6">
             Discover movies and TV shows and set reminders to get notified when they're released or available.
           </p>

@@ -1,13 +1,14 @@
 /**
- * StreamVault Login Screen
+ * SlasshyVault Login Screen
  *
  * Forces users to sign in with Google before accessing the app.
  * Data is stored in user's own Google Drive for privacy.
  */
 
 import { useState } from 'react'
-import { Loader2, Film, Users, Shield, Zap } from 'lucide-react'
-import streamvaultIcon from '@/assets/streamvault-icon-ui.png'
+import { Loader2, Film, Users, Shield, Zap, Minus, X } from 'lucide-react'
+import { appWindow } from '@tauri-apps/api/window'
+import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 
 interface LoginScreenProps {
   onLogin: () => void
@@ -18,21 +19,65 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
   const [isHovered, setIsHovered] = useState(false)
 
   return (
-    <div className="fixed inset-0 bg-[#0a0a0a] flex">
-      {/* Left Side - Branding */}
-      <div className="flex-1 flex flex-col justify-center px-16 bg-gradient-to-br from-[#0a0a0a] via-[#111] to-[#0a0a0a]">
+    <div className="fixed inset-0 bg-[#0a0a0a] flex flex-col">
+      {/* Custom Title Bar */}
+      <header className="fixed top-0 left-0 right-0 h-9 z-[300] bg-[#0a0a0a]">
+        <div className="relative h-full w-full flex items-center justify-between">
+          <div
+            data-tauri-drag-region
+            className="absolute left-0 top-0 bottom-0 right-[120px]"
+          />
+          <div className="flex items-center gap-2 pl-3 select-none">
+            <img
+              data-tauri-drag-region
+              src={slasshyvaultIcon}
+              alt=""
+              draggable={false}
+              className="pointer-events-none h-4 w-4 object-contain"
+            />
+            <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
+              SlasshyVault
+            </span>
+          </div>
+          <div className="flex items-center gap-1 pr-1.5">
+            <button
+              onClick={() => appWindow.minimize()}
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
+              title="Minimize"
+              aria-label="Minimize window"
+            >
+              <Minus className="mx-auto h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={async () => {
+                await appWindow.hide()
+              }}
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+              title="Close"
+              aria-label="Hide window"
+            >
+              <X className="mx-auto h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Content */}
+      <div className="flex-1 flex pt-9">
+        {/* Left Side - Branding */}
+        <div className="flex-1 flex flex-col justify-center px-16 bg-gradient-to-br from-[#0a0a0a] via-[#111] to-[#0a0a0a]">
         {/* Logo and App Name */}
         <div className="flex items-center gap-4 mb-8">
           <div className="w-14 h-14 rounded-xl border border-white/20 bg-white/5 flex items-center justify-center shadow-lg shadow-white/10">
             <img
-              src={streamvaultIcon}
-              alt="StreamVault logo"
+              src={slasshyvaultIcon}
+              alt="SlasshyVault logo"
               draggable={false}
               className="w-10 h-10 object-contain"
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">StreamVault</h1>
+            <h1 className="text-2xl font-bold text-white">SlasshyVault</h1>
             <p className="text-sm text-neutral-500">Your Personal Media Library</p>
           </div>
         </div>
@@ -104,9 +149,9 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           {/* Privacy Notice */}
           <p className="text-neutral-500 text-xs text-center mt-6 leading-relaxed">
             By signing in, you agree to our{' '}
-            <span className="text-neutral-400 hover:text-white cursor-pointer">Terms of Service</span>
+            <a href="https://slasshyvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
             {' '}and{' '}
-            <span className="text-neutral-400 hover:text-white cursor-pointer">Privacy Policy</span>.
+            <a href="https://slasshyvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
             <br />
             Your data is stored securely in your own Google Drive.
           </p>
@@ -118,6 +163,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
             <div className="flex-1 h-px bg-neutral-800" />
           </div>
         </div>
+      </div>
       </div>
     </div>
   )

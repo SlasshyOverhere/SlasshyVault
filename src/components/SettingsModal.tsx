@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,12 +20,10 @@ import {
   RefreshCw,
   Code,
   FlaskConical,
-  Users,
   Radio,
-  Activity,
   Shield,
   Archive,
-  Bot,
+  Loader2,
 } from "lucide-react";
 import {
   Config,
@@ -40,15 +38,11 @@ import {
   UpdateInfo,
   autoDetectMpv,
 } from "@/services/api";
-import {
-  getDevSettings,
-  setDevSettings,
-  getDefaultAuthServerUrl,
-} from "@/services/social";
-import { isDev } from "@/config/social";
+
 import { useToast } from "@/components/ui/use-toast";
 import { open as openDialog } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api/tauri";
+import { emit } from "@tauri-apps/api/event";
 import { Switch } from "@/components/ui/switch";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -65,14 +59,13 @@ interface SettingsModalProps {
   onLogout?: () => void;
   betaEnabled?: boolean;
   onBetaToggle?: (enabled: boolean) => void;
-  unstableEnabled?: boolean;
-  onUnstableToggle?: (enabled: boolean) => void;
   autoCheckUpdate?: boolean;
   onSimulateUpdate?: () => void;
 }
 
 type SettingsSection =
   | "general"
+  | "account"
   | "beta"
   | "updates"
   | "cloud"
@@ -90,10 +83,8 @@ export function SettingsModal({
   onLogout,
   betaEnabled = false,
   onBetaToggle,
-  unstableEnabled = false,
-  onUnstableToggle,
   autoCheckUpdate = false,
-  onSimulateUpdate,
+  onSimulateUpdate: _onSimulateUpdate,
 }: SettingsModalProps) {
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
@@ -109,11 +100,14 @@ export function SettingsModal({
     zip_cache_dir: "",
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
+    dev_backend_url: "",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("general");
   const [appVersion, setAppVersion] = useState<string>("");
@@ -121,11 +115,25 @@ export function SettingsModal({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [devAuthServerUrl, setDevAuthServerUrl] = useState("");
   const [detectingMpv, setDetectingMpv] = useState(false);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
+  const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
   const { toast } = useToast();
+
+  const validatePath = useCallback((path: string, label: string) => {
+    if (!path) {
+      setPathValidation(prev => ({ ...prev, [label]: "" }));
+      return;
+    }
+    if (path.includes("..") || path.includes("~")) {
+      setPathValidation(prev => ({ ...prev, [label]: "Path contains relative segments" }));
+    } else if (path.length > 260) {
+      setPathValidation(prev => ({ ...prev, [label]: "Path too long" }));
+    } else {
+      setPathValidation(prev => ({ ...prev, [label]: "" }));
+    }
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -134,11 +142,6 @@ export function SettingsModal({
       loadAppVersion();
       setActiveSection(initialTab || "general");
       setShowResetConfirm(false);
-      // Load dev settings
-      if (isDev) {
-        const devSettings = getDevSettings();
-        setDevAuthServerUrl(devSettings.authServerUrl);
-      }
     }
   }, [open, initialTab]);
 
@@ -249,13 +252,13 @@ export function SettingsModal({
         await invoke("plugin:autostart|enable");
         toast({
           title: "Auto Startup Enabled",
-          description: "StreamVault will now start automatically.",
+          description: "SlasshyVault will now start automatically.",
         });
       } else {
         await invoke("plugin:autostart|disable");
         toast({
           title: "Auto Startup Disabled",
-          description: "StreamVault will not start automatically.",
+          description: "SlasshyVault will not start automatically.",
         });
       }
       setAutoStart(checked);
@@ -286,6 +289,7 @@ export function SettingsModal({
         zip_cache_dir: data.zip_cache_dir || "",
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
+        dev_backend_url: data.dev_backend_url || "",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -321,13 +325,12 @@ export function SettingsModal({
     setResetting(true);
     try {
       await clearAllAppData();
-      toast({
-        title: "App Reset Complete",
-        description: "All data has been cleared. The app is now like new.",
-      });
       setShowResetConfirm(false);
       onOpenChange(false);
-      window.location.reload();
+      toast({
+        title: "App Reset Complete",
+        description: "All data has been cleared. Please restart the app for changes to take effect.",
+      });
     } catch (error) {
       console.error("Failed to reset app", error);
       toast({
@@ -370,24 +373,6 @@ export function SettingsModal({
     }
   };
 
-  const handleSaveDevSettings = () => {
-    setDevSettings({ authServerUrl: devAuthServerUrl });
-    toast({
-      title: "Dev Settings Saved",
-      description: "Backend URL updated. Social connections will reconnect.",
-    });
-  };
-
-  const handleResetDevSettings = () => {
-    const defaultUrl = getDefaultAuthServerUrl();
-    setDevAuthServerUrl(defaultUrl);
-    setDevSettings({ authServerUrl: defaultUrl });
-    toast({
-      title: "Dev Settings Reset",
-      description: "Backend URL reset to default.",
-    });
-  };
-
   const handleAutoDetectMpv = async () => {
     setDetectingMpv(true);
     try {
@@ -425,13 +410,18 @@ export function SettingsModal({
   }[] = [
     { id: "general", label: "General", icon: <Settings className="w-4 h-4" /> },
     {
+      id: "account",
+      label: "Account",
+      icon: <Power className="w-4 h-4" />,
+    },
+    {
       id: "updates",
       label: "Updates",
       icon: <Shield className="w-4 h-4" />,
     },
     {
       id: "cloud",
-      label: "Cloud Storage",
+      label: "Cache & Storage",
       icon: <Cloud className="w-4 h-4" />,
     },
     { id: "api", label: "API Keys", icon: <Key className="w-4 h-4" /> },
@@ -441,22 +431,15 @@ export function SettingsModal({
       icon: <AlertTriangle className="w-4 h-4" />,
     },
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
-    // Dev section only visible in development mode
-    ...(isDev
-      ? [
-          {
-            id: "dev" as SettingsSection,
-            label: "Developer",
-            icon: <Code className="w-4 h-4" />,
-          },
-        ]
+    ...(import.meta.env.DEV
+      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
       : []),
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <>
-        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden">
+        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
           <div className="flex flex-1 min-h-0">
             {/* Sidebar */}
             <div className="w-40 sm:w-48 md:w-56 flex-shrink-0 bg-card/50 border-r border-border p-3 sm:p-4 overflow-y-auto">
@@ -467,6 +450,7 @@ export function SettingsModal({
                 <button
                   onClick={() => onOpenChange(false)}
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  aria-label="Close settings"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -483,6 +467,7 @@ export function SettingsModal({
                         ? "bg-white/10 text-white"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                     )}
+                    aria-label={`${section.label} settings section`}
                   >
                     {section.icon}
                     <span className="text-xs sm:text-sm font-medium truncate">
@@ -499,6 +484,7 @@ export function SettingsModal({
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
                 <AnimatePresence mode="wait">
                   {/* General Section */}
+                  {/* ===== General Settings ===== */}
                   {activeSection === "general" && (
                     <motion.div
                       key="general"
@@ -528,7 +514,7 @@ export function SettingsModal({
                                 Run on Startup
                               </Label>
                               <p className="text-sm text-muted-foreground">
-                                Automatically start StreamVault when you log in
+                                Automatically start SlasshyVault when you log in
                               </p>
                             </div>
                           </div>
@@ -555,19 +541,28 @@ export function SettingsModal({
                           </div>
                         </div>
                         <div className="flex gap-2">
-                          <Input
-                            value={config.mpv_path || ""}
-                            onChange={(e) =>
-                              setConfig({ ...config, mpv_path: e.target.value })
-                            }
-                            placeholder="C:\path\to\mpv.exe"
-                            className="flex-1"
-                          />
+                          <div className="flex-1 relative">
+                            <Input
+                              value={config.mpv_path || ""}
+                              onChange={(e) => {
+                                setConfig({ ...config, mpv_path: e.target.value });
+                                validatePath(e.target.value, "mpv_path");
+                              }}
+                              placeholder="C:\path\to\mpv.exe"
+                              className="flex-1"
+                              aria-label="MPV executable path"
+                              aria-invalid={!!pathValidation.mpv_path}
+                            />
+                            {pathValidation.mpv_path && (
+                              <p className="text-xs text-destructive mt-1">{pathValidation.mpv_path}</p>
+                            )}
+                          </div>
                           <Button
                             variant="outline"
                             size="icon"
                             onClick={browseMpvPath}
                             title="Browse"
+                            aria-label="Browse for MPV executable"
                           >
                             <FolderOpen className="h-4 w-4" />
                           </Button>
@@ -577,6 +572,7 @@ export function SettingsModal({
                             disabled={detectingMpv}
                             className="gap-2"
                             title="Auto-detect MPV on your PC"
+                            aria-label="Auto-detect MPV on your PC"
                           >
                             <RefreshCw
                               className={cn(
@@ -625,7 +621,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Beta Features Section */}
+                  {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (
                     <motion.div
                       key="beta"
@@ -680,6 +676,7 @@ export function SettingsModal({
                             checked={betaEnabled}
                             onCheckedChange={(checked) => {
                               if (checked) {
+                                // TODO: Replace browser confirm() with custom modal
                                 const confirmed = window.confirm(
                                   "Beta Features Warning\n\n" +
                                     "These features are experimental and for public testing only:\n\n" +
@@ -694,55 +691,6 @@ export function SettingsModal({
                                 }
                               } else {
                                 onBetaToggle?.(false);
-                              }
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Master Unstable Toggle */}
-                      <div className="p-4 rounded-xl bg-card border border-amber-500/30">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-lg bg-amber-500/20">
-                              <Bot className="w-5 h-5 text-amber-300" />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <Label className="text-base font-medium">
-                                  Enable Unstable Features
-                                </Label>
-                                <span
-                                  className={cn(
-                                    "px-1.5 py-0.5 text-[10px] font-semibold rounded",
-                                    unstableEnabled
-                                      ? "bg-amber-500/20 text-amber-300"
-                                      : "bg-muted text-muted-foreground",
-                                  )}
-                                >
-                                  {unstableEnabled ? "ON" : "OFF"}
-                                </span>
-                              </div>
-                              <p className="text-sm text-muted-foreground">
-                                Toggle paused and unfinished entry points separately
-                              </p>
-                            </div>
-                          </div>
-                          <Switch
-                            checked={unstableEnabled}
-                            onCheckedChange={(checked) => {
-                              if (checked) {
-                                const confirmed = window.confirm(
-                                  "Unstable Features Warning\n\n" +
-                                    "These features may be paused, incomplete, or not usable yet:\n\n" +
-                                    "\u2022 AI Chat - Temporarily paused and unavailable for now\n\n" +
-                                    "Do you want to enable unstable features?",
-                                );
-                                if (confirmed) {
-                                  onUnstableToggle?.(true);
-                                }
-                              } else {
-                                onUnstableToggle?.(false);
                               }
                             }}
                           />
@@ -813,145 +761,111 @@ export function SettingsModal({
                           </div>
                         </div>
 
-                        {/* Social - Friends & Chat */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            betaEnabled
-                              ? "bg-card border-purple-500/20"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                betaEnabled ? "bg-purple-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Users
-                                className={cn(
-                                  "w-5 h-5",
-                                  betaEnabled
-                                    ? "text-purple-400"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  Social - Friends & Chat
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">
-                                  BETA
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                Add friends, send messages, and see what others
-                                are watching. Social tab appears in the sidebar.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Activity Feed */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            betaEnabled
-                              ? "bg-card border-purple-500/20"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                betaEnabled ? "bg-purple-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Activity
-                                className={cn(
-                                  "w-5 h-5",
-                                  betaEnabled
-                                    ? "text-purple-400"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  Activity Feed
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">
-                                  BETA
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                See what your friends are watching in real-time.
-                                Activity updates show on the Social page.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
                       </div>
 
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-                          Unstable Features
-                        </Label>
-                        {/* AI Chat */}
-                        <div
-                          className={cn(
-                            "p-4 rounded-xl border transition-colors",
-                            unstableEnabled
-                              ? "border-amber-500/25 bg-amber-500/10"
-                              : "bg-card/50 border-border opacity-60",
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={cn(
-                                "p-2 rounded-lg flex-shrink-0",
-                                unstableEnabled ? "bg-amber-500/20" : "bg-muted",
-                              )}
-                            >
-                              <Bot
-                                className={cn(
-                                  "w-5 h-5",
-                                  unstableEnabled
-                                    ? "text-amber-300"
-                                    : "text-muted-foreground",
-                                )}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-medium">
-                                  AI Chat
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/20 text-amber-300 rounded">
-                                  PAUSED
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-red-500/15 text-red-300 rounded">
-                                  UNSTABLE
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                AI Chat is temporarily disabled. New installs and updated apps keep it hidden by default.
-                                You can still enable unstable features from this page, but AI Chat itself will remain unavailable until it returns.
-                              </p>
-                            </div>
+                    </motion.div>
+                  )}
+
+                  {/* ===== Account ===== */}
+                  {activeSection === "account" && (
+                    <motion.div
+                      key="account"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Account
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Manage your Google account connection
+                        </p>
+                      </div>
+
+                      {/* Google Drive connection card */}
+                      <GoogleDriveSettings />
+
+                      {/* Logout */}
+                      <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-red-500/20">
+                            <Power className="w-5 h-5 text-red-400" />
+                          </div>
+                          <div>
+                            <p className="text-base font-medium">
+                              Sign Out
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              Disconnect your Google account and clear all stored data
+                            </p>
                           </div>
                         </div>
+                        <p className="text-xs text-muted-foreground">
+                          This will sign you out of SlasshyVault, disconnect your Google Drive,
+                          and clear all locally stored tokens. You'll need to sign in again
+                          to access your library.
+                        </p>
+
+                        {!showLogoutConfirm ? (
+                          <Button
+                            variant="destructive"
+                            onClick={() => setShowLogoutConfirm(true)}
+                            className="w-full"
+                          >
+                            <Power className="mr-2 h-4 w-4" />
+                            Sign Out
+                          </Button>
+                        ) : (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-medium text-destructive text-center">
+                              Are you sure you want to sign out? This will clear all
+                              locally stored credentials.
+                            </p>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => setShowLogoutConfirm(false)}
+                                className="flex-1"
+                                disabled={loggingOut}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={async () => {
+                                  setLoggingOut(true)
+                                  try {
+                                    if (onLogout) {
+                                      onLogout()
+                                      onOpenChange(false)
+                                    }
+                                  } finally {
+                                    setLoggingOut(false)
+                                    setShowLogoutConfirm(false)
+                                  }
+                                }}
+                                className="flex-1"
+                                disabled={loggingOut}
+                              >
+                                {loggingOut ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    Signing Out...
+                                  </>
+                                ) : (
+                                  "Yes, Sign Out"
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </motion.div>
                   )}
 
-                  {/* Updates & Security Section */}
+                  {/* ===== Updates & Security ===== */}
                   {activeSection === "updates" && (
                     <motion.div
                       key="updates"
@@ -1057,7 +971,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Cloud Storage Section */}
+                  {/* ===== Cache and Storage ===== */}
                   {activeSection === "cloud" && (
                     <motion.div
                       key="cloud"
@@ -1066,8 +980,6 @@ export function SettingsModal({
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <GoogleDriveSettings />
-
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
@@ -1092,12 +1004,6 @@ export function SettingsModal({
                               })
                             }
                           />
-                        </div>
-
-                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
-                          Store and Deflate ZIP entries are supported.
-                          Compressed episodes are extracted into a bounded cache
-                          for faster replay and stable seeking in MPV.
                         </div>
 
                         <div className="grid gap-4 md:grid-cols-2">
@@ -1176,20 +1082,11 @@ export function SettingsModal({
                             </p>
                           </div>
                         </div>
-
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowZipGuide(true)}
-                          className="gap-2"
-                        >
-                          <Archive className="w-4 h-4" />
-                          View ZIP Creation Guide
-                        </Button>
                       </div>
                     </motion.div>
                   )}
 
-                  {/* API Section */}
+                  {/* ===== API Configuration ===== */}
                   {activeSection === "api" && (
                     <motion.div
                       key="api"
@@ -1346,7 +1243,153 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Danger Section */}
+                  {/* ===== Dev Panel (only shown in dev mode) ===== */}
+                  {import.meta.env.DEV && activeSection === "dev" && (
+                    <motion.div
+                      key="dev"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-foreground mb-1">
+                            Dev Panel
+                          </h3>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Override the backend URL for local development. Auth,
+                          TMDB proxy, and WebSocket URLs are derived from this.
+                        </p>
+                      </div>
+
+                      {/* Backend URL */}
+                      <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-yellow-500/20">
+                            <Code className="w-5 h-5 text-yellow-400" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium">
+                              Backend URL
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Points to SlasshyVault-Backend/server.js
+                            </p>
+                          </div>
+                        </div>
+                        <Input
+                          value={config.dev_backend_url || ""}
+                          onChange={(e) =>
+                            setConfig({
+                              ...config,
+                              dev_backend_url: e.target.value,
+                            })
+                          }
+                          placeholder="https://slasshyvault.onrender.com"
+                          className="font-mono text-xs"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Default: https://slasshyvault.onrender.com · Local: http://localhost:3001
+                        </p>
+                      </div>
+
+                      {/* Derived URLs hint */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Derived endpoints:
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/auth/...
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/api/tmdb
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {(config.dev_backend_url || "https://slasshyvault.onrender.com")
+                            .replace("https://", "wss://")
+                            .replace("http://", "ws://")}
+                          /ws/watchtogether
+                        </p>
+                      </div>
+
+                      {/* Reset hint */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-xs text-muted-foreground">
+                          Leave empty and save to use production defaults.
+                        </p>
+                      </div>
+
+                      {/* Test ZIP notification flow */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-medium">Test ZIP Notifications</h4>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Simulate ZIP detection and indexing events to test the notification popup.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'detected',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: null,
+                                message: 'Archive detected in Test Folder. Processing episode entries...',
+                              })
+                            }}
+                          >
+                            ZIP Detected
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'complete',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: 12,
+                                message: 'Finished processing Test Archive.zip. Indexed 12 episode(s).',
+                              })
+                            }}
+                          >
+                            ZIP Complete
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              emit('zip-processing-status', {
+                                phase: 'error',
+                                archiveCount: 1,
+                                archiveName: 'Test Archive.zip',
+                                episodesIndexed: null,
+                                message: 'ZIP processing failed: Unsupported format',
+                              })
+                            }}
+                          >
+                            ZIP Error
+                          </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* ===== Factory Reset (Danger Zone) ===== */}
                   {activeSection === "danger" && (
                     <motion.div
                       key="danger"
@@ -1427,236 +1470,7 @@ export function SettingsModal({
                     </motion.div>
                   )}
 
-                  {/* Developer Section - Only visible in dev mode */}
-                  {activeSection === "dev" && isDev && (
-                    <motion.div
-                      key="dev"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      className="space-y-6"
-                    >
-                      <div>
-                        <h3 className="text-lg font-semibold text-foreground mb-1">
-                          Developer Settings
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          These settings are only available in development mode
-                        </p>
-                      </div>
 
-                      {/* Dev Mode Indicator */}
-                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                        <div className="flex items-center gap-2 text-yellow-500">
-                          <Code className="w-4 h-4" />
-                          <span className="text-sm font-medium">
-                            Development Mode Active
-                          </span>
-                        </div>
-                        <p className="text-xs text-yellow-500/70 mt-1">
-                          These options are hidden in production builds
-                        </p>
-                      </div>
-
-                      {/* Backend URL Configuration */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-purple-500/20">
-                            <Zap className="w-5 h-5 text-purple-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Auth Server URL
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Override the backend server URL for social
-                              features
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <Input
-                            value={devAuthServerUrl}
-                            onChange={(e) =>
-                              setDevAuthServerUrl(e.target.value)
-                            }
-                            placeholder="https://your-server.com"
-                            className="font-mono text-sm"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleResetDevSettings}
-                              className="flex-1"
-                            >
-                              <RefreshCw className="w-4 h-4 mr-2" />
-                              Reset to Default
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={handleSaveDevSettings}
-                              className="flex-1 bg-purple-600 hover:bg-purple-700"
-                            >
-                              <Save className="w-4 h-4 mr-2" />
-                              Apply URL
-                            </Button>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Default: {getDefaultAuthServerUrl()}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Quick Actions */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
-                        <Label className="text-base font-medium">
-                          Quick Actions
-                        </Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDevAuthServerUrl("http://localhost:3000");
-                              setDevSettings({
-                                authServerUrl: "http://localhost:3000",
-                              });
-                              toast({ title: "Set to localhost:3000" });
-                            }}
-                          >
-                            Use localhost:3000
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDevAuthServerUrl("http://localhost:8080");
-                              setDevSettings({
-                                authServerUrl: "http://localhost:8080",
-                              });
-                              toast({ title: "Set to localhost:8080" });
-                            }}
-                          >
-                            Use localhost:8080
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* MPV Auto-Detection */}
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-green-500/20">
-                            <MonitorPlay className="w-5 h-5 text-green-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              MPV Auto-Detection
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Search the entire PC for mpv.exe
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Searches common installation paths (Program Files,
-                          Scoop, Chocolatey, etc.) and the system PATH for
-                          mpv.exe. If found, it will be automatically
-                          configured.
-                        </p>
-                        {config.mpv_path && (
-                          <div className="p-2 rounded-lg bg-muted/50 text-xs font-mono text-muted-foreground truncate">
-                            Current: {config.mpv_path}
-                          </div>
-                        )}
-                        <Button
-                          variant="outline"
-                          onClick={handleAutoDetectMpv}
-                          disabled={detectingMpv}
-                          className="w-full gap-2 border-green-500/30 hover:bg-green-500/10"
-                        >
-                          <MonitorPlay
-                            className={cn(
-                              "w-4 h-4",
-                              detectingMpv && "animate-pulse",
-                            )}
-                          />
-                          {detectingMpv ? "Searching PC..." : "Auto-Detect MPV"}
-                        </Button>
-                      </div>
-
-                      {/* Simulate Update Notification */}
-                      <div className="p-4 rounded-xl bg-card border border-violet-500/30 space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-violet-500/20">
-                            <Download className="w-5 h-5 text-violet-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Simulate Update
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Trigger a fake update notification to test the
-                              flow
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          This will show the in-app update notification banner
-                          with fake data so you can test the full update
-                          workflow without a real update being available.
-                        </p>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            if (onSimulateUpdate) {
-                              onSimulateUpdate();
-                              onOpenChange(false);
-                            }
-                          }}
-                          className="w-full gap-2 border-violet-500/30 hover:bg-violet-500/10 text-violet-400 hover:text-violet-300"
-                        >
-                          <Download className="w-4 h-4" />
-                          Simulate Update Notification
-                        </Button>
-                      </div>
-
-                      {/* Logout Button for Testing */}
-                      <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-red-500/20">
-                            <Power className="w-5 h-5 text-red-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Test Login Screen
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Sign out to test the login screen
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          This will sign you out and show the login screen.
-                          You'll need to sign in again with Google.
-                        </p>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            if (onLogout) {
-                              onLogout();
-                              onOpenChange(false);
-                            }
-                          }}
-                          className="w-full gap-2 border-red-500/30 hover:bg-red-500/10 text-red-400 hover:text-red-300"
-                        >
-                          <Power className="w-4 h-4" />
-                          Sign Out (Test Login Screen)
-                        </Button>
-                      </div>
-                    </motion.div>
-                  )}
                 </AnimatePresence>
               </div>
             </div>

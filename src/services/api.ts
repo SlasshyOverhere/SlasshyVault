@@ -35,6 +35,7 @@ export interface MediaItem {
   zip_crc32?: string;
   zip_compression_method?: number;
   file_size_bytes?: number;
+  ddl_source_id?: string;
   // Frontend-only history presentation fields
   history_group_count?: number;
   history_group_ids?: number[];
@@ -104,6 +105,9 @@ export interface Config {
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
   notifications_enabled?: boolean;
+  // Dev mode: override backend URL (e.g. http://localhost:3001)
+  // Auth, TMDB proxy, and WebSocket URLs are all derived from this
+  dev_backend_url?: string;
 }
 
 export interface ResumeInfo {
@@ -163,7 +167,7 @@ export interface DownloadJob {
   title: string;
   fileName: string;
   targetPath: string;
-  status: "queued" | "preparing" | "downloading" | "completed" | "failed" | "cancelled" | string;
+  status: "queued" | "preparing" | "downloading" | "completed" | "failed" | "cancelled";
   progress: number;
   downloadedBytes: number;
   totalBytes: number;
@@ -237,6 +241,23 @@ export const getLibraryFiltered = async (
     return items;
   } catch (error) {
     console.error("Failed to get filtered library:", error);
+    return [];
+  }
+};
+
+// Get DDL library items
+export const getDdlMedia = async (
+  type: "movie" | "tv",
+  search: string = "",
+): Promise<MediaItem[]> => {
+  try {
+    const items = await invoke<MediaItem[]>("get_ddl_media", {
+      mediaType: type,
+      search: search || null,
+    });
+    return items;
+  } catch (error) {
+    console.error("Failed to get DDL media:", error);
     return [];
   }
 };
@@ -494,7 +515,7 @@ export const getConfig = async (): Promise<Config> => {
 // Save configuration
 export const saveConfig = async (config: Config): Promise<void> => {
   try {
-    await invoke("save_config", { newConfig: config });
+    await invoke("save_config", { newConfig: config, confirmed: true });
   } catch (error) {
     console.error("Failed to save config:", error);
     throw error;
@@ -848,14 +869,14 @@ export const setPlayerPreference = (preference: PlayerPreference): void => {
   localStorage.setItem("playerPreference", preference);
 };
 
-const SERIES_AUDIO_PREFERENCE_KEY = "streamvault_series_audio_preferences";
-const SERIES_SUBTITLE_PREFERENCE_KEY = "streamvault_series_subtitle_preferences";
-const AUDIO_TRACK_CACHE_KEY = "streamvault_detected_audio_tracks_v2";
-const SUBTITLE_TRACK_CACHE_KEY = "streamvault_detected_subtitle_tracks_v1";
+const SERIES_AUDIO_PREFERENCE_KEY = "slasshyvault_series_audio_preferences";
+const SERIES_SUBTITLE_PREFERENCE_KEY = "slasshyvault_series_subtitle_preferences";
+const AUDIO_TRACK_CACHE_KEY = "slasshyvault_detected_audio_tracks_v2";
+const SUBTITLE_TRACK_CACHE_KEY = "slasshyvault_detected_subtitle_tracks_v1";
 
-const readSeriesAudioPreferenceMap = (): Record<string, string> => {
+function readMapFromStorage<T>(key: string): Record<string, T> {
   try {
-    const stored = localStorage.getItem(SERIES_AUDIO_PREFERENCE_KEY);
+    const stored = localStorage.getItem(key);
     if (!stored) {
       return {};
     }
@@ -863,25 +884,16 @@ const readSeriesAudioPreferenceMap = (): Record<string, string> => {
     const parsed = JSON.parse(stored);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (error) {
-    console.error("Failed to read series audio preferences:", error);
+    console.error(`Failed to read map from "${key}":`, error);
     return {};
   }
-};
+}
 
-const readSeriesSubtitlePreferenceMap = (): Record<string, string> => {
-  try {
-    const stored = localStorage.getItem(SERIES_SUBTITLE_PREFERENCE_KEY);
-    if (!stored) {
-      return {};
-    }
+const readSeriesAudioPreferenceMap = (): Record<string, string> =>
+  readMapFromStorage<string>(SERIES_AUDIO_PREFERENCE_KEY);
 
-    const parsed = JSON.parse(stored);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    console.error("Failed to read series subtitle preferences:", error);
-    return {};
-  }
-};
+const readSeriesSubtitlePreferenceMap = (): Record<string, string> =>
+  readMapFromStorage<string>(SERIES_SUBTITLE_PREFERENCE_KEY);
 
 export const getSeriesAudioPreference = (
   seriesId: number,
@@ -945,35 +957,11 @@ export const setSeriesSubtitlePreference = (
   }
 };
 
-const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> => {
-  try {
-    const stored = localStorage.getItem(AUDIO_TRACK_CACHE_KEY);
-    if (!stored) {
-      return {};
-    }
+const readAudioTrackCacheMap = (): Record<string, AudioTrackOption[]> =>
+  readMapFromStorage<AudioTrackOption[]>(AUDIO_TRACK_CACHE_KEY);
 
-    const parsed = JSON.parse(stored);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    console.error("Failed to read cached audio tracks:", error);
-    return {};
-  }
-};
-
-const readSubtitleTrackCacheMap = (): Record<string, SubtitleTrackOption[]> => {
-  try {
-    const stored = localStorage.getItem(SUBTITLE_TRACK_CACHE_KEY);
-    if (!stored) {
-      return {};
-    }
-
-    const parsed = JSON.parse(stored);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    console.error("Failed to read cached subtitle tracks:", error);
-    return {};
-  }
-};
+const readSubtitleTrackCacheMap = (): Record<string, SubtitleTrackOption[]> =>
+  readMapFromStorage<SubtitleTrackOption[]>(SUBTITLE_TRACK_CACHE_KEY);
 
 export const getCachedSeriesAudioTracks = (
   seriesId: number,
@@ -1069,13 +1057,15 @@ const audioTracksLikelyMatch = (
   );
 };
 
-export const mergeCachedSeriesAudioTracks = (
+function mergeCachedSeriesTracks<T extends AudioTrackOption>(
   seriesId: number,
-  tracks: AudioTrackOption[],
-): void => {
-  const existingTracks = getCachedSeriesAudioTracks(seriesId) ?? [];
+  tracks: T[],
+  getter: (id: number) => T[] | null,
+  setter: (id: number, tracks: T[]) => void,
+): void {
+  const existingTracks = getter(seriesId) ?? [];
   if (existingTracks.length === 0) {
-    setCachedSeriesAudioTracks(seriesId, tracks);
+    setter(seriesId, tracks);
     return;
   }
 
@@ -1105,46 +1095,21 @@ export const mergeCachedSeriesAudioTracks = (
   });
 
   deduped.sort((left, right) => left.label.localeCompare(right.label));
-  setCachedSeriesAudioTracks(seriesId, deduped);
+  setter(seriesId, deduped);
+}
+
+export const mergeCachedSeriesAudioTracks = (
+  seriesId: number,
+  tracks: AudioTrackOption[],
+): void => {
+  mergeCachedSeriesTracks(seriesId, tracks, getCachedSeriesAudioTracks, setCachedSeriesAudioTracks);
 };
 
 export const mergeCachedSeriesSubtitleTracks = (
   seriesId: number,
   tracks: SubtitleTrackOption[],
 ): void => {
-  const existingTracks = getCachedSeriesSubtitleTracks(seriesId) ?? [];
-  if (existingTracks.length === 0) {
-    setCachedSeriesSubtitleTracks(seriesId, tracks);
-    return;
-  }
-
-  const merged = [...existingTracks];
-
-  for (const incomingTrack of tracks) {
-    const existingIndex = merged.findIndex((cachedTrack) =>
-      audioTracksLikelyMatch(cachedTrack, incomingTrack),
-    );
-
-    if (existingIndex >= 0) {
-      merged[existingIndex] = {
-        ...merged[existingIndex],
-        ...incomingTrack,
-      };
-      continue;
-    }
-
-    merged.push(incomingTrack);
-  }
-
-  const deduped = merged.filter((track, index, items) => {
-    const identity = audioTrackCacheIdentity(track);
-    return items.findIndex((candidate) =>
-      audioTrackCacheIdentity(candidate) === identity,
-    ) === index;
-  });
-
-  deduped.sort((left, right) => left.label.localeCompare(right.label));
-  setCachedSeriesSubtitleTracks(seriesId, deduped);
+  mergeCachedSeriesTracks(seriesId, tracks, getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks);
 };
 
 const matchesAudioTrackPreference = (
@@ -1610,7 +1575,7 @@ export const getTmdbImageUrl = (
 
 // ==================== ONBOARDING ====================
 
-const ONBOARDING_KEY = "streamvault_onboarding_completed";
+const ONBOARDING_KEY = "slasshyvault_onboarding_completed";
 const ONBOARDING_VERSION = "1"; // Increment to show onboarding again after major updates
 
 // Check if user has completed onboarding
@@ -1643,7 +1608,7 @@ export const resetOnboarding = (): void => {
 
 // ==================== TAB VISIBILITY ====================
 
-const TAB_VISIBILITY_KEY = "streamvault_tab_visibility";
+const TAB_VISIBILITY_KEY = "slasshyvault_tab_visibility";
 
 export interface TabVisibility {
   showLocal: boolean;
@@ -1675,14 +1640,8 @@ export const setTabVisibility = (visibility: TabVisibility): void => {
 
 // ==================== BETA FEATURES ====================
 
-const BETA_FEATURES_KEY = "streamvault_beta_features";
-const UNSTABLE_FEATURES_KEY = "streamvault_unstable_features";
-
+const BETA_FEATURES_KEY = "slasshyvault_beta_features";
 export interface BetaFeatures {
-  enabled: boolean;
-}
-
-export interface UnstableFeatures {
   enabled: boolean;
 }
 
@@ -1706,29 +1665,6 @@ export const setBetaEnabled = (enabled: boolean): void => {
     localStorage.setItem(BETA_FEATURES_KEY, JSON.stringify({ enabled }));
   } catch (error) {
     console.error("Failed to save beta features state:", error);
-  }
-};
-
-// Check if unstable features are enabled
-export const isUnstableEnabled = (): boolean => {
-  try {
-    const stored = localStorage.getItem(UNSTABLE_FEATURES_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as UnstableFeatures;
-      return parsed.enabled === true;
-    }
-  } catch (error) {
-    console.error("Failed to get unstable features state:", error);
-  }
-  return false;
-};
-
-// Enable or disable unstable features
-export const setUnstableEnabled = (enabled: boolean): void => {
-  try {
-    localStorage.setItem(UNSTABLE_FEATURES_KEY, JSON.stringify({ enabled }));
-  } catch (error) {
-    console.error("Failed to save unstable features state:", error);
   }
 };
 
@@ -2024,15 +1960,18 @@ export const wtGetClientId = async (): Promise<string> => {
 };
 
 // Launch MPV in Watch Together sync mode
+// Always uses the client ID from wtGetClientId() — ignores passed sessionId
+// to prevent callers from mistakenly passing a room code.
 export const wtLaunchMpv = async (
   mediaId: number,
-  sessionId: string,
+  _sessionId: string,
   startPosition: number = 0,
 ): Promise<number> => {
   try {
+    const effectiveSessionId = await wtGetClientId();
     return await invoke<number>("wt_launch_mpv", {
       mediaId,
-      sessionId,
+      sessionId: effectiveSessionId,
       startPosition,
     });
   } catch (error) {

@@ -37,7 +37,7 @@ fn get_lua_script_content(progress_file: &str) -> String {
 
     format!(
         r#"
--- StreamVault Progress Tracker for MPV
+-- SlasshyVault Progress Tracker for MPV
 -- Saves playback position to a JSON file periodically and on quit
 
 local progress_file = "{}"
@@ -128,7 +128,7 @@ mp.register_event("file-loaded", function()
     mp.add_timeout(1, save_progress)
 end)
 
-mp.msg.info("StreamVault progress tracker loaded.")
+mp.msg.info("SlasshyVault progress tracker loaded.")
 "#,
         clean_path
     )
@@ -150,6 +150,15 @@ fn create_lua_script(media_id: i64) -> Result<PathBuf, String> {
     file.write_all(script_content.as_bytes())
         .map_err(|e| format!("Failed to write Lua script: {}", e))?;
 
+    // Restrict file permissions: owner read/write only
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
+            eprintln!("[MPV] Warning: Failed to set Lua script permissions: {}", e);
+        }
+    }
+
     Ok(script_path)
 }
 
@@ -169,9 +178,11 @@ pub fn read_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
 pub fn clear_mpv_progress(media_id: i64) {
     let progress_file = get_progress_file_path(media_id);
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
+    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
 
     let _ = fs::remove_file(progress_file);
     let _ = fs::remove_file(script_file);
+    let _ = fs::remove_file(header_file);
 }
 
 /// Result of launching MPV with tracking
@@ -384,10 +395,16 @@ pub fn launch_mpv_with_tracking(
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL
+    // Use a temp file to pass headers (avoids exposing tokens in process listings)
     if !use_cached {
         if let Some(header) = auth_header {
-            cmd.arg(format!("--http-header-fields={}", header));
-            println!("[MPV] Added HTTP header for authentication");
+            let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
+            if let Err(e) = fs::write(&header_file, header) {
+                eprintln!("[MPV] Warning: Failed to write header file: {}", e);
+            } else {
+                cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
+                println!("[MPV] Added HTTP header file for authentication");
+            }
         }
     }
 
@@ -478,8 +495,9 @@ pub fn launch_mpv_with_tracking(
     // Add the file/URL to play
     cmd.arg(&actual_source);
 
-    // Print full command for debugging
-    println!("[MPV] Command: {:?}", cmd);
+    // Debug: log the program name only (not full args which may contain tokens via header file paths)
+    #[cfg(debug_assertions)]
+    println!("[MPV] Command program: {:?}", cmd.get_program());
 
     // Hide console window on Windows - but keep stderr/stdout for debugging
     #[cfg(windows)]
@@ -604,9 +622,11 @@ pub fn monitor_mpv_and_save_progress(
         }
     };
 
-    // Clean up the Lua script (keep progress file for debugging)
+    // Clean up the Lua script and header file (keep progress file for debugging)
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
+    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
     let _ = fs::remove_file(script_file);
+    let _ = fs::remove_file(header_file);
 
     result
 }
@@ -662,7 +682,7 @@ fn get_sync_lua_script_content(
 
     format!(
         r#"
--- StreamVault Watch Together Sync Script for MPV
+-- SlasshyVault Watch Together Sync Script for MPV
 -- Handles bidirectional sync: captures user actions and applies remote commands
 
 local progress_file = "{}"
@@ -826,7 +846,7 @@ mp.register_event("file-loaded", function()
     mp.add_timeout(1, save_progress)
 end)
 
-mp.msg.info("StreamVault Watch Together sync script loaded.")
+mp.msg.info("SlasshyVault Watch Together sync script loaded.")
 "#,
         clean_progress, clean_event, clean_command
     )
@@ -855,6 +875,15 @@ fn create_sync_lua_script(media_id: i64, session_id: &str) -> Result<PathBuf, St
         .map_err(|e| format!("Failed to create sync Lua script: {}", e))?;
     file.write_all(script_content.as_bytes())
         .map_err(|e| format!("Failed to write sync Lua script: {}", e))?;
+
+    // Restrict file permissions: owner read/write only
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
+            eprintln!("[MPV] Warning: Failed to set sync Lua script permissions: {}", e);
+        }
+    }
 
     Ok(script_path)
 }
@@ -903,7 +932,12 @@ pub fn launch_mpv_with_sync(
     }
 
     if let Some(header) = auth_header {
-        cmd.arg(format!("--http-header-fields={}", header));
+        let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
+        if let Err(e) = fs::write(&header_file, header) {
+            eprintln!("[MPV-SYNC] Warning: Failed to write header file: {}", e);
+        } else {
+            cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
+        }
     }
 
     cmd.arg(file_or_url);

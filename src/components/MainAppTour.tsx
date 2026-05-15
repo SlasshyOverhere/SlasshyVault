@@ -45,14 +45,14 @@ export function MainAppTour({ isActive, onComplete, onSkip, setView }: MainAppTo
       id: 'scan-library',
       target: '[data-tour="scan-library-btn"]',
       title: 'Update Library',
-      description: 'Click this to scan your media folders for new content. StreamVault will automatically fetch posters, descriptions, and organize everything.',
+      description: 'Click this to scan your media folders for new content. SlasshyVault will automatically fetch posters, descriptions, and organize everything.',
       position: 'right',
     },
     {
       id: 'settings-btn',
       target: '[data-tour="settings-btn"]',
       title: 'Settings',
-      description: 'Configure your media folders, TMDB API key, Google Drive, player settings, and more. This is where you set up StreamVault to work with your library.',
+      description: 'Configure your media folders, TMDB API key, Google Drive, player settings, and more. This is where you set up SlasshyVault to work with your library.',
       position: 'right',
     },
     {

@@ -7,7 +7,6 @@ interface PlayerModalProps {
     onOpenChange: (open: boolean) => void
     onSelectPlayer: (player: 'mpv' | 'vlc' | 'builtin') => void
     title: string
-    hasTmdbId?: boolean
 }
 
 export function PlayerModal({ open, onOpenChange, onSelectPlayer, title }: PlayerModalProps) {

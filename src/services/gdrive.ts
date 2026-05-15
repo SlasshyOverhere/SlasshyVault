@@ -53,32 +53,6 @@ export const getGDriveAccessToken = async (): Promise<string> => {
 };
 
 /**
- * Load AI chat history JSON from Google Drive hidden app folder (appDataFolder).
- */
-export const getGDriveAiChatHistory = async (): Promise<string> => {
-  try {
-    return await invoke<string>("gdrive_get_ai_chat_history");
-  } catch (error) {
-    console.error("[GDrive] Failed to load AI chat history:", error);
-    throw error;
-  }
-};
-
-/**
- * Save AI chat history JSON to Google Drive hidden app folder (appDataFolder).
- */
-export const saveGDriveAiChatHistory = async (
-  historyJson: string,
-): Promise<void> => {
-  try {
-    await invoke("gdrive_save_ai_chat_history", { historyJson });
-  } catch (error) {
-    console.error("[GDrive] Failed to save AI chat history:", error);
-    throw error;
-  }
-};
-
-/**
  * Get Google Drive account info (email, name, storage)
  */
 export const getGDriveAccountInfo =
@@ -145,72 +119,6 @@ export const disconnectGDrive = async (): Promise<void> => {
     await invoke("gdrive_disconnect");
   } catch (error) {
     console.error("[GDrive] Failed to disconnect:", error);
-    throw error;
-  }
-};
-
-/**
- * Check if social-specific Google auth is connected
- */
-export const isSocialAuthConnected = async (): Promise<boolean> => {
-  try {
-    return await invoke<boolean>("social_is_connected");
-  } catch (error) {
-    console.error("[SocialAuth] Failed to check connection:", error);
-    return false;
-  }
-};
-
-/**
- * Get current social auth access token
- */
-export const getSocialAccessToken = async (
-  serverUrl?: string,
-): Promise<string> => {
-  try {
-    return await invoke<string>("social_get_access_token", {
-      serverUrl: serverUrl || null,
-    });
-  } catch (error) {
-    console.error("[SocialAuth] Failed to get access token:", error);
-    throw error;
-  }
-};
-
-/**
- * Start social-specific Google OAuth flow
- */
-export const startSocialAuth = async (serverUrl?: string): Promise<string> => {
-  try {
-    return await invoke<string>("social_start_auth", {
-      serverUrl: serverUrl || null,
-    });
-  } catch (error) {
-    console.error("[SocialAuth] Failed to start auth:", error);
-    throw error;
-  }
-};
-
-/**
- * Complete social-specific Google OAuth flow
- */
-export const completeSocialAuth = async (): Promise<DriveAccountInfo> => {
-  try {
-    return await invoke<DriveAccountInfo>("social_complete_auth");
-  } catch (error) {
-    console.error("[SocialAuth] Failed to complete auth:", error);
-    throw error;
-  }
-};
-
-/**
- * Disconnect social-specific Google auth
- */
-export const disconnectSocialAuth = async (): Promise<void> => {
-  try {
-    await invoke("social_disconnect");
-  } catch (error) {
-    console.error("[SocialAuth] Failed to disconnect:", error);
     throw error;
   }
 };
@@ -282,6 +190,27 @@ export const getGDriveStreamUrl = async (
     return await invoke<[string, string]>("gdrive_get_stream_url", { fileId });
   } catch (error) {
     console.error("[GDrive] Failed to get stream URL:", error);
+    throw error;
+  }
+};
+
+/**
+ * Share a file with a user by email (Google Drive native share)
+ */
+export interface ShareResult {
+  success: boolean;
+  message: string;
+}
+
+export const shareGDriveFile = async (
+  fileId: string,
+  email: string,
+  role?: string,
+): Promise<ShareResult> => {
+  try {
+    return await invoke<ShareResult>("gdrive_share_file", { fileId, email, role: role ?? null });
+  } catch (error) {
+    console.error("[GDrive] Failed to share file:", error);
     throw error;
   }
 };

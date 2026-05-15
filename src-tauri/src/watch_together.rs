@@ -11,15 +11,33 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-// Backend server URL - reads from env var, falls back to production
+// Backend server URL - reads from env var, config file override, falls back to production
 fn get_relay_server_url() -> String {
-    std::env::var("STREAMVAULT_WS_URL").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "ws://localhost:3001/ws/watchtogether".to_string()
-        } else {
-            "wss://streamvault-backend-server.onrender.com/ws/watchtogether".to_string()
+    if let Ok(ws_url) = std::env::var("STREAMVAULT_WS_URL") {
+        let trimmed = ws_url.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
         }
-    })
+    }
+
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    // Convert http:// -> ws:// and https:// -> wss://
+                    let ws_url = trimmed
+                        .replace("https://", "wss://")
+                        .replace("http://", "ws://");
+                    return format!("{}/ws/watchtogether", ws_url);
+                }
+            }
+        }
+    }
+
+    "wss://slasshyvault.onrender.com/ws/watchtogether".to_string()
 }
 
 // Room code characters (no ambiguous chars like I/1/O/0)
@@ -27,8 +45,9 @@ const CODE_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// Generate a 6-character room code
 pub fn generate_room_code() -> String {
+    use rand::rngs::OsRng;
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = OsRng;
     (0..6)
         .map(|_| {
             let idx = rng.gen_range(0..CODE_CHARS.len());
@@ -60,18 +79,6 @@ pub struct RoomInfo {
     #[serde(default)]
     pub state: Option<String>,
     pub current_position: f64,
-}
-
-/// Sync command types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action")]
-pub enum SyncAction {
-    #[serde(rename = "play")]
-    Play { position: f64 },
-    #[serde(rename = "pause")]
-    Pause { position: f64 },
-    #[serde(rename = "seek")]
-    Seek { position: f64 },
 }
 
 /// Sync command with metadata
@@ -120,6 +127,9 @@ pub enum ClientMessage {
     /// Pong response for RTT measurement
     #[serde(rename = "pong_report")]
     PongReport { ping_id: String, rtt: f64 },
+    /// LBAS: Client reports buffering state
+    #[serde(rename = "buffering_started")]
+    BufferingStarted { position: f64 },
 }
 
 /// Participant sync info from server state_update
@@ -188,6 +198,18 @@ pub enum ServerMessage {
     },
     #[serde(rename = "heartbeat_ack")]
     HeartbeatAck { timestamp: i64 },
+    /// LBAS: Server instructs all clients to prepare for playback
+    #[serde(rename = "prepare")]
+    Prepare { position: f64, pre_buffer_target: u32 },
+    /// LBAS: Server schedules collective resume at a specific timestamp
+    #[serde(rename = "play_at")]
+    PlayAt { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server resumes playback after all participants recovered from buffering
+    #[serde(rename = "sync_resume")]
+    SyncResume { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server pauses playback due to a buffering participant
+    #[serde(rename = "pause")]
+    Pause { reason: String, triggered_by: String },
 }
 
 /// Watch session state
@@ -226,9 +248,13 @@ impl WatchSession {
         }
     }
 
-    /// Get current room info
-    pub async fn get_room_info(&self) -> Option<RoomInfo> {
-        self.room_info.read().await.clone()
+    /// Read current room state without cloning
+    pub async fn read_room_info<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(Option<&RoomInfo>) -> R,
+    {
+        let guard = self.room_info.read().await;
+        f(guard.as_ref())
     }
 }
 
@@ -262,6 +288,21 @@ pub enum WatchEvent {
         your_rtt: f64,
         participants: Vec<ParticipantSyncInfo>,
     },
+    /// LBAS: Server instructs client to prepare for playback
+    #[serde(rename = "prepare")]
+    Prepare { position: f64, pre_buffer_target: u32 },
+    /// LBAS: Server schedules collective resume
+    #[serde(rename = "play_at")]
+    PlayAt { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server resumes after buffering recovery
+    #[serde(rename = "sync_resume")]
+    SyncResume { position: f64, play_at_timestamp: f64 },
+    /// LBAS: Server pauses due to buffering
+    #[serde(rename = "pause")]
+    Pause { reason: String, triggered_by: String },
+    /// Show OSD message inside MPV player (like Syncplay)
+    #[serde(rename = "show_osd")]
+    ShowOsd { message: String, duration_ms: u64 },
 }
 
 impl WatchTogetherManager {
@@ -328,7 +369,7 @@ impl WatchTogetherManager {
             .into_client_request()
             .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
 
-        request.headers_mut().remove("Sec-WebSocket-Extensions");
+        filter_websocket_extensions(&mut request);
 
         let (ws_stream, _) = connect_async(request)
             .await
@@ -351,7 +392,7 @@ impl WatchTogetherManager {
             media_title: media_title.clone(),
             media_id,
             media_match_key,
-            nickname,
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
         };
 
@@ -443,6 +484,12 @@ impl WatchTogetherManager {
                         ping_counter += 1;
                         let ping_id = format!("client-{}", ping_counter);
                         ping_times.lock().await.insert(ping_id.clone(), std::time::Instant::now());
+                        // Cleanup ping entries older than 30s
+                        {
+                            let mut times = ping_times.lock().await;
+                            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
+                            times.retain(|_, v| *v > cutoff);
+                        }
                         // Send ping as raw JSON (not through ClientMessage enum to keep it simple)
                         let ping_json = serde_json::json!({
                             "type": "ping",
@@ -452,6 +499,9 @@ impl WatchTogetherManager {
                     }
                     // Handle shutdown
                     _ = shutdown_rx.recv() => {
+                        // Send Leave before Close to ensure clean server-side departure
+                        let leave_json = serde_json::json!({"type": "leave"});
+                        let _ = write.send(Message::Text(leave_json.to_string())).await;
                         let _ = write.send(Message::Close(None)).await;
                         break;
                     }
@@ -493,7 +543,7 @@ impl WatchTogetherManager {
             .into_client_request()
             .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
 
-        request.headers_mut().remove("Sec-WebSocket-Extensions");
+        filter_websocket_extensions(&mut request);
 
         let (ws_stream, _) = connect_async(request)
             .await
@@ -511,7 +561,7 @@ impl WatchTogetherManager {
         // Send join message
         let join_msg = ClientMessage::Join {
             room_code: room_code.to_uppercase(),
-            nickname,
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
             media_id,
             media_title,
@@ -604,6 +654,12 @@ impl WatchTogetherManager {
                         ping_counter += 1;
                         let ping_id = format!("client-{}", ping_counter);
                         ping_times.lock().await.insert(ping_id.clone(), std::time::Instant::now());
+                        // Cleanup ping entries older than 30s
+                        {
+                            let mut times = ping_times.lock().await;
+                            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
+                            times.retain(|_, v| *v > cutoff);
+                        }
                         let ping_json = serde_json::json!({
                             "type": "ping",
                             "ping_id": ping_id,
@@ -611,6 +667,9 @@ impl WatchTogetherManager {
                         let _ = write.send(Message::Text(ping_json.to_string())).await;
                     }
                     _ = shutdown_rx.recv() => {
+                        // Send Leave before Close to ensure clean server-side departure
+                        let leave_json = serde_json::json!({"type": "leave"});
+                        let _ = write.send(Message::Text(leave_json.to_string())).await;
                         let _ = write.send(Message::Close(None)).await;
                         break;
                     }
@@ -757,6 +816,42 @@ impl WatchTogetherManager {
             ServerMessage::Error { message } => {
                 emit(WatchEvent::Error { message }).await;
             }
+            ServerMessage::Prepare { position, pre_buffer_target } => {
+                emit(WatchEvent::Prepare { position, pre_buffer_target }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: format!("Pre-buffering {}s for smooth playback...", pre_buffer_target),
+                    duration_ms: 3000,
+                }).await;
+            }
+            ServerMessage::PlayAt { position, play_at_timestamp } => {
+                emit(WatchEvent::PlayAt { position, play_at_timestamp }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: "Starting synchronized playback".to_string(),
+                    duration_ms: 3000,
+                }).await;
+            }
+            ServerMessage::SyncResume { position, play_at_timestamp } => {
+                emit(WatchEvent::SyncResume { position, play_at_timestamp }).await;
+                emit(WatchEvent::ShowOsd {
+                    message: "Resuming sync — all participants ready".to_string(),
+                    duration_ms: 2000,
+                }).await;
+            }
+            ServerMessage::Pause { reason, triggered_by } => {
+                let tid = triggered_by.clone();
+                let nickname = {
+                    let info = room_info.read().await;
+                    info.as_ref().and_then(|r| r.participants.iter().find(|p| p.id == tid).map(|p| p.nickname.clone()))
+                        .unwrap_or_else(|| triggered_by.clone())
+                };
+                if reason == "buffering" {
+                    emit(WatchEvent::ShowOsd {
+                        message: format!("{} is buffering...", nickname),
+                        duration_ms: 3000,
+                    }).await;
+                }
+                emit(WatchEvent::Pause { reason, triggered_by }).await;
+            }
             _ => {}
         }
     }
@@ -842,7 +937,7 @@ impl WatchTogetherManager {
         let session_guard = self.session.lock().await;
 
         if let Some(session) = session_guard.as_ref() {
-            session.get_room_info().await.map(Self::normalize_room)
+            session.read_room_info(|info| info.cloned().map(Self::normalize_room)).await
         } else {
             None
         }
@@ -895,5 +990,32 @@ impl WatchTogetherManager {
 impl Default for WatchTogetherManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn filter_websocket_extensions(
+    request: &mut http::Request<()>,
+) {
+    if let Some(extensions) = request.headers().get("Sec-WebSocket-Extensions") {
+        let filtered: String = extensions
+            .to_str()
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|ext| {
+                let trimmed = ext.trim();
+                if trimmed.is_empty() || trimmed.starts_with("permessage-deflate") {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        request.headers_mut().remove("Sec-WebSocket-Extensions");
+        if !filtered.is_empty() {
+            if let Ok(header_val) = filtered.try_into() {
+                request.headers_mut().insert("Sec-WebSocket-Extensions", header_val);
+            }
+        }
     }
 }

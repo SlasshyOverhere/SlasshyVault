@@ -961,7 +961,7 @@ fn enforce_cache_policy(cache_config: &ZipCacheConfig, reserve_bytes: u64) -> Re
     }
 
     entries = collect_cache_entries(&cache_dir)?;
-    let mut total_size: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
+    let mut total_size: u64 = entries.iter().fold(0u64, |acc, e| acc.saturating_add(e.size_bytes));
     let target_limit = cache_config.max_size_bytes.max(reserve_bytes);
 
     if total_size.saturating_add(reserve_bytes) <= target_limit {

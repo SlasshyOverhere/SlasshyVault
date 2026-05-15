@@ -9,7 +9,6 @@ mod download_manager;
 mod gdrive;
 mod media_manager;
 mod mpv_ipc;
-mod social_auth;
 mod tmdb;
 mod transcoder;
 mod watch_together;
@@ -24,6 +23,7 @@ use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, N
 use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -73,7 +73,6 @@ pub struct AppState {
     pub active_zip_streams: Mutex<HashMap<i64, ActiveZipStream>>,
     pub download_manager: download_manager::DownloadManager,
     pub gdrive_client: gdrive::GoogleDriveClient,
-    pub social_auth_client: social_auth::SocialAuthClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
 }
@@ -341,6 +340,21 @@ async fn get_library_filtered(
     Ok(enrich_media_items_archive_assessment(items))
 }
 
+// Get DDL library items
+#[tauri::command]
+async fn get_ddl_media(
+    state: State<'_, AppState>,
+    media_type: String,
+    search: Option<String>,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let db_type = if media_type == "tv" { "tvshow" } else { "movie" };
+    let items = db
+        .get_ddl_media(db_type, search.as_deref())
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
 // Get episodes for a TV show
 #[tauri::command]
 async fn get_nickname(state: State<'_, AppState>) -> Result<Option<String>, String> {
@@ -477,64 +491,6 @@ async fn sync_watchlist(state: State<'_, AppState>) -> Result<WatchlistSyncStatu
     sync_watchlist_to_drive(&state).await
 }
 
-// ==================== STREAMING HISTORY COMMANDS ====================
-
-// Save streaming progress (for Videasy player)
-#[tauri::command]
-async fn save_streaming_progress(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    position: f64,
-    duration: f64,
-) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.save_streaming_progress(
-        &tmdb_id,
-        &media_type,
-        &title,
-        poster_path.as_deref(),
-        season,
-        episode,
-        position,
-        duration,
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(ApiResponse {
-        message: "Streaming progress saved".to_string(),
-    })
-}
-
-// Get streaming history
-#[tauri::command]
-async fn get_streaming_history(
-    state: State<'_, AppState>,
-    limit: Option<i32>,
-) -> Result<Vec<database::StreamingHistoryItem>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_streaming_history(limit.unwrap_or(50))
-        .map_err(|e| e.to_string())
-}
-
-// Get streaming resume info for a specific content
-#[tauri::command]
-async fn get_streaming_resume_info(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    season: Option<i32>,
-    episode: Option<i32>,
-) -> Result<Option<database::StreamingHistoryItem>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_streaming_resume_info(&tmdb_id, &media_type, season, episode)
-        .map_err(|e| e.to_string())
-}
-
 // ==================== SOCIAL SYNC COMMANDS ====================
 
 // Get aggregated watch stats for social sync
@@ -557,32 +513,6 @@ async fn get_recent_watch_activities(
         .map_err(|e| e.to_string())
 }
 
-// Remove a single item from streaming history
-#[tauri::command]
-async fn remove_from_streaming_history(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.remove_from_streaming_history(id)
-        .map_err(|e| e.to_string())?;
-    Ok(ApiResponse {
-        message: "Item removed from streaming history".to_string(),
-    })
-}
-
-// Clear all streaming history
-#[tauri::command]
-async fn clear_all_streaming_history(state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let count = db
-        .clear_all_streaming_history()
-        .map_err(|e| e.to_string())?;
-    Ok(ApiResponse {
-        message: format!("Cleared {} items from streaming history", count),
-    })
-}
-
 // ==================== GOOGLE DRIVE COMMANDS ====================
 
 /// Check if user is connected to Google Drive
@@ -603,28 +533,6 @@ async fn gdrive_get_account_info(
     state: State<'_, AppState>,
 ) -> Result<gdrive::DriveAccountInfo, String> {
     state.gdrive_client.get_account_info().await
-}
-
-/// Load AI chat history JSON from Google Drive appDataFolder (hidden app storage)
-#[tauri::command]
-async fn gdrive_get_ai_chat_history(state: State<'_, AppState>) -> Result<String, String> {
-    let history = state.gdrive_client.load_ai_chat_history().await?;
-    Ok(history.unwrap_or_else(|| "[]".to_string()))
-}
-
-/// Save AI chat history JSON to Google Drive appDataFolder (hidden app storage)
-#[tauri::command]
-async fn gdrive_save_ai_chat_history(
-    state: State<'_, AppState>,
-    history_json: String,
-) -> Result<ApiResponse, String> {
-    state
-        .gdrive_client
-        .save_ai_chat_history(&history_json)
-        .await?;
-    Ok(ApiResponse {
-        message: "AI chat history saved".to_string(),
-    })
 }
 
 /// Start Google Drive OAuth flow - returns auth URL
@@ -667,61 +575,6 @@ async fn gdrive_disconnect(state: State<'_, AppState>) -> Result<ApiResponse, St
     state.gdrive_client.clear_tokens()?;
     Ok(ApiResponse {
         message: "Disconnected from Google Drive".to_string(),
-    })
-}
-
-/// Check if Social auth is connected
-#[tauri::command]
-async fn social_is_connected(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.social_auth_client.is_authenticated())
-}
-
-/// Get Social auth access token
-#[tauri::command]
-async fn social_get_access_token(
-    state: State<'_, AppState>,
-    server_url: Option<String>,
-) -> Result<String, String> {
-    state
-        .social_auth_client
-        .get_access_token(server_url.as_deref())
-        .await
-}
-
-/// Start Social Google OAuth flow
-#[tauri::command]
-async fn social_start_auth(server_url: Option<String>) -> Result<String, String> {
-    let auth_url = social_auth::get_auth_url(server_url.as_deref());
-
-    if let Err(e) = open::that(&auth_url) {
-        println!("[SOCIAL AUTH] Failed to open browser: {}", e);
-    }
-
-    Ok(auth_url)
-}
-
-/// Wait for OAuth callback and complete Social authentication
-#[tauri::command]
-async fn social_complete_auth(
-    state: State<'_, AppState>,
-) -> Result<gdrive::DriveAccountInfo, String> {
-    println!("[SOCIAL AUTH] Waiting for OAuth callback...");
-
-    let tokens = gdrive::wait_for_oauth_callback().await?;
-    println!("[SOCIAL AUTH] Received tokens from backend");
-
-    state.social_auth_client.store_tokens(tokens)?;
-    println!("[SOCIAL AUTH] Tokens stored successfully");
-
-    state.social_auth_client.get_account_info().await
-}
-
-/// Disconnect Social auth
-#[tauri::command]
-async fn social_disconnect(state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    state.social_auth_client.clear_tokens()?;
-    Ok(ApiResponse {
-        message: "Disconnected from Social auth".to_string(),
     })
 }
 
@@ -785,6 +638,31 @@ async fn gdrive_get_file_metadata(
     file_id: String,
 ) -> Result<gdrive::DriveItem, String> {
     state.gdrive_client.get_file_metadata(&file_id).await
+}
+
+/// Share a Google Drive file with a user by email
+#[derive(serde::Serialize)]
+struct ShareResult {
+    success: bool,
+    message: String,
+}
+
+#[tauri::command]
+async fn gdrive_share_file(
+    state: State<'_, AppState>,
+    file_id: String,
+    email: String,
+    role: Option<String>,
+) -> Result<ShareResult, String> {
+    let role = role.unwrap_or_else(|| "reader".to_string());
+    state
+        .gdrive_client
+        .create_permission(&file_id, &email, &role)
+        .await?;
+    Ok(ShareResult {
+        success: true,
+        message: format!("Successfully shared with {}", email),
+    })
 }
 
 /// Cloud folder info for indexing
@@ -2111,7 +1989,7 @@ async fn check_cloud_changes(
                     format!("{} items removed (deleted from Drive)", messages.len())
                 };
 
-                dispatch_notification(&window, "StreamVault", &message, "info");
+                dispatch_notification(&window, "SlasshyVault", &message, "info");
             }
         }
     }
@@ -2558,7 +2436,7 @@ async fn check_cloud_changes(
         for title in &titles {
             dispatch_notification(
                 &window,
-                "StreamVault",
+                "SlasshyVault",
                 &format!("{} added to your library", title),
                 "success",
             );
@@ -2759,7 +2637,10 @@ async fn check_cloud_changes(
 
 // Clear all app data (reset to new state)
 #[tauri::command]
-async fn clear_all_app_data(state: State<'_, AppState>) -> Result<ApiResponse, String> {
+async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Result<ApiResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     println!("[RESET] Starting complete app data reset...");
 
     // Clear database and get image cache path
@@ -2778,7 +2659,7 @@ async fn clear_all_app_data(state: State<'_, AppState>) -> Result<ApiResponse, S
             Err(e) => println!("[RESET] Warning: Failed to delete image cache: {}", e),
         }
         // Recreate empty image cache directory
-        std::fs::create_dir_all(cache_path).ok();
+        std::fs::create_dir_all(cache_path).map_err(|e| println!("[RESET] Warning: Failed to recreate image cache: {}", e)).ok();
     }
 
     println!("[RESET] App data reset complete!");
@@ -2825,17 +2706,6 @@ async fn cleanup_missing_metadata(state: State<'_, AppState>) -> Result<CleanupR
     })
 }
 
-// Repair broken file paths - not applicable for cloud-only mode
-#[tauri::command]
-async fn repair_file_paths(_state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    // In cloud-only mode, file paths are managed by Google Drive
-    // No local file repair is needed
-    Ok(ApiResponse {
-        message: "Cloud media paths are managed automatically by Google Drive. No repair needed."
-            .to_string(),
-    })
-}
-
 // Response for delete operation
 #[derive(serde::Serialize)]
 struct DeleteResponse {
@@ -2852,7 +2722,11 @@ async fn delete_media_files(
     state: State<'_, AppState>,
     window: Window,
     media_ids: Vec<i64>,
+    confirmed: bool,
 ) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     if media_ids.is_empty() {
         return Err("No media IDs provided".to_string());
     }
@@ -2911,11 +2785,12 @@ async fn delete_media_files(
                 db_media_ids_to_delete.push(id);
             }
         } else {
-            // Local file - delete from disk
+            // Local file - delete from disk (with path canonicalization)
             if let Some(path_str) = file_path {
-                let path = std::path::Path::new(&path_str);
-                if path.exists() {
-                    match std::fs::remove_file(path) {
+                let raw_path = std::path::Path::new(&path_str);
+                let canonical = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_path_buf());
+                if canonical.exists() {
+                    match std::fs::remove_file(&canonical) {
                         Ok(_) => {
                             println!("[DELETE] Successfully deleted local file: {}", path_str);
                             deleted_file_paths.push(path_str);
@@ -3243,7 +3118,11 @@ async fn delete_series(
     state: State<'_, AppState>,
     series_id: i64,
     delete_files: bool,
+    confirmed: bool,
 ) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     println!(
         "[DELETE] Deleting series ID {} (delete_files: {})",
         series_id, delete_files
@@ -3469,7 +3348,11 @@ async fn save_config(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     new_config: config::Config,
+    confirmed: bool,
 ) -> Result<ApiResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     *config = new_config.clone();
     config::save_config(&new_config).map_err(|e| e.to_string())?;
@@ -4076,6 +3959,11 @@ fn detect_tracks_from_running_mpv(pipe_name: &str) -> Result<DetectedMpvTracks, 
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
+    // NOTE(from_raw_handle safety): File::from_raw_handle takes ownership of the
+    // Windows handle. The returned File will close the handle on drop. This function
+    // must NOT be called more than once for the same pipe, because the handle would
+    // already be consumed. The `break` after successful acquisition prevents retry
+    // within this loop; callers are responsible for ensuring single invocation.
     let mut file = None;
     for _ in 0..100 {
         let wide_name: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -4165,6 +4053,17 @@ fn detect_tracks_from_running_mpv(_pipe_name: &str) -> Result<DetectedMpvTracks,
     Err("MPV IPC track detection is currently supported only on Windows".to_string())
 }
 
+/// Write auth headers to a temporary file and return its path.
+/// This avoids leaking tokens in process listings (visible via `ps` on Linux).
+fn temp_file_for_headers(header_content: &str) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("ffprobe_headers_{}.txt", uuid::Uuid::new_v4());
+    let file_path = temp_dir.join(file_name);
+    let file_path_str = file_path.to_string_lossy().to_string();
+    std::fs::write(&file_path, header_content).map_err(|e| format!("Failed to write header file: {}", e))?;
+    Ok(file_path_str)
+}
+
 fn probe_tracks_with_ffprobe(
     ffprobe_path: &str,
     source: &str,
@@ -4190,16 +4089,26 @@ fn probe_tracks_with_ffprobe(
         .arg("-of")
         .arg("json");
 
-    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+    let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        let header_content = format!("Authorization: Bearer {}\r\n", token);
+        let path = temp_file_for_headers(&header_content)?;
         command
             .arg("-headers")
-            .arg(format!("Authorization: Bearer {}\r\n", token));
-    }
+            .arg(&path);
+        Some(path)
+    } else {
+        None
+    };
 
     let output = command
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    // Clean up header temp file
+    if let Some(path) = _header_file {
+        let _ = std::fs::remove_file(&path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4331,16 +4240,26 @@ fn probe_media_technical_details_with_ffprobe(
         .arg("-of")
         .arg("json");
 
-    if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+    let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
+        let header_content = format!("Authorization: Bearer {}\r\n", token);
+        let path = temp_file_for_headers(&header_content)?;
         command
             .arg("-headers")
-            .arg(format!("Authorization: Bearer {}\r\n", token));
-    }
+            .arg(&path);
+        Some(path)
+    } else {
+        None
+    };
 
     let output = command
         .arg(source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
+
+    // Clean up header temp file
+    if let Some(path) = _header_file {
+        let _ = std::fs::remove_file(&path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -5560,10 +5479,6 @@ async fn play_with_mpv(
         let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
         let resume_info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
 
-        // Update last_watched
-        db.update_last_watched(media_id)
-            .map_err(|e| e.to_string())?;
-
         (media, resume_info)
     };
 
@@ -5880,21 +5795,51 @@ async fn play_with_mpv(
             // Cloud file - get stream URL from Google Drive
             if let Some(ref cloud_file_id) = media.cloud_file_id {
                 println!(
-                    "[MPV] Cloud file detected, getting stream URL for file ID: {}",
+                    "[MPV] Cloud file detected, routing through proxy for file ID: {}",
                     cloud_file_id
                 );
-                let (stream_url, access_token) =
-                    state.gdrive_client.get_stream_url(cloud_file_id).await?;
+                let cached_file_size = media
+                    .file_size_bytes
+                    .and_then(|value| u64::try_from(value).ok());
+                let content_name = media
+                    .file_path
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(media.title.as_str());
+                let meta = if cached_file_size.is_some() {
+                    None
+                } else {
+                    Some(state.gdrive_client.get_file_metadata(cloud_file_id).await?)
+                };
+                let file_size = cached_file_size
+                    .or_else(|| {
+                        meta.as_ref()
+                            .and_then(|m| m.size.as_deref())
+                            .and_then(|s| s.parse::<u64>().ok())
+                    })
+                    .ok_or_else(|| "Cloud file size unavailable".to_string())?;
+                if file_size == 0 {
+                    return Err("Cloud file is empty".to_string());
+                }
+                let drive_url = state.gdrive_client.build_stream_url(cloud_file_id);
+                let mime_type = meta
+                    .as_ref()
+                    .map(|m| m.mime_type.clone())
+                    .unwrap_or_else(|| zip_manager::content_type_for_name(content_name));
+                let proxy = zip_stream_proxy::start_proxy(
+                    zip_stream_proxy::build_file_proxy_spec(
+                        drive_url,
+                        state.gdrive_client.clone(),
+                        file_size,
+                        mime_type,
+                    ),
+                )?;
+                let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
                 println!(
-                    "[MPV] Using direct Google Drive stream for cloud playback, token length: {}",
-                    access_token.len()
+                    "[MPV] Using authenticated localhost proxy for cloud playback (size={}, name='{}')",
+                    file_size, content_name
                 );
-                (
-                    stream_url,
-                    Some(format!("Authorization: Bearer {}", access_token)),
-                    None,
-                    true,
-                )
+                (stream_url, None, Some(proxy), true)
             } else {
                 return Err("Cloud file ID not found".to_string());
             }
@@ -5917,9 +5862,11 @@ async fn play_with_mpv(
     };
 
     config::validate_executable_path(&mpv_path, "mpv")?;
+    let pipe_prefix = if is_dev_runtime() { "slasshyvault-mpv-dev" } else { "slasshyvault-mpv" };
     let mpv_audio_probe_pipe = if is_zip_media {
         Some(format!(
-            r"\\.\pipe\streamvault-mpv-{}-{}",
+            r"\\.\pipe\{}-{}-{}",
+            pipe_prefix,
             media_id,
             chrono::Utc::now().timestamp_millis()
         ))
@@ -6023,6 +5970,13 @@ async fn play_with_mpv(
 
         if let Ok(db) = database::Database::new(&db_path) {
             let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
+
+            // Only mark as last_watched when actual playback progress was recorded
+            if result.final_position.is_some() && result.final_duration.is_some()
+                && result.final_duration.unwrap_or(0.0) > 0.0
+            {
+                let _ = db.update_last_watched(media_id);
+            }
 
             // Emit event to frontend when MPV exits
             let _ = window_clone.emit(
@@ -6461,7 +6415,7 @@ fn http_get_with_retry_auth(
             .tcp_keepalive(std::time::Duration::from_secs(20))
             .http1_only()
             .tcp_nodelay(true)
-            .user_agent("StreamVault/1.0")
+            .user_agent("SlasshyVault/1.0")
             .build()
         {
             Ok(c) => c,
@@ -6550,7 +6504,7 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
             // Set TCP nodelay for faster request/response
             .tcp_nodelay(true)
             // Add a user agent (some APIs block requests without one)
-            .user_agent("StreamVault/1.0")
+            .user_agent("SlasshyVault/1.0")
             .build()
         {
             Ok(c) => c,
@@ -7267,7 +7221,7 @@ fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>,
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(12))
         .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent("StreamVault/1.0")
+        .user_agent("SlasshyVault/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -8289,121 +8243,6 @@ async fn get_tmdb_trending(state: State<'_, AppState>) -> Result<TmdbTrendingRes
     Ok(TmdbTrendingResponse { results })
 }
 
-// Videasy localStorage progress format
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-struct VideasyProgress {
-    duration: f64,
-    watched: f64,
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct VideasyStorageItem {
-    poster: Option<String>,
-    background: Option<String>,
-    id: i64,
-    media_type: String,
-    title: String,
-    progress: Option<VideasyProgress>,
-}
-
-// Open Videasy in the user's default browser
-#[tauri::command]
-async fn open_videasy_player(
-    app_handle: tauri::AppHandle,
-    _state: State<'_, AppState>,
-    url: String,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    _poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-) -> Result<ApiResponse, String> {
-    println!(
-        "[VIDEASY] Opening in browser for: {} (tmdb_id: {})",
-        title, tmdb_id
-    );
-
-    // Validate URL scheme and domain to prevent SSRF and arbitrary URI scheme exploitation
-    let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
-    if parsed_url.scheme() != "https" {
-        return Err("Only HTTPS URLs are allowed".to_string());
-    }
-
-    if let Some(host_str) = parsed_url.host_str() {
-        if host_str != "videasy.net" && !host_str.ends_with(".videasy.net") {
-            return Err("URL domain not allowed".to_string());
-        }
-    } else {
-        return Err("Invalid URL domain".to_string());
-    }
-
-    // Open the URL directly in the user's default browser using Tauri's shell API
-    tauri::api::shell::open(&app_handle.shell_scope(), &url, None)
-        .map_err(|e| format!("Failed to open browser: {}", e))?;
-
-    let display_title = if media_type == "tv" {
-        format!(
-            "{} - S{}E{}",
-            title,
-            season.unwrap_or(1),
-            episode.unwrap_or(1)
-        )
-    } else {
-        title.clone()
-    };
-
-    Ok(ApiResponse {
-        message: format!("Opening \"{}\" in browser", display_title),
-    })
-}
-
-// Save progress from Videasy player (called from JavaScript)
-#[tauri::command]
-async fn save_videasy_progress(
-    state: State<'_, AppState>,
-    tmdb_id: String,
-    media_type: String,
-    title: String,
-    poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    position: f64,
-    duration: f64,
-) -> Result<ApiResponse, String> {
-    println!(
-        "[VIDEASY] Saving progress: {} - {:.1}s / {:.1}s",
-        title, position, duration
-    );
-
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-
-    let poster_url = poster_path.map(|p| {
-        if p.starts_with("http") {
-            p
-        } else {
-            format!("https://image.tmdb.org/t/p/w342{}", p)
-        }
-    });
-
-    db.save_streaming_progress(
-        &tmdb_id,
-        &media_type,
-        &title,
-        poster_url.as_deref(),
-        season,
-        episode,
-        position,
-        duration,
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(ApiResponse {
-        message: "Progress saved".to_string(),
-    })
-}
-
 // ==================== TRANSCODING COMMANDS ====================
 
 /// Transcode response with stream URL
@@ -8902,25 +8741,25 @@ fn is_dev_runtime() -> bool {
 
 fn runtime_window_title() -> &'static str {
     if is_dev_runtime() {
-        "StreamVault Dev"
+        "SlasshyVault Dev"
     } else {
-        "StreamVault"
+        "SlasshyVault"
     }
 }
 
 fn runtime_app_identifier() -> &'static str {
     if is_dev_runtime() {
-        "com.streamvault.app.dev"
+        "com.slasshyvault.app.dev"
     } else {
-        "com.streamvault.app"
+        "com.slasshyvault.app"
     }
 }
 
 fn runtime_deep_link_scheme() -> &'static str {
     if is_dev_runtime() {
-        "streamvault-dev"
+        "slasshyvault-dev"
     } else {
-        "streamvault"
+        "slasshyvault"
     }
 }
 
@@ -8965,7 +8804,7 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
         notification
             .summary(summary)
             .body(body)
-            .appname("StreamVault")
+            .appname("SlasshyVault")
             .app_id(&windows_app_id)
             .timeout(notify_rust::Timeout::Milliseconds(5000));
 
@@ -8982,7 +8821,7 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
     notification
         .summary(summary)
         .body(body)
-        .appname("StreamVault")
+        .appname("SlasshyVault")
         .timeout(notify_rust::Timeout::Milliseconds(5000));
 
     if let Err(err) = notification.show() {
@@ -9082,7 +8921,7 @@ async fn run_watchlist_scheduler(app_handle: AppHandle) {
         for item in due_items {
             send_system_notification(
                 &app_handle,
-                "StreamVault watchlist",
+                "SlasshyVault watchlist",
                 &format_watchlist_notification_body(&item),
             );
             let _ = app_handle.emit_all("watchlist-reminder-fired", item.clone());
@@ -9157,7 +8996,7 @@ async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
 
         for reminder in due_reminders {
             let body = format_reminder_notification_body(&reminder);
-            send_system_notification(&app_handle, "StreamVault reminder", &body);
+            send_system_notification(&app_handle, "SlasshyVault reminder", &body);
             let _ = app_handle.emit_all("movie-reminder-fired", reminder.clone());
 
             if should_continue_tv_reminder(&reminder) {
@@ -10361,7 +10200,7 @@ async fn background_check_cloud_changes(
                     format!("{} items removed (deleted from Drive)", messages.len())
                 };
 
-                dispatch_notification_from_handle(app_handle, "StreamVault", &message, "info");
+                dispatch_notification_from_handle(app_handle, "SlasshyVault", &message, "info");
             }
         }
     }
@@ -10782,7 +10621,7 @@ async fn background_check_cloud_changes(
                 format!("{} items added to your library", indexed_count)
             };
 
-            dispatch_notification_from_handle(app_handle, "StreamVault", &message, "success");
+            dispatch_notification_from_handle(app_handle, "SlasshyVault", &message, "success");
         }
 
         // Emit library-updated if window exists
@@ -10950,7 +10789,7 @@ async fn background_check_cloud_changes(
 
 // GitHub PAT for accessing private releases
 const GITHUB_RELEASE_TOKEN: &str = ""; // User will provide their PAT
-const ALLOWED_REPO: &str = "SlasshyOverhere/StreamVault";
+const ALLOWED_REPO: &str = "SlasshyOverhere/SlasshyVault";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateInfo {
@@ -10988,9 +10827,9 @@ struct GitHubAsset {
     size: i64,
 }
 
-const RELEASES_PAGE_URL: &str = "https://github.com/SlasshyOverhere/StreamVault/releases/latest";
+const RELEASES_PAGE_URL: &str = "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest";
 const RELEASES_METADATA_URL: &str =
-    "https://github.com/SlasshyOverhere/StreamVault/releases/latest/download/latest.json";
+    "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest/download/latest.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct TauriLatestManifest {
@@ -11071,7 +10910,7 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     println!("[UPDATE] Fetching release metadata...");
     let response = client
         .get(RELEASES_METADATA_URL)
-        .header("User-Agent", "StreamVault-Updater")
+        .header("User-Agent", "SlasshyVault-Updater")
         .send()
         .await
         .map_err(|e| {
@@ -11396,7 +11235,12 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
 }
 
 fn updater_staging_root() -> std::path::PathBuf {
-    std::env::temp_dir().join("streamvault-updater")
+    let dir_name = if is_dev_runtime() {
+        "slasshyvault-updater-dev"
+    } else {
+        "slasshyvault-updater"
+    };
+    std::env::temp_dir().join(dir_name)
 }
 
 fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
@@ -11432,7 +11276,7 @@ fn is_authorized_update_url(url: &url::Url, is_redirect: bool) -> bool {
 }
 
 fn sanitize_update_filename(parsed_url: &url::Url) -> String {
-    let fallback = "streamvault-update.bin";
+    let fallback = "slasshyvault-update.bin";
     let Some(raw_filename) = parsed_url
         .path_segments()
         .and_then(|segments| segments.last())
@@ -11655,11 +11499,11 @@ mod install_update_tests {
     use uuid::Uuid;
 
     #[cfg(target_os = "windows")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.exe";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.exe";
     #[cfg(target_os = "macos")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.pkg";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.pkg";
     #[cfg(target_os = "linux")]
-    const TEST_INSTALLER_NAME: &str = "streamvault-update.deb";
+    const TEST_INSTALLER_NAME: &str = "slasshyvault-update.deb";
 
     fn remove_test_artifact(path: &Path) {
         if path.is_dir() {
@@ -11675,7 +11519,7 @@ mod install_update_tests {
 
     fn create_temp_installer(name: &str) -> PathBuf {
         let dir =
-            updater_staging_root().join(format!("streamvault-installer-test-{}", Uuid::new_v4()));
+            updater_staging_root().join(format!("slasshyvault-installer-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
 
@@ -11699,7 +11543,7 @@ mod install_update_tests {
 
     #[test]
     fn rejects_disallowed_extension_in_temp_dir() {
-        let installer_path = create_temp_installer("streamvault-update.txt");
+        let installer_path = create_temp_installer("slasshyvault-update.txt");
         let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
         assert!(error.contains("allowed"));
         remove_test_artifact(&installer_path);
@@ -11709,7 +11553,7 @@ mod install_update_tests {
     fn rejects_installer_outside_staging_dir() {
         let installer_path = std::env::current_dir()
             .unwrap()
-            .join(format!("streamvault-outside-temp-{}", TEST_INSTALLER_NAME));
+            .join(format!("slasshyvault-outside-temp-{}", TEST_INSTALLER_NAME));
         fs::write(&installer_path, b"test-installer").unwrap();
 
         let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
@@ -11792,6 +11636,18 @@ async fn wt_create_room(
                     }
                 });
             }
+            // Show OSD messages directly inside MPV (like Syncplay)
+            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+                let msg = message.clone();
+                let dur = *duration_ms;
+                let ctrl = wt_ctrl.clone();
+                tokio::spawn(async move {
+                    let ctrl_guard = ctrl.lock().await;
+                    if let Some(ref controller) = *ctrl_guard {
+                        let _ = controller.show_osd(&msg, dur).await;
+                    }
+                });
+            }
             let _ = window_clone.emit("wt-event", &event);
         })
         .await;
@@ -11869,6 +11725,18 @@ async fn wt_join_room(
                             }
                             _ => {}
                         }
+                    }
+                });
+            }
+            // Show OSD messages directly inside MPV (like Syncplay)
+            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+                let msg = message.clone();
+                let dur = *duration_ms;
+                let ctrl = wt_ctrl.clone();
+                tokio::spawn(async move {
+                    let ctrl_guard = ctrl.lock().await;
+                    if let Some(ref controller) = *ctrl_guard {
+                        let _ = controller.show_osd(&msg, dur).await;
                     }
                 });
             }
@@ -12815,6 +12683,97 @@ fn ddl_get_source_media(
         .map_err(|e| e.to_string())
 }
 
+/// Returns the OLD app data directory (pre-rename "StreamVault") respecting dev/prod isolation.
+/// Dev builds target "StreamVault-Dev", production targets "StreamVault".
+fn get_old_app_data_dir() -> std::path::PathBuf {
+    let dir_name = if cfg!(debug_assertions) {
+        "StreamVault-Dev"
+    } else {
+        "StreamVault"
+    };
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return std::path::PathBuf::from(appdata).join(dir_name);
+        }
+    }
+    dirs::home_dir()
+        .map(|h| h.join(format!(".{}", dir_name)))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// Returns the NEW app data directory (post-rename "SlasshyVault"), delegating to database::get_app_data_dir.
+fn get_new_app_data_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(database::get_app_data_dir().to_string_lossy().as_ref())
+}
+
+fn copy_dir_all(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    std::fs::create_dir_all(&dst)?;
+    for entry in std::fs::read_dir(&src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.as_ref().join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_app_data() {
+    let old_dir = get_old_app_data_dir();
+    let new_dir = get_new_app_data_dir();
+
+    // If old dir doesn't exist, nothing to migrate (fresh install or already migrated)
+    if !old_dir.exists() {
+        println!("[MIGRATE] Old data directory {:?} does not exist, no migration needed", old_dir);
+        return;
+    }
+
+    // If both old and new databases exist, migration was already completed
+    let old_db = old_dir.join("media_library.db");
+    let new_db = new_dir.join("media_library.db");
+    if old_db.exists() && new_db.exists() {
+        if let Ok(db) = database::Database::new(&new_db.to_string_lossy()) {
+            if let Ok(Some(_)) = db.get_setting("migration_completed") {
+                println!("[MIGRATE] Migration already completed (flag found), skipping");
+                return;
+            }
+        }
+    }
+
+    println!("[MIGRATE] Migrating app data from {:?} to {:?}", old_dir, new_dir);
+
+    match copy_dir_all(&old_dir, &new_dir) {
+        Ok(_) => {
+            println!("[MIGRATE] Successfully copied data to {:?}", new_dir);
+
+            if new_db.exists() {
+                match database::Database::new(&new_db.to_string_lossy()) {
+                    Ok(_db) => {
+                        println!("[MIGRATE] Verified database at new location");
+                        // Mark migration as completed in the new DB (old dir is preserved)
+                        let _ = _db.set_setting("migration_completed", "true");
+                    }
+                    Err(e) => {
+                        println!("[MIGRATE] Warning: Database verification failed: {}. Rolling back.", e);
+                        let _ = std::fs::remove_dir_all(&new_dir);
+                    }
+                }
+            } else {
+                println!("[MIGRATE] Warning: Database file not found at new location");
+            }
+        }
+        Err(e) => {
+            println!("[MIGRATE] Warning: Failed to copy data: {}. Startup will continue with fresh data.", e);
+            let _ = std::fs::remove_dir_all(&new_dir);
+        }
+    }
+}
+
 fn main() {
     // Initialize single-instance plugin as early as possible for production builds.
     // This catches second instances BEFORE they attempt to open the database (which would cause a crash/panic).
@@ -12834,6 +12793,11 @@ fn main() {
     // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
     dotenvy::dotenv().ok();
 
+    // Migrate app data from old StreamVault directory to new SlasshyVault directory.
+    // Dev builds use StreamVault-Dev → SlasshyVault-Dev (isolated from production).
+    // Release builds use StreamVault → SlasshyVault (production data migration).
+    migrate_app_data();
+
     // Prepare deep link before building the app.
     // Dev and production use separate identifiers/schemes so they can run independently.
     tauri_plugin_deep_link::prepare(runtime_app_identifier());
@@ -12844,9 +12808,9 @@ fn main() {
 
     // Ensure directories exist
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent).map_err(|e| println!("[INIT] Warning: Failed to create db parent dir: {}", e)).ok();
     }
-    std::fs::create_dir_all(&image_cache_dir).ok();
+    std::fs::create_dir_all(&image_cache_dir).map_err(|e| println!("[INIT] Warning: Failed to create image cache dir: {}", e)).ok();
 
     // Initialize database
     let db = database::Database::new(&db_path).expect("Failed to initialize database");
@@ -12863,7 +12827,6 @@ fn main() {
         active_zip_streams: Mutex::new(HashMap::new()),
         download_manager: download_manager::DownloadManager::default(),
         gdrive_client: gdrive::GoogleDriveClient::new(),
-        social_auth_client: social_auth::SocialAuthClient::new(),
         watch_together: Arc::new(tokio::sync::Mutex::new(
             watch_together::WatchTogetherManager::new(),
         )),
@@ -12871,7 +12834,7 @@ fn main() {
     };
 
     // Create system tray menu
-    let show = CustomMenuItem::new("show".to_string(), "Show StreamVault");
+    let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
     let tray_menu = SystemTrayMenu::new()
         .add_item(show)
@@ -12915,6 +12878,28 @@ fn main() {
             if let Some(window) = app.get_window("main") {
                 window.set_title(runtime_window_title()).ok();
                 apply_window_corner_radius(&window);
+            }
+
+            // Allow both dev and production image cache directories in the asset protocol scope
+            let base_dir = if cfg!(windows) {
+                std::env::var_os("APPDATA").map(PathBuf::from)
+            } else {
+                dirs::home_dir()
+            };
+            if let Some(base_dir) = base_dir {
+                for dir_name in &["SlasshyVault", "SlasshyVault-Dev"] {
+                    let app_dir = if cfg!(windows) {
+                        base_dir.join(dir_name)
+                    } else {
+                        base_dir.join(format!(".{}", dir_name))
+                    };
+                    let cache_dir = app_dir.join("image_cache");
+                    if let Err(e) = app.asset_protocol_scope().allow_directory(&cache_dir, true) {
+                        println!("[ASSET-SCOPE] Warning: Failed to allow {:?}: {}", cache_dir, e);
+                    } else {
+                        println!("[ASSET-SCOPE] Allowed image cache: {:?}", cache_dir);
+                    }
+                }
             }
 
             apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
@@ -13084,7 +13069,7 @@ fn main() {
                 })();
             "#;
 
-            window.eval(popup_block_script).ok();
+            let _ = window.emit("inject-script", popup_block_script);
         })
         .on_window_event(|event| {
             match event.event() {
@@ -13097,7 +13082,7 @@ fn main() {
                     if *focused {
                         // Re-inject popup blocker when window regains focus
                         let window = event.window();
-                        window.eval(r#"
+                        let _ = window.emit("inject-script", r#"
                             if (!window.__adBlockerActive) {
                                 window.__adBlockerActive = true;
                                 const origOpen = window.open;
@@ -13106,7 +13091,7 @@ fn main() {
                                     return null;
                                 };
                             }
-                        "#).ok();
+                        "#);
                     }
                 }
                 _ => {}
@@ -13118,6 +13103,7 @@ fn main() {
             get_recently_added,
             get_library,
             get_library_filtered,
+            get_ddl_media,
             get_library_stats,
             get_episodes,
             get_watch_history,
@@ -13127,19 +13113,12 @@ fn main() {
             clear_all_watch_history,
             sync_watch_history,
             mark_as_complete,
-            // Streaming history commands
-            save_streaming_progress,
-            get_streaming_history,
-            get_streaming_resume_info,
-            remove_from_streaming_history,
-            clear_all_streaming_history,
             // Social sync commands
             get_watch_stats,
             get_recent_watch_activities,
             // App reset command
             clear_all_app_data,
             cleanup_missing_metadata,
-            repair_file_paths,
             // Other commands
             delete_media_files,
             delete_series,
@@ -13194,29 +13173,20 @@ fn main() {
             delete_watchlist_item,
             sync_watchlist,
             merge_duplicate_shows,
-            // Videasy player commands
-            open_videasy_player,
-            save_videasy_progress,
             // Google Drive commands
             gdrive_is_connected,
             gdrive_get_access_token,
             gdrive_get_account_info,
-            gdrive_get_ai_chat_history,
-            gdrive_save_ai_chat_history,
             gdrive_start_auth,
             gdrive_complete_auth,
             gdrive_auth_with_code,
             gdrive_disconnect,
-            social_is_connected,
-            social_get_access_token,
-            social_start_auth,
-            social_complete_auth,
-            social_disconnect,
             gdrive_list_folders,
             gdrive_list_files,
             gdrive_list_video_files,
             gdrive_get_stream_url,
             gdrive_get_file_metadata,
+            gdrive_share_file,
             gdrive_scan_folder,
             gdrive_delete_folder_media,
             // Cloud folder management

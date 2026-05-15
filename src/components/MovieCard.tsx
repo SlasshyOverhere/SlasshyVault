@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Bot, Sparkles, Cloud, Download } from "lucide-react"
+import { useState, useEffect, useRef, useCallback, memo } from "react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download, Pin, PinOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getCachedImageUrl, MediaItem } from "@/services/api"
+import { getPinnedIds, togglePin as togglePinStorage } from "@/utils/pins"
 import { motion } from "framer-motion"
 import { getMediaProgressPercent, isProgressPastAutoCompleteThreshold } from "@/utils/playbackProgress"
 import {
@@ -19,7 +20,6 @@ export interface MovieCardProps {
   onRemoveFromHistory?: (item: MediaItem) => void
   onDelete?: (item: MediaItem) => void
   onWatchTogether?: (item: MediaItem) => void
-  onAskAI?: (item: MediaItem) => void
   onDownload?: (item: MediaItem) => void
   showNewBadge?: boolean
   disableEntryAnimation?: boolean
@@ -48,7 +48,6 @@ export function areMovieCardPropsEqual(prev: MovieCardProps, next: MovieCardProp
     prev.onRemoveFromHistory !== next.onRemoveFromHistory ||
     prev.onDelete !== next.onDelete ||
     prev.onWatchTogether !== next.onWatchTogether ||
-    prev.onAskAI !== next.onAskAI ||
     prev.onDownload !== next.onDownload ||
     prev.showNewBadge !== next.showNewBadge ||
     prev.disableEntryAnimation !== next.disableEntryAnimation
@@ -93,7 +92,6 @@ function MovieCardBase({
   onRemoveFromHistory,
   onDelete,
   onWatchTogether,
-  onAskAI,
   onDownload,
   showNewBadge = false,
   disableEntryAnimation = false,
@@ -116,7 +114,37 @@ function MovieCardBase({
   const isGroupedHistorySeries = (item.history_group_count || 0) > 1
   const historyLatestLabel = item.history_group_latest_label?.trim()
   const leadActor = item.cast_names?.split(',')[0]?.trim()
+
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(getPinnedIds);
+  const isPinned = pinnedIds.has(String(item.id));
+  const togglePin = () => {
+    togglePinStorage(item.id);
+    setPinnedIds(getPinnedIds());
+  };
   const directorName = item.director?.trim()
+  const [isLightArea, setIsLightArea] = useState<boolean | null>(null)
+  const samplePosterLuminance = useCallback((img: HTMLImageElement) => {
+    try {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      const size = 8
+      canvas.width = size
+      canvas.height = size
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      if (!w || !h) return
+      ctx.drawImage(img, w * 0.7, 0, w * 0.3, h * 0.2, 0, 0, size, size)
+      const data = ctx.getImageData(0, 0, size, size).data
+      let r = 0, g = 0, b = 0
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i]; g += data[i + 1]; b += data[i + 2]
+      }
+      const n = data.length / 4
+      const lum = (0.299 * (r / n) + 0.587 * (g / n) + 0.114 * (b / n)) / 255
+      setIsLightArea(lum > 0.45)
+    } catch { setIsLightArea(null) }
+  }, [])
 
   useEffect(() => {
     if (shouldLoadPoster) return
@@ -189,6 +217,9 @@ function MovieCardBase({
               onClick={() => onClick(item)}
               onMouseEnter={handleHoverStart}
               onMouseLeave={handleHoverEnd}
+              onFocus={handleHoverStart}
+              onBlur={handleHoverEnd}
+              tabIndex={0}
               initial={shouldAnimateEntry ? { opacity: 0, y: 12 } : false}
               animate={shouldAnimateEntry ? { opacity: 1, y: 0 } : undefined}
               transition={shouldAnimateEntry
@@ -208,12 +239,17 @@ function MovieCardBase({
                     src={imageSrc}
                     alt={item.title}
                     loading="lazy"
-                    onLoad={() => setImageLoaded(true)}
+                    onLoad={(e) => { setImageLoaded(true); samplePosterLuminance(e.currentTarget); }}
                     className={cn(
                       "media-list-image",
                       imageLoaded ? "opacity-100" : "opacity-0"
                     )}
                   />
+                  {isPinned && (
+                    <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-md bg-black/70 backdrop-blur-md border-2 border-white/80 flex items-center justify-center shadow-lg">
+                      <Pin className="w-3 h-3 text-white" />
+                    </div>
+                  )}
                 </div>
 
                 <div className="media-list-info">
@@ -263,63 +299,31 @@ function MovieCardBase({
           </ContextMenuTrigger>
 
           {/* Context Menu */}
-          <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <ContextMenuItem
-              onClick={() => onClick(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-                <Play className="w-4 h-4 text-white" />
-              </div>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
+              <Play className="w-4 h-4 text-foreground/70" />
               <span>Open Details</span>
             </ContextMenuItem>
 
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+            <ContextMenuSeparator />
 
-            <ContextMenuItem
-              onClick={() => onFixMatch(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                <Edit className="w-4 h-4 text-muted-foreground" />
-              </div>
+            <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
+              <Edit className="w-4 h-4 text-foreground/40" />
               <span>Fix Match</span>
             </ContextMenuItem>
 
-            {onAskAI && item.is_cloud && (
-              <ContextMenuItem
-                onClick={() => onAskAI(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
-              >
-                <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-amber-300" />
-                </div>
-                <span>Ask AI (New)</span>
-              </ContextMenuItem>
-            )}
-
             {onDownload && item.is_cloud && (
-              <ContextMenuItem
-                onClick={() => onDownload(item)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
-              >
-                <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
-                  <Download className="w-4 h-4 text-amber-200" />
-                </div>
+              <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
+                <Download className="w-4 h-4 text-foreground/70" />
                 <span>Download</span>
               </ContextMenuItem>
             )}
 
             {onWatchTogether && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onWatchTogether(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                    <Users className="w-4 h-4 text-white" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
+                  <Users className="w-4 h-4 text-foreground/70" />
                   <span>Watch Together</span>
                 </ContextMenuItem>
               </>
@@ -327,29 +331,30 @@ function MovieCardBase({
 
             {onRemoveFromHistory && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onRemoveFromHistory(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
+                  <X className="w-4 h-4 text-foreground/40" />
                   <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
                 </ContextMenuItem>
               </>
             )}
 
+            <ContextMenuSeparator />
+
+            <ContextMenuItem onClick={togglePin}>
+              {isPinned ? (
+                <PinOff className="w-4 h-4 text-foreground/70" />
+              ) : (
+                <Pin className="w-4 h-4 text-foreground/70" />
+              )}
+              <span>{isPinned ? 'Unpin' : 'Pin'}</span>
+            </ContextMenuItem>
+
             {onDelete && (
               <>
-                <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-                <ContextMenuItem
-                  onClick={() => onDelete(item)}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
-                    <Trash2 className="w-4 h-4 text-red-400" />
-                  </div>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+                  <Trash2 className="w-4 h-4 text-red-400/70" />
                   <span>Delete from Drive</span>
                 </ContextMenuItem>
               </>
@@ -370,6 +375,9 @@ function MovieCardBase({
             onClick={() => onClick(item)}
             onMouseEnter={handleHoverStart}
             onMouseLeave={handleHoverEnd}
+            onFocus={handleHoverStart}
+            onBlur={handleHoverEnd}
+            tabIndex={0}
             initial={shouldAnimateEntry ? { opacity: 0, y: 30, scale: 0.95 } : false}
             animate={shouldAnimateEntry ? { opacity: 1, y: 0, scale: 1 } : undefined}
             transition={shouldAnimateEntry
@@ -402,11 +410,8 @@ function MovieCardBase({
               isHovered && "border-white/30"
             )}
             animate={enableMotionEffects
-              ? {
-                y: isHovered ? -6 : 0,
-              }
+              ? {}
               : undefined}
-            transition={enableMotionEffects ? { duration: 0.4, ease: [0.22, 1, 0.36, 1] } : undefined}
             style={{
               boxShadow: isHovered
                 ? '0 20px 42px -14px rgba(0,0,0,0.58), 0 0 32px -12px rgba(255, 255, 255, 0.16)'
@@ -428,7 +433,7 @@ function MovieCardBase({
                 src={imageSrc}
                 alt={item.title}
                 loading="lazy"
-                onLoad={() => setImageLoaded(true)}
+                onLoad={(e) => { setImageLoaded(true); samplePosterLuminance(e.currentTarget); }}
                 className={cn(
                   "w-full h-full object-cover",
                   "transition-all duration-700 ease-out will-change-transform",
@@ -506,67 +511,28 @@ function MovieCardBase({
                   )}
                 </div>
 
-                {/* Options button on hover - REMOVED 3-DOT AS PER USER REQUEST */}
-                <motion.div
-                  initial={enableMotionEffects ? { opacity: 0, scale: 0.5 } : false}
-                  animate={enableMotionEffects
-                    ? {
-                      opacity: isHovered ? 1 : 0,
-                      scale: isHovered ? 1 : 0.5
-                    }
-                    : undefined}
-                  transition={enableMotionEffects ? { duration: 0.2 } : undefined}
-                  className="ml-auto flex items-center gap-1.5"
-                  style={!enableMotionEffects ? {
-                    opacity: isHovered ? 1 : 0,
-                    transform: isHovered ? 'scale(1)' : 'scale(0.9)',
-                  } : undefined}
-                >
-                  {onDownload && item.is_cloud && (
-                    <button
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onDownload(item);
-                      }}
-                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-amber-300/40 text-amber-200 hover:text-white hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
-                      title="Download this title"
-                      aria-label={`Download ${item.title}`}
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
+                <div className="ml-auto flex items-center gap-1.5">
+                  {isPinned && (
+                    <div className={cn(
+                      "p-1.5 rounded-lg backdrop-blur-xl border-2 shadow-xl transition-all duration-300",
+                      isLightArea === null
+                        ? "bg-white/10 border-white/20"
+                        : isLightArea
+                          ? "bg-black/75 border-white/90"
+                          : "bg-white/90 border-black/40"
+                    )}>
+                      <Pin className={cn(
+                        "w-3.5 h-3.5 transition-colors duration-300",
+                        isLightArea === null
+                          ? "text-white/80"
+                          : isLightArea
+                            ? "text-white"
+                            : "text-black"
+                      )} />
+                    </div>
                   )}
-                  {onAskAI && item.is_cloud && (
-                    <button
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onAskAI(item);
-                      }}
-                      className="p-2 rounded-xl bg-amber-500/15 backdrop-blur-xl border border-white/45 text-amber-200 hover:text-amber-100 hover:bg-amber-500/30 hover:border-amber-200/70 transition-all shadow-xl"
-                      title="Ask AI about this title"
-                      aria-label={`Ask AI about ${item.title}`}
-                    >
-                      <Bot className="w-4 h-4" />
-                    </button>
-                  )}
-                </motion.div>
+
+                </div>
               </div>
 
               {/* Progress Bar */}
@@ -640,63 +606,31 @@ function MovieCardBase({
         </ContextMenuTrigger>
 
       {/* Context Menu */}
-        <ContextMenuContent className="min-w-[200px] bg-card/95 backdrop-blur-2xl border-white/10 rounded-xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <ContextMenuItem
-          onClick={() => onClick(item)}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-        >
-          <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
-            <Play className="w-4 h-4 text-white" />
-          </div>
+        <ContextMenuContent>
+        <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
+          <Play className="w-4 h-4 text-foreground/70" />
           <span>Open Details</span>
         </ContextMenuItem>
 
-        <ContextMenuSeparator className="bg-white/[0.08] my-2" />
+        <ContextMenuSeparator />
 
-        <ContextMenuItem
-          onClick={() => onFixMatch(item)}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-        >
-          <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-            <Edit className="w-4 h-4 text-muted-foreground" />
-          </div>
+        <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
+          <Edit className="w-4 h-4 text-foreground/40" />
           <span>Fix Match</span>
         </ContextMenuItem>
 
-        {onAskAI && item.is_cloud && (
-          <ContextMenuItem
-            onClick={() => onAskAI(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-300 text-amber-300 transition-colors"
-          >
-            <div className="w-8 h-8 rounded-lg bg-white/20 border border-white/35 flex items-center justify-center">
-              <Bot className="w-4 h-4 text-amber-300" />
-            </div>
-            <span>Ask AI (New)</span>
-          </ContextMenuItem>
-        )}
-
         {onDownload && item.is_cloud && (
-          <ContextMenuItem
-            onClick={() => onDownload(item)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-amber-200 text-amber-200 transition-colors"
-          >
-            <div className="w-8 h-8 rounded-lg bg-amber-400/15 border border-white/30 flex items-center justify-center">
-              <Download className="w-4 h-4 text-amber-200" />
-            </div>
+          <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
+            <Download className="w-4 h-4 text-foreground/70" />
             <span>Download</span>
           </ContextMenuItem>
         )}
 
         {onWatchTogether && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onWatchTogether(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                <Users className="w-4 h-4 text-white" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
+              <Users className="w-4 h-4 text-foreground/70" />
               <span>Watch Together</span>
             </ContextMenuItem>
           </>
@@ -704,14 +638,9 @@ function MovieCardBase({
 
         {onRemoveFromHistory && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onRemoveFromHistory(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-white/10 focus:text-white transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                <X className="w-4 h-4 text-muted-foreground" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
+              <X className="w-4 h-4 text-foreground/40" />
               <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
             </ContextMenuItem>
           </>
@@ -719,18 +648,24 @@ function MovieCardBase({
 
         {onDelete && (
           <>
-            <ContextMenuSeparator className="bg-white/[0.08] my-2" />
-            <ContextMenuItem
-              onClick={() => onDelete(item)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer text-sm font-medium focus:bg-red-500/10 focus:text-red-400 text-red-400/80 transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
-                <Trash2 className="w-4 h-4 text-red-400" />
-              </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+              <Trash2 className="w-4 h-4 text-red-400/70" />
               <span>Delete from Drive</span>
             </ContextMenuItem>
           </>
         )}
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={togglePin}>
+          {isPinned ? (
+            <PinOff className="w-4 h-4 text-foreground/70" />
+          ) : (
+            <Pin className="w-4 h-4 text-foreground/70" />
+          )}
+          <span>{isPinned ? 'Unpin' : 'Pin'}</span>
+        </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
 
@@ -793,6 +728,12 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
     ? item.duration_seconds - item.resume_position_seconds
     : null
   const remainingMinutes = remainingSeconds ? Math.ceil(remainingSeconds / 60) : null
+  const formatRemaining = (mins: number) => {
+    if (mins < 60) return `${mins}m left`
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
+    return m > 0 ? `${h}h ${m}m left` : `${h}h left`
+  }
 
   return (
     <motion.div
@@ -816,116 +757,75 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
       <motion.div
         className={cn(
           "relative flex rounded-2xl overflow-hidden cursor-pointer",
-          "h-[155px] min-w-[340px] max-w-[420px]",
-          "bg-card/80 backdrop-blur-sm border border-white/[0.08]",
+          "h-[155px] min-w-[300px] max-w-[380px]",
+          "border border-white/[0.08]",
           "transition-all duration-400",
-          isHovered && "border-white/30"
+          isHovered && "border-white/25"
         )}
         animate={{
-          y: isHovered ? -5 : 0,
-          scale: isHovered ? 1.01 : 1,
+          scale: isHovered ? 1.02 : 1,
         }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.35 }}
         style={{
           boxShadow: isHovered
-            ? '0 20px 40px -12px rgba(0,0,0,0.5), 0 0 30px -5px rgba(255, 255, 255, 0.15)'
-            : '0 4px 6px -1px rgba(0,0,0,0.2)',
+            ? '0 24px 48px -12px rgba(0,0,0,0.6), 0 0 40px -8px rgba(255,255,255,0.1)'
+            : '0 8px 12px -4px rgba(0,0,0,0.3)',
         }}
       >
-        {/* Blurred background effect */}
-        {posterUrl && (
-          <div
-            className="absolute inset-0 opacity-15 blur-3xl scale-125 pointer-events-none"
-            style={{ backgroundImage: `url(${posterUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-          />
-        )}
+        {/* Full-bleed poster background */}
+        <motion.img
+          src={imageSrc}
+          alt={item.title}
+          className="absolute inset-0 w-full h-full object-cover"
+          animate={{ scale: isHovered ? 1.08 : 1 }}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        />
 
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-r from-card via-card/95 to-card/80 z-0" />
+        {/* Dark gradient overlay for text readability */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 via-40% to-black/10 z-[1]" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-transparent z-[1]" />
 
-        {/* Poster */}
-        <div className="relative w-[110px] h-full flex-shrink-0 overflow-hidden z-10">
-          <motion.img
-            src={imageSrc}
-            alt={item.title}
-            className="w-full h-full object-cover"
-            animate={{
-              scale: isHovered ? 1.1 : 1,
-            }}
-            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-          />
+        {/* Content overlay */}
+        <div className="relative flex flex-col justify-end z-10 p-4 w-full h-full">
+          <h4 className="text-base font-black text-white leading-tight line-clamp-1">
+            {item.title}
+          </h4>
 
-          {/* Poster gradient fade */}
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-card pointer-events-none" />
-
-        </div>
-
-        {/* Content */}
-        <div className="relative flex-1 p-5 flex flex-col justify-between z-10 min-w-0">
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                {item.media_type === 'tvshow' && (
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10">
-                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Series</span>
-                  </div>
-                )}
-                {item.is_cloud && (
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/5 border border-white/10 group-hover:bg-white/10 transition-colors">
-                    <Cloud className="w-2.5 h-2.5 text-white/40" />
-                    <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">Cloud</span>
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-            <h4 className="font-bold text-[16px] text-white leading-tight line-clamp-1 mb-1 group-hover:text-amber-200 transition-colors">
-              {item.title}
-            </h4>
-            
-            {item.season_number && item.episode_number && (
-              <p className="text-[11px] text-white/50 font-medium tracking-wide uppercase flex items-center gap-2">
-                <span>Season {item.season_number}</span>
-                <span className="w-1 h-1 rounded-full bg-white/10" />
-                <span>Episode {item.episode_number}</span>
-              </p>
-            )}
-
-            {item.episode_title && (
-              <p className="text-[11px] text-white/30 font-medium line-clamp-1 italic mt-1.5">
-                "{item.episode_title}"
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2.5">
-            <div className="flex items-end justify-between text-[11px]">
-              <div className="flex items-center gap-1.5">
-                <span className="text-white font-bold">{Math.round(progress)}%</span>
-                <span className="text-white/20 uppercase text-[9px] tracking-widest font-medium">completed</span>
-              </div>
-              {remainingMinutes && (
-                <div className="flex items-center gap-1 text-amber-500/60 font-medium">
-                  <Clock className="w-3 h-3" />
-                  <span>{remainingMinutes}m left</span>
-                </div>
+          {(item.media_type === 'movie' || (item.season_number && item.episode_number) || item.episode_title) && (
+            <div className="flex items-center gap-1.5 text-[11px] text-white/50 min-w-0 mt-0.5">
+              {item.media_type === 'movie' ? (
+                <span className="text-amber-400/80">Movie</span>
+              ) : item.season_number && item.episode_number ? (
+                <span className="text-amber-400/80">S{item.season_number} · E{item.episode_number}</span>
+              ) : null}
+              {item.episode_title && (
+                <>
+                  <span className="text-white/30">—</span>
+                  <span className="italic text-white/50 truncate min-w-0">{item.episode_title}</span>
+                </>
               )}
             </div>
+          )}
 
-            {/* Sleek Progress Bar */}
-            <div className="h-1.5 rounded-full bg-white/5 border border-white/5 overflow-hidden">
-              <motion.div
-                className="h-full bg-gradient-to-r from-amber-600 to-amber-500 relative"
-                initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
-              >
-                {/* Subtle Moving Shimmer */}
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
-              </motion.div>
-            </div>
+          <div className="flex items-center justify-between mt-1.5">
+            {remainingMinutes && (
+              <div className="flex items-center gap-1 text-[11px] text-white/35 font-medium">
+                <Clock className="w-3 h-3" />
+                <span>{formatRemaining(remainingMinutes)}</span>
+              </div>
+            )}
+            <span className="text-[10px] font-medium text-white/50 tabular-nums">{Math.round(progress)}%</span>
           </div>
+        </div>
+
+        {/* Progress bar at very bottom */}
+        <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/[0.06] z-[2]">
+          <motion.div
+            className="h-full bg-gradient-to-r from-amber-600 to-amber-500"
+            initial={{ width: 0 }}
+            animate={{ width: `${progress}%` }}
+            transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+          />
         </div>
       </motion.div>
     </motion.div>

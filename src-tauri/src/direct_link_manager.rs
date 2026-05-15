@@ -72,6 +72,28 @@ pub struct DdlRefreshResult {
 
 /// Validate a direct download URL: check reachability, file size, and Range support.
 pub fn validate_url(url: &str) -> Result<DdlValidationResult, String> {
+    let parsed = url::Url::parse(url).map_err(|_| "Invalid URL".to_string())?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err("Only HTTPS URLs are allowed for direct links".to_string());
+    }
+    // Check for private IP ranges (allow localhost for testing and local DDL sources)
+    if let Some(host) = parsed.host_str() {
+        if host.starts_with("10.") || host.starts_with("172.16.") || host.starts_with("192.168.") || host.starts_with("169.254.") {
+            return Err("Private/internal network URLs are not allowed for direct links".to_string());
+        }
+    }
+    if let Some(host) = parsed.host_str() {
+        let lower = host.to_lowercase();
+        if lower == "::1"
+            || lower.starts_with("10.")
+            || lower.starts_with("172.16.")
+            || lower.starts_with("192.168.")
+            || lower.starts_with("169.254.")
+        {
+            return Err("Private/internal network URLs are not allowed".to_string());
+        }
+    }
+
     let client = build_client()?;
 
     let response = client

@@ -7,8 +7,8 @@
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "StreamVault",
-    "version": "3.0.39"
+    "productName": "SlasshyVault",
+    "version": "3.0.40"
   },
   "tauri": {
     "allowlist": {
@@ -21,46 +21,34 @@
       "protocol": {
         "asset": true,
         "assetScope": [
-          "**",
           "$APPDATA/**",
-          "$RESOURCE/**",
-          "C:\\**",
-          "D:\\**",
-          "E:\\**",
-          "F:\\**",
-          "G:\\**",
-          "H:\\**",
-          "I:\\**",
-          "J:\\**",
-          "K:\\**",
-          "L:\\**",
-          "M:\\**",
-          "N:\\**",
-          "O:\\**",
-          "P:\\**",
-          "Q:\\**",
-          "R:\\**",
-          "S:\\**",
-          "T:\\**",
-          "U:\\**",
-          "V:\\**",
-          "W:\\**",
-          "X:\\**",
-          "Y:\\**",
-          "Z:\\**"
+          "$RESOURCE/**"
         ]
       },
       "fs": {
-        "all": true,
+        "all": false,
+        "readFile": true,
+        "writeFile": true,
+        "readDir": true,
+        "createDir": true,
+        "removeFile": true,
+        "renameFile": true,
+        "exists": true,
         "scope": [
-          "**/*"
+          "$APPDATA/**",
+          "$RESOURCE/**",
+          "$HOME/**"
         ]
       },
       "http": {
-        "all": true,
+        "all": false,
+        "request": true,
         "scope": [
-          "http://**",
-          "https://**"
+          "https://api.themoviedb.org/**",
+          "https://www.googleapis.com/**",
+          "https://slasshyvault.onrender.com/**",
+          "http://localhost:3000/**",
+          "http://127.0.0.1:3000/**"
         ]
       },
       "shell": {
@@ -80,10 +68,10 @@
       },
       "externalBin": [],
       "icon": [
-        "icons/steamvault.png",
-        "icons/steamvault.ico"
+        "icons/slasshyvault.png",
+        "icons/slasshyvault.ico"
       ],
-      "identifier": "com.streamvault.app",
+      "identifier": "com.slasshyvault.app",
       "longDescription": "",
       "macOS": {
         "entitlements": null,
@@ -102,28 +90,29 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; frame-src https://player.videasy.net https://*.videasy.net; child-src https://player.videasy.net https://*.videasy.net; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:*"
+      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset: blob: https: http://localhost:* http://127.0.0.1:*; style-src 'self'; script-src 'self'; connect-src 'self' https://api.themoviedb.org https://www.googleapis.com https://slasshyvault.onrender.com ws://slasshyvault.onrender.com wss://slasshyvault.onrender.com http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
     },
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/SlasshyOverhere/StreamVault/releases/latest/download/latest.json"
+        "https://github.com/SlasshyOverhere/SlasshyVault/releases/latest/download/latest.json"
       ],
-      "dialog": false,
+      "dialog": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDQ0I5Mjk5NjFBQjU5MzEKUldReFdhdGhtWkxMVENNT1FNbWhZT0VUVmlJaEREdkR2akRGdFhFVDFHRWZIMnlUQ0JQSUtPN0UK"
     },
     "systemTray": {
-      "iconPath": "icons/steamvault.ico",
+      "iconPath": "icons/slasshyvault.ico",
       "iconAsTemplate": false,
       "menuOnLeftClick": false
     },
     "windows": [
       {
+        "center": true,
         "label": "main",
         "fullscreen": false,
         "height": 900,
         "resizable": true,
-        "title": "StreamVault",
+        "title": "SlasshyVault",
         "width": 1400,
         "maximizable": true,
         "minWidth": 900,

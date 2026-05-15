@@ -236,6 +236,7 @@ export function FullHistoryView({
                 <select
                   value={filter}
                   onChange={(event) => setFilter(event.target.value as QuickFilter)}
+                  aria-label="Filter history entries"
                   className="h-11 w-full appearance-none rounded-full border border-white/10 bg-[#2a2a2a] px-4 pr-10 text-sm text-white outline-none transition-colors hover:bg-[#323232] focus:border-white/20 [color-scheme:dark]"
                 >
                   {FILTER_OPTIONS.map((option) => (
@@ -307,7 +308,7 @@ export function FullHistoryView({
               </div>
               <h3 className="text-xl font-semibold text-white">No watch entries yet</h3>
               <p className="mt-2 text-sm leading-6 text-white/55">
-                Start watching a movie or episode and StreamVault will capture the full watch entry here with exact time,
+                Start watching a movie or episode and SlasshyVault will capture the full watch entry here with exact time,
                 progress, source, and timeline grouping.
               </p>
             </div>

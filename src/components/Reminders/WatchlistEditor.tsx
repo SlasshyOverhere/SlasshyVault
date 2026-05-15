@@ -47,23 +47,30 @@ export function WatchlistEditor({
 }: WatchlistEditorProps) {
   const [loading, setLoading] = useState(false)
   const [title, setTitle] = useState('')
+  const [titleError, setTitleError] = useState('')
   const [notes, setNotes] = useState('')
   const [notificationEnabled, setNotificationEnabled] = useState(false)
   const [notifyAt, setNotifyAt] = useState('')
+  const [notifyAtError, setNotifyAtError] = useState('')
   const [notificationMode, setNotificationMode] = useState<'single' | 'spam'>('single')
   const [intervalPreset, setIntervalPreset] = useState<string>('30')
   const [manualInterval, setManualInterval] = useState('30')
 
+  const typedData = (d: Partial<WatchlistItemInput> | WatchlistItem | undefined | null) => (d ?? {}) as Partial<WatchlistItemInput> & Partial<WatchlistItem>
+
   useEffect(() => {
     if (!open) return
 
-    const data = initialData as any
+    const data = typedData(initialData)
+    setTitleError('')
+    setNotifyAtError('')
     setTitle(data?.title || '')
     setNotes(data?.notes || '')
     setNotificationEnabled(data?.notification_enabled ?? data?.notificationEnabled ?? false)
     setNotifyAt(utcToLocalDatetime(data?.notify_at ?? data?.notifyAt))
 
-    const mode = (data?.notification_mode ?? data?.notificationMode ?? 'single') as 'single' | 'spam'
+    const rawMode = data?.notification_mode ?? data?.notificationMode ?? 'single'
+    const mode: 'single' | 'spam' = rawMode === 'spam' ? 'spam' : 'single'
     setNotificationMode(mode)
 
     const interval = data?.notification_interval_minutes ?? data?.notificationIntervalMinutes ?? 30
@@ -77,9 +84,24 @@ export function WatchlistEditor({
   }, [open, initialData])
 
   const handleSave = async () => {
+    let hasError = false
+    if (!title.trim()) {
+      setTitleError('Title is required')
+      hasError = true
+    } else {
+      setTitleError('')
+    }
+    if (notificationEnabled && !notifyAt) {
+      setNotifyAtError('Notification time is required')
+      hasError = true
+    } else {
+      setNotifyAtError('')
+    }
+    if (hasError) return
+
     setLoading(true)
     try {
-      const data = initialData as any
+      const data = typedData(initialData)
       const intervalMinutes = notificationMode === 'spam'
         ? intervalPreset === '-1'
           ? Number(manualInterval || 30)
@@ -128,10 +150,17 @@ export function WatchlistEditor({
           <div className="space-y-3">
             <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 ml-1">Title</Label>
             <Input
+              id="watchlist-title"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => { setTitle(e.target.value); setTitleError('') }}
+              aria-label="Watchlist item title"
+              aria-describedby="watchlist-title-error"
+              aria-invalid={!!titleError}
               className="bg-white/5 border-white/10 focus:border-white/20 h-14 rounded-2xl px-5 text-base font-bold"
             />
+            {titleError && (
+              <p id="watchlist-title-error" className="text-[10px] font-bold text-red-400 ml-1 mt-1">{titleError}</p>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -168,11 +197,18 @@ export function WatchlistEditor({
                 <div className="relative">
                   <Clock3 className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
                   <Input
+                    id="watchlist-notify-at"
                     type="datetime-local"
                     value={notifyAt}
-                    onChange={(e) => setNotifyAt(e.target.value)}
+                    onChange={(e) => { setNotifyAt(e.target.value); setNotifyAtError('') }}
+                    aria-label="Notification time"
+                    aria-describedby="watchlist-notify-at-error"
+                    aria-invalid={!!notifyAtError}
                     className="bg-white/5 border-white/10 focus:border-white/20 h-14 rounded-2xl pl-12 pr-5 text-base font-bold [color-scheme:dark]"
                   />
+                  {notifyAtError && (
+                    <p id="watchlist-notify-at-error" className="text-[10px] font-bold text-red-400 ml-1 mt-1">{notifyAtError}</p>
+                  )}
                 </div>
                 {notifyAt && (
                   <CountdownTimer target={localDatetimeToUtc(notifyAt) || ''} compact className="bg-white/[0.03] border-white/10" />
@@ -208,6 +244,7 @@ export function WatchlistEditor({
                     <select
                       value={intervalPreset}
                       onChange={(e) => setIntervalPreset(e.target.value)}
+                      aria-label="Spam reminder interval"
                       className="h-14 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-bold text-white outline-none"
                     >
                       {intervalOptions.map((option) => (

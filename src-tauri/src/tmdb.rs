@@ -11,7 +11,7 @@ const MAX_DELAY_MS: u64 = 10000;
 // Special marker used when we should call the backend TMDB proxy
 const BACKEND_PROXY_CREDENTIAL: &str = "__TMDB_BACKEND_PROXY__";
 const DEFAULT_TMDB_PROXY_BASE_URL: &str =
-    "https://streamvault-backend-server.onrender.com/api/tmdb";
+    "https://slasshyvault.onrender.com/api/tmdb";
 
 pub fn get_tmdb_proxy_base_url() -> String {
     if let Ok(proxy_url) = std::env::var("STREAMVAULT_TMDB_PROXY_URL") {
@@ -35,11 +35,34 @@ pub fn get_tmdb_proxy_base_url() -> String {
         }
     }
 
-    if cfg!(debug_assertions) {
-        "http://localhost:3001/api/tmdb".to_string()
-    } else {
-        DEFAULT_TMDB_PROXY_BASE_URL.to_string()
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    return format!("{}/api/tmdb", trimmed);
+                }
+            }
+        }
     }
+
+    // Legacy config file check
+    if let Some(app_data) = dirs::data_dir().map(|d| d.join("SlasshyVault").join("config.json")) {
+        if let Ok(contents) = std::fs::read_to_string(&app_data) {
+            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(proxy_url) = config.get("tmdb_proxy_url").and_then(|v| v.as_str()) {
+                    let trimmed = proxy_url.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.trim_end_matches('/').to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    DEFAULT_TMDB_PROXY_BASE_URL.to_string()
 }
 
 pub fn is_backend_proxy_credential(credential: &str) -> bool {
@@ -165,7 +188,7 @@ fn build_client() -> Result<reqwest::blocking::Client, Box<dyn std::error::Error
         .pool_max_idle_per_host(0)
         .tcp_keepalive(std::time::Duration::from_secs(20))
         .tcp_nodelay(true)
-        .user_agent("StreamVault/1.0")
+        .user_agent("SlasshyVault/1.0")
         .build()?)
 }
 
@@ -180,7 +203,7 @@ fn build_quick_client(
         .pool_max_idle_per_host(0)
         .tcp_keepalive(std::time::Duration::from_secs(15))
         .tcp_nodelay(true)
-        .user_agent("StreamVault/1.0");
+        .user_agent("SlasshyVault/1.0");
 
     if http1_only {
         builder = builder.http1_only();
@@ -640,7 +663,7 @@ pub fn search_multi_raw(
                 .tcp_keepalive(std::time::Duration::from_secs(20))
                 .tcp_nodelay(true)
                 .http1_only()
-                .user_agent("StreamVault/1.0")
+                .user_agent("SlasshyVault/1.0")
                 .build()?;
 
             tmdb_request(&fallback_client, &url, api_key).map_err(|fallback_error| {

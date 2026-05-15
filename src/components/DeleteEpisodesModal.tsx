@@ -245,8 +245,9 @@ export function DeleteEpisodesModal({
                 <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
                     <ScrollArea className="h-full min-h-0 pr-4">
                         {isLoading ? (
-                            <div className="flex h-full min-h-[240px] items-center justify-center">
+                            <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3">
                                 <Loader2 className="w-8 h-8 animate-spin text-white" />
+                                <span className="text-sm text-muted-foreground">Loading episodes...</span>
                             </div>
                         ) : error && episodes.length === 0 ? (
                             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center">

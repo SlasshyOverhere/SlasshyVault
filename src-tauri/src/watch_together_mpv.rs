@@ -107,7 +107,7 @@ pub struct WatchTogetherController {
     /// Channel to send commands to the pipe writer task
     cmd_tx: Option<mpsc::Sender<String>>,
     /// Channel to receive sync events from the pipe reader task
-    event_rx: Arc<Mutex<Option<mpsc::Receiver<MpvSyncEvent>>>>,
+    event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<MpvSyncEvent>>>>,
     /// Monotonic request ID counter for MPV commands
     next_request_id: Arc<AtomicU64>,
     /// Whether the controller is connected
@@ -157,7 +157,18 @@ impl WatchTogetherController {
             CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
         };
 
+        if self.connected.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // Wait for MPV to create the pipe
+        // Use WaitNamedPipeW with 5-second timeout before attempting connection
+        let wide_name: Vec<u16> = self
+            .pipe_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
         let mut file = None;
         for _ in 0..50 {
             let wide_name: Vec<u16> = self
@@ -200,7 +211,7 @@ impl WatchTogetherController {
 
         // Create channels
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<String>(64);
-        let (event_tx, event_rx) = mpsc::channel::<MpvSyncEvent>(64);
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<MpvSyncEvent>();
 
         self.cmd_tx = Some(cmd_tx);
         *self.event_rx.lock().await = Some(event_rx);
@@ -209,6 +220,28 @@ impl WatchTogetherController {
         let local_state = self.local_state.clone();
         let connected = self.connected.clone();
         let ignoring = self.ignoring_on_the_fly.clone();
+
+        // Channel for state updates from the blocking reader to the async world
+        let (state_tx, mut state_rx) = tokio::sync::mpsc::channel::<PlayerState>(32);
+
+        // Spawn a dedicated async task that owns the state and receives updates via the channel
+        let local_state_clone = local_state.clone();
+        tokio::spawn(async move {
+            while let Some(new_state) = state_rx.recv().await {
+                let mut s = local_state_clone.write().await;
+                s.position = new_state.position;
+                s.paused = new_state.paused;
+                s.duration = new_state.duration;
+                s.last_update = new_state.last_update;
+                // Drain intermediate states, keep only the latest
+                while let Ok(new_state) = state_rx.try_recv() {
+                    s.position = new_state.position;
+                    s.paused = new_state.paused;
+                    s.duration = new_state.duration;
+                    s.last_update = new_state.last_update;
+                }
+            }
+        });
 
         // Spawn writer task - sends commands to MPV pipe
         let write_connected = connected.clone();
@@ -251,20 +284,18 @@ impl WatchTogetherController {
                                     Some("time-pos") => {
                                         if let Some(serde_json::Value::Number(n)) = &event.data {
                                             if let Some(pos) = n.as_f64() {
-                                                // Update local state
-                                                let state = local_state.clone();
-                                                let rt = tokio::runtime::Handle::try_current();
-                                                if let Ok(rt) = rt {
-                                                    rt.block_on(async {
-                                                        let mut s = state.write().await;
-                                                        s.position = pos;
-                                                        s.last_update = std::time::Instant::now();
-                                                    });
-                                                }
+                                                // Send state update via channel instead of block_on
+                                                let _ = state_tx.send(PlayerState {
+                                                    position: pos,
+                                                    duration: 0.0,
+                                                    paused: last_paused,
+                                                    speed: 1.0,
+                                                    last_update: std::time::Instant::now(),
+                                                });
                                                 last_position = pos;
                                                 if pending_user_seek {
                                                     pending_user_seek = false;
-                                                    let _ = event_tx.blocking_send(
+                                                    let _ = event_tx.send(
                                                         MpvSyncEvent::Seeked { position: pos },
                                                     );
                                                 }
@@ -274,22 +305,20 @@ impl WatchTogetherController {
                                     Some("pause") => {
                                         if let Some(serde_json::Value::Bool(paused)) = &event.data {
                                             let paused = *paused;
-                                            let state = local_state.clone();
-                                            let rt = tokio::runtime::Handle::try_current();
-                                            if let Ok(rt) = rt {
-                                                rt.block_on(async {
-                                                    let mut s = state.write().await;
-                                                    s.paused = paused;
-                                                    s.last_update = std::time::Instant::now();
-                                                });
-                                            }
+                                            let _ = state_tx.send(PlayerState {
+                                                position: last_position,
+                                                duration: 0.0,
+                                                paused,
+                                                speed: 1.0,
+                                                last_update: std::time::Instant::now(),
+                                            });
 
                                             // Only emit event if this is a USER action (not echo)
-                                            let ign = ignoring.load(Ordering::SeqCst);
-                                            if ign > 0 {
-                                                ignoring.fetch_sub(1, Ordering::SeqCst);
+                                            let prev = ignoring.fetch_sub(1, Ordering::SeqCst);
+                                            if prev == 0 {
+                                                ignoring.fetch_add(1, Ordering::SeqCst);
                                             } else if paused != last_paused {
-                                                let _ = event_tx.blocking_send(
+                                                let _ = event_tx.send(
                                                     MpvSyncEvent::PauseChanged {
                                                         paused,
                                                         position: last_position,
@@ -302,14 +331,13 @@ impl WatchTogetherController {
                                     Some("duration") => {
                                         if let Some(serde_json::Value::Number(n)) = &event.data {
                                             if let Some(dur) = n.as_f64() {
-                                                let state = local_state.clone();
-                                                let rt = tokio::runtime::Handle::try_current();
-                                                if let Ok(rt) = rt {
-                                                    rt.block_on(async {
-                                                        let mut s = state.write().await;
-                                                        s.duration = dur;
-                                                    });
-                                                }
+                                                let _ = state_tx.send(PlayerState {
+                                                    position: last_position,
+                                                    duration: dur,
+                                                    paused: last_paused,
+                                                    speed: 1.0,
+                                                    last_update: std::time::Instant::now(),
+                                                });
                                             }
                                         }
                                     }
@@ -318,16 +346,16 @@ impl WatchTogetherController {
                             } else if event.event.as_deref() == Some("seek") {
                                 // Seek event can fire before time-pos updates. We defer emission
                                 // until the next time-pos property change for an accurate position.
-                                let ign = ignoring.load(Ordering::SeqCst);
-                                if ign > 0 {
-                                    ignoring.fetch_sub(1, Ordering::SeqCst);
+                                let prev = ignoring.fetch_sub(1, Ordering::SeqCst);
+                                if prev == 0 {
+                                    ignoring.fetch_add(1, Ordering::SeqCst);
                                 } else {
                                     pending_user_seek = true;
                                 }
                             } else if event.event.as_deref() == Some("shutdown")
                                 || event.event.as_deref() == Some("end-file")
                             {
-                                let _ = event_tx.blocking_send(MpvSyncEvent::Ended);
+                                let _ = event_tx.send(MpvSyncEvent::Ended);
                                 break;
                             }
                         }
@@ -335,7 +363,7 @@ impl WatchTogetherController {
                     Err(e) => {
                         println!("[WT-MPV] Read error: {}", e);
                         connected.store(false, Ordering::SeqCst);
-                        let _ = event_tx.blocking_send(MpvSyncEvent::Ended);
+                        let _ = event_tx.send(MpvSyncEvent::Ended);
                         break;
                     }
                 }
@@ -360,7 +388,7 @@ impl WatchTogetherController {
     }
 
     /// Take the event receiver (can only be called once)
-    pub async fn take_event_rx(&self) -> Option<mpsc::Receiver<MpvSyncEvent>> {
+    pub async fn take_event_rx(&self) -> Option<mpsc::UnboundedReceiver<MpvSyncEvent>> {
         self.event_rx.lock().await.take()
     }
 
@@ -454,7 +482,9 @@ impl WatchTogetherController {
     /// Set playback speed
     pub async fn set_speed(&self, speed: f64) -> Result<(), String> {
         self.send_command(vec!["set_property".into(), "speed".into(), speed.into()])
-            .await
+            .await?;
+        self.local_state.write().await.speed = speed;
+        Ok(())
     }
 
     /// Show OSD message in MPV
@@ -516,9 +546,21 @@ impl WatchTogetherController {
             state.paused = server_paused;
             state.last_update = std::time::Instant::now();
 
+            // Recompute diff after reacquiring lock
+            let elapsed = state.last_update.elapsed().as_secs_f64();
+            let estimated_position = if state.paused {
+                state.position
+            } else {
+                state.position + (elapsed * state.speed)
+            };
+            let diff = estimated_position - server_position;
+
             // If unpausing, also sync position
             if !server_paused && diff.abs() > SLOWDOWN_RESET {
                 drop(state);
+                if !self.should_seek_now().await {
+                    return Ok(());
+                }
                 self.seek_to(server_position).await?;
                 let mut state = self.local_state.write().await;
                 state.position = server_position;
@@ -593,6 +635,27 @@ impl WatchTogetherController {
     /// Check if connected
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
+    }
+
+    /// LBAS: Seek to position and schedule unpause at a specific target timestamp
+    pub async fn seek_and_play_at(&self, position: f64, target_timestamp: f64) -> Result<(), String> {
+        self.seek_to(position).await?;
+        self.set_paused(true).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let delay = (target_timestamp - now).max(0.0);
+        let cmd_tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
+            if let Some(tx) = cmd_tx {
+                let _ = tx.send(
+                    r#"{"command":["set_property","pause",false]}"#.to_string()
+                ).await;
+            }
+        });
+        Ok(())
     }
 }
 
@@ -677,7 +740,7 @@ pub fn launch_mpv_wt(
     cmd.stdout(std::process::Stdio::inherit());
     cmd.stderr(std::process::Stdio::inherit());
 
-    println!("[WT-MPV] Command: {:?}", cmd);
+    println!("[WT-MPV] Command: {:?}", cmd.get_program());
 
     let child = cmd
         .spawn()

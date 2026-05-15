@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   History, Settings,
-  Home, RotateCw, Cloud, Users, Sparkles, Bot, Clapperboard, Download, Link2
+  Home, RotateCw, Cloud, Clapperboard, Download, Link2
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -11,7 +11,6 @@ interface SidebarProps {
   className?: string
   currentView: string
   setView: (view: string) => void
-  onAiChatClick?: () => void
   onOpenSettings: () => void
   onCloudScan?: () => void
   theme?: 'dark' | 'light'
@@ -24,8 +23,6 @@ interface SidebarProps {
   } | null
   showCloudTab?: boolean
   betaEnabled?: boolean
-  unstableEnabled?: boolean
-  aiChatPaused?: boolean
   downloadJobCount?: number
 }
 
@@ -33,15 +30,12 @@ export function Sidebar({
   className,
   currentView,
   setView,
-  onAiChatClick,
   onOpenSettings,
   onCloudScan,
   isScanning = false,
   isCloudIndexing = false,
   showCloudTab = true,
-  betaEnabled = false,
-  unstableEnabled = false,
-  aiChatPaused = false,
+  betaEnabled: _betaEnabled = false,
   downloadJobCount = 0,
 }: SidebarProps) {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -107,9 +101,7 @@ export function Sidebar({
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "directlinks", label: "Direct Links", icon: Link2 },
-    { id: "ai", label: "AI Chat", icon: Bot, isNew: true, hidden: !unstableEnabled, paused: aiChatPaused },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
-    { id: "social", label: "Social", icon: Users, hidden: !betaEnabled },
     { id: "history", label: "History", icon: History },
   ].filter(item => !item.hidden);
 
@@ -117,7 +109,7 @@ export function Sidebar({
     <motion.aside
       data-tour="sidebar"
       className={cn(
-        "h-screen flex flex-col fixed left-0 top-0 z-[100]",
+        "h-screen flex flex-col z-[100]",
         "bg-[#0D0D0D]",
         "border-r border-white/[0.05] shadow-2xl",
         "will-change-[width]",
@@ -133,6 +125,12 @@ export function Sidebar({
       }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocus={handleMouseEnter}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          handleMouseLeave()
+        }
+      }}
     >
       {/* Glossy Overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
@@ -145,22 +143,17 @@ export function Sidebar({
               const isActive = currentView === item.id;
 
               return (
-                <button
-                  key={item.id}
-                  data-tour={`nav-${item.id}`}
-                  onClick={() => {
-                    if (item.id === "ai" && item.paused) {
-                      onAiChatClick?.()
-                      return
-                    }
-                    setView(item.id)
-                  }}
+                  <button
+                    key={item.id}
+                    data-tour={`nav-${item.id}`}
+                    aria-label={item.label}
+                    onClick={() => setView(item.id)}
                   className={cn(
                     "group relative w-full flex items-center gap-3 px-3.5 py-3 rounded-xl transition-colors duration-300",
                     isActive
                       ? "bg-white/[0.12] text-white shadow-[0_0_25px_rgba(255,255,255,0.08)] border border-white/20 backdrop-blur-md"
                       : "text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.04]",
-                    item.paused ? "opacity-75" : "",
+
                     isCollapsed ? "justify-center px-0" : ""
                   )}
                 >
@@ -174,7 +167,7 @@ export function Sidebar({
                       />
                       <motion.div
                         layoutId="active-pill"
-                        className="absolute left-0 inset-y-0 my-auto w-1 h-8 bg-white rounded-r-full shadow-[0_0_20px_rgba(255,255,255,0.8)]"
+                        className="absolute left-1 inset-y-0 my-auto w-1 h-6 bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.6)] z-10"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
                     </>
@@ -185,12 +178,6 @@ export function Sidebar({
                       "w-5 h-5 transition-all duration-300",
                       isActive ? "text-white drop-shadow-white" : "text-neutral-500 group-hover:text-neutral-300"
                     )} />
-                    {item.isNew && (
-                      <Sparkles className={cn(
-                        "absolute -right-1 -top-1 h-2.5 w-2.5 transition-colors duration-300",
-                        isActive ? "text-white" : "text-white/60 group-hover:text-white"
-                      )} />
-                    )}
                     {isCollapsed && item.badge && (
                       <div className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full border border-white/50 bg-white px-1 text-[8px] font-black text-black shadow-[0_0_10px_rgba(255,255,255,0.4)]">
                         {item.badge}
@@ -206,16 +193,7 @@ export function Sidebar({
                       )}>
                         {item.label}
                       </span>
-                      {item.paused ? (
-                        <span className={cn(
-                          "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase border transition-colors duration-300",
-                          isActive
-                            ? "border-white/40 bg-white/20 text-white"
-                            : "border-white/20 bg-white/10 text-neutral-400"
-                        )}>
-                          Paused
-                        </span>
-                      ) : item.badge ? (
+                      {item.badge && (
                         <span className={cn(
                           "ml-auto min-w-6 rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.08em] text-center border transition-all duration-300 shadow-[0_0_15px_rgba(255,255,255,0.15)]",
                           isActive
@@ -224,30 +202,16 @@ export function Sidebar({
                         )}>
                           {item.badge}
                         </span>
-                      ) : item.isNew && (
-                        <span className={cn(
-                          "ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] uppercase",
-                          "border transition-colors duration-300",
-                          isActive
-                            ? "border-white/40 bg-white/20 text-white"
-                            : "border-white/20 bg-white/10 text-neutral-400"
-                        )}>
-                          New
-                        </span>
                       )}
                     </>
                   )}
 
                   {/* Tooltip for collapsed mode */}
                   {isCollapsed && (
-                    <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+                    <div className="absolute left-full ml-4 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                       <span className="text-xs font-semibold text-white">Open {item.label}</span>
-                      {item.paused ? (
-                        <span className="text-xs font-bold text-white tracking-wider">{" • PAUSED"}</span>
-                      ) : item.badge ? (
+                      {item.badge && (
                         <span className="text-xs font-bold text-white tracking-wider">{` • ${item.badge}`}</span>
-                      ) : item.isNew && (
-                        <span className="text-xs font-bold text-white tracking-wider">{" • NEW"}</span>
                       )}
                     </div>
                   )}
@@ -270,6 +234,7 @@ export function Sidebar({
                 data-tour="scan-library-btn"
                 onClick={onCloudScan}
                 disabled={isCloudIndexing || isScanning}
+                aria-label="Update Library"
                 className={cn(
                   "w-full flex items-center justify-between transition-all duration-300",
                   isCollapsed 
@@ -361,11 +326,12 @@ export function Sidebar({
                 data-tour="settings-btn"
                 onClick={onOpenSettings}
                 title="Open settings"
+                aria-label="Open settings"
                 className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
               >
                 <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
               </button>
-              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0">
+              <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                 <span className="text-xs font-semibold text-white">Open Settings</span>
               </div>
             </div>
@@ -373,15 +339,16 @@ export function Sidebar({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <button
-              data-tour="settings-btn"
-              onClick={onOpenSettings}
-              title="Open settings"
-              className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
-            >
-              <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
-              <span className="text-xs font-semibold tracking-wide">Settings</span>
-            </button>
+              <button
+                data-tour="settings-btn"
+                onClick={onOpenSettings}
+                title="Open settings"
+                aria-label="Open settings"
+                className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+              >
+                <Settings className="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-45" />
+                <span className="text-xs font-semibold tracking-wide">Settings</span>
+              </button>
           </div>
         )}
       </div>

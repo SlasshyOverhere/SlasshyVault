@@ -190,12 +190,17 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
             </Button>
           </div>
 
-          <div className="text-xs text-muted-foreground">
+          <div className="text-xs space-y-1">
+            {query.trim() && !isSearching && !isDirectMatchInput && query.trim().length < 3 && (
+              <p className="text-amber-400">Enter at least 3 characters for a valid search.</p>
+            )}
+            <p className="text-muted-foreground">
             {isSearching
               ? "Searching TMDB..."
               : isDirectMatchInput
                 ? "Direct match input detected. Click Update Match to fetch metadata from that TMDB/IMDb link or ID."
               : `Found ${results.length} ${results.length === 1 ? "result" : "results"} for ${expectedTypeLabel}s`}
+            </p>
           </div>
 
           <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">

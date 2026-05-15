@@ -15,14 +15,37 @@ use crate::database::get_app_data_dir;
 
 // Backend auth server URL (handles OAuth securely)
 // This keeps client_id and client_secret on the server
-const AUTH_SERVER_URL: &str = "https://streamvault-backend-server.onrender.com";
+const AUTH_SERVER_URL: &str = "https://slasshyvault.onrender.com";
+
+fn get_auth_server_url() -> String {
+    if let Ok(env_url) = std::env::var("STREAMVAULT_AUTH_SERVER_URL") {
+        let trimmed = env_url.trim().trim_end_matches('/').to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    return trimmed;
+                }
+            }
+        }
+    }
+
+    AUTH_SERVER_URL.to_string()
+}
 
 // Google Drive API
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
-const AI_CHAT_HISTORY_FILE_NAME: &str = "streamvault_ai_chat_history_v1.json";
-const WATCH_HISTORY_FILE_NAME: &str = "streamvault_watch_history_v1.json";
-const WATCHLIST_FILE_NAME: &str = "streamvault_watchlist_v1.json";
+const WATCH_HISTORY_FILE_NAME: &str = "slasshyvault_watch_history_v1.json";
+const WATCHLIST_FILE_NAME: &str = "slasshyvault_watchlist_v1.json";
 
 /// Stored OAuth tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,18 +165,21 @@ impl GoogleDriveClient {
         let tokens = load_tokens().ok();
         Self {
             tokens: Arc::new(Mutex::new(tokens)),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .user_agent("SlasshyVault/3.0.40")
+                .build()
+                .expect("Failed to build reqwest client"),
         }
     }
 
     /// Check if user is authenticated
     pub fn is_authenticated(&self) -> bool {
-        self.tokens.lock().unwrap().is_some()
+        self.tokens.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 
     /// Get the current access token, refreshing if needed
     pub async fn get_access_token(&self) -> Result<String, String> {
-        let tokens = self.tokens.lock().unwrap().clone();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         match tokens {
             Some(t) => {
@@ -178,7 +204,7 @@ impl GoogleDriveClient {
     async fn refresh_access_token(&self, refresh_token: &str) -> Result<String, String> {
         let response = self
             .http_client
-            .post(format!("{}/auth/refresh", AUTH_SERVER_URL))
+            .post(format!("{}/auth/refresh", get_auth_server_url()))
             .json(&serde_json::json!({
                 "refresh_token": refresh_token
             }))
@@ -205,7 +231,7 @@ impl GoogleDriveClient {
         let expires_at = chrono::Utc::now().timestamp() + expires_in;
 
         // Update stored tokens
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut t) = *tokens {
             t.access_token = access_token.clone();
             t.expires_at = Some(expires_at);
@@ -218,13 +244,13 @@ impl GoogleDriveClient {
     /// Store tokens after successful authentication
     pub fn store_tokens(&self, tokens: GoogleTokens) -> Result<(), String> {
         save_tokens(&tokens)?;
-        *self.tokens.lock().unwrap() = Some(tokens);
+        *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = Some(tokens);
         Ok(())
     }
 
     /// Clear stored tokens (logout)
     pub fn clear_tokens(&self) -> Result<(), String> {
-        *self.tokens.lock().unwrap() = None;
+        *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let path = get_tokens_path();
         if path.exists() {
             fs::remove_file(path).map_err(|e| format!("Failed to remove tokens: {}", e))?;
@@ -462,43 +488,6 @@ impl GoogleDriveClient {
             .ok_or_else(|| "Missing file id in create file response".to_string())
     }
 
-    pub async fn load_ai_chat_history(&self) -> Result<Option<String>, String> {
-        let file_id = match self
-            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
-            .await?
-        {
-            Some(id) => id,
-            None => return Ok(None),
-        };
-
-        let access_token = self.get_access_token().await?;
-        let response = self
-            .http_client
-            .get(format!(
-                "{}/files/{}?alt=media&supportsAllDrives=true",
-                DRIVE_API_BASE, file_id
-            ))
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download AI chat history: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "Drive API download AI chat history error: {}",
-                error_text
-            ));
-        }
-
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read AI chat history response: {}", e))?;
-
-        Ok(Some(text))
-    }
-
     pub async fn load_watch_history_snapshot(&self) -> Result<Option<String>, String> {
         let file_id = match self.find_sync_file_id(WATCH_HISTORY_FILE_NAME).await? {
             Some(id) => id,
@@ -531,43 +520,6 @@ impl GoogleDriveClient {
             .map_err(|e| format!("Failed to read watch history snapshot response: {}", e))?;
 
         Ok(Some(text))
-    }
-
-    pub async fn save_ai_chat_history(&self, history_json: &str) -> Result<(), String> {
-        serde_json::from_str::<serde_json::Value>(history_json)
-            .map_err(|e| format!("Invalid AI chat history JSON: {}", e))?;
-
-        let file_id = match self
-            .find_sync_file_id(AI_CHAT_HISTORY_FILE_NAME)
-            .await?
-        {
-            Some(id) => id,
-            None => self.create_sync_file(AI_CHAT_HISTORY_FILE_NAME, "application/json").await?,
-        };
-
-        let access_token = self.get_access_token().await?;
-        let response = self
-            .http_client
-            .patch(format!(
-                "{}/files/{}?uploadType=media",
-                DRIVE_UPLOAD_API_BASE, file_id
-            ))
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .body(history_json.to_string())
-            .send()
-            .await
-            .map_err(|e| format!("Failed to upload AI chat history: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "Drive API upload AI chat history error: {}",
-                error_text
-            ));
-        }
-
-        Ok(())
     }
 
     pub async fn save_watch_history_snapshot(&self, history_json: &str) -> Result<(), String> {
@@ -698,6 +650,46 @@ impl GoogleDriveClient {
             .json()
             .await
             .map_err(|e| format!("Failed to parse response: {}", e))
+    }
+
+    /// Create a permission (share) for a file with a specific user
+    pub async fn create_permission(
+        &self,
+        file_id: &str,
+        email: &str,
+        role: &str,
+    ) -> Result<(), String> {
+        let access_token = self.get_access_token().await?;
+
+        let url = format!(
+            "{}/files/{}/permissions?supportsAllDrives=true&sendNotificationEmail=true",
+            DRIVE_API_BASE, file_id
+        );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "type": "user",
+                "role": role,
+                "emailAddress": email
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to share file: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Drive API share error: {}", error_text));
+        }
+
+        println!(
+            "[GDRIVE] Successfully shared file {} with {} (role: {})",
+            file_id, email, role
+        );
+        Ok(())
     }
 
     /// Delete a file from Google Drive
@@ -896,11 +888,11 @@ impl GoogleDriveClient {
 
 /// Generate the OAuth authorization URL (via backend proxy)
 pub fn get_auth_url() -> String {
-    format!("{}/auth/google", AUTH_SERVER_URL)
+    format!("{}/auth/google", get_auth_server_url())
 }
 
 /// Parse tokens from deep link callback URL
-/// The backend sends tokens via: streamvault://oauth/callback?tokens=BASE64_ENCODED_JSON
+/// The backend sends tokens via: slasshyvault://oauth/callback?tokens=BASE64_ENCODED_JSON
 pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
     // Parse the URL to get the tokens parameter
     let url_parts: Vec<&str> = url.split('?').collect();
@@ -957,14 +949,24 @@ pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
     })
 }
 
+fn find_available_port() -> u16 {
+    for port in 8085..=8095 {
+        if std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
+            return port;
+        }
+    }
+    8085
+}
+
 /// Start local OAuth callback server and wait for tokens from backend
 /// The backend exchanges the code and redirects here with tokens directly
 pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
+    let port = find_available_port();
     // Start a local TCP listener on the redirect URI port
-    let listener = TcpListener::bind("127.0.0.1:8085")
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .map_err(|e| format!("Failed to start OAuth callback server: {}", e))?;
 
-    println!("[GDRIVE] OAuth callback server listening on port 8085");
+    println!("[GDRIVE] OAuth callback server listening on port {}", port);
 
     // Set a timeout for the connection
     listener.set_nonblocking(false).ok();
@@ -982,7 +984,9 @@ pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
         .ok_or("No request received")?
         .map_err(|e| format!("Failed to read request: {}", e))?;
 
-    println!("[GDRIVE] Received callback: {}", request_line);
+    // Log only that we received a callback (without exposing query params/tokens)
+    let safe_line = request_line.split(' ').take(2).collect::<Vec<_>>().join(" ");
+    println!("[GDRIVE] Received callback: {}", safe_line);
 
     // Parse the request to get tokens or error
     let tokens = extract_tokens_from_request(&request_line)?;
@@ -1006,7 +1010,7 @@ pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
         <body>
             <div class="container">
                 <h1>✓ Authorization Successful!</h1>
-                <p>You can close this window and return to StreamVault.</p>
+                <p>You can close this window and return to SlasshyVault.</p>
             </div>
         </body>
         </html>
@@ -1098,19 +1102,21 @@ fn extract_tokens_from_request(request_line: &str) -> Result<GoogleTokens, Strin
     })
 }
 
-/// Exchange authorization code for tokens
-/// NOTE: This function is deprecated. The new flow uses backend proxy
-/// and tokens are returned via deep link callback.
-/// Use parse_tokens_from_callback() instead.
-#[deprecated(note = "Use parse_tokens_from_callback() with the new backend proxy flow")]
-pub async fn exchange_code_for_tokens(_code: &str) -> Result<GoogleTokens, String> {
-    Err("This function is deprecated. Tokens are now received via deep link callback from the backend proxy. Use parse_tokens_from_callback() to parse tokens from the callback URL.".to_string())
-}
-
 // ==================== Helpers ====================
 
 fn get_tokens_path() -> PathBuf {
     get_app_data_dir().join("gdrive_tokens.json")
+}
+
+fn obfuscate(data: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    BASE64.encode(data)
+}
+
+fn deobfuscate(data: &str) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    let bytes = BASE64.decode(data).map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
 fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
@@ -1123,54 +1129,16 @@ fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
         fs::create_dir_all(parent).ok();
     }
 
-    fs::write(&path, json).map_err(|e| format!("Failed to save tokens: {}", e))
+    let encoded = obfuscate(&json);
+    fs::write(&path, encoded).map_err(|e| format!("Failed to save tokens: {}", e))
 }
 
 fn load_tokens() -> Result<GoogleTokens, String> {
     let path = get_tokens_path();
-    let json = fs::read_to_string(&path).map_err(|e| format!("Failed to read tokens: {}", e))?;
+    let encoded = fs::read_to_string(&path).map_err(|e| format!("Failed to read tokens: {}", e))?;
 
+    let json = deobfuscate(&encoded)?;
     serde_json::from_str(&json).map_err(|e| format!("Failed to parse tokens: {}", e))
-}
-
-fn extract_auth_code(request_line: &str) -> Result<String, String> {
-    // Parse: GET /callback?code=XXX&state=YYY HTTP/1.1
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Err("Invalid request line".to_string());
-    }
-
-    let path = parts[1];
-
-    // Check for error
-    if path.contains("error=") {
-        return Err("User denied authorization".to_string());
-    }
-
-    // Parse query parameters
-    let query_start = path.find('?').ok_or("No query string in callback URL")?;
-    let query = &path[query_start + 1..];
-
-    let params: HashMap<&str, &str> = query
-        .split('&')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            Some((parts.next()?, parts.next()?))
-        })
-        .collect();
-
-    params
-        .get("code")
-        .map(|s| s.to_string())
-        .ok_or("No code in callback URL".to_string())
-}
-
-fn generate_state() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..16)
-        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-        .collect()
 }
 
 // ==================== URL Encoding Helper ====================

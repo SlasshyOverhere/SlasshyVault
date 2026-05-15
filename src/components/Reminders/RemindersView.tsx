@@ -394,10 +394,10 @@ export function RemindersView() {
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-8 gap-y-12">
                           {filteredResults.map((result, idx) => (
                             <motion.div key={`${result.media_type}-${result.id}`} initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ delay: idx * 0.05, duration: 0.5 }} className="group">
-                              <div className="relative isolate cursor-pointer" onClick={() => {
+                              <button type="button" className="relative isolate cursor-pointer text-left w-full" onClick={() => {
                                 setSelectedResult({ id: result.id, type: result.media_type as 'movie' | 'tv' })
                                 setDetailsModalOpen(true)
-                              }}>
+                              }} aria-label={`View details for ${result.title || result.name}`}>
                                 <div className="relative overflow-hidden rounded-[2rem] border border-white/[0.06] bg-white/[0.02] shadow-elevation-1 transition-all duration-500 group-hover:border-white/15 group-hover:shadow-elevation-2">
                                   {result.poster_path ? (
                                     <img src={getTmdbImageUrl(result.poster_path, 'w500') || ''} alt={result.title || result.name} className="aspect-[2/3] w-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
@@ -416,7 +416,7 @@ export function RemindersView() {
                                   </div>
 
                                 </div>
-                              </div>
+                              </button>
 
                               <div className="mt-5 px-1 space-y-1.5 text-center">
                                 <h3 className="font-black text-white text-sm line-clamp-1 tracking-tight">

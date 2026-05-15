@@ -279,6 +279,8 @@ pub fn parse_zip64_extra(
     Err(ZipError::Zip64ParsingError)
 }
 
+/// Sanitize a ZIP entry path to prevent path traversal attacks.
+/// Rejects absolute paths, Windows drive letters, and '..' traversal components.
 pub fn sanitize_zip_entry_path(filename: &str) -> Result<String, ZipError> {
     if filename.is_empty() {
         return Err(ZipError::InvalidPath);
@@ -378,6 +380,25 @@ mod tests {
     fn sanitize_rejects_path_traversal() {
         assert!(sanitize_zip_entry_path("../episode.mkv").is_err());
         assert!(sanitize_zip_entry_path("C:/episode.mkv").is_err());
+        // Note: "...." is NOT path traversal — four dots is a valid filename component
+        assert!(sanitize_zip_entry_path("foo/../../episode.mkv").is_err());
+        assert!(sanitize_zip_entry_path("foo/..\\bar/episode.mkv").is_err());
+        assert!(sanitize_zip_entry_path("/absolute/path.mkv").is_err());
+        assert!(sanitize_zip_entry_path("//unc/path.mkv").is_err());
+        assert!(sanitize_zip_entry_path("").is_err());
+        // Note: "..." is NOT path traversal — it's a valid filename component
+        assert!(sanitize_zip_entry_path("foo/./../bar.mkv").is_err());
+        assert!(sanitize_zip_entry_path("foo/..").is_err());
+        assert!(sanitize_zip_entry_path("..").is_err());
+    }
+
+    #[test]
+    fn sanitize_accepts_valid_paths() {
+        assert!(sanitize_zip_entry_path("episode.mkv").is_ok());
+        assert!(sanitize_zip_entry_path("Season 01/episode.mkv").is_ok());
+        assert!(sanitize_zip_entry_path("foo/bar/episode.mkv").is_ok());
+        assert!(sanitize_zip_entry_path("foo/./bar.mkv").is_ok());
+        assert!(sanitize_zip_entry_path("normal_path.mkv").is_ok());
     }
 
     #[test]
@@ -440,7 +461,7 @@ mod tests {
         entry.extend_from_slice(&0x1234_5678u32.to_le_bytes());
         entry.extend_from_slice(&100u32.to_le_bytes());
         entry.extend_from_slice(&100u32.to_le_bytes());
-        entry.extend_from_slice(&14u16.to_le_bytes());
+        entry.extend_from_slice(&15u16.to_le_bytes());
         entry.extend_from_slice(&0u16.to_le_bytes());
         entry.extend_from_slice(&0u16.to_le_bytes());
         entry.extend_from_slice(&0u16.to_le_bytes());

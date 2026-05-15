@@ -83,14 +83,12 @@
     letter-spacing: -0.01em;
   }
 
-  body:not(.app-window-maximized),
-  body:not(.app-window-maximized) #root {
+  body:not(.app-window-maximized) {
     border-radius: 10px;
     clip-path: inset(0 round 10px);
   }
 
-  body.app-window-maximized,
-  body.app-window-maximized #root {
+  body.app-window-maximized {
     border-radius: 0;
     clip-path: none;
   }
@@ -621,12 +619,12 @@
 
   .badge-success {
     @apply badge;
-    @apply bg-white/20 text-white border border-white/30;
+    @apply bg-green-500/20 text-green-400 border border-green-500/30;
   }
 
   .badge-warning {
     @apply badge;
-    @apply bg-white/20 text-white border border-white/30;
+    @apply bg-yellow-500/20 text-yellow-400 border border-yellow-500/30;
   }
 
   .badge-glass {
@@ -1608,15 +1606,6 @@
 
   /* Local compatibility helpers for current unmerged screens */
 
-  .scrollbar-none::-webkit-scrollbar {
-    display: none;
-  }
-
-  .scrollbar-none {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
   .btn-primary-compact {
     @apply btn-primary;
   }
@@ -1629,4 +1618,12 @@
       0 24px 60px -32px rgba(0, 0, 0, 0.7),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }
