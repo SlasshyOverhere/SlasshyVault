@@ -225,6 +225,7 @@ export function WatchTogetherModal({
                     launchMpv();
                     break;
                 case 'pause':
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     if ((event.payload as any).reason === 'buffering') {
                         setSyncPhase('paused');
                     }
@@ -232,9 +233,11 @@ export function WatchTogetherModal({
                 case 'participant_status':
                     setParticipantStatus(prev => {
                         const next = new Map(prev);
-                        next.set((event.payload as any).participantId, {
-                            state: (event.payload as any).state,
-                            loadProgress: (event.payload as any).loadProgress || 0,
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const p = event.payload as any;
+                        next.set(p.participantId, {
+                            state: p.state,
+                            loadProgress: p.loadProgress || 0,
                         });
                         return next;
                     });
