@@ -177,6 +177,7 @@ interface AppNotificationItem {
 }
 
 const NOTIFICATION_CENTER_STORAGE_KEY = 'slasshyvault.notification-center.v1'
+const REBRAND_NOTICE_KEY = 'slasshyvault_rebrand_notice_shown'
 const MAX_NOTIFICATION_CENTER_ITEMS = 200
 const TV_EPISODE_NOTIFICATION_PATTERN = /\bS\d{1,2}E\d{1,3}\b/i
 
@@ -545,6 +546,7 @@ function App() {
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
   const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
+  const [showRebrandNotice, setShowRebrandNotice] = useState(false)
 
   // Check onboarding status and load tab visibility on mount
   useEffect(() => {
@@ -553,6 +555,10 @@ function App() {
     }
     // Load tab visibility settings
     setTabVisibilityState(getTabVisibility())
+    // Show rebrand notice once
+    if (!localStorage.getItem(REBRAND_NOTICE_KEY)) {
+      setShowRebrandNotice(true)
+    }
   }, [])
 
   // Initialize beta features
@@ -1827,6 +1833,51 @@ function App() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* One-time rebrand notice: StreamVault → SlasshyVault */}
+      <Dialog open={showRebrandNotice} onOpenChange={(open) => {
+        if (!open) {
+          localStorage.setItem(REBRAND_NOTICE_KEY, '1')
+          setShowRebrandNotice(false)
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <div className="text-center space-y-1">
+            <h2 className="text-xl font-bold text-foreground">
+              We've Rebranded
+            </h2>
+            <p className="text-sm text-muted-foreground font-medium tracking-wide uppercase">
+              StreamVault → SlasshyVault
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground leading-relaxed text-center">
+              You may have noticed the app now shows a different name. We
+              encountered some technical issues on our end that we weren't
+              able to resolve, so we decided to rebrand instead.
+            </p>
+
+            <div className="bg-muted/50 rounded-xl p-4 border border-border">
+              <p className="text-sm text-foreground/80 leading-relaxed text-center">
+                Everything else stays the same — your library, watch history, and
+                Google Drive connection are all untouched. Just a fresh name
+                going forward.
+              </p>
+            </div>
+          </div>
+
+          <Button
+            onClick={() => {
+              localStorage.setItem(REBRAND_NOTICE_KEY, '1')
+              setShowRebrandNotice(false)
+            }}
+            className="w-full"
+          >
+            Got it
+          </Button>
         </DialogContent>
       </Dialog>
 
