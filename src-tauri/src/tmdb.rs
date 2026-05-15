@@ -35,7 +35,20 @@ pub fn get_tmdb_proxy_base_url() -> String {
         }
     }
 
-    // Check config file for tmdb_proxy_url override
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    return format!("{}/api/tmdb", trimmed);
+                }
+            }
+        }
+    }
+
+    // Legacy config file check
     if let Some(app_data) = dirs::data_dir().map(|d| d.join("SlasshyVault").join("config.json")) {
         if let Ok(contents) = std::fs::read_to_string(&app_data) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
@@ -49,11 +62,7 @@ pub fn get_tmdb_proxy_base_url() -> String {
         }
     }
 
-    if cfg!(debug_assertions) {
-        "http://localhost:3001/api/tmdb".to_string()
-    } else {
-        DEFAULT_TMDB_PROXY_BASE_URL.to_string()
-    }
+    DEFAULT_TMDB_PROXY_BASE_URL.to_string()
 }
 
 pub fn is_backend_proxy_credential(credential: &str) -> bool {

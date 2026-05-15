@@ -24,6 +24,20 @@ fn get_auth_server_url() -> String {
             return trimmed;
         }
     }
+
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    return trimmed;
+                }
+            }
+        }
+    }
+
     AUTH_SERVER_URL.to_string()
 }
 

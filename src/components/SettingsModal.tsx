@@ -99,6 +99,7 @@ export function SettingsModal({
     zip_cache_dir: "",
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
+    dev_backend_url: "",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -287,6 +288,7 @@ export function SettingsModal({
         zip_cache_dir: data.zip_cache_dir || "",
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
+        dev_backend_url: data.dev_backend_url || "",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -428,6 +430,9 @@ export function SettingsModal({
       icon: <AlertTriangle className="w-4 h-4" />,
     },
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
+    ...(import.meta.env.DEV
+      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
+      : []),
   ];
 
   return (
@@ -1233,6 +1238,89 @@ export function SettingsModal({
                             </p>
                           </motion.div>
                         )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* ===== Dev Panel (only shown in dev mode) ===== */}
+                  {import.meta.env.DEV && activeSection === "dev" && (
+                    <motion.div
+                      key="dev"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-foreground mb-1">
+                            Dev Panel
+                          </h3>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Override the backend URL for local development. Auth,
+                          TMDB proxy, and WebSocket URLs are derived from this.
+                        </p>
+                      </div>
+
+                      {/* Backend URL */}
+                      <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-yellow-500/20">
+                            <Code className="w-5 h-5 text-yellow-400" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium">
+                              Backend URL
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Points to SlasshyVault-Backend/server.js
+                            </p>
+                          </div>
+                        </div>
+                        <Input
+                          value={config.dev_backend_url || ""}
+                          onChange={(e) =>
+                            setConfig({
+                              ...config,
+                              dev_backend_url: e.target.value,
+                            })
+                          }
+                          placeholder="https://slasshyvault.onrender.com"
+                          className="font-mono text-xs"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Default: https://slasshyvault.onrender.com · Local: http://localhost:3001
+                        </p>
+                      </div>
+
+                      {/* Derived URLs hint */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Derived endpoints:
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/auth/...
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/api/tmdb
+                        </p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {(config.dev_backend_url || "https://slasshyvault.onrender.com")
+                            .replace("https://", "wss://")
+                            .replace("http://", "ws://")}
+                          /ws/watchtogether
+                        </p>
+                      </div>
+
+                      {/* Reset hint */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-xs text-muted-foreground">
+                          Leave empty and save to use production defaults.
+                        </p>
                       </div>
                     </motion.div>
                   )}

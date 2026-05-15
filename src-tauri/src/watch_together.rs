@@ -11,15 +11,33 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-// Backend server URL - reads from env var, falls back to production
+// Backend server URL - reads from env var, config file override, falls back to production
 fn get_relay_server_url() -> String {
-    std::env::var("STREAMVAULT_WS_URL").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "ws://localhost:3001/ws/watchtogether".to_string()
-        } else {
-            "wss://slasshyvault.onrender.com/ws/watchtogether".to_string()
+    if let Ok(ws_url) = std::env::var("STREAMVAULT_WS_URL") {
+        let trimmed = ws_url.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
         }
-    })
+    }
+
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    // Convert http:// -> ws:// and https:// -> wss://
+                    let ws_url = trimmed
+                        .replace("https://", "wss://")
+                        .replace("http://", "ws://");
+                    return format!("{}/ws/watchtogether", ws_url);
+                }
+            }
+        }
+    }
+
+    "wss://slasshyvault.onrender.com/ws/watchtogether".to_string()
 }
 
 // Room code characters (no ambiguous chars like I/1/O/0)

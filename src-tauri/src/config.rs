@@ -251,6 +251,10 @@ pub struct Config {
     pub zip_cache_expiry_days: u32,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    // Dev mode: override the backend URL (e.g. http://localhost:3001)
+    // All auth, TMDB proxy, and WebSocket URLs are derived from this
+    #[serde(default)]
+    pub dev_backend_url: Option<String>,
 }
 
 fn default_cloud_cache_max_mb() -> u32 {
@@ -299,6 +303,7 @@ impl Default for Config {
             zip_cache_max_gb: 20,
             zip_cache_expiry_days: 7,
             notifications_enabled: true,
+            dev_backend_url: None,
         }
     }
 }

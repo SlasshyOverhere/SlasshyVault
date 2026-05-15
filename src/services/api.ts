@@ -105,6 +105,9 @@ export interface Config {
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
   notifications_enabled?: boolean;
+  // Dev mode: override backend URL (e.g. http://localhost:3001)
+  // Auth, TMDB proxy, and WebSocket URLs are all derived from this
+  dev_backend_url?: string;
 }
 
 export interface ResumeInfo {
