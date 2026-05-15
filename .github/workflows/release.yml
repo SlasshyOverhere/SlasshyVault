@@ -88,15 +88,21 @@ jobs:
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        with:
-          args: --bundles nsis,updater
-          tagName: ${{ github.ref_name }}
-          releaseName: 'SlasshyVault ${{ github.ref_name }}'
-          releaseBody: ${{ steps.release_notes.outputs.notes }}
-          releaseDraft: false
-          prerelease: false
+        run: npx tauri build --bundles nsis,updater
+
+      - name: Create Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notes = "${{ steps.release_notes.outputs.notes }}"
+          $notes | Out-File -FilePath "release_notes.md" -Encoding utf8
+          gh release create $tag --title "SlasshyVault $tag" --notes-file "release_notes.md" --draft=$false
+          $bundles = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File
+          foreach ($file in $bundles) {
+            gh release upload $tag $file.FullName --clobber
+          }
