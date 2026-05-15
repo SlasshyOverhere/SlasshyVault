@@ -42,16 +42,16 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Run frontend tests
         run: pnpm test
 
       - name: Type check
-        run: pnpm tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Run lint
-        run: pnpm lint
+        run: pnpm run lint
 
       - name: Generate release notes
         id: release_notes
