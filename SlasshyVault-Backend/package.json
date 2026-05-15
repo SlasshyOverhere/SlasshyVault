@@ -1,7 +1,7 @@
 {
-  "name": "streamvault-auth-server",
+  "name": "slasshyvault-auth-server",
   "version": "1.2.1",
-  "description": "OAuth proxy server for StreamVault with Watch Together and Social features",
+  "description": "OAuth proxy server for SlasshyVault with Watch Together and Social features",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

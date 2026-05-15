@@ -1,6 +1,6 @@
-# StreamVault Auth Server
+# SlasshyVault Auth Server
 
-Backend service for StreamVault desktop. It handles Google OAuth, AI proxying with signed requests and quotas, TMDB proxy failover, and social/watch-together APIs.
+Backend service for SlasshyVault desktop. It handles Google OAuth, AI proxying with signed requests and quotas, TMDB proxy failover, and social/watch-together APIs.
 
 ## About
 

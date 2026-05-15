@@ -1,5 +1,5 @@
 /**
- * StreamVault Database Module (Turso)
+ * SlasshyVault Database Module (Turso)
  *
  * Handles persistent social data, streaming history, and user discovery.
  * Supports either:

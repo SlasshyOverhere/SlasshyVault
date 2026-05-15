@@ -1,5 +1,5 @@
 /**
- * StreamVault Social Module
+ * SlasshyVault Social Module
  *
  * Handles social features with data stored in user's Google Drive:
  * - User profiles and privacy settings
@@ -27,7 +27,7 @@ const onlineUsers = new Map(); // Maps googleId -> { ws, lastSeen, currentlyWatc
 const activeChats = new Map(); // Maps chatId -> Set of participant websockets
 
 // Google Drive folder names
-const SOCIAL_FOLDER = 'StreamVault_Social';
+const SOCIAL_FOLDER = 'SlasshyVault_Social';
 const PROFILE_FILE = 'profile.json';
 const FRIENDS_FILE = 'friends.json';
 const ACTIVITY_FILE = 'activity.json';

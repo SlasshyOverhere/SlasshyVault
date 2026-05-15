@@ -2865,7 +2865,7 @@ function getRoomState(room) {
   await recoverRoomsFromRedis();
 
   server.listen(PORT, () => {
-    console.log(`StreamVault Auth Server running on port ${PORT}`);
+    console.log(`SlasshyVault Auth Server running on port ${PORT}`);
     console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws/watchtogether/{roomCode}`);
     console.log(`Database connected: ${database.isConnected()}`);
     console.log(`Redis connected: ${redis.isConnected()}`);
