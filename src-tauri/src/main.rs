@@ -2897,11 +2897,20 @@ async fn delete_media_files(
                     deleted_count += 1;
                 }
                 Err(e) => {
-                    println!(
-                        "[DELETE] Failed to delete cloud file {}: {}",
-                        cloud_file_id, e
-                    );
-                    failed_count += 1;
+                    let is_permission_error = e.contains("403") || e.contains("insufficientFilePermissions");
+                    if is_permission_error {
+                        println!(
+                            "[DELETE] Permission denied for cloud file {} (insufficient permissions). Removing from library only.",
+                            cloud_file_id
+                        );
+                        deleted_count += 1;
+                    } else {
+                        println!(
+                            "[DELETE] Failed to delete cloud file {}: {}",
+                            cloud_file_id, e
+                        );
+                        failed_count += 1;
+                    }
                 }
             }
         }
