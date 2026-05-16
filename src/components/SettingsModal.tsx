@@ -14,7 +14,6 @@ import {
   Power,
   X,
   Save,
-  Sparkles,
   Cloud,
   Download,
   RefreshCw,
@@ -52,7 +51,6 @@ import { ZipGuideModal } from "@/components/ZipGuideModal";
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRestartOnboarding?: () => void;
   initialTab?: SettingsSection;
   tabVisibility?: TabVisibility;
   onTabVisibilityChange?: (visibility: TabVisibility) => void;
@@ -76,7 +74,6 @@ type SettingsSection =
 export function SettingsModal({
   open,
   onOpenChange,
-  onRestartOnboarding,
   initialTab,
   tabVisibility: _tabVisibility,
   onTabVisibilityChange: _onTabVisibilityChange,
@@ -327,10 +324,7 @@ export function SettingsModal({
       await clearAllAppData();
       setShowResetConfirm(false);
       onOpenChange(false);
-      toast({
-        title: "App Reset Complete",
-        description: "All data has been cleared. Please restart the app for changes to take effect.",
-      });
+      invoke('restart_app');
     } catch (error) {
       console.error("Failed to reset app", error);
       toast({
@@ -588,36 +582,7 @@ export function SettingsModal({
                         </p>
                       </div>
 
-                      {/* Onboarding Overview */}
-                      <div className="p-4 rounded-xl bg-card border border-border">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-lg bg-white/10">
-                              <Sparkles className="w-5 h-5 text-white" />
-                            </div>
-                            <div>
-                              <Label className="text-base font-medium">
-                                Onboarding Overview
-                              </Label>
-                              <p className="text-sm text-muted-foreground">
-                                Experience the full app introduction again
-                              </p>
-                            </div>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              onOpenChange(false);
-                              onRestartOnboarding?.();
-                            }}
-                            className="gap-2"
-                          >
-                            <Sparkles className="w-4 h-4" />
-                            Start Tour
-                          </Button>
-                        </div>
-                      </div>
+
                     </motion.div>
                   )}
 

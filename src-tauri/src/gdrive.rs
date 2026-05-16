@@ -162,7 +162,16 @@ pub struct GoogleDriveClient {
 
 impl GoogleDriveClient {
     pub fn new() -> Self {
-        let tokens = load_tokens().ok();
+        let tokens_path = get_tokens_path();
+        let tokens = match load_tokens() {
+            Ok(t) => Some(t),
+            Err(e) => {
+                if tokens_path.exists() {
+                    eprintln!("[GDRIVE] Warning: Failed to load tokens (file exists but corrupted): {}. User will need to re-authenticate.", e);
+                }
+                None
+            }
+        };
         Self {
             tokens: Arc::new(Mutex::new(tokens)),
             http_client: reqwest::Client::builder()

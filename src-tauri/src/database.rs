@@ -4083,18 +4083,26 @@ impl Database {
         Ok(merged)
     }
 
-    /// Clear all app data - deletes database tables and image cache
-    /// Returns the path to the image cache directory for cleanup
+    /// Clear ALL app data - deletes every table and returns paths for file cleanup
+    /// Returns the image cache path for the caller to delete
     pub fn clear_all_data(&self) -> Result<String> {
-        // Delete all data from streaming_history
+        // Disable foreign key checks temporarily for clean deletion order
+        self.conn.execute("PRAGMA foreign_keys = OFF", [])?;
+
+        // Delete ALL data from ALL tables
         self.conn.execute("DELETE FROM streaming_history", [])?;
-
-        // Delete all data from media table
+        self.conn.execute("DELETE FROM watch_history_events", [])?;
+        self.conn.execute("DELETE FROM cloud_folders", [])?;
+        self.conn.execute("DELETE FROM cloud_index_failures", [])?;
+        self.conn.execute("DELETE FROM app_settings", [])?;
+        self.conn.execute("DELETE FROM movie_reminders", [])?;
+        self.conn.execute("DELETE FROM watchlist_items", [])?;
         self.conn.execute("DELETE FROM media", [])?;
+        self.conn.execute("DELETE FROM cached_episode_metadata", [])?;
+        self.conn.execute("DELETE FROM zip_archives", [])?;
+        self.conn.execute("DELETE FROM ddl_sources", [])?;
 
-        // Delete all cached episode metadata (important - stale cache causes missing images)
-        self.conn
-            .execute("DELETE FROM cached_episode_metadata", [])?;
+        self.conn.execute("PRAGMA foreign_keys = ON", [])?;
 
         // Return the image cache path for the caller to delete
         Ok(get_image_cache_dir())
