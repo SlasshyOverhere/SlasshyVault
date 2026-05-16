@@ -370,7 +370,7 @@ export const clearAllAppData = async (): Promise<void> => {
     // Clear localStorage
     localStorage.clear();
     // Clear database and image cache via backend
-    await invoke("clear_all_app_data");
+    await invoke("clear_all_app_data", { confirmed: true });
   } catch (error) {
     console.error("Failed to clear app data:", error);
     throw error;
@@ -433,6 +433,7 @@ export const deleteMediaFiles = async (
   try {
     const response = await invoke<DeleteResponse>("delete_media_files", {
       mediaIds,
+      confirmed: true,
     });
     return response;
   } catch (error) {
@@ -466,6 +467,7 @@ export const deleteSeries = async (
     const response = await invoke<DeleteResponse>("delete_series", {
       seriesId,
       deleteFiles,
+      confirmed: true,
     });
     return response;
   } catch (error) {
@@ -1574,37 +1576,6 @@ export const getTmdbImageUrl = (
 };
 
 // ==================== ONBOARDING ====================
-
-const ONBOARDING_KEY = "slasshyvault_onboarding_completed";
-const ONBOARDING_VERSION = "1"; // Increment to show onboarding again after major updates
-
-// Check if user has completed onboarding
-export const hasCompletedOnboarding = (): boolean => {
-  try {
-    const completed = localStorage.getItem(ONBOARDING_KEY);
-    return completed === ONBOARDING_VERSION;
-  } catch {
-    return false;
-  }
-};
-
-// Mark onboarding as complete
-export const completeOnboarding = (): void => {
-  try {
-    localStorage.setItem(ONBOARDING_KEY, ONBOARDING_VERSION);
-  } catch (error) {
-    console.error("Failed to save onboarding state:", error);
-  }
-};
-
-// Reset onboarding (for testing or after major updates)
-export const resetOnboarding = (): void => {
-  try {
-    localStorage.removeItem(ONBOARDING_KEY);
-  } catch (error) {
-    console.error("Failed to reset onboarding:", error);
-  }
-};
 
 // ==================== TAB VISIBILITY ====================
 

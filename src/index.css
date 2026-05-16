@@ -1611,12 +1611,14 @@
   }
 
   .empty-state-enhanced {
-    @apply empty-state;
-    @apply rounded-[2rem] border border-white/5;
+    @apply flex flex-col items-center justify-center p-24 text-center;
+    @apply rounded-[3rem] border border-white/5;
     @apply bg-card/40 backdrop-blur-xl;
+    @apply w-full max-w-xl mx-auto;
+    min-height: 480px;
     box-shadow:
-      0 24px 60px -32px rgba(0, 0, 0, 0.7),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      0 32px 80px -40px rgba(0, 0, 0, 0.8),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 }
 

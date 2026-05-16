@@ -500,7 +500,7 @@ export default function DirectLinksView({
 
       {/* Add Archive Dialog */}
       <Dialog open={showAddModal} onOpenChange={(open) => { if (!open && addStep !== "validating" && addStep !== "indexing") setShowAddModal(false) }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg w-[95vw] sm:w-full overflow-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Plus className="w-5 h-5" />
@@ -509,7 +509,7 @@ export default function DirectLinksView({
             <DialogDescription>Add a direct download link to stream its contents.</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0 overflow-hidden">
             <div className="space-y-2">
               <label className="text-xs font-medium text-muted-foreground">Source URL</label>
               <Input
@@ -519,6 +519,7 @@ export default function DirectLinksView({
                 onChange={e => setAddUrl(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && addStep === 'idle') handleAdd() }}
                 disabled={addStep === "validating" || addStep === "indexing"}
+                className="w-full"
                 autoFocus
               />
             </div>
@@ -542,10 +543,10 @@ export default function DirectLinksView({
                   key="indexing"
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="space-y-4"
+                  className="space-y-4 w-full min-w-0"
                 >
-                  <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex-shrink-0 flex items-center justify-center">
                       <CheckCircle className="w-4 h-4 text-amber-400" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -554,13 +555,13 @@ export default function DirectLinksView({
                     </div>
                   </div>
 
-                  <div className="rounded-lg bg-muted/30 border border-border p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1 min-w-0">
+                  <div className="rounded-lg bg-muted/30 border border-border p-4 space-y-3 min-w-0 overflow-hidden">
+                    <div className="flex items-start justify-between gap-4 min-w-0">
+                      <div className="space-y-1 flex-1 min-w-0">
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{progressLabel}</p>
-                        <p className="text-sm font-medium text-foreground">{progressMessage}</p>
-                        {progressContext && <p className="text-xs text-muted-foreground">{progressContext}</p>}
-                        {addProgress?.filename && <p className="text-xs text-muted-foreground truncate max-w-[200px]">{addProgress.filename}</p>}
+                        <p className="text-sm font-medium text-foreground truncate">{progressMessage}</p>
+                        {progressContext && <p className="text-xs text-muted-foreground truncate">{progressContext}</p>}
+                        {addProgress?.filename && <p className="text-xs text-muted-foreground truncate">{addProgress.filename}</p>}
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-lg font-semibold text-foreground">{Math.round(progressPercent)}%</p>
@@ -585,9 +586,9 @@ export default function DirectLinksView({
                       <motion.div
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 border border-border"
+                        className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 border border-border min-w-0"
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                         <span className="text-xs text-muted-foreground truncate">
                           {addProgress.stage === "fetching-episode-metadata" ? "Metadata:" : "Discovered:"} {addProgress.episodeTitle}
                         </span>
@@ -627,17 +628,17 @@ export default function DirectLinksView({
               )}
             </AnimatePresence>
 
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border">
-              <div className="p-1.5 rounded-md bg-muted">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border min-w-0">
+              <div className="p-1.5 rounded-md bg-muted flex-shrink-0">
                 <HardDrive className="w-4 h-4 text-muted-foreground" />
               </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
+              <p className="text-xs text-muted-foreground leading-relaxed min-w-0">
                 Hosting provider must support <span className="text-foreground font-medium">HTTP Range</span> requests for faster seeking.
               </p>
             </div>
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="ghost"
               onClick={() => setShowAddModal(false)}
@@ -648,7 +649,7 @@ export default function DirectLinksView({
             <Button
               onClick={handleAdd}
               disabled={!addUrl.trim() || addStep === "validating" || addStep === "indexing" || addStep === "done"}
-              className="min-w-[140px]"
+              className="min-w-[120px] sm:min-w-[140px]"
             >
               {addStep === "validating" || addStep === "indexing" ? (
                 <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{addStep === "validating" ? "Validating..." : "Indexing..."}</>

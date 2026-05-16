@@ -317,16 +317,45 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
         return Ok(default_config);
     }
 
-    let mut file = fs::File::open(&config_path)?;
+    let mut file = match fs::File::open(&config_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[CONFIG] Failed to open config file: {}. Recreating with defaults.", e);
+            heal_corrupted_config(&config_path);
+            return Ok(Config::default());
+        }
+    };
     let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
+    if file.read_to_string(&mut contents).is_err() {
+        eprintln!("[CONFIG] Failed to read config file. Recreating with defaults.");
+        heal_corrupted_config(&config_path);
+        return Ok(Config::default());
+    }
 
-    let mut config: Config = serde_json::from_str(&contents)?;
+    let mut config: Config = match serde_json::from_str(&contents) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[CONFIG] Corrupted config ({:?}), backing up and recreating with defaults.", e);
+            heal_corrupted_config(&config_path);
+            Config::default()
+        }
+    };
     // Apply validation bounds
     config.cloud_cache_max_mb = config.cloud_cache_max_mb.min(100000);
     config.zip_cache_max_gb = config.zip_cache_max_gb.min(100);
     config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
     Ok(config)
+}
+
+fn heal_corrupted_config(config_path: &str) {
+    let backup = format!("{}.corrupted", config_path);
+    let _ = fs::rename(config_path, &backup);
+    eprintln!("[CONFIG] Corrupted config backed up to: {}", backup);
+    if let Err(e) = save_config(&Config::default()) {
+        eprintln!("[CONFIG] Failed to create default config: {}", e);
+    } else {
+        eprintln!("[CONFIG] Created fresh default config.");
+    }
 }
 
 pub fn save_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {

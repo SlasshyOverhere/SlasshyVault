@@ -1383,7 +1383,7 @@ async fn scan_all_cloud_folders(
             skipped_count: 0,
             movies_count: 0,
             tv_count: 0,
-            message: "No cloud folders configured".to_string(),
+            message: "No cloud folders configured. Use the Indexing prompt or add folders in Settings.".to_string(),
         });
     }
 
@@ -2635,6 +2635,17 @@ async fn check_cloud_changes(
     })
 }
 
+// Restart the app
+#[tauri::command]
+fn restart_app() -> Result<(), String> {
+    println!("[RESTART] Restarting app...");
+    let exe_path = std::env::current_exe().map_err(|e| format!("Failed to get exe path: {}", e))?;
+    std::process::Command::new(&exe_path)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn new process: {}", e))?;
+    std::process::exit(0);
+}
+
 // Clear all app data (reset to new state)
 #[tauri::command]
 async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Result<ApiResponse, String> {
@@ -2658,8 +2669,30 @@ async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Resu
             Ok(_) => println!("[RESET] Image cache deleted successfully"),
             Err(e) => println!("[RESET] Warning: Failed to delete image cache: {}", e),
         }
-        // Recreate empty image cache directory
-        std::fs::create_dir_all(cache_path).map_err(|e| println!("[RESET] Warning: Failed to recreate image cache: {}", e)).ok();
+        std::fs::create_dir_all(cache_path).ok();
+    }
+
+    // Delete zip cache directory
+    let zip_cache_path = database::get_zip_cache_dir();
+    let zip_path = std::path::Path::new(&zip_cache_path);
+    if zip_path.exists() {
+        std::fs::remove_dir_all(zip_path).ok();
+        println!("[RESET] Zip cache deleted successfully");
+    }
+
+    // Delete Google Drive tokens file
+    let tokens_dir = std::path::Path::new(&database::get_app_data_dir().to_string_lossy().to_string()).join("gdrive_tokens.json");
+    if tokens_dir.exists() {
+        std::fs::remove_file(&tokens_dir).ok();
+        println!("[RESET] Google Drive tokens deleted");
+    }
+
+    // Delete config file (will be recreated as default on next launch)
+    let config_path = database::get_config_path();
+    let config_path = std::path::Path::new(&config_path);
+    if config_path.exists() {
+        std::fs::remove_file(config_path).ok();
+        println!("[RESET] Config file deleted (will recreate with defaults on restart)");
     }
 
     println!("[RESET] App data reset complete!");
@@ -12812,11 +12845,42 @@ fn main() {
     }
     std::fs::create_dir_all(&image_cache_dir).map_err(|e| println!("[INIT] Warning: Failed to create image cache dir: {}", e)).ok();
 
-    // Initialize database
-    let db = database::Database::new(&db_path).expect("Failed to initialize database");
+    // Initialize database with auto-healing on corruption
+    let db = match database::Database::new(&db_path) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("[DB] Failed to open database: {}. Attempting auto-recovery...", e);
+
+            let backup_path = format!("{}.corrupted", db_path);
+
+            // Try to back up and recreate
+            if std::fs::rename(&db_path, &backup_path).is_ok() {
+                eprintln!("[DB] Corrupted database backed up to: {}", backup_path);
+                match database::Database::new(&db_path) {
+                    Ok(new_db) => {
+                        eprintln!("[DB] Successfully created fresh database.");
+                        new_db
+                    }
+                    Err(e2) => {
+                        eprintln!("[DB] Failed to create fresh database: {}", e2);
+                        std::fs::rename(&backup_path, &db_path).ok();
+                        panic!("Failed to initialize database: {}", e2);
+                    }
+                }
+            } else {
+                panic!("Failed to initialize database and could not back up corrupted file: {}", e);
+            }
+        }
+    };
 
     // Load config
-    let config = config::load_config().unwrap_or_default();
+    let config = match config::load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[CONFIG] Failed to load config: {}. Falling back to defaults.", e);
+            config::Config::default()
+        }
+    };
 
     // Create app state
     let state = AppState {
@@ -12952,7 +13016,13 @@ fn main() {
             }
 
             // Clean up expired cloud cache on startup
-            let config = config::load_config().unwrap_or_default();
+            let config = match config::load_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[CONFIG] Failed to load config: {}. Falling back to defaults.", e);
+                    config::Config::default()
+                }
+            };
             if config.cloud_cache_enabled {
                 if let Some(ref cache_dir) = config.cloud_cache_dir {
                     println!("[STARTUP] Cleaning up expired cloud cache...");
@@ -13118,6 +13188,7 @@ fn main() {
             get_recent_watch_activities,
             // App reset command
             clear_all_app_data,
+            restart_app,
             cleanup_missing_metadata,
             // Other commands
             delete_media_files,

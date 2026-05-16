@@ -8,8 +8,7 @@ import {
   ContinueCard,
   ResumeDialog,
   DeleteEpisodesModal,
-  OnboardingModal,
-  MainAppTour,
+
   MarkCompleteDialog,
   WatchTogetherBanner,
   LoginScreen,
@@ -40,8 +39,6 @@ import {
   resolveWatchHistoryMedia,
   ResumeInfo,
   getCachedImageUrl,
-  hasCompletedOnboarding,
-  completeOnboarding,
   getTabVisibility,
   setTabVisibility,
   TabVisibility,
@@ -94,7 +91,6 @@ import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
 // Lazy load heavy components
@@ -177,7 +173,6 @@ interface AppNotificationItem {
 }
 
 const NOTIFICATION_CENTER_STORAGE_KEY = 'slasshyvault.notification-center.v1'
-const REBRAND_NOTICE_KEY = 'slasshyvault_rebrand_notice_shown'
 const MAX_NOTIFICATION_CENTER_ITEMS = 200
 const TV_EPISODE_NOTIFICATION_PATTERN = /\bS\d{1,2}E\d{1,3}\b/i
 
@@ -412,11 +407,6 @@ function App() {
   const [wtIsPlaying, setWtIsPlaying] = useState(false)
   const [wtSessionMedia, setWtSessionMedia] = useState<MediaItem | null>(null) // Media for the session
 
-  // Onboarding state
-  const [showOnboarding, setShowOnboarding] = useState(false)
-  const [showMainAppTour, setShowMainAppTour] = useState(false)
-
-  // Update notes state
   // Tab visibility state - cloud-only mode
   const [tabVisibility, setTabVisibilityState] = useState<TabVisibility>({ showLocal: false, showCloud: true })
 
@@ -434,9 +424,7 @@ function App() {
   } | null>(null)
 
   // Authentication state
-  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, nickname, nicknameLoaded, updateNickname, showIndexingPrompt, isIndexing, confirmIndexing, declineIndexing } = useAuth()
-  const [showNicknameModal, setShowNicknameModal] = useState(false)
-  const [tempNickname, setTempNickname] = useState('')
+  const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, showIndexingPrompt, isIndexing, confirmIndexing, declineIndexing } = useAuth()
 
   const mergeDownloadJob = useCallback((job: DownloadJob) => {
     setDownloadJobs((current) => {
@@ -464,24 +452,6 @@ function App() {
       console.error('[Downloads] Failed to load jobs:', error)
     }
   }, [])
-
-  useEffect(() => {
-    if (!isAuthenticated || !nicknameLoaded) return
-
-    const hasNickname = Boolean(nickname?.trim())
-    setShowNicknameModal(!hasNickname)
-    if (hasNickname) {
-      setTempNickname(nickname ?? '')
-    }
-  }, [isAuthenticated, nickname, nicknameLoaded])
-
-  const handleSaveNickname = async () => {
-    const trimmedNickname = tempNickname.trim()
-    if (!trimmedNickname) return
-
-    await updateNickname(trimmedNickname)
-    setShowNicknameModal(false)
-  }
 
   const [currentTime, setCurrentTime] = useState(new Date())
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
@@ -546,19 +516,9 @@ function App() {
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
   const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
-  const [showRebrandNotice, setShowRebrandNotice] = useState(false)
-
-  // Check onboarding status and load tab visibility on mount
+  // Load tab visibility on mount
   useEffect(() => {
-    if (!hasCompletedOnboarding()) {
-      setShowOnboarding(true)
-    }
-    // Load tab visibility settings
     setTabVisibilityState(getTabVisibility())
-    // Show rebrand notice once
-    if (!localStorage.getItem(REBRAND_NOTICE_KEY)) {
-      setShowRebrandNotice(true)
-    }
   }, [])
 
   // Initialize beta features
@@ -669,30 +629,6 @@ function App() {
         ? "Watch Together features are now available"
         : "Watch Together features are now hidden"
     })
-  }
-
-  const handleOnboardingComplete = () => {
-    completeOnboarding()
-    setShowOnboarding(false)
-    // Start the main app tour after onboarding modal
-    setTimeout(() => {
-      setShowMainAppTour(true)
-    }, 300)
-  }
-
-  const handleMainAppTourComplete = () => {
-    setShowMainAppTour(false)
-  }
-
-  const handleMainAppTourSkip = () => {
-    setShowMainAppTour(false)
-  }
-
-  const handleRestartOnboarding = () => {
-    // Small delay to let Settings modal close first
-    setTimeout(() => {
-      setShowOnboarding(true)
-    }, 300)
   }
 
   // Check GDrive connection status for contextual empty states
@@ -1279,7 +1215,7 @@ function App() {
     }
 
     try {
-      const { isGDriveConnected: checkConnected, scanAllCloudFolders } = await import('@/services/gdrive')
+      const { isGDriveConnected: checkConnected } = await import('@/services/gdrive')
       const connected = await checkConnected()
 
       if (!connected) {
@@ -1291,10 +1227,12 @@ function App() {
       }
 
       setIsCloudIndexing(true)
-      setCloudIndexingStatus('Checking for new files...')
+      setCloudIndexingStatus('Scanning your entire Google Drive...')
 
-      // Scan all tracked cloud folders and retry any previously skipped cloud files.
-      const result = await scanAllCloudFolders()
+      // Always scan the entire Google Drive (root recursively covers everything)
+      const gdrive = await import('@/services/gdrive')
+      await gdrive.addCloudFolder('root', 'My Drive')
+      const result = await gdrive.scanCloudFolder('root', 'My Drive')
 
       if (result.indexed_count > 0) {
         setCloudIndexingStatus(`✓ Added ${result.indexed_count} new files!`)
@@ -1306,10 +1244,10 @@ function App() {
         await fetchData()
         await loadLibraryStats()
       } else {
-        setCloudIndexingStatus('✓ Library is up to date')
+        setCloudIndexingStatus('✓ ' + (result.message || 'Library is up to date'))
         toast({
           title: "Library Up to Date",
-          description: "No new movies or TV shows found in your Drive"
+          description: result.message || "No new movies or TV shows found in your Drive"
         })
       }
 
@@ -1392,8 +1330,8 @@ function App() {
         )
         toast({ title: "Playing", description: `Now playing: ${item.title}` })
       }
-    } catch {
-      toast({ title: "Error", description: "Failed to start playback", variant: "destructive" })
+    } catch (e) {
+      toast({ title: "Error", description: String(e) || "Failed to start playback", variant: "destructive" })
     }
   }, [launchPlaybackWithZipLoading, toast])
 
@@ -1769,21 +1707,6 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
-      <Dialog open={showNicknameModal} onOpenChange={setShowNicknameModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Welcome! Please set a Full Name.</DialogTitle>
-            </DialogHeader>
-            <div className="flex flex-col gap-4">
-            <Input
-              value={tempNickname}
-              onChange={(e) => setTempNickname(e.target.value)}
-              placeholder="Full Name"
-            />            <Button onClick={handleSaveNickname}>Save</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Indexing confirmation dialog for first-time users */}
       <Dialog open={showIndexingPrompt} onOpenChange={declineIndexing}>
         <DialogContent>
@@ -1823,51 +1746,6 @@ function App() {
               </Button>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* One-time rebrand notice: StreamVault → SlasshyVault */}
-      <Dialog open={showRebrandNotice} onOpenChange={(open) => {
-        if (!open) {
-          localStorage.setItem(REBRAND_NOTICE_KEY, '1')
-          setShowRebrandNotice(false)
-        }
-      }}>
-        <DialogContent className="sm:max-w-md">
-          <div className="text-center space-y-1">
-            <h2 className="text-xl font-bold text-foreground">
-              We've Rebranded
-            </h2>
-            <p className="text-sm text-muted-foreground font-medium tracking-wide uppercase">
-              StreamVault → SlasshyVault
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground leading-relaxed text-center">
-              You may have noticed the app now shows a different name. We
-              encountered some technical issues on our end that we weren't
-              able to resolve, so we decided to rebrand instead.
-            </p>
-
-            <div className="bg-muted/50 rounded-xl p-4 border border-border">
-              <p className="text-sm text-foreground/80 leading-relaxed text-center">
-                Everything else stays the same — your library, watch history, and
-                Google Drive connection are all untouched. Just a fresh name
-                going forward.
-              </p>
-            </div>
-          </div>
-
-          <Button
-            onClick={() => {
-              localStorage.setItem(REBRAND_NOTICE_KEY, '1')
-              setShowRebrandNotice(false)
-            }}
-            className="w-full"
-          >
-            Got it
-          </Button>
         </DialogContent>
       </Dialog>
 
@@ -2667,40 +2545,40 @@ function App() {
                               >
                                 {/* Cloud Indexing Progress - Shows when indexing */}
                                 {view === 'cloud' && isCloudIndexing ? (
-                                  <motion.div
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    className="flex flex-col items-center w-full max-w-md"
-                                  >
-                                    <div className="relative mb-6">
-                                      {/* Animated rings */}
-                                      <motion.div
-                                        className="absolute inset-0 rounded-full border-2 border-gray-500/30"
-                                        animate={{ scale: [1, 1.5, 1.5], opacity: [0.5, 0, 0] }}
-                                        transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-                                        style={{ width: 80, height: 80 }}
-                                      />
-                                      <motion.div
-                                        className="absolute inset-0 rounded-full border-2 border-gray-500/30"
-                                        animate={{ scale: [1, 1.5, 1.5], opacity: [0.5, 0, 0] }}
-                                        transition={{ duration: 2, repeat: Infinity, ease: "easeOut", delay: 0.5 }}
-                                        style={{ width: 80, height: 80 }}
-                                      />
-                                      {/* Center icon */}
-                                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-gray-500/20 to-gray-400/20 border border-gray-500/30 flex items-center justify-center">
+                                    <motion.div
+                                      initial={{ opacity: 0, y: 10 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      className="flex flex-col items-center w-full max-w-xl"
+                                    >
+                                      <div className="relative mb-8">
+                                        {/* Animated rings */}
                                         <motion.div
-                                          animate={cloudIndexingStatus.includes('complete') ? {} : { rotate: 360 }}
-                                          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                                        >
-                                          <Cloud className={`w-8 h-8 ${cloudIndexingStatus.includes('complete') ? 'text-white' : 'text-gray-400'}`} />
-                                        </motion.div>
+                                          className="absolute inset-0 rounded-full border-2 border-gray-500/30"
+                                          animate={{ scale: [1, 1.5, 1.5], opacity: [0.5, 0, 0] }}
+                                          transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+                                          style={{ width: 96, height: 96 }}
+                                        />
+                                        <motion.div
+                                          className="absolute inset-0 rounded-full border-2 border-gray-500/30"
+                                          animate={{ scale: [1, 1.5, 1.5], opacity: [0.5, 0, 0] }}
+                                          transition={{ duration: 2, repeat: Infinity, ease: "easeOut", delay: 0.5 }}
+                                          style={{ width: 96, height: 96 }}
+                                        />
+                                        {/* Center icon */}
+                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gray-500/20 to-gray-400/20 border border-gray-500/30 flex items-center justify-center">
+                                          <motion.div
+                                            animate={cloudIndexingStatus.includes('complete') ? {} : { rotate: 360 }}
+                                            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                                          >
+                                            <Cloud className={`w-12 h-12 ${cloudIndexingStatus.includes('complete') ? 'text-white' : 'text-gray-400'}`} />
+                                          </motion.div>
+                                        </div>
                                       </div>
-                                    </div>
 
-                                    {/* Status Title */}
-                                    <h3 className="text-xl font-semibold text-foreground mb-1">
-                                      {cloudIndexingStatus.includes('complete') ? '✓ Indexing Complete!' : cloudIndexingStatus || 'Indexing your cloud files...'}
-                                    </h3>
+                                      {/* Status Title */}
+                                      <h3 className="text-2xl font-semibold text-foreground mb-2">
+                                        {cloudIndexingStatus.includes('complete') ? '✓ Indexing Complete!' : cloudIndexingStatus || 'Indexing your cloud files...'}
+                                      </h3>
 
                                     {/* Current Folder */}
                                     {cloudIndexingProgress && cloudIndexingProgress.currentFolderName && !cloudIndexingStatus.includes('complete') && (
@@ -2747,15 +2625,15 @@ function App() {
                                   </motion.div>
                                 ) : (
                                   <>
-                                    <div className="icon-wrapper mb-4">
-                                      <div className="icon-bg">
-                                        <Cloud className="w-10 h-10 text-muted-foreground" />
+                                    <div className="mb-8">
+                                      <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gray-500/10 to-gray-400/10 border border-gray-500/20 flex items-center justify-center mx-auto">
+                                        <Cloud className="w-12 h-12 text-muted-foreground/60" />
                                       </div>
                                     </div>
-                                    <h3 className="text-xl font-semibold text-foreground mb-2 text-center">
+                                    <h3 className="text-2xl font-semibold text-foreground mb-3 text-center">
                                       {`No cloud ${(cloudSubTab === 'movies' ? 'movies' : 'TV shows')} found`}
                                     </h3>
-                                    <p className="text-muted-foreground max-w-sm mb-6 text-center mx-auto">
+                                    <p className="text-muted-foreground text-lg max-w-md mb-8 text-center mx-auto leading-relaxed">
                                       {isGDriveConnected
                                         ? 'Click Update Library to scan your Google Drive for movies and TV shows'
                                         : 'Connect your Google Drive account to stream your cloud media'
@@ -2766,9 +2644,9 @@ function App() {
                                         <button
                                           onClick={handleCloudScan}
                                           disabled={isScanning || isCloudIndexing}
-                                          className="btn-primary inline-flex items-center gap-2"
+                                          className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
-                                          <RefreshCw className={`w-4 h-4 ${isCloudIndexing ? 'animate-spin' : ''}`} />
+                                          <RefreshCw className={`w-5 h-5 ${isCloudIndexing ? 'animate-spin' : ''}`} />
                                           {isCloudIndexing ? 'Updating...' : 'Update Library'}
                                         </button>
                                       ) : (
@@ -2777,9 +2655,9 @@ function App() {
                                             setSettingsInitialTab('cloud')
                                             setSettingsOpen(true)
                                           }}
-                                          className="btn-primary inline-flex items-center gap-2"
+                                          className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
-                                          <Sparkles className="w-4 h-4" />
+                                          <Sparkles className="w-5 h-5" />
                                           {view === 'cloud' ? 'Setup Google Drive' : 'Add Media Folders'}
                                         </button>
                                       )}
@@ -2798,26 +2676,6 @@ function App() {
             )}
           </main>
 
-          {/* Modals */}
-          <OnboardingModal
-            open={showOnboarding}
-            onComplete={handleOnboardingComplete}
-          />
-
-          {/* Main App Tour - shows after onboarding */}
-          <MainAppTour
-            isActive={showMainAppTour}
-            onComplete={handleMainAppTourComplete}
-            onSkip={handleMainAppTourSkip}
-            setView={(v) => {
-              setView(v)
-              setSelectedShow(null)
-              setSearchQuery('')
-              setHomeSearchQuery('')
-              setHomeSearchResults([])
-            }}
-          />
-
           <Suspense fallback={null}>
             <SettingsModal
               open={settingsOpen}
@@ -2827,7 +2685,6 @@ function App() {
                   setSettingsInitialTab('general')
                 }
               }}
-              onRestartOnboarding={handleRestartOnboarding}
               initialTab={settingsInitialTab}
               tabVisibility={tabVisibility}
               onTabVisibilityChange={handleTabVisibilityChange}
