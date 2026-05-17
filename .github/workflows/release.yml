@@ -9,11 +9,6 @@ jobs:
   release:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [windows-latest]
-
     runs-on: windows-2022
 
     steps:
@@ -104,6 +99,50 @@ jobs:
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: npx tauri build --bundles nsis,updater
 
+      - name: Generate latest.json
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $repo = "${{ github.repository }}"
+          $bundleRoot = "src-tauri\target\release\bundle"
+          $nsisBundleDir = Join-Path $bundleRoot "nsis"
+
+          if (-not (Test-Path -LiteralPath $nsisBundleDir)) {
+            throw "NSIS bundle directory not found: $nsisBundleDir"
+          }
+
+          $updaterArchive = Get-ChildItem -Path $nsisBundleDir -Filter "*.nsis.zip" -File | Select-Object -First 1
+          if (-not $updaterArchive) {
+            throw "Updater archive (*.nsis.zip) was not generated."
+          }
+
+          $signaturePath = "$($updaterArchive.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signaturePath)) {
+            throw "Updater signature file not found: $signaturePath"
+          }
+
+          $signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+          $notes = @"
+${{ steps.release_notes.outputs.notes }}
+"@
+          $latestJsonPath = Join-Path $bundleRoot "latest.json"
+          $downloadUrl = "https://github.com/$repo/releases/download/$tag/$($updaterArchive.Name)"
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          $manifest = [ordered]@{
+            version = $tag
+            notes = $notes.Trim()
+            pub_date = $pubDate
+            platforms = [ordered]@{
+              "windows-x86_64-nsis" = [ordered]@{
+                url = $downloadUrl
+                signature = $signature
+              }
+            }
+          }
+
+          $manifest | ConvertTo-Json -Depth 6 | Out-File -FilePath $latestJsonPath -Encoding utf8
+
       - name: Create Release
         shell: pwsh
         env:
@@ -112,7 +151,14 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $notes = "${{ steps.release_notes.outputs.notes }}"
           $notes | Out-File -FilePath "release_notes.md" -Encoding utf8
-          gh release create $tag --title "SlasshyVault $tag" --notes-file "release_notes.md" --draft=$false
+
+          gh release view $tag 1>$null 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --title "SlasshyVault $tag" --notes-file "release_notes.md"
+          } else {
+            gh release create $tag --title "SlasshyVault $tag" --notes-file "release_notes.md" --draft=$false
+          }
+
           $bundles = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File
           foreach ($file in $bundles) {
             gh release upload $tag $file.FullName --clobber
