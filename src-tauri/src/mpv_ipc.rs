@@ -394,17 +394,12 @@ pub fn launch_mpv_with_tracking(
         }
     }
 
-    // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL
-    // Use a temp file to pass headers (avoids exposing tokens in process listings)
+    // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL.
+    // Keep the inline header behavior from v3.0.39 for direct cloud playback compatibility.
     if !use_cached {
         if let Some(header) = auth_header {
-            let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
-            if let Err(e) = fs::write(&header_file, header) {
-                eprintln!("[MPV] Warning: Failed to write header file: {}", e);
-            } else {
-                cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
-                println!("[MPV] Added HTTP header file for authentication");
-            }
+            cmd.arg(format!("--http-header-fields={}", header));
+            println!("[MPV] Added HTTP header for authentication");
         }
     }
 
@@ -932,12 +927,7 @@ pub fn launch_mpv_with_sync(
     }
 
     if let Some(header) = auth_header {
-        let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
-        if let Err(e) = fs::write(&header_file, header) {
-            eprintln!("[MPV-SYNC] Warning: Failed to write header file: {}", e);
-        } else {
-            cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
-        }
+        cmd.arg(format!("--http-header-fields={}", header));
     }
 
     cmd.arg(file_or_url);
