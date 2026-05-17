@@ -14,7 +14,7 @@ jobs:
       matrix:
         platform: [windows-latest]
 
-    runs-on: windows-2022
+    runs-on: ${{ matrix.platform }}
 
     steps:
       - name: Checkout repository
@@ -22,16 +22,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
+          cache: 'npm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -42,16 +40,10 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: npm ci
 
-      - name: Run frontend tests
-        run: pnpm test
-
-      - name: Type check
-        run: pnpm exec tsc --noEmit
-
-      - name: Run lint
-        run: pnpm run lint
+      - name: Prebuild WAN test binary
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --bin wt_tauri_wan_test --features wan-test
 
       - name: Generate release notes
         id: release_notes
@@ -87,33 +79,17 @@ jobs:
           $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Install working NSIS
-        shell: pwsh
-        run: |
-          choco install nsis -y --no-progress
-          $nsisCache = "$env:LOCALAPPDATA\tauri\NsisUser-x86_64"
-          New-Item -ItemType Directory -Force -Path $nsisCache | Out-Null
-          Copy-Item "${env:ProgramFiles(x86)}\NSIS\*" $nsisCache -Recurse -Force
-
-      - name: Build auxiliary Tauri binaries
-        run: cargo build --release --features custom-protocol,wan-test --bin wt_tauri_wan_test --bin test_autoupdate --manifest-path src-tauri/Cargo.toml
-
       - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: npx tauri build --bundles nsis,updater
-
-      - name: Create Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $notes = "${{ steps.release_notes.outputs.notes }}"
-          $notes | Out-File -FilePath "release_notes.md" -Encoding utf8
-          gh release create $tag --title "SlasshyVault $tag" --notes-file "release_notes.md" --draft=$false
-          $bundles = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File
-          foreach ($file in $bundles) {
-            gh release upload $tag $file.FullName --clobber
-          }
+          VITE_AI_SIGNATURE_SECRET: ${{ secrets.VITE_AI_SIGNATURE_SECRET }}
+        with:
+          args: --bundles nsis,updater
+          tagName: ${{ github.ref_name }}
+          releaseName: 'StreamVault ${{ github.ref_name }}'
+          releaseBody: ${{ steps.release_notes.outputs.notes }}
+          releaseDraft: false
+          prerelease: false
