@@ -3425,7 +3425,7 @@ async fn get_bundled_mpv_info() -> BundledMpvInfo {
     }
 }
 
-// Download bundled MPV from GitHub releases and save to app data
+// Download bundled MPV from GitHub repo and save to app data
 #[tauri::command]
 async fn download_bundled_mpv(
     window: Window,
@@ -3452,7 +3452,7 @@ async fn download_bundled_mpv(
     let status = response.status();
     if !status.is_success() {
         return Err(format!(
-            "Failed to download MPV: HTTP {}. Make sure the asset '{}' exists in the latest GitHub release.",
+            "Failed to download MPV: HTTP {}. Make sure the file exists at: {}",
             status,
             config::get_bundled_mpv_download_url()
         ));
