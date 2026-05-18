@@ -984,7 +984,7 @@ impl Database {
              FROM media WHERE media_type = ? AND ddl_source_id IS NOT NULL",
         );
 
-        if let Some(query) = search {
+        if let Some(_query) = search {
             sql.push_str(" AND title LIKE ?");
         }
         sql.push_str(" ORDER BY last_watched DESC, title");

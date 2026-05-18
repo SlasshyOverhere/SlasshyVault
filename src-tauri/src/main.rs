@@ -7,6 +7,7 @@ mod database;
 mod direct_link_manager;
 mod download_manager;
 mod gdrive;
+mod log_buffer;
 mod media_manager;
 mod mpv_ipc;
 mod tmdb;
@@ -3235,7 +3236,7 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
                 episode_info
             {
                 if is_cloud && ddl_source_id.is_none() {
@@ -3434,6 +3435,19 @@ async fn save_config(
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
     })
+}
+
+// Get recent backend logs for developer console
+#[tauri::command]
+async fn get_recent_logs() -> Result<Vec<String>, String> {
+    Ok(log_buffer::drain())
+}
+
+// Clear all backend logs
+#[tauri::command]
+async fn clear_logs() -> Result<(), String> {
+    log_buffer::clear();
+    Ok(())
 }
 
 // Get scan status
@@ -6267,14 +6281,17 @@ async fn get_mpv_status(
 
             // If not running, remove from active sessions
             if !is_running {
-                let mut sessions = state
-                    .active_mpv_sessions
-                    .lock()
-                    .map_err(|e| e.to_string())?;
-                if let Some(mut session) = sessions.remove(&media_id) {
-                    if let Some(proxy) = session.zip_proxy.take() {
-                        let _ = stop_zip_proxy_handle_blocking(proxy).await;
-                    }
+                let proxy = {
+                    let mut sessions = state
+                        .active_mpv_sessions
+                        .lock()
+                        .map_err(|e| e.to_string())?;
+                    sessions
+                        .remove(&media_id)
+                        .and_then(|mut s| s.zip_proxy.take())
+                };
+                if let Some(proxy) = proxy {
+                    let _ = stop_zip_proxy_handle_blocking(proxy).await;
                 }
             }
 
@@ -6297,27 +6314,28 @@ async fn get_mpv_status(
 // Get all active MPV sessions
 #[tauri::command]
 async fn get_active_mpv_sessions(state: State<'_, AppState>) -> Result<Vec<MpvSession>, String> {
-    let mut sessions = state
-        .active_mpv_sessions
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let proxies_to_stop = {
+        let mut sessions = state
+            .active_mpv_sessions
+            .lock()
+            .map_err(|e| e.to_string())?;
 
-    // Filter out dead sessions
-    let mut to_remove = Vec::new();
-    for (media_id, session) in sessions.iter() {
-        if !mpv_ipc::is_mpv_running(session.session.pid) {
-            to_remove.push(*media_id);
-        }
-    }
-    let mut proxies_to_stop = Vec::with_capacity(to_remove.len());
-    for id in to_remove {
-        if let Some(mut session) = sessions.remove(&id) {
-            if let Some(proxy) = session.zip_proxy.take() {
-                proxies_to_stop.push(proxy);
+        let mut to_remove = Vec::new();
+        for (media_id, session) in sessions.iter() {
+            if !mpv_ipc::is_mpv_running(session.session.pid) {
+                to_remove.push(*media_id);
             }
         }
-    }
-    drop(sessions);
+        let mut proxies = Vec::with_capacity(to_remove.len());
+        for id in to_remove {
+            if let Some(mut session) = sessions.remove(&id) {
+                if let Some(proxy) = session.zip_proxy.take() {
+                    proxies.push(proxy);
+                }
+            }
+        }
+        proxies
+    };
 
     for proxy in proxies_to_stop {
         let _ = stop_zip_proxy_handle_blocking(proxy).await;
@@ -13596,6 +13614,9 @@ fn main() {
             download_update,
             install_update,
             get_app_version,
+            // Developer console commands
+            get_recent_logs,
+            clear_logs,
             // Watch Together commands
             wt_create_room,
             wt_join_room,

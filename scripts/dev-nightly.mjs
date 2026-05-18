@@ -32,6 +32,7 @@ const child = spawn('npm', ['run', 'tauri', '--', 'dev', '--config', 'src-tauri/
   cwd: root,
   stdio: 'inherit',
   shell: true,
+  env: { ...process.env, VITE_IS_NIGHTLY: 'true' },
 });
 
 const cleanup = () => {

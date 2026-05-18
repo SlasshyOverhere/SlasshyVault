@@ -100,6 +100,7 @@ jobs:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           VITE_AI_SIGNATURE_SECRET: ${{ secrets.VITE_AI_SIGNATURE_SECRET }}
+          VITE_IS_NIGHTLY: 'true'
         with:
           args: --config src-tauri/tauri.conf.nightly-merged.json --bundles nsis,updater
           tagName: nightly

@@ -23,6 +23,7 @@ import {
   Shield,
   Archive,
   Loader2,
+  Bug,
 } from "lucide-react";
 import {
   Config,
@@ -69,7 +70,8 @@ type SettingsSection =
   | "cloud"
   | "api"
   | "danger"
-  | "dev";
+  | "dev"
+  | "nightly";
 
 export function SettingsModal({
   open,
@@ -116,6 +118,9 @@ export function SettingsModal({
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
+  const [showDevConsole, setShowDevConsole] = useState(() => {
+    return localStorage.getItem("slasshyvault_show_dev_console") === "true";
+  });
   const { toast } = useToast();
 
   const validatePath = useCallback((path: string, label: string) => {
@@ -427,6 +432,9 @@ export function SettingsModal({
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
     ...(import.meta.env.DEV
       ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
+      : []),
+    ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
+      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="w-4 h-4" /> }]
       : []),
   ];
 
@@ -1349,6 +1357,79 @@ export function SettingsModal({
                           >
                             ZIP Error
                           </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* ===== Nightly Section (only shown in nightly builds) ===== */}
+                  {import.meta.env.VITE_IS_NIGHTLY === 'true' && activeSection === "nightly" && (
+                    <motion.div
+                      key="nightly"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-foreground mb-1">
+                            Nightly Build Options
+                          </h3>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded-full">
+                            NIGHTLY
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Developer tools and diagnostics for nightly builds
+                        </p>
+                      </div>
+
+                      {/* Developer Console Toggle */}
+                      <div className="p-4 rounded-xl bg-card border border-border">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-lg bg-white/10">
+                              <Bug className="w-5 h-5 text-white" />
+                            </div>
+                            <div>
+                              <Label className="text-base font-medium">
+                                Show Developer Console
+                              </Label>
+                              <p className="text-sm text-muted-foreground">
+                                Opens a floating console overlay showing frontend and backend logs
+                              </p>
+                            </div>
+                          </div>
+                          <Switch
+                            checked={showDevConsole}
+                            onCheckedChange={(checked) => {
+                              setShowDevConsole(checked);
+                              localStorage.setItem("slasshyvault_show_dev_console", String(checked));
+                              if (checked) {
+                                toast({
+                                  title: "Developer Console Enabled",
+                                  description: "Click the 'Console' button at the bottom-right corner to open it.",
+                                });
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Info card */}
+                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-yellow-500">
+                              Nightly Build
+                            </p>
+                            <p className="text-xs text-yellow-500/70">
+                              This is a pre-release build. Logs include verbose debug information
+                              from the ZIP proxy cache, MPV playback, cloud scanning, and more.
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </motion.div>

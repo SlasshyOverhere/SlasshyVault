@@ -163,7 +163,7 @@ impl WatchTogetherController {
 
         // Wait for MPV to create the pipe
         // Use WaitNamedPipeW with 5-second timeout before attempting connection
-        let wide_name: Vec<u16> = self
+        let _wide_name: Vec<u16> = self
             .pipe_name
             .encode_utf16()
             .chain(std::iter::once(0))

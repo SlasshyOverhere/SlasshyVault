@@ -2,7 +2,6 @@ use regex::Regex;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
 use crate::database::Database;
 use crate::tmdb;
 
