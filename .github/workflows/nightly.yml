@@ -51,6 +51,15 @@ jobs:
           npm run version:sync
           echo "Building version: $version"
 
+      - name: Export nightly Tauri config override
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw src-tauri/tauri.conf.nightly.json
+          $delimiter = [Guid]::NewGuid().ToString()
+          "TAURI_CONFIG<<$delimiter" | Add-Content -Path $env:GITHUB_ENV
+          $config | Add-Content -Path $env:GITHUB_ENV
+          $delimiter | Add-Content -Path $env:GITHUB_ENV
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -59,7 +68,7 @@ jobs:
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           VITE_AI_SIGNATURE_SECRET: ${{ secrets.VITE_AI_SIGNATURE_SECRET }}
         with:
-          args: --config src-tauri/tauri.conf.json --config src-tauri/tauri.conf.nightly.json --bundles nsis,updater
+          args: --bundles nsis,updater
           tagName: nightly
           releaseName: 'SlasshyVault Nightly'
           releaseBody: '⚠️ Nightly build — for testing only. Not for production use.'
