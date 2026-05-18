@@ -393,7 +393,7 @@ pub fn launch_mpv_with_tracking(
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL.
-    // MPV reliably applies the inline form here; the temp header file path was not being honored.
+// MPV reliably applies the inline form here; the temp header file path was not being honored.
     if !use_cached {
         if let Some(header) = auth_header {
             cmd.arg(format!("--http-header-fields={}", header));
@@ -927,13 +927,7 @@ pub fn launch_mpv_with_sync(
     }
 
     if let Some(header) = auth_header {
-        let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
-        if let Err(e) = fs::write(&header_file, header) {
-            eprintln!("[MPV-SYNC] Warning: Failed to write header file: {}", e);
-        } else {
-            let clean = header_file.to_string_lossy().replace("\\", "/");
-            cmd.arg(format!("--http-header-fields-file={}", clean));
-        }
+cmd.arg(format!("--http-header-fields={}", header));
     }
 
     cmd.arg(file_or_url);
