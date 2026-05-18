@@ -402,7 +402,8 @@ pub fn launch_mpv_with_tracking(
             if let Err(e) = fs::write(&header_file, header) {
                 eprintln!("[MPV] Warning: Failed to write header file: {}", e);
             } else {
-                cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
+                let clean = header_file.to_string_lossy().replace("\\", "/");
+                cmd.arg(format!("--http-header-fields-file={}", clean));
                 println!("[MPV] Added HTTP header file for authentication");
             }
         }
@@ -940,7 +941,8 @@ pub fn launch_mpv_with_sync(
         if let Err(e) = fs::write(&header_file, header) {
             eprintln!("[MPV-SYNC] Warning: Failed to write header file: {}", e);
         } else {
-            cmd.arg(format!("--http-header-fields-file={}", header_file.to_string_lossy()));
+            let clean = header_file.to_string_lossy().replace("\\", "/");
+            cmd.arg(format!("--http-header-fields-file={}", clean));
         }
     }
 
