@@ -19,10 +19,11 @@ const GITHUB_BRANCH: &str = "main";
 /// Relative path to the bundled MPV archive in the repo
 const BUNDLED_MPV_REPO_PATH: &str = "mpv-player/slasshyvault-mpv.rar";
 
-/// Returns the raw download URL for the bundled MPV archive from the GitHub repo
+/// Returns the download URL for the bundled MPV archive from the GitHub repo.
+/// Uses media.githubusercontent.com to resolve Git LFS objects.
 pub fn get_bundled_mpv_download_url() -> String {
     format!(
-        "https://raw.githubusercontent.com/{}/{}/{}",
+        "https://media.githubusercontent.com/media/{}/{}/{}",
         GITHUB_REPO, GITHUB_BRANCH, BUNDLED_MPV_REPO_PATH
     )
 }

@@ -3513,7 +3513,27 @@ async fn download_bundled_mpv(
     // Clean up the RAR file after extraction
     let _ = std::fs::remove_file(&rar_path);
 
-    println!("[MPV-BUNDLED] Extraction complete. Finding mpv.exe...");
+    println!("[MPV-BUNDLED] Extraction complete. Unblocking files...");
+
+    // Unblock all extracted files to prevent Windows UAC/SmartScreen prompts
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let mpv_dir_str = mpv_dir.to_string_lossy().to_string();
+        let _ = Command::new("powershell")
+            .args([
+                "-Command",
+                &format!(
+                    "Get-ChildItem -Recurse -LiteralPath '{}' | Unblock-File -ErrorAction SilentlyContinue",
+                    mpv_dir_str.replace('\'', "''")
+                ),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    println!("[MPV-BUNDLED] Finding mpv.exe...");
 
     // Find the extracted mpv.exe
     let mpv_path = config::get_bundled_mpv_path();
@@ -5861,11 +5881,6 @@ async fn play_with_mpv(
     };
 
     let is_ddl_media = media.ddl_source_id.is_some();
-
-    #[cfg(windows)]
-    if is_zip_media || is_ddl_media {
-        ensure_zip_proxy_firewall_rule();
-    }
 
     let (playback_url, auth_header, zip_proxy, playback_is_cloud): (
         String,
