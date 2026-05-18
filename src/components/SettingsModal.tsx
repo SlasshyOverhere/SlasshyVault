@@ -122,6 +122,7 @@ export function SettingsModal({
   const [bundledMpvInfo, setBundledMpvInfo] = useState<BundledMpvInfo | null>(null);
   const [downloadingBundledMpv, setDownloadingBundledMpv] = useState(false);
   const [bundledMpvProgress, setBundledMpvProgress] = useState(0);
+  const [showCustomMpv, setShowCustomMpv] = useState(false);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
@@ -583,115 +584,169 @@ export function SettingsModal({
                         </div>
                       </div>
 
-                      {/* MPV Path */}
+                      {/* MPV Player */}
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-white/10">
-                            <MonitorPlay className="w-5 h-5 text-white" />
+                          <div className="p-2 rounded-lg bg-emerald-500/20">
+                            <MonitorPlay className="w-5 h-5 text-emerald-400" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
-                              MPV Executable Path
+                              MPV Player
                             </Label>
                             <p className="text-sm text-muted-foreground">
                               Required for video playback
                             </p>
                           </div>
                         </div>
-                        <div className="flex gap-2">
-                          <div className="flex-1 relative">
-                            <Input
-                              value={config.mpv_path || ""}
-                              onChange={(e) => {
-                                setConfig({ ...config, mpv_path: e.target.value });
-                                validatePath(e.target.value, "mpv_path");
-                              }}
-                              placeholder="C:\path\to\mpv.exe"
-                              className="flex-1"
-                              aria-label="MPV executable path"
-                              aria-invalid={!!pathValidation.mpv_path}
-                            />
-                            {pathValidation.mpv_path && (
-                              <p className="text-xs text-destructive mt-1">{pathValidation.mpv_path}</p>
-                            )}
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={browseMpvPath}
-                            title="Browse"
-                            aria-label="Browse for MPV executable"
-                          >
-                            <FolderOpen className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={handleAutoDetectMpv}
-                            disabled={detectingMpv}
-                            className="gap-2"
-                            title="Auto-detect MPV on your PC"
-                            aria-label="Auto-detect MPV on your PC"
-                          >
-                            <RefreshCw
-                              className={cn(
-                                "w-4 h-4",
-                                detectingMpv && "animate-spin",
-                              )}
-                            />
-                            {detectingMpv ? "Detecting..." : "Detect"}
-                          </Button>
-                        </div>
 
-                        {/* Bundled MPV install section */}
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/50">
-                          <div className="flex items-center gap-2">
-                            <Wifi className="w-4 h-4 text-muted-foreground" />
-                            <div>
-                              <p className="text-xs font-medium">
-                                Bundled MPV Player
-                              </p>
-                              <p className="text-[11px] text-muted-foreground">
-                                {bundledMpvInfo?.exists
-                                  ? "Installed"
-                                  : "Not installed"}
-                              </p>
+                        {/* Bundled Player — the hero */}
+                        <div className={cn(
+                          "rounded-xl border transition-all overflow-hidden",
+                          config.mpv_path && bundledMpvInfo?.exists && config.mpv_path === bundledMpvInfo.path
+                            ? "border-emerald-500/30 bg-emerald-500/5"
+                            : "border-border/50 bg-muted/30"
+                        )}>
+                          <div className="p-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={cn(
+                                  "p-2 rounded-lg",
+                                  bundledMpvInfo?.exists ? "bg-emerald-500/20" : "bg-muted"
+                                )}>
+                                  <Wifi className={cn(
+                                    "w-5 h-5",
+                                    bundledMpvInfo?.exists ? "text-emerald-400" : "text-muted-foreground"
+                                  )} />
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-sm font-medium">
+                                      Bundled Player
+                                    </p>
+                                    <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 rounded-full tracking-wide">
+                                      RECOMMENDED
+                                    </span>
+                                  </div>
+                                  <p className={cn(
+                                    "text-xs",
+                                    bundledMpvInfo?.exists ? "text-emerald-300/80" : "text-muted-foreground"
+                                  )}>
+                                    {bundledMpvInfo?.exists
+                                      ? "✓ Installed and ready to use"
+                                      : "Not installed — click to set up"}
+                                  </p>
+                                </div>
+                              </div>
+                              <Button
+                                variant={bundledMpvInfo?.exists ? "ghost" : "default"}
+                                size="sm"
+                                onClick={handleDownloadBundledMpv}
+                                disabled={downloadingBundledMpv}
+                                className={cn(
+                                  "gap-1.5 text-xs h-8 shrink-0",
+                                  bundledMpvInfo?.exists && "text-muted-foreground hover:text-foreground"
+                                )}
+                              >
+                                {downloadingBundledMpv ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    {bundledMpvProgress > 0
+                                      ? `${Math.round(bundledMpvProgress)}%`
+                                      : "Installing..."}
+                                  </>
+                                ) : bundledMpvInfo?.exists ? (
+                                  "Reinstall"
+                                ) : (
+                                  "Install"
+                                )}
+                              </Button>
                             </div>
-                          </div>
-                          <Button
-                            variant={bundledMpvInfo?.exists ? "outline" : "default"}
-                            size="sm"
-                            onClick={handleDownloadBundledMpv}
-                            disabled={downloadingBundledMpv}
-                            className="gap-1.5 text-xs h-8"
-                          >
-                            {downloadingBundledMpv ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                {bundledMpvProgress > 0
-                                  ? `${Math.round(bundledMpvProgress)}%`
-                                  : "Installing..."}
-                              </>
-                            ) : bundledMpvInfo?.exists ? (
-                              "Reinstall"
-                            ) : (
-                              "Install"
+
+                            {/* Warning when bundled not actively used */}
+                            {bundledMpvInfo?.exists && config.mpv_path && config.mpv_path !== bundledMpvInfo.path && (
+                              <div className="flex items-start gap-2 mt-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                                <p className="text-[11px] text-amber-300/90 leading-relaxed">
+                                  You're using a different MPV build. Newer builds can cause
+                                  playback errors. Switch back to the bundled player above.
+                                </p>
+                              </div>
                             )}
-                          </Button>
+                          </div>
                         </div>
 
-                        {/* Warning when using non-bundled MPV */}
-                        {config.mpv_path && (!bundledMpvInfo?.exists || config.mpv_path !== bundledMpvInfo.path) && (
-                          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                            <p className="text-[11px] text-amber-300/90 leading-relaxed">
-                              Newer MPV builds can cause playback errors. We strongly recommend
-                              using the bundled player version above for the best experience.
-                            </p>
-                          </div>
-                        )}
-                        <p className="text-xs text-muted-foreground">
-                          Or use the bundled player from the button above for guaranteed compatibility.
-                        </p>
+                        {/* Custom path — hidden behind a toggle */}
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setShowCustomMpv(!showCustomMpv)}
+                            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {showCustomMpv ? "▼" : "▶"} {showCustomMpv ? "Hide" : "Use a different player"}
+                          </button>
+
+                          {showCustomMpv && (
+                            <div className="mt-3 p-3 rounded-xl bg-red-500/5 border border-red-500/20 space-y-3">
+                              <div className="flex items-start gap-2">
+                                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                                <div>
+                                  <p className="text-xs font-semibold text-red-300">
+                                    Not recommended
+                                  </p>
+                                  <p className="text-[11px] text-red-300/70 leading-relaxed">
+                                    Changing the MPV player can break video playback.
+                                    Only do this if you're absolutely sure you need
+                                    a different build.
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <div className="flex-1 relative">
+                                  <Input
+                                    value={config.mpv_path || ""}
+                                    onChange={(e) => {
+                                      setConfig({ ...config, mpv_path: e.target.value });
+                                      validatePath(e.target.value, "mpv_path");
+                                    }}
+                                    placeholder="C:\path\to\mpv.exe"
+                                    className="flex-1 text-xs"
+                                    aria-label="Custom MPV executable path"
+                                    aria-invalid={!!pathValidation.mpv_path}
+                                  />
+                                  {pathValidation.mpv_path && (
+                                    <p className="text-xs text-destructive mt-1">{pathValidation.mpv_path}</p>
+                                  )}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={browseMpvPath}
+                                  title="Browse"
+                                  className="shrink-0"
+                                  aria-label="Browse for MPV executable"
+                                >
+                                  <FolderOpen className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={handleAutoDetectMpv}
+                                  disabled={detectingMpv}
+                                  className="gap-2 shrink-0 text-xs"
+                                  title="Auto-detect MPV on your PC"
+                                >
+                                  <RefreshCw
+                                    className={cn(
+                                      "w-3 h-3",
+                                      detectingMpv && "animate-spin",
+                                    )}
+                                  />
+                                  {detectingMpv ? "Detecting..." : "Detect"}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
 
