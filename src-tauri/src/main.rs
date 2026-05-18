@@ -11568,6 +11568,54 @@ mod install_update_tests {
 
 // ==================== WATCH TOGETHER COMMANDS ====================
 
+/// Compute a CRC32 hash of the first 5MB of a file for content verification.
+/// Returns a hex string to append to the media match key.
+fn compute_partial_hash(file_path: &str) -> Option<String> {
+    use crc32fast::Hasher as Crc32Hasher;
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(file_path).ok()?;
+    let mut hasher = Crc32Hasher::new();
+    let mut buf = [0u8; 8192];
+    let max_bytes: usize = 5 * 1024 * 1024; // 5MB
+    let mut total_read: usize = 0;
+
+    loop {
+        if total_read >= max_bytes {
+            break;
+        }
+        let to_read = std::cmp::min(buf.len(), max_bytes - total_read);
+        match file.read(&mut buf[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => {
+                hasher.update(&buf[..n]);
+                total_read += n;
+            }
+            Err(_) => return None,
+        }
+    }
+
+    if total_read == 0 {
+        return None;
+    }
+
+    Some(format!("{:08x}", hasher.finalize()))
+}
+
+/// Augment a media match key with a partial file hash if a local file path is available.
+fn augment_match_key_with_phash(media_match_key: Option<String>, file_path: Option<&str>) -> Option<String> {
+    let path = file_path?;
+    if path.is_empty() {
+        return media_match_key;
+    }
+    let hash = compute_partial_hash(path)?;
+    let phash_token = format!("phash:{}", hash);
+    match media_match_key {
+        Some(key) if !key.is_empty() => Some(format!("{}|{}", key, phash_token)),
+        _ => Some(phash_token),
+    }
+}
+
 /// Create a Watch Together room
 #[tauri::command]
 async fn wt_create_room(
@@ -11577,7 +11625,9 @@ async fn wt_create_room(
     title: String,
     media_match_key: Option<String>,
     nickname: String,
+    file_path: Option<String>,
 ) -> Result<watch_together::RoomInfo, String> {
+    let media_match_key = augment_match_key_with_phash(media_match_key, file_path.as_deref());
     let wt = state.watch_together.clone();
     let manager = wt.lock().await;
 
@@ -11671,7 +11721,9 @@ async fn wt_join_room(
     media_title: Option<String>,
     media_match_key: Option<String>,
     nickname: String,
+    file_path: Option<String>,
 ) -> Result<watch_together::RoomInfo, String> {
+    let media_match_key = augment_match_key_with_phash(media_match_key, file_path.as_deref());
     let wt = state.watch_together.clone();
     let manager = wt.lock().await;
 

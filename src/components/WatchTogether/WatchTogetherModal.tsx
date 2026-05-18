@@ -62,12 +62,20 @@ function buildMediaMatchKey(media?: MediaItem): string | undefined {
         tokens.push(`title:${encodeURIComponent(title.toLowerCase())}`);
     }
 
+    if (media.file_size_bytes && media.file_size_bytes > 0) {
+        tokens.push(`size:${media.file_size_bytes}`);
+    }
+
+    if (media.duration_seconds && media.duration_seconds > 0) {
+        tokens.push(`dur:${Math.round(media.duration_seconds)}`);
+    }
+
     if (tokens.length === 0) {
         return undefined;
     }
 
-    // Send all available keys; server accepts join if any token overlaps.
-    return Array.from(new Set(tokens)).map(t => encodeURIComponent(t)).join('|');
+    // Send all available keys; server accepts join if identity token overlaps and verifier tokens match.
+    return Array.from(new Set(tokens)).join('|');
 }
 
 export function WatchTogetherModal({
@@ -303,7 +311,8 @@ export function WatchTogetherModal({
                 selectedMedia.id,
                 selectedMedia.title,
                 buildMediaMatchKey(selectedMedia),
-                sanitizedNickname
+                sanitizedNickname,
+                selectedMedia.file_path
             );
             const localClientId = await wtGetClientId();
             if (localClientId) {
@@ -340,7 +349,8 @@ export function WatchTogetherModal({
                 selectedMedia.id,
                 selectedMedia.title,
                 buildMediaMatchKey(selectedMedia),
-                sanitizedNickname
+                sanitizedNickname,
+                selectedMedia.file_path
             );
             const localClientId = await wtGetClientId();
             if (localClientId) {

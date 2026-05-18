@@ -178,11 +178,9 @@ pub fn read_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
 pub fn clear_mpv_progress(media_id: i64) {
     let progress_file = get_progress_file_path(media_id);
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
-    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
 
     let _ = fs::remove_file(progress_file);
     let _ = fs::remove_file(script_file);
-    let _ = fs::remove_file(header_file);
 }
 
 /// Result of launching MPV with tracking
@@ -395,11 +393,11 @@ pub fn launch_mpv_with_tracking(
     }
 
     // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL.
-    // Keep the inline header behavior from v3.0.39 for direct cloud playback compatibility.
+// MPV reliably applies the inline form here; the temp header file path was not being honored.
     if !use_cached {
         if let Some(header) = auth_header {
             cmd.arg(format!("--http-header-fields={}", header));
-            println!("[MPV] Added HTTP header for authentication");
+            println!("[MPV] Added inline HTTP header for authentication");
         }
     }
 
@@ -409,7 +407,11 @@ pub fn launch_mpv_with_tracking(
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
         cmd.arg("--keep-open=yes");
-        cmd.arg("--network-timeout=30");
+        if is_local_zip_proxy {
+            cmd.arg("--network-timeout=120");
+        } else {
+            cmd.arg("--network-timeout=30");
+        }
 
         if is_local_zip_proxy {
             cmd.arg("--cache-pause=no");
@@ -617,11 +619,9 @@ pub fn monitor_mpv_and_save_progress(
         }
     };
 
-    // Clean up the Lua script and header file (keep progress file for debugging)
+    // Clean up the Lua script (keep progress file for debugging)
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
-    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
     let _ = fs::remove_file(script_file);
-    let _ = fs::remove_file(header_file);
 
     result
 }
@@ -927,7 +927,7 @@ pub fn launch_mpv_with_sync(
     }
 
     if let Some(header) = auth_header {
-        cmd.arg(format!("--http-header-fields={}", header));
+cmd.arg(format!("--http-header-fields={}", header));
     }
 
     cmd.arg(file_or_url);
