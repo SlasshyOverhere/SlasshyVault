@@ -3503,7 +3503,7 @@ async fn download_bundled_mpv(
     let rar_path_str = rar_path.to_string_lossy().to_string();
     let extract_dest = mpv_dir.to_string_lossy().to_string();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let _result = tokio::task::spawn_blocking(move || {
         extract_rar_to_dir(&rar_path_str, &extract_dest)
     })
     .await

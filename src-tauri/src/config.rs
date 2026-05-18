@@ -57,7 +57,6 @@ fn find_mpv_recursive(dir: &Path) -> Option<PathBuf> {
             } else if path.is_file() {
                 let name = path.file_stem()?.to_str()?;
                 if name.eq_ignore_ascii_case("mpv") || name.eq_ignore_ascii_case("slasshyvault-mpv") {
-                    // Also verify extension
                     let ext = path.extension()?.to_str()?;
                     if ext.eq_ignore_ascii_case("exe") {
                         return Some(path);
