@@ -3410,6 +3410,109 @@ async fn auto_detect_mpv(state: State<'_, AppState>) -> Result<Option<String>, S
     Ok(result)
 }
 
+// Get info about bundled MPV (exists, path)
+#[derive(Serialize)]
+struct BundledMpvInfo {
+    exists: bool,
+    path: String,
+}
+
+#[tauri::command]
+async fn get_bundled_mpv_info() -> BundledMpvInfo {
+    BundledMpvInfo {
+        exists: config::bundled_mpv_exists(),
+        path: config::get_bundled_mpv_path().to_string_lossy().to_string(),
+    }
+}
+
+// Download bundled MPV from GitHub releases and save to app data
+#[tauri::command]
+async fn download_bundled_mpv(
+    window: Window,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use std::io::Write;
+    use futures_util::StreamExt;
+
+    let url = config::get_bundled_mpv_download_url();
+    println!("[MPV-BUNDLED] Downloading MPV from: {}", url);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("Failed to build download client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .header("User-Agent", "SlasshyVault-MPV-Updater")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download bundled MPV: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Failed to download MPV: HTTP {}. Make sure the asset '{}' exists in the latest GitHub release.",
+            status,
+            config::get_bundled_mpv_download_url()
+        ));
+    }
+
+    let total_size = response.content_length().unwrap_or(0);
+    println!("[MPV-BUNDLED] File size: {} bytes", total_size);
+
+    // Remove any existing bundled MPV before writing new one
+    let _ = config::remove_bundled_mpv();
+
+    // Ensure the bundled MPV directory exists
+    let mpv_dir = config::get_bundled_mpv_dir();
+    std::fs::create_dir_all(&mpv_dir)
+        .map_err(|e| format!("Failed to create bundled MPV directory: {}", e))?;
+
+    let file_path = config::get_bundled_mpv_path();
+    let mut file = std::fs::File::create(&file_path)
+        .map_err(|e| format!("Failed to create bundled MPV file: {}", e))?;
+
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| {
+            format!("Download error: {}", e)
+        })?;
+        file.write_all(&chunk).map_err(|e| {
+            format!("Write error: {}", e)
+        })?;
+        downloaded += chunk.len() as u64;
+
+        if total_size > 0 {
+            let progress = (downloaded as f64 / total_size as f64) * 100.0;
+            window
+                .emit(
+                    "mpv-download-progress",
+                    serde_json::json!({
+                        "downloaded": downloaded,
+                        "total": total_size,
+                        "progress": progress
+                    }),
+                )
+                .ok();
+        }
+    }
+
+    println!("[MPV-BUNDLED] Download complete: {:?}", file_path);
+    println!("[MPV-BUNDLED] Final size: {} bytes", downloaded);
+
+    // Save to config
+    let path_str = file_path.to_string_lossy().to_string();
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.mpv_path = Some(path_str.clone());
+        config::save_config(&config).map_err(|e| format!("Failed to save config: {}", e))?;
+    }
+
+    Ok(path_str)
+}
+
 // Get configuration
 #[tauri::command]
 async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String> {
@@ -13523,6 +13626,8 @@ fn main() {
             get_config,
             save_config,
             auto_detect_mpv,
+            download_bundled_mpv,
+            get_bundled_mpv_info,
             get_scan_status,
             get_resume_info,
             get_media_info,

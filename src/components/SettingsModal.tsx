@@ -24,6 +24,7 @@ import {
   Archive,
   Loader2,
   Bug,
+  Wifi,
 } from "lucide-react";
 import {
   Config,
@@ -37,6 +38,9 @@ import {
   getAppVersion,
   UpdateInfo,
   autoDetectMpv,
+  getBundledMpvInfo,
+  downloadBundledMpv,
+  BundledMpvInfo,
 } from "@/services/api";
 
 import { useToast } from "@/components/ui/use-toast";
@@ -115,6 +119,9 @@ export function SettingsModal({
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [detectingMpv, setDetectingMpv] = useState(false);
+  const [bundledMpvInfo, setBundledMpvInfo] = useState<BundledMpvInfo | null>(null);
+  const [downloadingBundledMpv, setDownloadingBundledMpv] = useState(false);
+  const [bundledMpvProgress, setBundledMpvProgress] = useState(0);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
@@ -142,6 +149,7 @@ export function SettingsModal({
       loadConfig();
       checkAutoStart();
       loadAppVersion();
+      loadBundledMpvInfo();
       setActiveSection(initialTab || "general");
       setShowResetConfirm(false);
     }
@@ -372,6 +380,54 @@ export function SettingsModal({
     }
   };
 
+  const loadBundledMpvInfo = async () => {
+    const info = await getBundledMpvInfo();
+    setBundledMpvInfo(info);
+  };
+
+  const handleDownloadBundledMpv = async () => {
+    setDownloadingBundledMpv(true);
+    setBundledMpvProgress(0);
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<{ progress: number }>(
+        "mpv-download-progress",
+        (event) => {
+          setBundledMpvProgress(event.payload.progress);
+        },
+      );
+
+      const path = await downloadBundledMpv();
+      unlisten();
+
+      setConfig({ ...config, mpv_path: path });
+
+      // Refresh bundled MPV info
+      await loadBundledMpvInfo();
+
+      toast({
+        title: "MPV Installed",
+        description: "Bundled MPV player has been installed successfully.",
+      });
+    } catch (error) {
+      console.error("Failed to download bundled MPV:", error);
+      const description =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      toast({
+        title: "Download Failed",
+        description,
+        variant: "destructive",
+      });
+    } finally {
+      setDownloadingBundledMpv(false);
+      setBundledMpvProgress(0);
+    }
+  };
+
   const handleAutoDetectMpv = async () => {
     setDetectingMpv(true);
     try {
@@ -585,8 +641,56 @@ export function SettingsModal({
                             {detectingMpv ? "Detecting..." : "Detect"}
                           </Button>
                         </div>
+
+                        {/* Bundled MPV install section */}
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/50">
+                          <div className="flex items-center gap-2">
+                            <Wifi className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                              <p className="text-xs font-medium">
+                                Bundled MPV Player
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {bundledMpvInfo?.exists
+                                  ? "Installed"
+                                  : "Not installed"}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant={bundledMpvInfo?.exists ? "outline" : "default"}
+                            size="sm"
+                            onClick={handleDownloadBundledMpv}
+                            disabled={downloadingBundledMpv}
+                            className="gap-1.5 text-xs h-8"
+                          >
+                            {downloadingBundledMpv ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                {bundledMpvProgress > 0
+                                  ? `${Math.round(bundledMpvProgress)}%`
+                                  : "Installing..."}
+                              </>
+                            ) : bundledMpvInfo?.exists ? (
+                              "Reinstall"
+                            ) : (
+                              "Install"
+                            )}
+                          </Button>
+                        </div>
+
+                        {/* Warning when using non-bundled MPV */}
+                        {config.mpv_path && (!bundledMpvInfo?.exists || config.mpv_path !== bundledMpvInfo.path) && (
+                          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-amber-300/90 leading-relaxed">
+                              Newer MPV builds can cause playback errors. We strongly recommend
+                              using the bundled player version above for the best experience.
+                            </p>
+                          </div>
+                        )}
                         <p className="text-xs text-muted-foreground">
-                          Download MPV from mpv.io if not installed
+                          Or use the bundled player from the button above for guaranteed compatibility.
                         </p>
                       </div>
 

@@ -535,6 +535,31 @@ export const autoDetectMpv = async (): Promise<string | null> => {
   }
 };
 
+export interface BundledMpvInfo {
+  exists: boolean;
+  path: string;
+}
+
+// Get info about bundled MPV
+export const getBundledMpvInfo = async (): Promise<BundledMpvInfo> => {
+  try {
+    return await invoke<BundledMpvInfo>("get_bundled_mpv_info");
+  } catch (error) {
+    console.error("Failed to get bundled MPV info:", error);
+    return { exists: false, path: "" };
+  }
+};
+
+// Download bundled MPV from GitHub releases
+export const downloadBundledMpv = async (): Promise<string> => {
+  try {
+    return await invoke<string>("download_bundled_mpv");
+  } catch (error) {
+    console.error("Failed to download bundled MPV:", error);
+    throw error;
+  }
+};
+
 // Get resume info for a media item
 export const getResumeInfo = async (id: number): Promise<ResumeInfo> => {
   try {

@@ -4,6 +4,8 @@ import {
   getConfig,
   saveConfig,
   autoDetectMpv,
+  getBundledMpvInfo,
+  downloadBundledMpv,
 } from '@/services/api'
 
 
@@ -41,6 +43,7 @@ export function useAuth() {
     try {
       const config = await withTimeoutOrNull(getConfig(), AUTH_CHECK_TIMEOUT_MS)
       if (config && !config.mpv_path) {
+        // First try system auto-detect
         const mpvPath = await withTimeoutOrNull(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS)
         if (mpvPath) {
           await saveConfig({ ...config, mpv_path: mpvPath })
@@ -48,6 +51,15 @@ export function useAuth() {
             title: "MPV Detected",
             description: "Media player configured automatically"
           })
+          return
+        }
+
+        // Fallback: try to use bundled MPV if available
+        const bundledInfo = await getBundledMpvInfo()
+        if (bundledInfo.exists) {
+          await saveConfig({ ...config, mpv_path: bundledInfo.path })
+          console.log('[useAuth] Using bundled MPV:', bundledInfo.path)
+          return
         }
       }
     } catch (error) {
