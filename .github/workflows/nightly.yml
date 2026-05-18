@@ -1,0 +1,66 @@
+name: Nightly Build
+
+on:
+  push:
+    branches: [nightly]
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set nightly version
+        shell: pwsh
+        run: |
+          $date = Get-Date -Format 'yyyyMMdd'
+          $version = "3.0.44-nightly.$date"
+          npm version --no-git-tag-version $version
+          npm run version:sync
+          echo "Building version: $version"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          VITE_AI_SIGNATURE_SECRET: ${{ secrets.VITE_AI_SIGNATURE_SECRET }}
+        with:
+          args: --config src-tauri/tauri.conf.json,src-tauri/tauri.conf.nightly.json --bundles nsis,updater
+          tagName: nightly
+          releaseName: 'SlasshyVault Nightly'
+          releaseBody: '⚠️ Nightly build — for testing only. Not for production use.'
+          prerelease: true
