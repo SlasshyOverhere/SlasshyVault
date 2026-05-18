@@ -5834,54 +5834,16 @@ async fn play_with_mpv(
                 }
             }
         } else {
-            // Cloud file - get stream URL from Google Drive
+            // Cloud non-ZIP file - direct Google Drive streaming (matches v3.0.39 behavior)
             if let Some(ref cloud_file_id) = media.cloud_file_id {
+                let (stream_url, access_token) =
+                    state.gdrive_client.get_stream_url(cloud_file_id).await?;
+                let auth_header = format!("Authorization: Bearer {}", access_token);
                 println!(
-                    "[MPV] Cloud file detected, routing through proxy for file ID: {}",
-                    cloud_file_id
+                    "[MPV] Using direct Google Drive stream for cloud playback, token length: {}",
+                    access_token.len()
                 );
-                let cached_file_size = media
-                    .file_size_bytes
-                    .and_then(|value| u64::try_from(value).ok());
-                let content_name = media
-                    .file_path
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(media.title.as_str());
-                let meta = if cached_file_size.is_some() {
-                    None
-                } else {
-                    Some(state.gdrive_client.get_file_metadata(cloud_file_id).await?)
-                };
-                let file_size = cached_file_size
-                    .or_else(|| {
-                        meta.as_ref()
-                            .and_then(|m| m.size.as_deref())
-                            .and_then(|s| s.parse::<u64>().ok())
-                    })
-                    .ok_or_else(|| "Cloud file size unavailable".to_string())?;
-                if file_size == 0 {
-                    return Err("Cloud file is empty".to_string());
-                }
-                let drive_url = state.gdrive_client.build_stream_url(cloud_file_id);
-                let mime_type = meta
-                    .as_ref()
-                    .map(|m| m.mime_type.clone())
-                    .unwrap_or_else(|| zip_manager::content_type_for_name(content_name));
-                let proxy = zip_stream_proxy::start_proxy(
-                    zip_stream_proxy::build_file_proxy_spec(
-                        drive_url,
-                        state.gdrive_client.clone(),
-                        file_size,
-                        mime_type,
-                    ),
-                )?;
-                let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
-                println!(
-                    "[MPV] Using authenticated localhost proxy for cloud playback (size={}, name='{}')",
-                    file_size, content_name
-                );
-                (stream_url, None, Some(proxy), true)
+                (stream_url, Some(auth_header), None, true)
             } else {
                 return Err("Cloud file ID not found".to_string());
             }
