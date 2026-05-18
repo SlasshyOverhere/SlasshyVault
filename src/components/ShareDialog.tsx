@@ -62,8 +62,8 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
         <div className="px-6 pt-6 pb-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2.5 text-white text-base">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center">
-                <Shield className="w-4.5 h-4.5 text-emerald-400" style={{ width: 18, height: 18 }} />
+              <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
+                <Shield className="w-4.5 h-4.5 text-white" style={{ width: 18, height: 18 }} />
               </div>
               <span>Share via Google Drive</span>
             </DialogTitle>
@@ -77,8 +77,8 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
         <div className="px-6 pb-6">
           {shared ? (
             <div className="flex flex-col items-center gap-5 py-8">
-              <div className="w-20 h-20 rounded-full bg-emerald-500/12 flex items-center justify-center ring-1 ring-emerald-500/20">
-                <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+              <div className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center ring-1 ring-white/10">
+                <CheckCircle2 className="w-10 h-10 text-white" />
               </div>
               <p className="text-white/85 text-base font-medium">File shared successfully!</p>
               <Button
@@ -102,7 +102,7 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
                   }}
                   className={cn(
                     "pl-10 h-12 bg-white/[0.04] border border-white/10 text-white placeholder:text-white/22 text-sm rounded-2xl",
-                    "focus-visible:ring-emerald-500/25 focus-visible:border-emerald-500/35 transition-all",
+                    "focus-visible:ring-white/25 focus-visible:border-white/35 transition-all",
                     "hover:border-white/18"
                   )}
                 />

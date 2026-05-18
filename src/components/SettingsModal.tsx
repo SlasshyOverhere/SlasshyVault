@@ -587,8 +587,8 @@ export function SettingsModal({
                       {/* MPV Player */}
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-emerald-500/20">
-                            <MonitorPlay className="w-5 h-5 text-emerald-400" />
+                          <div className="p-2 rounded-lg bg-white/8">
+                            <MonitorPlay className="w-5 h-5 text-foreground" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -604,7 +604,7 @@ export function SettingsModal({
                         <div className={cn(
                           "rounded-xl border transition-all overflow-hidden",
                           config.mpv_path && bundledMpvInfo?.exists && config.mpv_path === bundledMpvInfo.path
-                            ? "border-emerald-500/30 bg-emerald-500/5"
+                            ? "border-white/10 bg-white/5"
                             : "border-border/50 bg-muted/30"
                         )}>
                           <div className="p-4">
@@ -612,11 +612,11 @@ export function SettingsModal({
                               <div className="flex items-center gap-3">
                                 <div className={cn(
                                   "p-2 rounded-lg",
-                                  bundledMpvInfo?.exists ? "bg-emerald-500/20" : "bg-muted"
+                                  bundledMpvInfo?.exists ? "bg-white/10" : "bg-muted"
                                 )}>
                                   <Wifi className={cn(
                                     "w-5 h-5",
-                                    bundledMpvInfo?.exists ? "text-emerald-400" : "text-muted-foreground"
+                                    bundledMpvInfo?.exists ? "text-foreground" : "text-muted-foreground"
                                   )} />
                                 </div>
                                 <div>
@@ -624,13 +624,13 @@ export function SettingsModal({
                                     <p className="text-sm font-medium">
                                       Bundled Player
                                     </p>
-                                    <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 rounded-full tracking-wide">
+                                    <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-white/10 text-foreground rounded-full tracking-wide">
                                       RECOMMENDED
                                     </span>
                                   </div>
                                   <p className={cn(
                                     "text-xs",
-                                    bundledMpvInfo?.exists ? "text-emerald-300/80" : "text-muted-foreground"
+                                    bundledMpvInfo?.exists ? "text-foreground/70" : "text-muted-foreground"
                                   )}>
                                     {bundledMpvInfo?.exists
                                       ? "✓ Installed and ready to use"

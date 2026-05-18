@@ -2800,7 +2800,7 @@ function App() {
 
           <Toaster />
 
-          <DeveloperConsole />
+          {import.meta.env.DEV && <DeveloperConsole />}
         </>
       )}
     </div>
