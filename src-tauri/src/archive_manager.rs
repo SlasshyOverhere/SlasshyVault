@@ -18,7 +18,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tar::Archive as TarArchive;
-use tokio::runtime::Builder as TokioRuntimeBuilder;
 use unrar::Archive as RarArchive;
 
 fn get_rar_runtime() -> &'static tokio::runtime::Runtime {

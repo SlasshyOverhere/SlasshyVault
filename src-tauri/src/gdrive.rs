@@ -183,12 +183,19 @@ impl GoogleDriveClient {
 
     /// Check if user is authenticated
     pub fn is_authenticated(&self) -> bool {
-        self.tokens.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        self.tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 
     /// Get the current access token, refreshing if needed
     pub async fn get_access_token(&self) -> Result<String, String> {
-        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let tokens = self
+            .tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         match tokens {
             Some(t) => {
@@ -461,11 +468,7 @@ impl GoogleDriveClient {
         Ok(result.files.first().map(|f| f.id.clone()))
     }
 
-    async fn create_sync_file(
-        &self,
-        file_name: &str,
-        mime_type: &str,
-    ) -> Result<String, String> {
+    async fn create_sync_file(&self, file_name: &str, mime_type: &str) -> Result<String, String> {
         let access_token = self.get_access_token().await?;
 
         let response = self
@@ -537,7 +540,10 @@ impl GoogleDriveClient {
 
         let file_id = match self.find_sync_file_id(WATCH_HISTORY_FILE_NAME).await? {
             Some(id) => id,
-            None => self.create_sync_file(WATCH_HISTORY_FILE_NAME, "application/json").await?,
+            None => {
+                self.create_sync_file(WATCH_HISTORY_FILE_NAME, "application/json")
+                    .await?
+            }
         };
 
         let access_token = self.get_access_token().await?;
@@ -605,7 +611,10 @@ impl GoogleDriveClient {
 
         let file_id = match self.find_sync_file_id(WATCHLIST_FILE_NAME).await? {
             Some(id) => id,
-            None => self.create_sync_file(WATCHLIST_FILE_NAME, "application/json").await?,
+            None => {
+                self.create_sync_file(WATCHLIST_FILE_NAME, "application/json")
+                    .await?
+            }
         };
 
         let access_token = self.get_access_token().await?;
@@ -958,27 +967,24 @@ pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
     })
 }
 
-fn find_available_port() -> u16 {
-    for port in 8085..=8095 {
-        if std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
-            return port;
-        }
-    }
-    8085
+/// Bind the OAuth callback listener BEFORE opening the browser
+/// so it's ready when the backend redirect comes back
+pub fn start_oauth_listener() -> Result<std::net::TcpListener, String> {
+    let listener = TcpListener::bind("127.0.0.1:8085")
+        .map_err(|e| format!("Failed to start OAuth callback server: {}", e))?;
+    listener.set_nonblocking(false).ok();
+    println!("[GDRIVE] OAuth callback server listening on port 8085");
+    Ok(listener)
 }
 
-/// Start local OAuth callback server and wait for tokens from backend
-/// The backend exchanges the code and redirects here with tokens directly
-pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
-    let port = find_available_port();
-    // Start a local TCP listener on the redirect URI port
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-        .map_err(|e| format!("Failed to start OAuth callback server: {}", e))?;
-
-    println!("[GDRIVE] OAuth callback server listening on port {}", port);
-
-    // Set a timeout for the connection
-    listener.set_nonblocking(false).ok();
+/// Wait for OAuth callback on an already-bound listener
+/// The backend exchanges the code, stores tokens server-side with a session ID,
+/// then redirects here with: /callback?session_id=<uuid>
+/// We then fetch the tokens from the backend using that session ID.
+pub async fn wait_for_oauth_callback(
+    listener: &std::net::TcpListener,
+) -> Result<GoogleTokens, String> {
+    println!("[GDRIVE] Waiting for OAuth callback...");
 
     // Accept one connection
     let (mut stream, _) = listener
@@ -994,11 +1000,128 @@ pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
         .map_err(|e| format!("Failed to read request: {}", e))?;
 
     // Log only that we received a callback (without exposing query params/tokens)
-    let safe_line = request_line.split(' ').take(2).collect::<Vec<_>>().join(" ");
+    let safe_line = request_line
+        .split(' ')
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
     println!("[GDRIVE] Received callback: {}", safe_line);
 
-    // Parse the request to get tokens or error
-    let tokens = extract_tokens_from_request(&request_line)?;
+    // Parse query parameters from the request path
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("Invalid request line")?;
+
+    // Check for error from backend
+    if path.contains("error=") {
+        let query_start = path.find('?').ok_or("No query string")?;
+        let query = &path[query_start + 1..];
+        let params: HashMap<&str, &str> = query
+            .split('&')
+            .filter_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                Some((parts.next()?, parts.next()?))
+            })
+            .collect();
+
+        let error = params.get("error").unwrap_or(&"unknown_error");
+        return Err(format!("OAuth error: {}", error));
+    }
+
+    let query_start = path.find('?').ok_or("No query string in callback URL")?;
+    let query = &path[query_start + 1..];
+
+    let params: HashMap<&str, &str> = query
+        .split('&')
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            Some((parts.next()?, parts.next()?))
+        })
+        .collect();
+
+    // Resolve tokens: either from session_id or legacy tokens param
+    let tokens = if let Some(session_id) = params.get("session_id") {
+        println!("[GDRIVE] Fetching tokens for session...");
+        let auth_url = get_auth_server_url();
+        let session_url = format!("{}/auth/session/{}", auth_url, session_id);
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?
+            .get(&session_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch session tokens: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Session token fetch failed: {}", error_text));
+        }
+
+        let token_data: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse session tokens: {}", e))?;
+
+        let access_token = token_data["access_token"]
+            .as_str()
+            .ok_or("Missing access_token")?
+            .to_string();
+
+        let refresh_token = token_data["refresh_token"].as_str().map(String::from);
+
+        let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
+        let expires_at = chrono::Utc::now().timestamp() + expires_in;
+
+        let token_type = token_data["token_type"]
+            .as_str()
+            .unwrap_or("Bearer")
+            .to_string();
+
+        GoogleTokens {
+            access_token,
+            refresh_token,
+            expires_at: Some(expires_at),
+            token_type,
+        }
+    } else if let Some(tokens_b64) = params.get("tokens") {
+        // Legacy flow: tokens are base64-encoded in the URL
+        println!("[GDRIVE] Decoding tokens from callback URL...");
+        let tokens_json = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(tokens_b64)
+                .map_err(|e| format!("Failed to decode tokens: {}", e))?,
+        )
+        .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
+
+        let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
+            .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
+
+        let access_token = token_data["access_token"]
+            .as_str()
+            .ok_or("Missing access_token")?
+            .to_string();
+
+        let refresh_token = token_data["refresh_token"].as_str().map(String::from);
+
+        let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
+        let expires_at = chrono::Utc::now().timestamp() + expires_in;
+
+        let token_type = token_data["token_type"]
+            .as_str()
+            .unwrap_or("Bearer")
+            .to_string();
+
+        GoogleTokens {
+            access_token,
+            refresh_token,
+            expires_at: Some(expires_at),
+            token_type,
+        }
+    } else {
+        return Err("No session_id or tokens in callback URL".to_string());
+    };
 
     // Send a success response
     let response_body = r#"
@@ -1017,10 +1140,8 @@ pub async fn wait_for_oauth_callback() -> Result<GoogleTokens, String> {
             </style>
         </head>
         <body>
-            <div class="container">
-                <h1>✓ Authorization Successful!</h1>
-                <p>You can close this window and return to SlasshyVault.</p>
-            </div>
+            <h1>✓ Authorization Successful!</h1>
+            <p>You can close this window and return to SlasshyVault.</p>
         </body>
         </html>
     "#;
@@ -1118,12 +1239,12 @@ fn get_tokens_path() -> PathBuf {
 }
 
 fn obfuscate(data: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     BASE64.encode(data)
 }
 
 fn deobfuscate(data: &str) -> Result<String, String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     let bytes = BASE64.decode(data).map_err(|e| e.to_string())?;
     String::from_utf8(bytes).map_err(|e| e.to_string())
 }

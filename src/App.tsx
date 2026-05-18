@@ -17,6 +17,7 @@ import {
   NotificationCenter,
   RemindersView,
   DownloadsView,
+  DeveloperConsole,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -2798,6 +2799,8 @@ function App() {
           />
 
           <Toaster />
+
+          <DeveloperConsole />
         </>
       )}
     </div>

@@ -13,3 +13,4 @@ export * from './ZipPlaybackLoadingOverlay'
 export * from './NotificationCenter'
 export * from './Reminders';
 export * from './DownloadsView';
+export * from './DeveloperConsole';

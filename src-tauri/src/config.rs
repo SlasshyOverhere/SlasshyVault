@@ -1,10 +1,54 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::database::get_config_path;
+use crate::database::{get_app_data_dir, get_config_path};
+
+/// Filename for the bundled MPV executable
+const BUNDLED_MPV_FILENAME: &str = "slasshyvault-mpv.exe";
+
+/// GitHub repository slug and branch
+const GITHUB_REPO: &str = "SlasshyOverhere/SlasshyVault";
+const GITHUB_BRANCH: &str = "main";
+
+/// Relative path to the bundled MPV binary in the repo
+const BUNDLED_MPV_REPO_PATH: &str = "mpv-player/slasshyvault-mpv.exe";
+
+/// Returns the raw download URL for the bundled MPV from the GitHub repo
+pub fn get_bundled_mpv_download_url() -> String {
+    format!(
+        "https://raw.githubusercontent.com/{}/{}/{}",
+        GITHUB_REPO, GITHUB_BRANCH, BUNDLED_MPV_REPO_PATH
+    )
+}
+
+/// Returns the directory where bundled MPV is stored in app data
+pub fn get_bundled_mpv_dir() -> PathBuf {
+    get_app_data_dir().join("mpv_bundled")
+}
+
+/// Returns the full path to the bundled MPV executable in app data
+pub fn get_bundled_mpv_path() -> PathBuf {
+    get_bundled_mpv_dir().join(BUNDLED_MPV_FILENAME)
+}
+
+/// Check if bundled MPV executable exists in app data
+pub fn bundled_mpv_exists() -> bool {
+    get_bundled_mpv_path().exists()
+}
+
+/// Remove the installed bundled MPV (for reinstallation)
+pub fn remove_bundled_mpv() -> Result<(), String> {
+    let path = get_bundled_mpv_path();
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Failed to remove bundled MPV: {}", e))?;
+        println!("[MPV-BUNDLED] Removed bundled MPV at {:?}", path);
+    }
+    Ok(())
+}
 
 /// Common locations where MPV might be installed on Windows
 const MPV_SEARCH_PATHS: &[&str] = &[
@@ -33,7 +77,14 @@ const MPV_SEARCH_PATHS: &[&str] = &[
 pub fn find_mpv_executable() -> Option<String> {
     println!("[MPV] Searching for mpv.exe on the system...");
 
-    // First, check if mpv is in PATH (fastest check)
+    // First, check bundled MPV (so the app prefers its own copy)
+    if bundled_mpv_exists() {
+        let path = get_bundled_mpv_path().to_string_lossy().to_string();
+        println!("[MPV] Found bundled mpv at: {}", path);
+        return Some(path);
+    }
+
+    // Then, check if mpv is in PATH (fastest check)
     let mut where_cmd = Command::new("where");
     where_cmd.arg("mpv.exe");
     apply_hidden_process_flags(&mut where_cmd);
@@ -174,8 +225,14 @@ pub fn validate_executable_path(path: &str, expected_name: &str) -> Result<(), S
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid executable path: {}", path.display()))?;
 
-    // Compare case-insensitively
-    if file_stem.to_lowercase() != expected_name.to_lowercase() {
+    let stem_lower = file_stem.to_lowercase();
+    let expected_lower = expected_name.to_lowercase();
+
+    // Also accept "slasshyvault-mpv" when expecting "mpv" (bundled variant)
+    let valid = stem_lower == expected_lower
+        || (expected_lower == "mpv" && stem_lower == "slasshyvault-mpv");
+
+    if !valid {
         return Err(format!(
             "Security violation: Executable name must be '{}' or '{}.exe', but got '{}'",
             expected_name, expected_name, file_stem

@@ -1,5 +1,4 @@
-use crate::gdrive;
-use crate::zip_manager;
+use crate::{dev_elog, dev_log, gdrive, zip_manager};
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, RANGE};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -23,6 +22,8 @@ const TURBO_MAX_CONNECTIONS: usize = 8;
 const TURBO_FETCH_RETRIES: usize = 3;
 const TURBO_FETCH_TIMEOUT_SECS: u64 = 20;
 const TURBO_RATE_LIMIT_BACKOFF_SECS: u64 = 5;
+
+pub const ZIP_PROXY_PORT: u16 = 48621;
 
 #[derive(Debug, Clone)]
 pub struct ProxyCacheSpec {
@@ -235,7 +236,7 @@ impl TurboProxyState {
                 }
             }));
             if let Err(panic_err) = result {
-                eprintln!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
+                dev_elog!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
             }
         });
     }
@@ -346,7 +347,7 @@ impl TurboProxyState {
                     turbo.fetch_chunk_worker(next_chunk);
                 }));
                 if let Err(panic_err) = result {
-                    eprintln!("[ZIP PROXY] Fetch worker panicked: {:?}", panic_err);
+                    dev_elog!("[ZIP PROXY] Fetch worker panicked: {:?}", panic_err);
                 }
             });
 
@@ -362,7 +363,7 @@ impl TurboProxyState {
         let mut inner = match lock.lock() {
             Ok(inner) => inner,
             Err(error) => {
-                eprintln!("[ZIP PROXY] Failed to lock turbo cache state: {}", error);
+                dev_elog!("[ZIP PROXY] Failed to lock turbo cache state: {}", error);
                 return;
             }
         };
@@ -377,7 +378,7 @@ impl TurboProxyState {
                 let bytes = Arc::new(bytes);
                 inner.insert_hot(chunk_index, bytes.clone(), self.hot_limit_bytes);
                 if let Err(error) = self.persist_contiguous_chunks_locked(&mut inner) {
-                    eprintln!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
+                    dev_elog!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
                 }
             }
             Err(error) => {
@@ -537,7 +538,7 @@ impl TurboProxyState {
                 &self.cache_spec.cache_paths,
                 &self.cache_spec.cache_config,
             ) {
-                eprintln!("[ZIP PROXY] Failed to finalize turbo cache target: {:?}", error);
+                dev_elog!("[ZIP PROXY] Failed to finalize turbo cache target: {:?}", error);
             }
         }
 
@@ -855,7 +856,7 @@ fn handle_request(
         .url()
         .to_string();
 
-    println!(
+    dev_log!(
         "[ZIP PROXY] {} {} range={:?} resolved={}..{} len={} turbo={}",
         method,
         url,
@@ -904,7 +905,7 @@ fn handle_request(
             .expect("request should be present before responding")
             .respond(response.boxed())
             .map_err(|e| (None, e.to_string()))?;
-        println!(
+        dev_log!(
             "[ZIP PROXY] Served turbo response in {} ms",
             started_at.elapsed().as_millis()
         );
@@ -939,7 +940,7 @@ fn handle_request(
         .expect("request should be present before responding")
         .respond(response.boxed())
         .map_err(|e| (None, e.to_string()))?;
-    println!(
+    dev_log!(
         "[ZIP PROXY] Streamed upstream response in {} ms",
         started_at.elapsed().as_millis()
     );

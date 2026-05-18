@@ -23,6 +23,8 @@ import {
   Shield,
   Archive,
   Loader2,
+  Bug,
+  Wifi,
 } from "lucide-react";
 import {
   Config,
@@ -36,6 +38,9 @@ import {
   getAppVersion,
   UpdateInfo,
   autoDetectMpv,
+  getBundledMpvInfo,
+  downloadBundledMpv,
+  BundledMpvInfo,
 } from "@/services/api";
 
 import { useToast } from "@/components/ui/use-toast";
@@ -69,7 +74,8 @@ type SettingsSection =
   | "cloud"
   | "api"
   | "danger"
-  | "dev";
+  | "dev"
+  | "nightly";
 
 export function SettingsModal({
   open,
@@ -113,9 +119,15 @@ export function SettingsModal({
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [detectingMpv, setDetectingMpv] = useState(false);
+  const [bundledMpvInfo, setBundledMpvInfo] = useState<BundledMpvInfo | null>(null);
+  const [downloadingBundledMpv, setDownloadingBundledMpv] = useState(false);
+  const [bundledMpvProgress, setBundledMpvProgress] = useState(0);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
+  const [showDevConsole, setShowDevConsole] = useState(() => {
+    return localStorage.getItem("slasshyvault_show_dev_console") === "true";
+  });
   const { toast } = useToast();
 
   const validatePath = useCallback((path: string, label: string) => {
@@ -137,6 +149,7 @@ export function SettingsModal({
       loadConfig();
       checkAutoStart();
       loadAppVersion();
+      loadBundledMpvInfo();
       setActiveSection(initialTab || "general");
       setShowResetConfirm(false);
     }
@@ -367,6 +380,54 @@ export function SettingsModal({
     }
   };
 
+  const loadBundledMpvInfo = async () => {
+    const info = await getBundledMpvInfo();
+    setBundledMpvInfo(info);
+  };
+
+  const handleDownloadBundledMpv = async () => {
+    setDownloadingBundledMpv(true);
+    setBundledMpvProgress(0);
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<{ progress: number }>(
+        "mpv-download-progress",
+        (event) => {
+          setBundledMpvProgress(event.payload.progress);
+        },
+      );
+
+      const path = await downloadBundledMpv();
+      unlisten();
+
+      setConfig({ ...config, mpv_path: path });
+
+      // Refresh bundled MPV info
+      await loadBundledMpvInfo();
+
+      toast({
+        title: "MPV Installed",
+        description: "Bundled MPV player has been installed successfully.",
+      });
+    } catch (error) {
+      console.error("Failed to download bundled MPV:", error);
+      const description =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      toast({
+        title: "Download Failed",
+        description,
+        variant: "destructive",
+      });
+    } finally {
+      setDownloadingBundledMpv(false);
+      setBundledMpvProgress(0);
+    }
+  };
+
   const handleAutoDetectMpv = async () => {
     setDetectingMpv(true);
     try {
@@ -427,6 +488,9 @@ export function SettingsModal({
     { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
     ...(import.meta.env.DEV
       ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
+      : []),
+    ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
+      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="w-4 h-4" /> }]
       : []),
   ];
 
@@ -577,8 +641,56 @@ export function SettingsModal({
                             {detectingMpv ? "Detecting..." : "Detect"}
                           </Button>
                         </div>
+
+                        {/* Bundled MPV install section */}
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/50">
+                          <div className="flex items-center gap-2">
+                            <Wifi className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                              <p className="text-xs font-medium">
+                                Bundled MPV Player
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {bundledMpvInfo?.exists
+                                  ? "Installed"
+                                  : "Not installed"}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant={bundledMpvInfo?.exists ? "outline" : "default"}
+                            size="sm"
+                            onClick={handleDownloadBundledMpv}
+                            disabled={downloadingBundledMpv}
+                            className="gap-1.5 text-xs h-8"
+                          >
+                            {downloadingBundledMpv ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                {bundledMpvProgress > 0
+                                  ? `${Math.round(bundledMpvProgress)}%`
+                                  : "Installing..."}
+                              </>
+                            ) : bundledMpvInfo?.exists ? (
+                              "Reinstall"
+                            ) : (
+                              "Install"
+                            )}
+                          </Button>
+                        </div>
+
+                        {/* Warning when using non-bundled MPV */}
+                        {config.mpv_path && (!bundledMpvInfo?.exists || config.mpv_path !== bundledMpvInfo.path) && (
+                          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-amber-300/90 leading-relaxed">
+                              Newer MPV builds can cause playback errors. We strongly recommend
+                              using the bundled player version above for the best experience.
+                            </p>
+                          </div>
+                        )}
                         <p className="text-xs text-muted-foreground">
-                          Download MPV from mpv.io if not installed
+                          Or use the bundled player from the button above for guaranteed compatibility.
                         </p>
                       </div>
 
@@ -1349,6 +1461,79 @@ export function SettingsModal({
                           >
                             ZIP Error
                           </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* ===== Nightly Section (only shown in nightly builds) ===== */}
+                  {import.meta.env.VITE_IS_NIGHTLY === 'true' && activeSection === "nightly" && (
+                    <motion.div
+                      key="nightly"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-foreground mb-1">
+                            Nightly Build Options
+                          </h3>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded-full">
+                            NIGHTLY
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Developer tools and diagnostics for nightly builds
+                        </p>
+                      </div>
+
+                      {/* Developer Console Toggle */}
+                      <div className="p-4 rounded-xl bg-card border border-border">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-lg bg-white/10">
+                              <Bug className="w-5 h-5 text-white" />
+                            </div>
+                            <div>
+                              <Label className="text-base font-medium">
+                                Show Developer Console
+                              </Label>
+                              <p className="text-sm text-muted-foreground">
+                                Opens a floating console overlay showing frontend and backend logs
+                              </p>
+                            </div>
+                          </div>
+                          <Switch
+                            checked={showDevConsole}
+                            onCheckedChange={(checked) => {
+                              setShowDevConsole(checked);
+                              localStorage.setItem("slasshyvault_show_dev_console", String(checked));
+                              if (checked) {
+                                toast({
+                                  title: "Developer Console Enabled",
+                                  description: "Click the 'Console' button at the bottom-right corner to open it.",
+                                });
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Info card */}
+                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-yellow-500">
+                              Nightly Build
+                            </p>
+                            <p className="text-xs text-yellow-500/70">
+                              This is a pre-release build. Logs include verbose debug information
+                              from the ZIP proxy cache, MPV playback, cloud scanning, and more.
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </motion.div>

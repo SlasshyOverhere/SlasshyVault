@@ -427,29 +427,11 @@ pub fn launch_mpv_with_tracking(
                 let media_cache_dir =
                     std::path::Path::new(&cache.cache_dir).join(format!("media_{}", media_id));
 
-                if let Err(e) = std::fs::create_dir_all(&media_cache_dir) {
-                    println!("[MPV] Warning: Failed to create cache dir: {}", e);
-                } else {
-                    // Use stream-record to save the video to disk as it plays
-                    // This creates a persistent cache file that survives MPV exit
+                if std::fs::create_dir_all(&media_cache_dir).is_ok() {
                     let cache_file = media_cache_dir.join("video.mp4");
-
-                    // Only record if we don't already have a cache file
                     if !cache_file.exists() {
                         cmd.arg(format!("--stream-record={}", cache_file.to_string_lossy()));
                         println!("[MPV] Recording stream to: {}", cache_file.display());
-                    }
-
-                    // Also enable memory cache for smooth playback while recording
-                    cmd.arg("--cache=yes");
-                    let cache_bytes = (cache.max_size_mb as u64) * 1024 * 1024;
-                    if is_local_zip_proxy {
-                        cmd.arg("--demuxer-max-bytes=200MiB");
-                        cmd.arg("--demuxer-max-back-bytes=128MiB");
-                        cmd.arg("--demuxer-readahead-secs=30");
-                    } else {
-                        cmd.arg(format!("--demuxer-max-bytes={}", cache_bytes));
-                        cmd.arg(format!("--demuxer-max-back-bytes={}", cache_bytes / 4));
                     }
 
                     println!(
@@ -457,32 +439,22 @@ pub fn launch_mpv_with_tracking(
                         media_cache_dir.display(),
                         cache.max_size_mb
                     );
-                }
-            } else {
-                // Memory-only cache
-                cmd.arg("--cache=yes");
-                if is_local_zip_proxy {
-                    cmd.arg("--demuxer-max-bytes=200MiB");
-                    cmd.arg("--demuxer-max-back-bytes=128MiB");
-                    cmd.arg("--demuxer-readahead-secs=30");
-                    println!("[MPV] Using turbo cache profile for local ZIP proxy");
                 } else {
-                    cmd.arg("--demuxer-max-bytes=500MiB");
-                    cmd.arg("--demuxer-max-back-bytes=100MiB");
+                    println!("[MPV] Warning: Failed to create cache dir: {}", media_cache_dir.display());
                 }
             }
+        }
+
+        // Always set cache options for URL sources
+        cmd.arg("--cache=yes");
+        if is_local_zip_proxy {
+            cmd.arg("--demuxer-max-bytes=200MiB");
+            cmd.arg("--demuxer-max-back-bytes=128MiB");
+            cmd.arg("--demuxer-readahead-secs=30");
+            println!("[MPV] Using turbo cache profile for local ZIP proxy");
         } else {
-            // Default memory cache for URLs
-            cmd.arg("--cache=yes");
-            if is_local_zip_proxy {
-                cmd.arg("--demuxer-max-bytes=200MiB");
-                cmd.arg("--demuxer-max-back-bytes=128MiB");
-                cmd.arg("--demuxer-readahead-secs=30");
-                println!("[MPV] Using turbo cache profile for local ZIP proxy");
-            } else {
-                cmd.arg("--demuxer-max-bytes=500MiB");
-                cmd.arg("--demuxer-max-back-bytes=100MiB");
-            }
+            cmd.arg("--demuxer-max-bytes=500MiB");
+            cmd.arg("--demuxer-max-back-bytes=100MiB");
         }
     }
 

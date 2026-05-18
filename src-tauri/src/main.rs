@@ -7,6 +7,7 @@ mod database;
 mod direct_link_manager;
 mod download_manager;
 mod gdrive;
+mod log_buffer;
 mod media_manager;
 mod mpv_ipc;
 mod tmdb;
@@ -19,7 +20,10 @@ mod zip_stream_proxy;
 
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
-use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
+    Timelike, Utc,
+};
 use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -75,6 +79,7 @@ pub struct AppState {
     pub gdrive_client: gdrive::GoogleDriveClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
+    pub oauth_listener: Arc<Mutex<Option<std::net::TcpListener>>>,
 }
 
 // API Response types
@@ -265,13 +270,14 @@ async fn sync_watchlist_to_drive(state: &AppState) -> Result<WatchlistSyncStatus
         db.get_watchlist_items(true).map_err(|e| e.to_string())?
     };
 
-    let remote_items = if let Some(remote_json) = state.gdrive_client.load_watchlist_snapshot().await? {
-        let remote_snapshot: WatchlistSnapshot = serde_json::from_str(&remote_json)
-            .map_err(|e| format!("Failed to parse remote watchlist snapshot: {}", e))?;
-        remote_snapshot.items
-    } else {
-        Vec::new()
-    };
+    let remote_items =
+        if let Some(remote_json) = state.gdrive_client.load_watchlist_snapshot().await? {
+            let remote_snapshot: WatchlistSnapshot = serde_json::from_str(&remote_json)
+                .map_err(|e| format!("Failed to parse remote watchlist snapshot: {}", e))?;
+            remote_snapshot.items
+        } else {
+            Vec::new()
+        };
 
     let (merged_items, merged_remote_items) = merge_watchlist_items(local_items, remote_items);
 
@@ -348,7 +354,11 @@ async fn get_ddl_media(
     search: Option<String>,
 ) -> Result<Vec<database::MediaItem>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let db_type = if media_type == "tv" { "tvshow" } else { "movie" };
+    let db_type = if media_type == "tv" {
+        "tvshow"
+    } else {
+        "movie"
+    };
     let items = db
         .get_ddl_media(db_type, search.as_deref())
         .map_err(|e| e.to_string())?;
@@ -365,7 +375,8 @@ async fn get_nickname(state: State<'_, AppState>) -> Result<Option<String>, Stri
 #[tauri::command]
 async fn set_nickname(state: State<'_, AppState>, nickname: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.set_setting("nickname", nickname.trim()).map_err(|e| e.to_string())
+    db.set_setting("nickname", nickname.trim())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -537,7 +548,12 @@ async fn gdrive_get_account_info(
 
 /// Start Google Drive OAuth flow - returns auth URL
 #[tauri::command]
-async fn gdrive_start_auth() -> Result<String, String> {
+async fn gdrive_start_auth(state: State<'_, AppState>) -> Result<String, String> {
+    // Start local TCP listener BEFORE opening browser so it's ready
+    // to receive the callback redirect from the backend
+    let listener = gdrive::start_oauth_listener()?;
+    *state.oauth_listener.lock().unwrap() = Some(listener);
+
     let auth_url = gdrive::get_auth_url();
 
     // Open the URL in the default browser
@@ -555,10 +571,13 @@ async fn gdrive_start_auth() -> Result<String, String> {
 async fn gdrive_complete_auth(
     state: State<'_, AppState>,
 ) -> Result<gdrive::DriveAccountInfo, String> {
-    println!("[GDRIVE] Waiting for OAuth callback...");
+    // Take the listener that was started in gdrive_start_auth
+    let listener = state.oauth_listener.lock().unwrap().take().ok_or_else(|| {
+        "OAuth callback listener not started. Did you call gdrive_start_auth first?".to_string()
+    })?;
 
     // Wait for tokens from backend (it redirects to localhost with tokens)
-    let tokens = gdrive::wait_for_oauth_callback().await?;
+    let tokens = gdrive::wait_for_oauth_callback(&listener).await?;
     println!("[GDRIVE] Received tokens from backend");
 
     // Store tokens
@@ -1383,7 +1402,9 @@ async fn scan_all_cloud_folders(
             skipped_count: 0,
             movies_count: 0,
             tv_count: 0,
-            message: "No cloud folders configured. Use the Indexing prompt or add folders in Settings.".to_string(),
+            message:
+                "No cloud folders configured. Use the Indexing prompt or add folders in Settings."
+                    .to_string(),
         });
     }
 
@@ -2648,7 +2669,10 @@ fn restart_app() -> Result<(), String> {
 
 // Clear all app data (reset to new state)
 #[tauri::command]
-async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Result<ApiResponse, String> {
+async fn clear_all_app_data(
+    state: State<'_, AppState>,
+    confirmed: bool,
+) -> Result<ApiResponse, String> {
     if !confirmed {
         return Err("Operation cancelled by user".to_string());
     }
@@ -2681,7 +2705,9 @@ async fn clear_all_app_data(state: State<'_, AppState>, confirmed: bool) -> Resu
     }
 
     // Delete Google Drive tokens file
-    let tokens_dir = std::path::Path::new(&database::get_app_data_dir().to_string_lossy().to_string()).join("gdrive_tokens.json");
+    let tokens_dir =
+        std::path::Path::new(&database::get_app_data_dir().to_string_lossy().to_string())
+            .join("gdrive_tokens.json");
     if tokens_dir.exists() {
         std::fs::remove_file(&tokens_dir).ok();
         println!("[RESET] Google Drive tokens deleted");
@@ -2821,7 +2847,9 @@ async fn delete_media_files(
             // Local file - delete from disk (with path canonicalization)
             if let Some(path_str) = file_path {
                 let raw_path = std::path::Path::new(&path_str);
-                let canonical = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_path_buf());
+                let canonical = raw_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| raw_path.to_path_buf());
                 if canonical.exists() {
                     match std::fs::remove_file(&canonical) {
                         Ok(_) => {
@@ -2897,7 +2925,8 @@ async fn delete_media_files(
                     deleted_count += 1;
                 }
                 Err(e) => {
-                    let is_permission_error = e.contains("403") || e.contains("insufficientFilePermissions");
+                    let is_permission_error =
+                        e.contains("403") || e.contains("insufficientFilePermissions");
                     if is_permission_error {
                         println!(
                             "[DELETE] Permission denied for cloud file {} (insufficient permissions). Removing from library only.",
@@ -3207,7 +3236,9 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in episode_info {
+            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+                episode_info
+            {
                 if is_cloud && ddl_source_id.is_none() {
                     if let Some(cloud_id) = cloud_file_id {
                         cloud_file_ids.push(cloud_id);
@@ -3332,7 +3363,9 @@ async fn delete_series_cloud_folder(
                     .map_err(|e| e.to_string())?
             };
 
-            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in episode_info {
+            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+                episode_info
+            {
                 if let Some(cloud_id) = cloud_file_id {
                     if ddl_source_id.is_none() {
                         println!(
@@ -3377,6 +3410,109 @@ async fn auto_detect_mpv(state: State<'_, AppState>) -> Result<Option<String>, S
     Ok(result)
 }
 
+// Get info about bundled MPV (exists, path)
+#[derive(Serialize)]
+struct BundledMpvInfo {
+    exists: bool,
+    path: String,
+}
+
+#[tauri::command]
+async fn get_bundled_mpv_info() -> BundledMpvInfo {
+    BundledMpvInfo {
+        exists: config::bundled_mpv_exists(),
+        path: config::get_bundled_mpv_path().to_string_lossy().to_string(),
+    }
+}
+
+// Download bundled MPV from GitHub repo and save to app data
+#[tauri::command]
+async fn download_bundled_mpv(
+    window: Window,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use std::io::Write;
+    use futures_util::StreamExt;
+
+    let url = config::get_bundled_mpv_download_url();
+    println!("[MPV-BUNDLED] Downloading MPV from: {}", url);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("Failed to build download client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .header("User-Agent", "SlasshyVault-MPV-Updater")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download bundled MPV: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Failed to download MPV: HTTP {}. Make sure the file exists at: {}",
+            status,
+            config::get_bundled_mpv_download_url()
+        ));
+    }
+
+    let total_size = response.content_length().unwrap_or(0);
+    println!("[MPV-BUNDLED] File size: {} bytes", total_size);
+
+    // Remove any existing bundled MPV before writing new one
+    let _ = config::remove_bundled_mpv();
+
+    // Ensure the bundled MPV directory exists
+    let mpv_dir = config::get_bundled_mpv_dir();
+    std::fs::create_dir_all(&mpv_dir)
+        .map_err(|e| format!("Failed to create bundled MPV directory: {}", e))?;
+
+    let file_path = config::get_bundled_mpv_path();
+    let mut file = std::fs::File::create(&file_path)
+        .map_err(|e| format!("Failed to create bundled MPV file: {}", e))?;
+
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| {
+            format!("Download error: {}", e)
+        })?;
+        file.write_all(&chunk).map_err(|e| {
+            format!("Write error: {}", e)
+        })?;
+        downloaded += chunk.len() as u64;
+
+        if total_size > 0 {
+            let progress = (downloaded as f64 / total_size as f64) * 100.0;
+            window
+                .emit(
+                    "mpv-download-progress",
+                    serde_json::json!({
+                        "downloaded": downloaded,
+                        "total": total_size,
+                        "progress": progress
+                    }),
+                )
+                .ok();
+        }
+    }
+
+    println!("[MPV-BUNDLED] Download complete: {:?}", file_path);
+    println!("[MPV-BUNDLED] Final size: {} bytes", downloaded);
+
+    // Save to config
+    let path_str = file_path.to_string_lossy().to_string();
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.mpv_path = Some(path_str.clone());
+        config::save_config(&config).map_err(|e| format!("Failed to save config: {}", e))?;
+    }
+
+    Ok(path_str)
+}
+
 // Get configuration
 #[tauri::command]
 async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String> {
@@ -3402,6 +3538,19 @@ async fn save_config(
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
     })
+}
+
+// Get recent backend logs for developer console
+#[tauri::command]
+async fn get_recent_logs() -> Result<Vec<String>, String> {
+    Ok(log_buffer::drain())
+}
+
+// Clear all backend logs
+#[tauri::command]
+async fn clear_logs() -> Result<(), String> {
+    log_buffer::clear();
+    Ok(())
 }
 
 // Get scan status
@@ -4102,7 +4251,8 @@ fn temp_file_for_headers(header_content: &str) -> Result<String, String> {
     let file_name = format!("ffprobe_headers_{}.txt", uuid::Uuid::new_v4());
     let file_path = temp_dir.join(file_name);
     let file_path_str = file_path.to_string_lossy().to_string();
-    std::fs::write(&file_path, header_content).map_err(|e| format!("Failed to write header file: {}", e))?;
+    std::fs::write(&file_path, header_content)
+        .map_err(|e| format!("Failed to write header file: {}", e))?;
     Ok(file_path_str)
 }
 
@@ -4134,9 +4284,7 @@ fn probe_tracks_with_ffprobe(
     let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
         let header_content = format!("Authorization: Bearer {}\r\n", token);
         let path = temp_file_for_headers(&header_content)?;
-        command
-            .arg("-headers")
-            .arg(&path);
+        command.arg("-headers").arg(&path);
         Some(path)
     } else {
         None
@@ -4285,9 +4433,7 @@ fn probe_media_technical_details_with_ffprobe(
     let _header_file = if let Some(token) = access_token.filter(|value| !value.trim().is_empty()) {
         let header_content = format!("Authorization: Bearer {}\r\n", token);
         let path = temp_file_for_headers(&header_content)?;
-        command
-            .arg("-headers")
-            .arg(&path);
+        command.arg("-headers").arg(&path);
         Some(path)
     } else {
         None
@@ -4447,23 +4593,22 @@ fn infer_extension_for_media(media: &database::MediaItem) -> Option<String> {
         .filter(|ext| !ext.is_empty())
 }
 
-fn infer_download_filename(
-    media: &database::MediaItem,
-    metadata_name: Option<&str>,
-) -> String {
+fn infer_download_filename(media: &database::MediaItem, metadata_name: Option<&str>) -> String {
     let fallback = format!("media-{}", media.id);
     let base_name = metadata_name
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().to_string())
         .or_else(|| {
-            media.zip_entry_path
+            media
+                .zip_entry_path
                 .as_deref()
                 .and_then(|path| std::path::Path::new(path).file_name())
                 .and_then(|value| value.to_str())
                 .map(|value| value.to_string())
         })
         .or_else(|| {
-            media.file_path
+            media
+                .file_path
                 .as_deref()
                 .and_then(|path| std::path::Path::new(path).file_name())
                 .and_then(|value| value.to_str())
@@ -4480,7 +4625,9 @@ fn infer_download_filename(
 }
 
 #[tauri::command]
-async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<download_manager::DownloadJobSnapshot>, String> {
+async fn get_download_jobs(
+    state: State<'_, AppState>,
+) -> Result<Vec<download_manager::DownloadJobSnapshot>, String> {
     let mut jobs = state.download_manager.list_jobs();
     let db = state.db.lock().map_err(|e| e.to_string())?;
     for job in &mut jobs {
@@ -4502,10 +4649,7 @@ async fn cancel_download_job(
 }
 
 #[tauri::command]
-async fn delete_download_job(
-    state: State<'_, AppState>,
-    job_id: String,
-) -> Result<(), String> {
+async fn delete_download_job(state: State<'_, AppState>, job_id: String) -> Result<(), String> {
     state.download_manager.delete_job(&job_id)
 }
 
@@ -4564,7 +4708,9 @@ async fn start_media_download(
             let method = media.zip_compression_method.unwrap_or(-1);
             let supports_direct_range = match archive_format {
                 archive_manager::ArchiveFormat::Zip => method == 0,
-                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => method == 0,
+                archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => {
+                    method == 0
+                }
             };
 
             if supports_direct_range {
@@ -4698,18 +4844,23 @@ async fn start_media_download(
                             &media_for_worker,
                             &temp_path_for_worker,
                             |written, total| {
-                                if written < total && written.saturating_sub(last_emitted) < progress_step {
+                                if written < total
+                                    && written.saturating_sub(last_emitted) < progress_step
+                                {
                                     return;
                                 }
                                 last_emitted = written;
                                 let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
-                                if let Some(updated) = manager_for_progress.update_job(&job_id_for_progress, |job| {
-                                    job.downloaded_bytes = written;
-                                    job.total_bytes = total;
-                                    job.progress = ((written as f64 / total.max(1) as f64) * 100.0)
-                                        .clamp(0.0, 100.0);
-                                    job.speed_bytes_per_second = Some(written as f64 / elapsed);
-                                }) {
+                                if let Some(updated) =
+                                    manager_for_progress.update_job(&job_id_for_progress, |job| {
+                                        job.downloaded_bytes = written;
+                                        job.total_bytes = total;
+                                        job.progress = ((written as f64 / total.max(1) as f64)
+                                            * 100.0)
+                                            .clamp(0.0, 100.0);
+                                        job.speed_bytes_per_second = Some(written as f64 / elapsed);
+                                    })
+                                {
                                     download_manager::emit_job_update(&app_for_progress, &updated);
                                 }
                             },
@@ -4765,7 +4916,10 @@ async fn start_media_download(
                     if let Err(error) = std::fs::rename(&temp_path, &target_path) {
                         let _ = std::fs::remove_file(&temp_path);
                         let error = format!("Failed to finalize extracted download: {}", error);
-                        println!("[DOWNLOAD] ZIP deflate job {} finalize failed: {}", job_id, error);
+                        println!(
+                            "[DOWNLOAD] ZIP deflate job {} finalize failed: {}",
+                            job_id, error
+                        );
                         if let Some(updated) = manager.update_job(&job_id, |job| {
                             job.status = "failed".to_string();
                             job.error = Some(error.clone());
@@ -4887,7 +5041,10 @@ async fn start_media_download(
                 };
 
                 if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    println!("[DOWNLOAD] archive extract job {} was cancelled after extract", job_id);
+                    println!(
+                        "[DOWNLOAD] archive extract job {} was cancelled after extract",
+                        job_id
+                    );
                     if let Some(updated) = manager.update_job(&job_id, |job| {
                         job.status = "cancelled".to_string();
                     }) {
@@ -4956,7 +5113,11 @@ async fn start_media_download(
             .size
             .as_deref()
             .and_then(|value| value.parse::<u64>().ok())
-            .or_else(|| media.file_size_bytes.and_then(|value| u64::try_from(value).ok()))
+            .or_else(|| {
+                media
+                    .file_size_bytes
+                    .and_then(|value| u64::try_from(value).ok())
+            })
             .ok_or_else(|| "Cloud file size not available for download".to_string())?;
         if total_bytes == 0 {
             return Err("Cloud file is empty and cannot be downloaded".to_string());
@@ -5049,8 +5210,8 @@ async fn get_media_technical_details(
                 file_size_bytes,
             );
 
-            if let Some(proxy) = source.temp_zip_proxy.as_mut() {
-                proxy.stop();
+            if let Some(proxy) = source.temp_zip_proxy.take() {
+                let _ = stop_zip_proxy_handle_blocking(proxy).await;
             }
 
             if let Ok(details) = result {
@@ -5097,8 +5258,8 @@ async fn get_audio_tracks(
         source.access_token.as_deref(),
     );
 
-    if let Some(proxy) = source.temp_zip_proxy.as_mut() {
-        proxy.stop();
+    if let Some(proxy) = source.temp_zip_proxy.take() {
+        let _ = stop_zip_proxy_handle_blocking(proxy).await;
     }
 
     result
@@ -5129,8 +5290,8 @@ async fn get_subtitle_tracks(
         source.access_token.as_deref(),
     );
 
-    if let Some(proxy) = source.temp_zip_proxy.as_mut() {
-        proxy.stop();
+    if let Some(proxy) = source.temp_zip_proxy.take() {
+        let _ = stop_zip_proxy_handle_blocking(proxy).await;
     }
 
     result
@@ -5493,6 +5654,75 @@ async fn fix_match(
 }
 
 // Play media with MPV (external player) with progress tracking
+#[cfg(windows)]
+fn ensure_zip_proxy_firewall_rule() {
+    use std::process::Command;
+
+    let rule_name = "SlasshyVault ZIP Proxy";
+
+    // Check if rule already exists (no elevation needed for show)
+    let check = Command::new("netsh")
+        .args([
+            "advfirewall",
+            "firewall",
+            "show",
+            "rule",
+            &format!("name={}", rule_name),
+        ])
+        .output();
+    if let Ok(output) = check {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("SlasshyVault ZIP Proxy") && !stdout.contains("0 rules") {
+            println!("[ZIP PROXY] Firewall rule already exists");
+            return;
+        }
+    }
+
+    // Only prompt UAC once per process lifetime
+    static ATTEMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ATTEMPTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+    let port = zip_stream_proxy::ZIP_PROXY_PORT;
+
+    let netsh_script = format!(
+        "& {{ netsh advfirewall firewall delete rule name=\"{rule}\"; netsh advfirewall firewall add rule name=\"{rule}\" dir=in action=allow protocol=TCP localport={port} program=\"{exe}\" remoteip=127.0.0.1,::1 enable=yes }}",
+        rule = rule_name,
+        port = port,
+        exe = exe,
+    );
+    let ps = format!(
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"{}\")",
+        netsh_script.replace('"', "`\"")
+    );
+
+    match Command::new("powershell").args(["-Command", &ps]).spawn() {
+        Ok(_) => println!("[ZIP PROXY] Firewall rule requested — accept the UAC prompt to allow MPV loopback connections"),
+        Err(e) => println!("[ZIP PROXY] Could not launch PowerShell to set up firewall: {}", e),
+    }
+}
+
+async fn start_zip_proxy_blocking(
+    proxy_spec: zip_stream_proxy::ProxyStreamSpec,
+) -> Result<zip_stream_proxy::ZipStreamProxyHandle, String> {
+    tokio::task::spawn_blocking(move || zip_stream_proxy::start_proxy(proxy_spec))
+        .await
+        .map_err(|error| format!("ZIP proxy task join error: {}", error))?
+}
+
+async fn stop_zip_proxy_handle_blocking(
+    mut proxy: zip_stream_proxy::ZipStreamProxyHandle,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || proxy.stop())
+        .await
+        .map_err(|error| format!("ZIP proxy stop join error: {}", error))
+}
+
 #[tauri::command]
 async fn play_with_mpv(
     window: Window,
@@ -5571,6 +5801,11 @@ async fn play_with_mpv(
 
     let is_ddl_media = media.ddl_source_id.is_some();
 
+    #[cfg(windows)]
+    if is_zip_media || is_ddl_media {
+        ensure_zip_proxy_firewall_rule();
+    }
+
     let (playback_url, auth_header, zip_proxy, playback_is_cloud): (
         String,
         Option<String>,
@@ -5607,7 +5842,9 @@ async fn play_with_mpv(
                         match zip_manager::inspect_stream_cache_target(&media, &cache_config) {
                             Ok(snapshot) => {
                                 let local_cache_path = choose_store_zip_local_cache_for_mpv(
-                                    &media, &snapshot, start_position,
+                                    &media,
+                                    &snapshot,
+                                    start_position,
                                 );
                                 (
                                     Some(zip_stream_proxy::ProxyCacheSpec {
@@ -5627,13 +5864,13 @@ async fn play_with_mpv(
                         }
                     };
 
-                    let proxy = zip_stream_proxy::start_proxy(
-                        zip_stream_proxy::build_direct_link_proxy_spec(
+                    let proxy =
+                        start_zip_proxy_blocking(zip_stream_proxy::build_direct_link_proxy_spec(
                             ddl_url,
                             &stream_info,
                             cache_spec,
-                        ),
-                    )?;
+                        ))
+                        .await?;
 
                     if let Some(local_path) = local_cache_path {
                         if cache_is_complete {
@@ -5677,13 +5914,10 @@ async fn play_with_mpv(
             _ => {
                 // Non-ZIP archives (tar/rar): use extract path
                 let stream_info = archive_manager::build_archive_stream_info(&media)?;
-                let proxy = zip_stream_proxy::start_proxy(
-                    zip_stream_proxy::build_direct_link_proxy_spec(
-                        ddl_url,
-                        &stream_info,
-                        None,
-                    ),
-                )?;
+                let proxy = start_zip_proxy_blocking(
+                    zip_stream_proxy::build_direct_link_proxy_spec(ddl_url, &stream_info, None),
+                )
+                .await?;
                 (
                     zip_stream_proxy::localhost_stream_url(proxy.port),
                     None,
@@ -5721,8 +5955,9 @@ async fn play_with_mpv(
                     {
                         0 => {
                             let stream_info = archive_manager::build_archive_stream_info(&media)?;
-                            let drive_url =
-                                state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
+                            let drive_url = state
+                                .gdrive_client
+                                .build_stream_url(&stream_info.zip_file_id);
                             let (
                                 cache_spec,
                                 local_cache_path,
@@ -5764,12 +5999,13 @@ async fn play_with_mpv(
                                 }
                             };
                             let proxy =
-                                zip_stream_proxy::start_proxy(zip_stream_proxy::build_proxy_spec(
+                                start_zip_proxy_blocking(zip_stream_proxy::build_proxy_spec(
                                     drive_url,
                                     state.gdrive_client.clone(),
                                     &stream_info,
                                     cache_spec,
-                                ))?;
+                                ))
+                                .await?;
                             if let Some(local_path) = local_cache_path {
                                 if use_partial_cache_via_proxy {
                                     println!(
@@ -5866,7 +6102,11 @@ async fn play_with_mpv(
     };
 
     config::validate_executable_path(&mpv_path, "mpv")?;
-    let pipe_prefix = if is_dev_runtime() { "slasshyvault-mpv-dev" } else { "slasshyvault-mpv" };
+    let pipe_prefix = if is_dev_runtime() {
+        "slasshyvault-mpv-dev"
+    } else {
+        "slasshyvault-mpv"
+    };
     let mpv_audio_probe_pipe = if is_zip_media {
         Some(format!(
             r"\\.\pipe\{}-{}-{}",
@@ -5898,7 +6138,7 @@ async fn play_with_mpv(
 
     let display_title = build_mpv_display_title(&media);
 
-    let pid = mpv_ipc::launch_mpv_with_tracking(
+    let pid = match mpv_ipc::launch_mpv_with_tracking(
         &mpv_path_clone,
         &playback_url_clone,
         media_id,
@@ -5909,7 +6149,15 @@ async fn play_with_mpv(
         audio_language.as_deref(),
         subtitle_language.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
-    )?;
+    ) {
+        Ok(pid) => pid,
+        Err(error) => {
+            if let Some(proxy) = zip_proxy {
+                let _ = stop_zip_proxy_handle_blocking(proxy).await;
+            }
+            return Err(error);
+        }
+    };
 
     // Store the session
     {
@@ -5976,7 +6224,8 @@ async fn play_with_mpv(
             let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
 
             // Only mark as last_watched when actual playback progress was recorded
-            if result.final_position.is_some() && result.final_duration.is_some()
+            if result.final_position.is_some()
+                && result.final_duration.is_some()
                 && result.final_duration.unwrap_or(0.0) > 0.0
             {
                 let _ = db.update_last_watched(media_id);
@@ -6135,14 +6384,17 @@ async fn get_mpv_status(
 
             // If not running, remove from active sessions
             if !is_running {
-                let mut sessions = state
-                    .active_mpv_sessions
-                    .lock()
-                    .map_err(|e| e.to_string())?;
-                if let Some(mut session) = sessions.remove(&media_id) {
-                    if let Some(proxy) = session.zip_proxy.as_mut() {
-                        proxy.stop();
-                    }
+                let proxy = {
+                    let mut sessions = state
+                        .active_mpv_sessions
+                        .lock()
+                        .map_err(|e| e.to_string())?;
+                    sessions
+                        .remove(&media_id)
+                        .and_then(|mut s| s.zip_proxy.take())
+                };
+                if let Some(proxy) = proxy {
+                    let _ = stop_zip_proxy_handle_blocking(proxy).await;
                 }
             }
 
@@ -6165,25 +6417,37 @@ async fn get_mpv_status(
 // Get all active MPV sessions
 #[tauri::command]
 async fn get_active_mpv_sessions(state: State<'_, AppState>) -> Result<Vec<MpvSession>, String> {
-    let mut sessions = state
+    let proxies_to_stop = {
+        let mut sessions = state
+            .active_mpv_sessions
+            .lock()
+            .map_err(|e| e.to_string())?;
+
+        let mut to_remove = Vec::new();
+        for (media_id, session) in sessions.iter() {
+            if !mpv_ipc::is_mpv_running(session.session.pid) {
+                to_remove.push(*media_id);
+            }
+        }
+        let mut proxies = Vec::with_capacity(to_remove.len());
+        for id in to_remove {
+            if let Some(mut session) = sessions.remove(&id) {
+                if let Some(proxy) = session.zip_proxy.take() {
+                    proxies.push(proxy);
+                }
+            }
+        }
+        proxies
+    };
+
+    for proxy in proxies_to_stop {
+        let _ = stop_zip_proxy_handle_blocking(proxy).await;
+    }
+
+    let sessions = state
         .active_mpv_sessions
         .lock()
         .map_err(|e| e.to_string())?;
-
-    // Filter out dead sessions
-    let mut to_remove = Vec::new();
-    for (media_id, session) in sessions.iter() {
-        if !mpv_ipc::is_mpv_running(session.session.pid) {
-            to_remove.push(*media_id);
-        }
-    }
-    for id in to_remove {
-        if let Some(mut session) = sessions.remove(&id) {
-            if let Some(proxy) = session.zip_proxy.as_mut() {
-                proxy.stop();
-            }
-        }
-    }
 
     Ok(sessions
         .values()
@@ -7237,10 +7501,7 @@ fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>,
         return Err(format!("TVmaze returned HTTP {}", response.status()));
     }
 
-    response
-        .json::<T>()
-        .map(Some)
-        .map_err(|e| e.to_string())
+    response.json::<T>().map(Some).map_err(|e| e.to_string())
 }
 
 fn tvmaze_lookup_show_id_by_imdb(imdb_id: &str) -> Option<i64> {
@@ -7253,27 +7514,48 @@ fn tvmaze_lookup_show_id_by_imdb(imdb_id: &str) -> Option<i64> {
         id: i64,
     }
 
-    let url = format!("https://api.tvmaze.com/lookup/shows?imdb={}", imdb_id.trim());
-    tvmaze_get_json::<TvmazeShow>(&url).ok().flatten().map(|show| show.id)
+    let url = format!(
+        "https://api.tvmaze.com/lookup/shows?imdb={}",
+        imdb_id.trim()
+    );
+    tvmaze_get_json::<TvmazeShow>(&url)
+        .ok()
+        .flatten()
+        .map(|show| show.id)
 }
 
-fn apply_streaming_provider_heuristics(provider_name: Option<&str>, release_date_str: Option<&str>) -> Option<String> {
+fn apply_streaming_provider_heuristics(
+    provider_name: Option<&str>,
+    release_date_str: Option<&str>,
+) -> Option<String> {
     let provider = provider_name?.trim().to_ascii_lowercase();
     let date = NaiveDate::parse_from_str(release_date_str?, "%Y-%m-%d").ok()?;
-    
+
     let tz_pt: chrono_tz::Tz = "America/Los_Angeles".parse().unwrap();
     let tz_et: chrono_tz::Tz = "America/New_York".parse().unwrap();
-    
+
     if provider.contains("netflix") || provider.contains("disney") {
-        let pt_midnight = date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(tz_pt).single()?;
+        let pt_midnight = date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(tz_pt)
+            .single()?;
         return Some(pt_midnight.with_timezone(&Utc).to_rfc3339());
     } else if provider.contains("hulu") || provider.contains("apple") {
-        let et_midnight = date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(tz_et).single()?;
+        let et_midnight = date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(tz_et)
+            .single()?;
         return Some(et_midnight.with_timezone(&Utc).to_rfc3339());
     } else if provider.contains("amazon") || provider.contains("prime") {
         return Some(date.and_hms_opt(0, 0, 0).unwrap().and_utc().to_rfc3339());
     } else if provider.contains("max") || provider.contains("hbo") {
-        let et_9pm = date.and_hms_opt(21, 0, 0).unwrap().and_local_timezone(tz_et).single()?;
+        let et_9pm = date
+            .and_hms_opt(21, 0, 0)
+            .unwrap()
+            .and_local_timezone(tz_et)
+            .single()?;
         return Some(et_9pm.with_timezone(&Utc).to_rfc3339());
     } else if provider.contains("crunchyroll") {
         return Some(date.and_hms_opt(12, 0, 0).unwrap().and_utc().to_rfc3339());
@@ -7281,12 +7563,16 @@ fn apply_streaming_provider_heuristics(provider_name: Option<&str>, release_date
     None
 }
 
-fn tmdb_exact_episode_reminder_at_heuristics(tmdb_id: i64, release_date_str: Option<&str>, credential: &str) -> Option<String> {
+fn tmdb_exact_episode_reminder_at_heuristics(
+    tmdb_id: i64,
+    release_date_str: Option<&str>,
+    credential: &str,
+) -> Option<String> {
     #[derive(Deserialize)]
     struct ProviderInfo {
         provider_name: Option<String>,
     }
-    
+
     #[derive(Deserialize)]
     struct CountryProviders {
         flatrate: Option<Vec<ProviderInfo>>,
@@ -7310,15 +7596,16 @@ fn tmdb_exact_episode_reminder_at_heuristics(tmdb_id: i64, release_date_str: Opt
             for provider in flatrate {
                 if let Some(name) = &provider.provider_name {
                     let name_lower = name.to_ascii_lowercase();
-                    if name_lower.contains("netflix") || 
-                       name_lower.contains("disney") || 
-                       name_lower.contains("hulu") || 
-                       name_lower.contains("apple") || 
-                       name_lower.contains("amazon") || 
-                       name_lower.contains("prime") || 
-                       name_lower.contains("max") || 
-                       name_lower.contains("hbo") || 
-                       name_lower.contains("crunchyroll") {
+                    if name_lower.contains("netflix")
+                        || name_lower.contains("disney")
+                        || name_lower.contains("hulu")
+                        || name_lower.contains("apple")
+                        || name_lower.contains("amazon")
+                        || name_lower.contains("prime")
+                        || name_lower.contains("max")
+                        || name_lower.contains("hbo")
+                        || name_lower.contains("crunchyroll")
+                    {
                         found_provider = Some(name.clone());
                         break;
                     }
@@ -7374,16 +7661,24 @@ fn tvmaze_exact_episode_reminder_at(show_id: i64, season: i32, episode: i32) -> 
         "https://api.tvmaze.com/shows/{}/episodebynumber?season={}&number={}",
         show_id, season, episode
     );
-    let episode = tvmaze_get_json::<TvmazeEpisode>(&episode_url).ok().flatten()?;
+    let episode = tvmaze_get_json::<TvmazeEpisode>(&episode_url)
+        .ok()
+        .flatten()?;
 
     let provider_name = show.as_ref().and_then(|show| {
         show.network
             .as_ref()
             .and_then(|network| network.name.as_deref())
-            .or_else(|| show.web_channel.as_ref().and_then(|channel| channel.name.as_deref()))
+            .or_else(|| {
+                show.web_channel
+                    .as_ref()
+                    .and_then(|channel| channel.name.as_deref())
+            })
     });
 
-    if let Some(heuristic_time) = apply_streaming_provider_heuristics(provider_name, episode.airdate.as_deref()) {
+    if let Some(heuristic_time) =
+        apply_streaming_provider_heuristics(provider_name, episode.airdate.as_deref())
+    {
         return Some(heuristic_time);
     }
 
@@ -7396,26 +7691,27 @@ fn tvmaze_exact_episode_reminder_at(show_id: i64, season: i32, episode: i32) -> 
 
     if let Some(parsed_airstamp) = parsed_airstamp {
         let utc_time = parsed_airstamp.with_timezone(&Utc).time();
-        
+
         let is_noon_utc = utc_time.hour() == 12 && utc_time.minute() == 0 && utc_time.second() == 0;
-        let is_midnight_utc = utc_time.hour() == 0 && utc_time.minute() == 0 && utc_time.second() == 0;
-        
-        let timezone_name = show
-            .as_ref()
-            .and_then(|show| {
-                show.network
-                    .as_ref()
-                    .and_then(|network| network.country.as_ref())
-                    .and_then(|country| country.timezone.as_deref())
-                    .or_else(|| {
-                        show.web_channel
-                            .as_ref()
-                            .and_then(|channel| channel.country.as_ref())
-                            .and_then(|country| country.timezone.as_deref())
-                    })
-            });
-            
-        let is_global_or_unknown = timezone_name.map_or(true, |tz| tz.trim().is_empty() || tz.eq_ignore_ascii_case("global"));
+        let is_midnight_utc =
+            utc_time.hour() == 0 && utc_time.minute() == 0 && utc_time.second() == 0;
+
+        let timezone_name = show.as_ref().and_then(|show| {
+            show.network
+                .as_ref()
+                .and_then(|network| network.country.as_ref())
+                .and_then(|country| country.timezone.as_deref())
+                .or_else(|| {
+                    show.web_channel
+                        .as_ref()
+                        .and_then(|channel| channel.country.as_ref())
+                        .and_then(|country| country.timezone.as_deref())
+                })
+        });
+
+        let is_global_or_unknown = timezone_name.map_or(true, |tz| {
+            tz.trim().is_empty() || tz.eq_ignore_ascii_case("global")
+        });
 
         if !((is_noon_utc || is_midnight_utc) && is_global_or_unknown) {
             return Some(parsed_airstamp.with_timezone(&Utc).to_rfc3339());
@@ -7432,7 +7728,7 @@ fn tvmaze_exact_episode_reminder_at(show_id: i64, season: i32, episode: i32) -> 
                 .and_then(|schedule| schedule.time.as_deref())
                 .filter(|value| !value.trim().is_empty())
         });
-        
+
     let timezone_name = show
         .as_ref()
         .and_then(|show| {
@@ -7511,7 +7807,11 @@ fn enrich_tv_schedule_with_tvmaze(
         return;
     };
 
-    if let Some(tmdb_time) = tmdb_exact_episode_reminder_at_heuristics(tmdb_id, schedule.release_date.as_deref(), credential) {
+    if let Some(tmdb_time) = tmdb_exact_episode_reminder_at_heuristics(
+        tmdb_id,
+        schedule.release_date.as_deref(),
+        credential,
+    ) {
         schedule.suggested_reminder_at = Some(tmdb_time);
         schedule.source = "tmdb-heuristics".to_string();
         schedule.precision = "datetime".to_string();
@@ -7524,7 +7824,8 @@ fn enrich_tv_schedule_with_tvmaze(
     let Some(tvmaze_show_id) = tvmaze_lookup_show_id_by_imdb(&imdb_id) else {
         return;
     };
-    let Some(reminder_at) = tvmaze_exact_episode_reminder_at(tvmaze_show_id, season, episode) else {
+    let Some(reminder_at) = tvmaze_exact_episode_reminder_at(tvmaze_show_id, season, episode)
+    else {
         return;
     };
 
@@ -7861,11 +8162,17 @@ async fn get_tmdb_release_schedule(
             .unwrap_or_else(|| "Unknown show".to_string());
 
         let build_episode_schedule = |episode: RawAirEpisode, show_title: &str| {
-            let release_date = episode.air_date.clone().filter(|value| !value.trim().is_empty());
+            let release_date = episode
+                .air_date
+                .clone()
+                .filter(|value| !value.trim().is_empty());
             let suggested = suggested_reminder_at_from_release_date(release_date.as_deref());
             let episode_title = episode
                 .name
-                .filter(|name| !name.trim().is_empty() && name.to_lowercase() != format!("episode {}", episode.episode_number))
+                .filter(|name| {
+                    !name.trim().is_empty()
+                        && name.to_lowercase() != format!("episode {}", episode.episode_number)
+                })
                 .map(|name| format!("{} - {}", show_title, name))
                 .unwrap_or_else(|| {
                     format!(
@@ -7904,17 +8211,18 @@ async fn get_tmdb_release_schedule(
                 &credential,
                 "",
             );
-            let raw_season: RawSeasonSchedule = http_get_with_retry_auth(&season_url, &credential, 3)?
-                .json()
-                .map_err(|e| e.to_string())?;
-            
+            let raw_season: RawSeasonSchedule =
+                http_get_with_retry_auth(&season_url, &credential, 3)?
+                    .json()
+                    .map_err(|e| e.to_string())?;
+
             let mut episode_info = raw_season
                 .episodes
                 .unwrap_or_default()
                 .into_iter()
                 .find(|item| item.episode_number == episode)
                 .ok_or_else(|| "Episode not found on TMDB".to_string())?;
-            
+
             episode_info.season_number = Some(season);
             return Ok(build_episode_schedule(episode_info, &show_title));
         }
@@ -8034,56 +8342,77 @@ fn resolve_next_tv_season_reminder_target(
     let tracking_season = reminder
         .tracking_season_number
         .or(reminder.season_number)
-        .or_else(|| raw.next_episode_to_air.as_ref().and_then(|episode| episode.season_number));
-
-    let build_target =
-        |episode: RawAirEpisode, explicit_tracking_season: Option<i32>| -> Option<ReminderScheduleTarget> {
-            let release_date = episode.air_date.clone().filter(|value| !value.trim().is_empty());
-            let suggested = suggested_reminder_at_from_release_date(release_date.as_deref())?;
-            let (reminder_at, source) = if let Some(tmdb_time) = tmdb_exact_episode_reminder_at_heuristics(tmdb_id_num, release_date.as_deref(), credential) {
-                (tmdb_time, "tmdb-heuristics".to_string())
-            } else if let (Some(show_id), Some(season)) =
-                (tvmaze_show_id, episode.season_number)
-            {
-                match tvmaze_exact_episode_reminder_at(show_id, season, episode.episode_number) {
-                    Some(exact_time) => (exact_time, "tvmaze".to_string()),
-                    None => (suggested, "tmdb".to_string()),
-                }
-            } else {
-                (suggested, "tmdb".to_string())
-            };
-            let episode_label = episode
-                .name
+        .or_else(|| {
+            raw.next_episode_to_air
                 .as_ref()
-                .filter(|name| !name.trim().is_empty() && name.to_lowercase() != format!("episode {}", episode.episode_number))
-                .map(|name| format!("{} - {}", show_title, name))
-                .unwrap_or_else(|| match episode.season_number {
-                    Some(season) => format!("{} - S{:02}E{:02}", show_title, season, episode.episode_number),
-                    None => format!("{} - Episode {}", show_title, episode.episode_number),
-                });
+                .and_then(|episode| episode.season_number)
+        });
 
-            Some(ReminderScheduleTarget {
-                title: episode_label,
-                poster_path: poster_path.clone(),
-                season_number: episode.season_number,
-                episode_number: Some(episode.episode_number),
-                release_date,
-                reminder_at,
-                source,
-                tracking_season_number: explicit_tracking_season.or(episode.season_number),
-            })
+    let build_target = |episode: RawAirEpisode,
+                        explicit_tracking_season: Option<i32>|
+     -> Option<ReminderScheduleTarget> {
+        let release_date = episode
+            .air_date
+            .clone()
+            .filter(|value| !value.trim().is_empty());
+        let suggested = suggested_reminder_at_from_release_date(release_date.as_deref())?;
+        let (reminder_at, source) = if let Some(tmdb_time) =
+            tmdb_exact_episode_reminder_at_heuristics(
+                tmdb_id_num,
+                release_date.as_deref(),
+                credential,
+            ) {
+            (tmdb_time, "tmdb-heuristics".to_string())
+        } else if let (Some(show_id), Some(season)) = (tvmaze_show_id, episode.season_number) {
+            match tvmaze_exact_episode_reminder_at(show_id, season, episode.episode_number) {
+                Some(exact_time) => (exact_time, "tvmaze".to_string()),
+                None => (suggested, "tmdb".to_string()),
+            }
+        } else {
+            (suggested, "tmdb".to_string())
         };
+        let episode_label = episode
+            .name
+            .as_ref()
+            .filter(|name| {
+                !name.trim().is_empty()
+                    && name.to_lowercase() != format!("episode {}", episode.episode_number)
+            })
+            .map(|name| format!("{} - {}", show_title, name))
+            .unwrap_or_else(|| match episode.season_number {
+                Some(season) => format!(
+                    "{} - S{:02}E{:02}",
+                    show_title, season, episode.episode_number
+                ),
+                None => format!("{} - Episode {}", show_title, episode.episode_number),
+            });
+
+        Some(ReminderScheduleTarget {
+            title: episode_label,
+            poster_path: poster_path.clone(),
+            season_number: episode.season_number,
+            episode_number: Some(episode.episode_number),
+            release_date,
+            reminder_at,
+            source,
+            tracking_season_number: explicit_tracking_season.or(episode.season_number),
+        })
+    };
 
     if tracking_season.is_none() {
         if let Some(next_episode) = raw.next_episode_to_air.clone() {
             if is_release_date_in_future(next_episode.air_date.as_deref()) {
-                return Ok(build_target(next_episode.clone(), next_episode.season_number));
+                return Ok(build_target(
+                    next_episode.clone(),
+                    next_episode.season_number,
+                ));
             }
         }
 
         if is_release_date_in_future(raw.first_air_date.as_deref()) {
-            let reminder_at = suggested_reminder_at_from_release_date(raw.first_air_date.as_deref())
-                .ok_or_else(|| "Unable to derive premiere reminder time".to_string())?;
+            let reminder_at =
+                suggested_reminder_at_from_release_date(raw.first_air_date.as_deref())
+                    .ok_or_else(|| "Unable to derive premiere reminder time".to_string())?;
             return Ok(Some(ReminderScheduleTarget {
                 title: show_title,
                 poster_path,
@@ -8130,17 +8459,22 @@ fn resolve_next_tv_season_reminder_target(
         .filter_map(|episode| {
             let air_date = episode.air_date.clone()?;
             let target = suggested_reminder_at_from_release_date(Some(&air_date))?;
-            let parsed = DateTime::parse_from_rfc3339(&target).ok()?.with_timezone(&Utc);
+            let parsed = DateTime::parse_from_rfc3339(&target)
+                .ok()?
+                .with_timezone(&Utc);
             if parsed <= *now_utc {
                 return None;
             }
 
-            Some((air_date.clone(), RawAirEpisode {
-                name: episode.name,
-                air_date: Some(air_date),
-                season_number: Some(tracking_season),
-                episode_number: episode.episode_number,
-            }))
+            Some((
+                air_date.clone(),
+                RawAirEpisode {
+                    name: episode.name,
+                    air_date: Some(air_date),
+                    season_number: Some(tracking_season),
+                    episode_number: episode.episode_number,
+                },
+            ))
         })
         .min_by_key(|(air_date, _)| air_date.clone())
         .map(|(_, episode)| episode);
@@ -8821,16 +9155,16 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
 
     #[cfg(not(target_os = "windows"))]
     {
-    let mut notification = SystemNotification::new();
-    notification
-        .summary(summary)
-        .body(body)
-        .appname("SlasshyVault")
-        .timeout(notify_rust::Timeout::Milliseconds(5000));
+        let mut notification = SystemNotification::new();
+        notification
+            .summary(summary)
+            .body(body)
+            .appname("SlasshyVault")
+            .timeout(notify_rust::Timeout::Milliseconds(5000));
 
-    if let Err(err) = notification.show() {
-        println!("[NOTIFY] notify-rust failed: {}", err);
-    }
+        if let Err(err) = notification.show() {
+            println!("[NOTIFY] notify-rust failed: {}", err);
+        }
     }
 }
 
@@ -8934,7 +9268,8 @@ async fn run_watchlist_scheduler(app_handle: AppHandle) {
             if let Ok(db) = state.db.lock() {
                 let result = if item.notification_mode == "spam" {
                     let minutes = item.notification_interval_minutes.unwrap_or(30).max(1) as i64;
-                    let next_notify_at = (Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
+                    let next_notify_at =
+                        (Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
                     db.advance_watchlist_notification(item.id, &next_notify_at, &now_utc)
                 } else {
                     db.disable_watchlist_notification(item.id, &now_utc)
@@ -9007,11 +9342,14 @@ async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
                 let credential = {
                     let state = app_handle.state::<AppState>();
                     let resolved = match state.config.lock() {
-                        Ok(config) => {
-                            tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
-                        }
+                        Ok(config) => tmdb::get_tmdb_credential(
+                            &config.tmdb_api_key.clone().unwrap_or_default(),
+                        ),
                         Err(error) => {
-                            println!("[REMINDERS] Failed to lock config for reminder {}: {}", reminder.id, error);
+                            println!(
+                                "[REMINDERS] Failed to lock config for reminder {}: {}",
+                                reminder.id, error
+                            );
                             String::new()
                         }
                     };
@@ -9025,7 +9363,9 @@ async fn run_movie_reminder_scheduler(app_handle: AppHandle) {
                     tokio::task::spawn_blocking({
                         let reminder = reminder.clone();
                         let credential = credential.clone();
-                        move || resolve_next_tv_season_reminder_target(&reminder, &credential, &now_dt)
+                        move || {
+                            resolve_next_tv_season_reminder_target(&reminder, &credential, &now_dt)
+                        }
                     })
                     .await
                     .map_err(|e| e.to_string())
@@ -9153,7 +9493,7 @@ fn poster_asset_url(poster_path: Option<&String>) -> Option<String> {
     })
 }
 
-fn cleanup_expired_zip_streams(state: &AppState) {
+fn take_expired_zip_streams(state: &AppState) -> Vec<zip_stream_proxy::ZipStreamProxyHandle> {
     if let Ok(mut streams) = state.active_zip_streams.lock() {
         let stale_ids: Vec<i64> = streams
             .iter()
@@ -9166,20 +9506,29 @@ fn cleanup_expired_zip_streams(state: &AppState) {
             })
             .collect();
 
+        let mut proxies = Vec::with_capacity(stale_ids.len());
+
         for media_id in stale_ids {
-            if let Some(mut stream) = streams.remove(&media_id) {
-                stream.proxy.stop();
+            if let Some(stream) = streams.remove(&media_id) {
+                proxies.push(stream.proxy);
             }
         }
+
+        return proxies;
     }
+
+    Vec::new()
 }
 
-fn stop_zip_stream_proxy(state: &AppState, media_id: i64) {
+fn take_zip_stream_proxy(
+    state: &AppState,
+    media_id: i64,
+) -> Option<zip_stream_proxy::ZipStreamProxyHandle> {
     if let Ok(mut streams) = state.active_zip_streams.lock() {
-        if let Some(mut stream) = streams.remove(&media_id) {
-            stream.proxy.stop();
-        }
+        return streams.remove(&media_id).map(|stream| stream.proxy);
     }
+
+    None
 }
 
 fn build_zip_cache_config(config: &config::Config) -> zip_manager::ZipCacheConfig {
@@ -9332,25 +9681,36 @@ async fn build_zip_stream_url(
     if let Err(error) = zip_manager::cleanup_stale_zip_cache(&cache_config) {
         println!("[ZIP] Cache cleanup warning: {}", error);
     }
-    cleanup_expired_zip_streams(state);
-    stop_zip_stream_proxy(state, media_id);
+    let mut proxies_to_stop = take_expired_zip_streams(state);
+    if let Some(proxy) = take_zip_stream_proxy(state, media_id) {
+        proxies_to_stop.push(proxy);
+    }
+    for proxy in proxies_to_stop {
+        let _ = stop_zip_proxy_handle_blocking(proxy).await;
+    }
 
     let stream_info = archive_manager::build_archive_stream_info(media)?;
-    
+
     let is_ddl = media.ddl_source_id.is_some();
-    
+
     let drive_url = if is_ddl {
-        let ddl_source_id = media.ddl_source_id.as_deref()
+        let ddl_source_id = media
+            .ddl_source_id
+            .as_deref()
             .or(media.parent_zip_id.as_deref())
             .ok_or_else(|| "DDL media missing source ID".to_string())?;
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        let source = db.get_ddl_source(ddl_source_id).map_err(|e| e.to_string())?;
+        let source = db
+            .get_ddl_source(ddl_source_id)
+            .map_err(|e| e.to_string())?;
         if source.is_expired {
             return Err("Link expired. Please refresh the link with a new URL.".to_string());
         }
         source.url
     } else {
-        state.gdrive_client.build_stream_url(&stream_info.zip_file_id)
+        state
+            .gdrive_client
+            .build_stream_url(&stream_info.zip_file_id)
     };
     let proxy_cache_spec = match archive_manager::archive_format_for_media(media) {
         archive_manager::ArchiveFormat::Zip => {
@@ -9376,11 +9736,7 @@ async fn build_zip_stream_url(
         archive_manager::ArchiveFormat::Tar | archive_manager::ArchiveFormat::Rar => None,
     };
     let proxy_spec = if is_ddl {
-        zip_stream_proxy::build_direct_link_proxy_spec(
-            drive_url,
-            &stream_info,
-            proxy_cache_spec,
-        )
+        zip_stream_proxy::build_direct_link_proxy_spec(drive_url, &stream_info, proxy_cache_spec)
     } else {
         zip_stream_proxy::build_proxy_spec(
             drive_url,
@@ -9389,8 +9745,8 @@ async fn build_zip_stream_url(
             proxy_cache_spec,
         )
     };
-    
-    let proxy = zip_stream_proxy::start_proxy(proxy_spec)?;
+
+    let proxy = start_zip_proxy_blocking(proxy_spec).await?;
     let stream_url = zip_stream_proxy::localhost_stream_url(proxy.port);
 
     let mut streams = state.active_zip_streams.lock().map_err(|e| e.to_string())?;
@@ -9425,7 +9781,9 @@ async fn build_temporary_zip_stream_url(
 
         zip_stream_proxy::build_direct_link_proxy_spec(source.url, &stream_info, None)
     } else {
-        let drive_url = state.gdrive_client.build_stream_url(&stream_info.zip_file_id);
+        let drive_url = state
+            .gdrive_client
+            .build_stream_url(&stream_info.zip_file_id);
         zip_stream_proxy::build_proxy_spec(
             drive_url,
             state.gdrive_client.clone(),
@@ -9434,7 +9792,7 @@ async fn build_temporary_zip_stream_url(
         )
     };
 
-    let proxy = zip_stream_proxy::start_proxy(proxy_spec)?;
+    let proxy = start_zip_proxy_blocking(proxy_spec).await?;
 
     Ok((zip_stream_proxy::localhost_stream_url(proxy.port), proxy))
 }
@@ -11603,7 +11961,10 @@ fn compute_partial_hash(file_path: &str) -> Option<String> {
 }
 
 /// Augment a media match key with a partial file hash if a local file path is available.
-fn augment_match_key_with_phash(media_match_key: Option<String>, file_path: Option<&str>) -> Option<String> {
+fn augment_match_key_with_phash(
+    media_match_key: Option<String>,
+    file_path: Option<&str>,
+) -> Option<String> {
     let path = file_path?;
     if path.is_empty() {
         return media_match_key;
@@ -11691,7 +12052,11 @@ async fn wt_create_room(
                 });
             }
             // Show OSD messages directly inside MPV (like Syncplay)
-            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+            if let watch_together::WatchEvent::ShowOsd {
+                message,
+                duration_ms,
+            } = &event
+            {
                 let msg = message.clone();
                 let dur = *duration_ms;
                 let ctrl = wt_ctrl.clone();
@@ -11785,7 +12150,11 @@ async fn wt_join_room(
                 });
             }
             // Show OSD messages directly inside MPV (like Syncplay)
-            if let watch_together::WatchEvent::ShowOsd { message, duration_ms } = &event {
+            if let watch_together::WatchEvent::ShowOsd {
+                message,
+                duration_ms,
+            } = &event
+            {
                 let msg = message.clone();
                 let dur = *duration_ms;
                 let ctrl = wt_ctrl.clone();
@@ -12235,16 +12604,14 @@ async fn ddl_index_archive(
     url: String,
     validation: direct_link_manager::DdlValidationResult,
 ) -> Result<direct_link_manager::DdlSource, String> {
-    let emit_ddl_progress = |
-        stage: &str,
-        message: String,
-        filename: Option<String>,
-        current: Option<usize>,
-        total: Option<usize>,
-        season: Option<i32>,
-        episode: Option<i32>,
-        episode_title: Option<String>,
-    | {
+    let emit_ddl_progress = |stage: &str,
+                             message: String,
+                             filename: Option<String>,
+                             current: Option<usize>,
+                             total: Option<usize>,
+                             season: Option<i32>,
+                             episode: Option<i32>,
+                             episode_title: Option<String>| {
         let _ = window.emit(
             "ddl-index-progress",
             DdlIndexProgressPayload {
@@ -12271,11 +12638,10 @@ async fn ddl_index_archive(
         None,
     );
 
-    let result = tokio::task::spawn_blocking(move || {
-        direct_link_manager::index_archive(&url, &validation)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tokio::task::spawn_blocking(move || direct_link_manager::index_archive(&url, &validation))
+            .await
+            .map_err(|e| e.to_string())??;
 
     // Get config for TMDB API key and image cache dir
     let (api_key, image_cache_dir) = {
@@ -12313,7 +12679,11 @@ async fn ddl_index_archive(
         format!(
             "Found {} playable entr{}.",
             result.entries.len(),
-            if result.entries.len() == 1 { "y" } else { "ies" }
+            if result.entries.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
         ),
         Some(result.source.filename.clone()),
         Some(0),
@@ -12385,7 +12755,8 @@ async fn ddl_index_archive(
                     )
                 })
                 .await
-                .map_err(|e| e.to_string())? {
+                .map_err(|e| e.to_string())?
+                {
                     Ok(Some(meta)) => {
                         matched = Some((candidate.clone(), meta));
                         break;
@@ -12430,11 +12801,8 @@ async fn ddl_index_archive(
         // Pre-fetch episode metadata from TMDB
         if let Some(ref tid) = tmdb_id {
             // Get all unique seasons
-            let seasons: std::collections::HashSet<i32> = result
-                .entries
-                .iter()
-                .filter_map(|e| e.season)
-                .collect();
+            let seasons: std::collections::HashSet<i32> =
+                result.entries.iter().filter_map(|e| e.season).collect();
             for season_num in seasons {
                 let season_episode_total = result
                     .entries
@@ -12465,7 +12833,8 @@ async fn ddl_index_archive(
                     )
                 })
                 .await
-                .map_err(|e| e.to_string())? {
+                .map_err(|e| e.to_string())?
+                {
                     Ok(season_info) => {
                         // Cache all episode metadata for later lookup
                         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -12482,10 +12851,7 @@ async fn ddl_index_archive(
                         }
                         emit_ddl_progress(
                             "fetching-episode-metadata",
-                            format!(
-                                "Cached metadata for Season {}.",
-                                season_num
-                            ),
+                            format!("Cached metadata for Season {}.", season_num),
                             Some(result.source.filename.clone()),
                             Some(season_episode_total),
                             Some(season_episode_total),
@@ -12502,9 +12868,7 @@ async fn ddl_index_archive(
                     Err(err) => {
                         println!(
                             "[DDL] Failed to fetch season metadata for '{}' S{:02}: {}",
-                            title,
-                            season_num,
-                            err
+                            title, season_num, err
                         );
                     }
                 }
@@ -12538,10 +12902,14 @@ async fn ddl_index_archive(
         } else {
             entry.title.clone()
         };
-        let season = entry.season.or(if parent_id.is_some() { Some(1) } else { None });
-        let episode = entry
-            .episode
-            .or(if parent_id.is_some() { Some((idx + 1) as i32) } else { None });
+        let season = entry
+            .season
+            .or(if parent_id.is_some() { Some(1) } else { None });
+        let episode = entry.episode.or(if parent_id.is_some() {
+            Some((idx + 1) as i32)
+        } else {
+            None
+        });
 
         // Fetch episode-specific metadata from TMDB cache
         let (ep_title, ep_overview, ep_still) = if let Some((_, Some(ref tmdb_id))) = parent_id {
@@ -12596,7 +12964,7 @@ async fn ddl_index_archive(
                     entry.title.clone()
                 }
             };
-            
+
             println!("[DDL] Searching TMDB for movie: {}", movie_title);
             let api_key = api_key.clone();
             let movie_title_for_search = movie_title.clone();
@@ -12611,17 +12979,24 @@ async fn ddl_index_archive(
                 )
             })
             .await
-            .map_err(|e| e.to_string())? {
+            .map_err(|e| e.to_string())?
+            {
                 Ok(Some(meta)) => {
                     let db = state.db.lock().map_err(|e| e.to_string())?;
                     let _ = db.update_metadata(inserted_id, &meta);
-                    println!("[DDL] Enriched movie '{}' with TMDB metadata (Poster: {:?})", movie_title, meta.poster_path);
+                    println!(
+                        "[DDL] Enriched movie '{}' with TMDB metadata (Poster: {:?})",
+                        movie_title, meta.poster_path
+                    );
                 }
                 Ok(None) => {
                     println!("[DDL] No TMDB movie match for '{}'", movie_title);
                 }
                 Err(err) => {
-                    println!("[DDL] TMDB movie search failed for '{}': {}", movie_title, err);
+                    println!(
+                        "[DDL] TMDB movie search failed for '{}': {}",
+                        movie_title, err
+                    );
                 }
             }
         }
@@ -12635,7 +13010,15 @@ async fn ddl_index_archive(
 
     emit_ddl_progress(
         "completed",
-        format!("Added {} entr{} successfully.", result.entries.len(), if result.entries.len() == 1 { "y" } else { "ies" }),
+        format!(
+            "Added {} entr{} successfully.",
+            result.entries.len(),
+            if result.entries.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
+        ),
         Some(result.source.filename.clone()),
         Some(result.entries.len()),
         Some(result.entries.len()),
@@ -12696,8 +13079,7 @@ async fn ddl_refresh_link(
 ) -> Result<direct_link_manager::DdlRefreshResult, String> {
     let source = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.get_ddl_source(&source_id)
-            .map_err(|e| e.to_string())?
+        db.get_ddl_source(&source_id).map_err(|e| e.to_string())?
     };
 
     let url_for_verify = new_url.clone();
@@ -12718,10 +13100,7 @@ async fn ddl_refresh_link(
 }
 
 #[tauri::command]
-fn ddl_delete_source(
-    state: tauri::State<'_, AppState>,
-    source_id: String,
-) -> Result<(), String> {
+fn ddl_delete_source(state: tauri::State<'_, AppState>, source_id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.delete_ddl_source_and_media(&source_id)
         .map_err(|e| e.to_string())?;
@@ -12763,7 +13142,10 @@ fn get_new_app_data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(database::get_app_data_dir().to_string_lossy().as_ref())
 }
 
-fn copy_dir_all(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+fn copy_dir_all(
+    src: impl AsRef<std::path::Path>,
+    dst: impl AsRef<std::path::Path>,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(&dst)?;
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
@@ -12785,7 +13167,10 @@ fn migrate_app_data() {
 
     // If old dir doesn't exist, nothing to migrate (fresh install or already migrated)
     if !old_dir.exists() {
-        println!("[MIGRATE] Old data directory {:?} does not exist, no migration needed", old_dir);
+        println!(
+            "[MIGRATE] Old data directory {:?} does not exist, no migration needed",
+            old_dir
+        );
         return;
     }
 
@@ -12801,7 +13186,10 @@ fn migrate_app_data() {
         }
     }
 
-    println!("[MIGRATE] Migrating app data from {:?} to {:?}", old_dir, new_dir);
+    println!(
+        "[MIGRATE] Migrating app data from {:?} to {:?}",
+        old_dir, new_dir
+    );
 
     match copy_dir_all(&old_dir, &new_dir) {
         Ok(_) => {
@@ -12815,7 +13203,10 @@ fn migrate_app_data() {
                         let _ = _db.set_setting("migration_completed", "true");
                     }
                     Err(e) => {
-                        println!("[MIGRATE] Warning: Database verification failed: {}. Rolling back.", e);
+                        println!(
+                            "[MIGRATE] Warning: Database verification failed: {}. Rolling back.",
+                            e
+                        );
                         let _ = std::fs::remove_dir_all(&new_dir);
                     }
                 }
@@ -12864,15 +13255,22 @@ fn main() {
 
     // Ensure directories exist
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| println!("[INIT] Warning: Failed to create db parent dir: {}", e)).ok();
+        std::fs::create_dir_all(parent)
+            .map_err(|e| println!("[INIT] Warning: Failed to create db parent dir: {}", e))
+            .ok();
     }
-    std::fs::create_dir_all(&image_cache_dir).map_err(|e| println!("[INIT] Warning: Failed to create image cache dir: {}", e)).ok();
+    std::fs::create_dir_all(&image_cache_dir)
+        .map_err(|e| println!("[INIT] Warning: Failed to create image cache dir: {}", e))
+        .ok();
 
     // Initialize database with auto-healing on corruption
     let db = match database::Database::new(&db_path) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("[DB] Failed to open database: {}. Attempting auto-recovery...", e);
+            eprintln!(
+                "[DB] Failed to open database: {}. Attempting auto-recovery...",
+                e
+            );
 
             let backup_path = format!("{}.corrupted", db_path);
 
@@ -12891,7 +13289,10 @@ fn main() {
                     }
                 }
             } else {
-                panic!("Failed to initialize database and could not back up corrupted file: {}", e);
+                panic!(
+                    "Failed to initialize database and could not back up corrupted file: {}",
+                    e
+                );
             }
         }
     };
@@ -12900,7 +13301,10 @@ fn main() {
     let config = match config::load_config() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[CONFIG] Failed to load config: {}. Falling back to defaults.", e);
+            eprintln!(
+                "[CONFIG] Failed to load config: {}. Falling back to defaults.",
+                e
+            );
             config::Config::default()
         }
     };
@@ -12918,6 +13322,7 @@ fn main() {
             watch_together::WatchTogetherManager::new(),
         )),
         wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
+        oauth_listener: Arc::new(Mutex::new(None)),
     };
 
     // Create system tray menu
@@ -13221,6 +13626,8 @@ fn main() {
             get_config,
             save_config,
             auto_detect_mpv,
+            download_bundled_mpv,
+            get_bundled_mpv_info,
             get_scan_status,
             get_resume_info,
             get_media_info,
@@ -13312,6 +13719,9 @@ fn main() {
             download_update,
             install_update,
             get_app_version,
+            // Developer console commands
+            get_recent_logs,
+            clear_logs,
             // Watch Together commands
             wt_create_room,
             wt_join_room,
