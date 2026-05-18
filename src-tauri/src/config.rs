@@ -6,17 +6,20 @@ use std::process::Command;
 
 use crate::database::{get_app_data_dir, get_config_path};
 
-/// Filename for the bundled MPV executable
-const BUNDLED_MPV_FILENAME: &str = "slasshyvault-mpv.exe";
+/// Filename for the bundled MPV RAR archive in the repo
+const BUNDLED_MPV_RAR_FILENAME: &str = "slasshyvault-mpv.rar";
+
+/// Name of the temporary downloaded RAR file
+const BUNDLED_MPV_RAR_TEMP_NAME: &str = "slasshyvault-mpv.rar";
 
 /// GitHub repository slug and branch
 const GITHUB_REPO: &str = "SlasshyOverhere/SlasshyVault";
 const GITHUB_BRANCH: &str = "main";
 
-/// Relative path to the bundled MPV binary in the repo
-const BUNDLED_MPV_REPO_PATH: &str = "mpv-player/slasshyvault-mpv.exe";
+/// Relative path to the bundled MPV archive in the repo
+const BUNDLED_MPV_REPO_PATH: &str = "mpv-player/slasshyvault-mpv.rar";
 
-/// Returns the raw download URL for the bundled MPV from the GitHub repo
+/// Returns the raw download URL for the bundled MPV archive from the GitHub repo
 pub fn get_bundled_mpv_download_url() -> String {
     format!(
         "https://raw.githubusercontent.com/{}/{}/{}",
@@ -24,28 +27,60 @@ pub fn get_bundled_mpv_download_url() -> String {
     )
 }
 
-/// Returns the directory where bundled MPV is stored in app data
+/// Returns the directory where bundled MPV is stored/extracted in app data
 pub fn get_bundled_mpv_dir() -> PathBuf {
     get_app_data_dir().join("mpv_bundled")
 }
 
-/// Returns the full path to the bundled MPV executable in app data
-pub fn get_bundled_mpv_path() -> PathBuf {
-    get_bundled_mpv_dir().join(BUNDLED_MPV_FILENAME)
+/// Returns the temp path for the downloaded RAR file before extraction
+pub fn get_bundled_mpv_rar_temp_path() -> PathBuf {
+    get_bundled_mpv_dir().join(BUNDLED_MPV_RAR_TEMP_NAME)
 }
 
-/// Check if bundled MPV executable exists in app data
+/// Search for mpv.exe inside the extracted bundled directory (recursive)
+pub fn get_bundled_mpv_path() -> PathBuf {
+    let dir = get_bundled_mpv_dir();
+    if !dir.exists() {
+        return dir.join("mpv.exe");
+    }
+    find_mpv_recursive(&dir).unwrap_or_else(|| dir.join("mpv.exe"))
+}
+
+fn find_mpv_recursive(dir: &Path) -> Option<PathBuf> {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find_mpv_recursive(&path) {
+                    return Some(found);
+                }
+            } else if path.is_file() {
+                let name = path.file_stem()?.to_str()?;
+                if name.eq_ignore_ascii_case("mpv") || name.eq_ignore_ascii_case("slasshyvault-mpv") {
+                    // Also verify extension
+                    let ext = path.extension()?.to_str()?;
+                    if ext.eq_ignore_ascii_case("exe") {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if bundled MPV executable exists in app data (after extraction)
 pub fn bundled_mpv_exists() -> bool {
     get_bundled_mpv_path().exists()
 }
 
-/// Remove the installed bundled MPV (for reinstallation)
+/// Remove the entire installed bundled MPV directory (for reinstallation)
 pub fn remove_bundled_mpv() -> Result<(), String> {
-    let path = get_bundled_mpv_path();
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Failed to remove bundled MPV: {}", e))?;
-        println!("[MPV-BUNDLED] Removed bundled MPV at {:?}", path);
+    let dir = get_bundled_mpv_dir();
+    if dir.exists() {
+        fs::remove_dir_all(&dir)
+            .map_err(|e| format!("Failed to remove bundled MPV directory: {}", e))?;
+        println!("[MPV-BUNDLED] Removed bundled MPV directory {:?}", dir);
     }
     Ok(())
 }

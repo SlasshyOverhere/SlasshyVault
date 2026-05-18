@@ -3425,7 +3425,7 @@ async fn get_bundled_mpv_info() -> BundledMpvInfo {
     }
 }
 
-// Download bundled MPV from GitHub repo and save to app data
+// Download bundled MPV RAR from GitHub repo, extract it, and set the path
 #[tauri::command]
 async fn download_bundled_mpv(
     window: Window,
@@ -3435,7 +3435,7 @@ async fn download_bundled_mpv(
     use futures_util::StreamExt;
 
     let url = config::get_bundled_mpv_download_url();
-    println!("[MPV-BUNDLED] Downloading MPV from: {}", url);
+    println!("[MPV-BUNDLED] Downloading MPV archive from: {}", url);
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
@@ -3461,7 +3461,7 @@ async fn download_bundled_mpv(
     let total_size = response.content_length().unwrap_or(0);
     println!("[MPV-BUNDLED] File size: {} bytes", total_size);
 
-    // Remove any existing bundled MPV before writing new one
+    // Remove existing bundled MPV before writing new one
     let _ = config::remove_bundled_mpv();
 
     // Ensure the bundled MPV directory exists
@@ -3469,19 +3469,16 @@ async fn download_bundled_mpv(
     std::fs::create_dir_all(&mpv_dir)
         .map_err(|e| format!("Failed to create bundled MPV directory: {}", e))?;
 
-    let file_path = config::get_bundled_mpv_path();
-    let mut file = std::fs::File::create(&file_path)
-        .map_err(|e| format!("Failed to create bundled MPV file: {}", e))?;
+    // Download to a temp RAR file
+    let rar_path = config::get_bundled_mpv_rar_temp_path();
+    let mut file = std::fs::File::create(&rar_path)
+        .map_err(|e| format!("Failed to create temp RAR file: {}", e))?;
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| {
-            format!("Download error: {}", e)
-        })?;
-        file.write_all(&chunk).map_err(|e| {
-            format!("Write error: {}", e)
-        })?;
+        let chunk = chunk_result.map_err(|e| format!("Download error: {}", e))?;
+        file.write_all(&chunk).map_err(|e| format!("Write error: {}", e))?;
         downloaded += chunk.len() as u64;
 
         if total_size > 0 {
@@ -3499,11 +3496,37 @@ async fn download_bundled_mpv(
         }
     }
 
-    println!("[MPV-BUNDLED] Download complete: {:?}", file_path);
-    println!("[MPV-BUNDLED] Final size: {} bytes", downloaded);
+    println!("[MPV-BUNDLED] Download complete: {:?}", rar_path);
+    println!("[MPV-BUNDLED] Extracting RAR archive...");
+
+    // Extract the RAR using unrar crate
+    let rar_path_str = rar_path.to_string_lossy().to_string();
+    let extract_dest = mpv_dir.to_string_lossy().to_string();
+
+    let result = tokio::task::spawn_blocking(move || {
+        extract_rar_to_dir(&rar_path_str, &extract_dest)
+    })
+    .await
+    .map_err(|e| format!("Extraction task failed: {}", e))?
+    .map_err(|e| format!("Failed to extract MPV archive: {}", e))?;
+
+    // Clean up the RAR file after extraction
+    let _ = std::fs::remove_file(&rar_path);
+
+    println!("[MPV-BUNDLED] Extraction complete. Finding mpv.exe...");
+
+    // Find the extracted mpv.exe
+    let mpv_path = config::get_bundled_mpv_path();
+    if !mpv_path.exists() {
+        return Err(format!(
+            "Extraction completed but mpv.exe was not found inside the archive."
+        ));
+    }
+
+    let path_str = mpv_path.to_string_lossy().to_string();
+    println!("[MPV-BUNDLED] Found MPV at: {}", path_str);
 
     // Save to config
-    let path_str = file_path.to_string_lossy().to_string();
     {
         let mut config = state.config.lock().map_err(|e| e.to_string())?;
         config.mpv_path = Some(path_str.clone());
@@ -3511,6 +3534,44 @@ async fn download_bundled_mpv(
     }
 
     Ok(path_str)
+}
+
+/// Extract a RAR archive to a destination directory using the unrar crate
+fn extract_rar_to_dir(rar_path: &str, dest_dir: &str) -> Result<(), String> {
+    use std::path::Path;
+    use unrar::Archive as RarArchive;
+
+    let dest = Path::new(dest_dir);
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create extraction directory: {}", e))?;
+
+    let mut archive = RarArchive::new(rar_path)
+        .open_for_processing()
+        .map_err(|e| format!("Failed to open RAR archive: {}", e))?;
+
+    while let Some(header) = archive.read_header().map_err(|e| e.to_string())? {
+        let entry_path = header.entry().filename.to_string_lossy().to_string();
+        let sanitized = entry_path
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_string();
+
+        let output_path = dest.join(&sanitized);
+
+        if header.entry().is_directory() {
+            std::fs::create_dir_all(&output_path)
+                .map_err(|e| format!("Failed to create directory '{}': {}", sanitized, e))?;
+            archive = header.skip().map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dir for '{}': {}", sanitized, e))?;
+            }
+            archive = header.extract_to(&output_path).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 // Get configuration

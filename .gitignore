@@ -103,5 +103,4 @@ FRONTEND_REMINDER_*.md
 # Vendor docs (not source)
 src-tauri/vendor/rar-stream/*.md
 
-# Bundled MPV binary (tracked via Git LFS)
-# mpv-player/slasshyvault-mpv.exe
+# Bundled MPV tracked via Git LFS
