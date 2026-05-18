@@ -2016,7 +2016,7 @@ wss.on('connection', (ws, req) => {
         }
 
         const newCode = await generateUniqueRoomCode();
-        const hostId = authenticatedGoogleId || uuidv4();
+        const hostId = authenticatedGoogleId || message.client_id || uuidv4();
         const now = Date.now();
         const room = {
           code: newCode,
