@@ -7,7 +7,7 @@ It indexes video content from Google Drive, enriches it with TMDB metadata, and 
 
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.43-white?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.44-white?style=flat-square)
 
 ## What SlasshyVault Does
 
@@ -41,7 +41,11 @@ If SlasshyVault detects a `.tar` file, it informs the user in the UI and explain
 
 ## Playback
 
-Playback is powered by MPV.
+Playback is powered by [MPV](https://mpv.io/).
+
+SlasshyVault bundles a pre-built MPV binary for hassle-free installation — you don't need to install MPV separately. The bundled binary is downloaded from the official MPV project on first launch.
+
+> **Acknowledgments:** MPV is released under GPLv2. All rights and credits for MPV belong to the [mpv project](https://mpv.io/) and its contributors. SlasshyVault is not affiliated with or endorsed by the MPV team.
 
 - Native playback for common video formats
 - Resume from previous progress

@@ -5,7 +5,6 @@ import {
   saveConfig,
   autoDetectMpv,
   getBundledMpvInfo,
-  downloadBundledMpv,
 } from '@/services/api'
 
 
