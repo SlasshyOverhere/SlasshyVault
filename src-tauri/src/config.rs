@@ -9,18 +9,18 @@ use crate::database::{get_app_data_dir, get_config_path};
 /// Filename for the bundled MPV executable
 const BUNDLED_MPV_FILENAME: &str = "slasshyvault-mpv.exe";
 
-/// GitHub repository slug
+/// GitHub repository slug and branch
 const GITHUB_REPO: &str = "SlasshyOverhere/SlasshyVault";
+const GITHUB_BRANCH: &str = "main";
 
-/// GitHub release asset name for the bundled MPV binary
-const BUNDLED_MPV_ASSET_NAME: &str = "slasshyvault-mpv.exe";
+/// Relative path to the bundled MPV binary in the repo
+const BUNDLED_MPV_REPO_PATH: &str = "mpv-player/slasshyvault-mpv.exe";
 
-/// Returns the download URL for the bundled MPV from GitHub Releases
-/// (Release assets support up to 2GB, unlike the 100MB repo limit)
+/// Returns the raw download URL for the bundled MPV from the GitHub repo
 pub fn get_bundled_mpv_download_url() -> String {
     format!(
-        "https://github.com/{}/releases/latest/download/{}",
-        GITHUB_REPO, BUNDLED_MPV_ASSET_NAME
+        "https://raw.githubusercontent.com/{}/{}/{}",
+        GITHUB_REPO, GITHUB_BRANCH, BUNDLED_MPV_REPO_PATH
     )
 }
 
