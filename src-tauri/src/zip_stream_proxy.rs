@@ -15,10 +15,10 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime};
 
 const TURBO_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
-const TURBO_PREWARM_BYTES: u64 = 1 * 1024 * 1024;
+const TURBO_PREWARM_BYTES: u64 = 1024 * 1024;
 const TURBO_PREFETCH_WINDOW_BYTES: u64 = 32 * 1024 * 1024;
 const TURBO_HOT_CACHE_BYTES: u64 = 500 * 1024 * 1024;
-const TURBO_MIN_CONNECTIONS: usize = 2;
+const TURBO_MIN_CONNECTIONS: usize = 3;
 const TURBO_MAX_CONNECTIONS: usize = 8;
 const TURBO_FETCH_RETRIES: usize = 3;
 const TURBO_FETCH_TIMEOUT_SECS: u64 = 20;
@@ -132,6 +132,8 @@ struct TurboStreamReader {
     current_chunk: Option<Arc<Vec<u8>>>,
 }
 
+type RequestFailure = Box<(Option<tiny_http::Request>, String)>;
+
 impl TurboStreamReader {
     fn new(turbo: TurboProxyState, relative_start: u64, relative_end: u64) -> Self {
         let start_chunk = relative_start / TURBO_CHUNK_BYTES;
@@ -233,7 +235,7 @@ impl TurboProxyState {
                 }
             }));
             if let Err(panic_err) = result {
-                println!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
+                eprintln!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
             }
         });
     }
@@ -344,7 +346,7 @@ impl TurboProxyState {
                     turbo.fetch_chunk_worker(next_chunk);
                 }));
                 if let Err(panic_err) = result {
-                    println!("[ZIP PROXY] Fetch worker panicked: {:?}", panic_err);
+                    eprintln!("[ZIP PROXY] Fetch worker panicked: {:?}", panic_err);
                 }
             });
 
@@ -360,7 +362,7 @@ impl TurboProxyState {
         let mut inner = match lock.lock() {
             Ok(inner) => inner,
             Err(error) => {
-                println!("[ZIP PROXY] Failed to lock turbo cache state: {}", error);
+                eprintln!("[ZIP PROXY] Failed to lock turbo cache state: {}", error);
                 return;
             }
         };
@@ -375,7 +377,7 @@ impl TurboProxyState {
                 let bytes = Arc::new(bytes);
                 inner.insert_hot(chunk_index, bytes.clone(), self.hot_limit_bytes);
                 if let Err(error) = self.persist_contiguous_chunks_locked(&mut inner) {
-                    println!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
+                    eprintln!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
                 }
             }
             Err(error) => {
@@ -535,7 +537,7 @@ impl TurboProxyState {
                 &self.cache_spec.cache_paths,
                 &self.cache_spec.cache_config,
             ) {
-                println!("[ZIP CACHE] Failed to finalize turbo cache target: {:?}", error);
+                eprintln!("[ZIP PROXY] Failed to finalize turbo cache target: {:?}", error);
             }
         }
 
@@ -545,7 +547,7 @@ impl TurboProxyState {
 
     fn is_chunk_on_disk(&self, contiguous_prefix_bytes: u64, chunk_index: u64) -> bool {
         let (chunk_start, chunk_end) = self.chunk_relative_bounds(chunk_index);
-        contiguous_prefix_bytes > chunk_start && contiguous_prefix_bytes >= chunk_end + 1
+        contiguous_prefix_bytes > chunk_start && contiguous_prefix_bytes > chunk_end
     }
 
     fn read_chunk_from_disk(&self, chunk_index: u64) -> Result<Vec<u8>, String> {
@@ -667,7 +669,7 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
             {
                 Ok(client) => client,
                 Err(error) => {
-                    println!("[ZIP PROXY] Failed to build HTTP client: {}", error);
+                    eprintln!("[ZIP PROXY] Failed to build HTTP client: {}", error);
                     return;
                 }
             };
@@ -682,7 +684,7 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
                     Ok(Some(request)) => request,
                     Ok(None) => continue,
                     Err(error) => {
-                        println!("[ZIP PROXY] Server receive error: {}", error);
+                        eprintln!("[ZIP PROXY] Server receive error: {}", error);
                         break;
                     }
                 };
@@ -701,7 +703,16 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
                         let auth_runtime = match build_auth_runtime(&spec_for_request.auth) {
                             Ok(runtime) => runtime,
                             Err(error) => {
-                                println!("[ZIP PROXY] Failed to build auth runtime: {}", error);
+                                eprintln!("[ZIP PROXY] Failed to build auth runtime: {}", error);
+                                if let Err(response_error) = respond_with_internal_error(
+                                    request,
+                                    "Failed to build auth runtime",
+                                ) {
+                                    eprintln!(
+                                        "[ZIP PROXY] Failed to send 500 response: {}",
+                                        response_error
+                                    );
+                                }
                                 return;
                             }
                         };
@@ -713,17 +724,29 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
                             &auth_runtime,
                             turbo_for_request.as_ref(),
                         ) {
-                            println!("[ZIP PROXY] Request failed: {}", error);
+                            let (request, error) = *error;
+                            eprintln!("[ZIP PROXY] Request failed: {}", error);
+                            if let Some(request) = request {
+                                if let Err(response_error) = respond_with_internal_error(
+                                    request,
+                                    "ZIP proxy request failed",
+                                ) {
+                                    eprintln!(
+                                        "[ZIP PROXY] Failed to send 500 response: {}",
+                                        response_error
+                                    );
+                                }
+                            }
                         }
                     }));
                     if let Err(panic_err) = result {
-                        println!("[ZIP PROXY] Request handler panicked: {:?}", panic_err);
+                        eprintln!("[ZIP PROXY] Request handler panicked: {:?}", panic_err);
                     }
                 });
             }
         }));
         if let Err(panic_err) = result {
-            println!("[ZIP PROXY] Server thread panicked: {:?}", panic_err);
+            eprintln!("[ZIP PROXY] Server thread panicked: {:?}", panic_err);
         }
     });
 
@@ -742,21 +765,31 @@ fn handle_request(
     spec: &ProxyStreamSpec,
     auth_runtime: &Option<TokioRuntime>,
     turbo_state: Option<&TurboProxyState>,
-) -> Result<(), String> {
+) -> Result<(), RequestFailure> {
     let started_at = Instant::now();
-    if request.url() != "/stream" {
+    let mut request = Some(request);
+
+    if request.as_ref().map(|request| request.url()) != Some("/stream") {
         request
+            .take()
+            .expect("request should be present before responding")
             .respond(Response::from_string("Not Found").with_status_code(StatusCode(404)))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| (None, e.to_string()))?;
         return Ok(());
     }
 
-    match request.method() {
+    match request
+        .as_ref()
+        .expect("request should be present while handling method")
+        .method()
+    {
         Method::Get | Method::Head => {}
         _ => {
             request
+                .take()
+                .expect("request should be present before responding")
                 .respond(Response::empty(StatusCode(405)))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| (None, e.to_string()))?;
             return Ok(());
         }
     }
@@ -765,17 +798,32 @@ fn handle_request(
         .byte_end
         .checked_sub(spec.byte_start)
         .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| "Invalid ZIP byte range".to_string())?;
+        .ok_or_else(|| {
+            (
+                request.take(),
+                "Invalid ZIP byte range".to_string(),
+            )
+        })?;
 
-    let requested_range = match extract_range_header(&request, episode_length) {
+    let requested_range = match extract_range_header(
+        request
+            .as_ref()
+            .expect("request should be present while parsing range"),
+        episode_length,
+    ) {
         Ok(range) => range,
         Err(error) => {
             let response = Response::empty(StatusCode(416)).with_header(make_header(
                 "Content-Range",
                 &format!("bytes */{}", episode_length),
-            )?);
-            request.respond(response).map_err(|e| e.to_string())?;
-            return Err(error);
+            )
+            .map_err(|header_error| (request.take(), header_error))?);
+            request
+                .take()
+                .expect("request should be present before responding")
+                .respond(response)
+                .map_err(|e| (None, e.to_string()))?;
+            return Err(Box::new((None, error)));
         }
     };
 
@@ -789,16 +837,28 @@ fn handle_request(
         episode_length,
         body_length,
         requested_range.is_some(),
-    )?;
+    )
+    .map_err(|error| (request.take(), error))?;
+
+    let method = match request
+        .as_ref()
+        .expect("request should be present for logging")
+        .method()
+    {
+        Method::Get => "GET",
+        Method::Head => "HEAD",
+        _ => "OTHER",
+    };
+    let url = request
+        .as_ref()
+        .expect("request should be present for logging")
+        .url()
+        .to_string();
 
     println!(
         "[ZIP PROXY] {} {} range={:?} resolved={}..{} len={} turbo={}",
-        match request.method() {
-            Method::Get => "GET",
-            Method::Head => "HEAD",
-            _ => "OTHER",
-        },
-        request.url(),
+        method,
+        url,
         requested_range,
         relative_start,
         relative_end,
@@ -806,12 +866,22 @@ fn handle_request(
         turbo_state.is_some()
     );
 
-    if matches!(request.method(), Method::Head) {
+    if matches!(
+        request
+            .as_ref()
+            .expect("request should be present for HEAD check")
+            .method(),
+        Method::Head
+    ) {
         let response = headers.into_iter().fold(
             Response::empty(StatusCode(response_status)),
             |response, header| response.with_header(header),
         );
-        request.respond(response).map_err(|e| e.to_string())?;
+        request
+            .take()
+            .expect("request should be present before responding")
+            .respond(response)
+            .map_err(|e| (None, e.to_string()))?;
         return Ok(());
     }
 
@@ -829,7 +899,11 @@ fn handle_request(
             None,
         )
         .with_chunked_threshold(usize::MAX);
-        request.respond(response.boxed()).map_err(|e| e.to_string())?;
+        request
+            .take()
+            .expect("request should be present before responding")
+            .respond(response.boxed())
+            .map_err(|e| (None, e.to_string()))?;
         println!(
             "[ZIP PROXY] Served turbo response in {} ms",
             started_at.elapsed().as_millis()
@@ -839,7 +913,8 @@ fn handle_request(
 
     let upstream_start = spec.byte_start + relative_start;
     let upstream_end = spec.byte_start + relative_end;
-    let access_token = resolve_access_token(spec, auth_runtime)?;
+    let access_token = resolve_access_token(spec, auth_runtime)
+        .map_err(|error| (request.take(), error))?;
     let mut req = client
         .get(&spec.drive_url)
         .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
@@ -849,7 +924,7 @@ fn handle_request(
     let upstream = req
         .send()
         .and_then(|response| response.error_for_status())
-        .map_err(|error| format!("Upstream request failed: {}", error))?;
+        .map_err(|error| (request.take(), format!("Upstream request failed: {}", error)))?;
 
     let response = Response::new(
         StatusCode(response_status),
@@ -859,12 +934,22 @@ fn handle_request(
         None,
     )
     .with_chunked_threshold(usize::MAX);
-    request.respond(response.boxed()).map_err(|e| e.to_string())?;
+    request
+        .take()
+        .expect("request should be present before responding")
+        .respond(response.boxed())
+        .map_err(|e| (None, e.to_string()))?;
     println!(
         "[ZIP PROXY] Streamed upstream response in {} ms",
         started_at.elapsed().as_millis()
     );
     Ok(())
+}
+
+fn respond_with_internal_error(request: tiny_http::Request, message: &str) -> Result<(), String> {
+    request
+        .respond(Response::from_string(message).with_status_code(StatusCode(500)))
+        .map_err(|error| error.to_string())
 }
 
 fn existing_prefix_len(cache_spec: &ProxyCacheSpec) -> u64 {
@@ -901,6 +986,7 @@ fn append_bytes_at_offset(path: &Path, offset: u64, bytes: &[u8]) -> Result<(), 
         .create(true)
         .write(true)
         .read(true)
+        .truncate(false)
         .open(path)
         .map_err(|error| format!("Failed to open cache file '{}': {}", path.display(), error))?;
     writer

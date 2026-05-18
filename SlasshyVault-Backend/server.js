@@ -840,8 +840,51 @@ function hasMatchingMediaKey(roomKeyValue, joinKeyValue) {
   if (roomKeys.length === 0 || joinKeys.length === 0) {
     return null;
   }
-  const roomSet = new Set(roomKeys);
-  return joinKeys.some((key) => roomSet.has(key));
+
+  const identityPrefixes = ['cloud:', 'file:', 'tmdb:', 'title:'];
+  const verifierPrefixes = ['size:', 'dur:', 'phash:'];
+
+  const isIdentity = (key) => identityPrefixes.some((p) => key.startsWith(p));
+  const isVerifier = (key) => verifierPrefixes.some((p) => key.startsWith(p));
+
+  const roomIdentity = roomKeys.filter(isIdentity);
+  const joinIdentity = joinKeys.filter(isIdentity);
+
+  // Must have at least one identity token overlap
+  if (roomIdentity.length === 0 || joinIdentity.length === 0) {
+    return null;
+  }
+  const roomIdentitySet = new Set(roomIdentity);
+  const hasIdentityMatch = joinIdentity.some((key) => roomIdentitySet.has(key));
+  if (!hasIdentityMatch) {
+    return false;
+  }
+
+  // If verifier tokens are present on both sides, they must match
+  const getVerifierMap = (keys) => {
+    const map = new Map();
+    for (const key of keys) {
+      if (isVerifier(key)) {
+        const sep = key.indexOf(':');
+        const prefix = key.substring(0, sep + 1);
+        const value = key.substring(sep + 1);
+        map.set(prefix, value);
+      }
+    }
+    return map;
+  };
+
+  const roomVerifiers = getVerifierMap(roomKeys);
+  const joinVerifiers = getVerifierMap(joinKeys);
+
+  for (const [prefix, roomValue] of roomVerifiers) {
+    const joinValue = joinVerifiers.get(prefix);
+    if (joinValue !== undefined && roomValue !== joinValue) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function normalizeSyncAction(action) {

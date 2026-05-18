@@ -1820,6 +1820,7 @@ export const wtCreateRoom = async (
   title: string,
   mediaMatchKey: string | undefined,
   nickname: string,
+  filePath?: string,
 ): Promise<WatchRoom> => {
   try {
     return await invoke<WatchRoom>("wt_create_room", {
@@ -1827,6 +1828,7 @@ export const wtCreateRoom = async (
       title,
       mediaMatchKey: mediaMatchKey ?? null,
       nickname,
+      filePath: filePath ?? null,
     });
   } catch (error) {
     console.error("Failed to create watch room:", error);
@@ -1841,6 +1843,7 @@ export const wtJoinRoom = async (
   mediaTitle: string,
   mediaMatchKey: string | undefined,
   nickname: string,
+  filePath?: string,
 ): Promise<WatchRoom> => {
   try {
     return await invoke<WatchRoom>("wt_join_room", {
@@ -1849,6 +1852,7 @@ export const wtJoinRoom = async (
       mediaTitle,
       mediaMatchKey: mediaMatchKey ?? null,
       nickname,
+      filePath: filePath ?? null,
     });
   } catch (error) {
     console.error("Failed to join watch room:", error);

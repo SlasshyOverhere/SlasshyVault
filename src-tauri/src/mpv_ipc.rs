@@ -414,7 +414,11 @@ pub fn launch_mpv_with_tracking(
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
         cmd.arg("--keep-open=yes");
-        cmd.arg("--network-timeout=30");
+        if is_local_zip_proxy {
+            cmd.arg("--network-timeout=120");
+        } else {
+            cmd.arg("--network-timeout=30");
+        }
 
         if is_local_zip_proxy {
             cmd.arg("--cache-pause=no");
