@@ -178,11 +178,9 @@ pub fn read_mpv_progress(media_id: i64) -> Option<MpvProgressInfo> {
 pub fn clear_mpv_progress(media_id: i64) {
     let progress_file = get_progress_file_path(media_id);
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
-    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
 
     let _ = fs::remove_file(progress_file);
     let _ = fs::remove_file(script_file);
-    let _ = fs::remove_file(header_file);
 }
 
 /// Result of launching MPV with tracking
@@ -394,18 +392,12 @@ pub fn launch_mpv_with_tracking(
         }
     }
 
-    // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL
-    // Use a temp file to pass headers (avoids exposing tokens in process listings)
+    // Add HTTP headers for cloud streaming (Google Drive auth) - only if streaming from URL.
+    // MPV reliably applies the inline form here; the temp header file path was not being honored.
     if !use_cached {
         if let Some(header) = auth_header {
-            let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
-            if let Err(e) = fs::write(&header_file, header) {
-                eprintln!("[MPV] Warning: Failed to write header file: {}", e);
-            } else {
-                let clean = header_file.to_string_lossy().replace("\\", "/");
-                cmd.arg(format!("--http-header-fields-file={}", clean));
-                println!("[MPV] Added HTTP header file for authentication");
-            }
+            cmd.arg(format!("--http-header-fields={}", header));
+            println!("[MPV] Added inline HTTP header for authentication");
         }
     }
 
@@ -627,11 +619,9 @@ pub fn monitor_mpv_and_save_progress(
         }
     };
 
-    // Clean up the Lua script and header file (keep progress file for debugging)
+    // Clean up the Lua script (keep progress file for debugging)
     let script_file = get_progress_dir().join(format!("tracker_{}.lua", media_id));
-    let header_file = get_progress_dir().join(format!("headers_{}.txt", media_id));
     let _ = fs::remove_file(script_file);
-    let _ = fs::remove_file(header_file);
 
     result
 }
