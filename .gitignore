@@ -20,6 +20,7 @@ src-tauri/target/
 target/
 src-tauri/binaries/
 src-tauri/Fallout/
+src-tauri/tauri.conf.nightly-merged.json
 
 # Rust
 *.rs.bk
