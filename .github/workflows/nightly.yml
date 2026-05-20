@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           $date = Get-Date -Format 'yyyyMMdd'
-          $version = "3.0.44-nightly.$date"
+          $version = "3.0.45-nightly.$date"
           npm version --no-git-tag-version $version
           npm run version:sync
           echo "Building version: $version"

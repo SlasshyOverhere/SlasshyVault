@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2 } from "lucide-react"
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy } from "lucide-react"
 import { 
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
   searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
@@ -15,7 +15,9 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { isMediaMarkedWatched } from "@/utils/playbackProgress"
 import { useToast } from "@/components/ui/use-toast"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { ShareDialog } from "@/components/ShareDialog"
+import { EpisodeThumbnailImage, getZipCompressionLabel } from "@/components/EpisodeThumbnailImage"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -88,17 +90,6 @@ const resolveLocalImage = async (path?: string): Promise<string | null> => {
   if (path.startsWith("http") || path.startsWith("asset://")) return path
   const filename = path.replace("image_cache/", "")
   return getCachedImageUrl(filename)
-}
-
-const getZipCompressionLabel = (method?: number): string | null => {
-  switch (method) {
-    case 0:
-      return "Store"
-    case 8:
-      return "Deflate"
-    default:
-      return null
-  }
 }
 
 const formatEpisodeSize = (bytes?: number | null): string | null => {
@@ -174,77 +165,6 @@ const getPreferredEpisodeSize = (episode: MediaItem): number | null => {
   return episode.file_size_bytes ?? episode.zip_uncompressed_size ?? episode.zip_compressed_size ?? null
 }
 
-// TODO: Extract this to a shared component (duplicated in EpisodeBrowser.tsx)
-function EpisodeThumbnailImage({
-  localStillPath,
-  tmdbStillUrl,
-  episodeTitle,
-  episodeNumber
-}: {
-  localStillPath?: string;
-  tmdbStillUrl: string | null;
-  episodeTitle: string;
-  episodeNumber: number;
-}) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadImage = async () => {
-      setLoading(true);
-      setImageUrl(null);
-
-      if (localStillPath) {
-        let filename = localStillPath;
-        if (filename.startsWith('image_cache/')) {
-          filename = filename.replace('image_cache/', '');
-        }
-
-        try {
-          const cachedUrl = await getCachedImageUrl(filename);
-          if (cachedUrl) {
-            setImageUrl(cachedUrl);
-            setLoading(false);
-            return;
-          }
-        } catch (error) {
-          console.log(`[EpisodeThumbnail] Failed to load local image:`, error);
-        }
-      }
-
-      if (tmdbStillUrl) {
-        setImageUrl(tmdbStillUrl);
-      }
-      setLoading(false);
-    };
-    loadImage();
-  }, [localStillPath, tmdbStillUrl, episodeNumber]);
-
-  if (loading) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-white/5">
-        <Loader2 className="w-5 h-5 animate-spin text-white/20" />
-      </div>
-    );
-  }
-
-  if (imageUrl) {
-    return (
-      <img
-        src={imageUrl}
-        alt={episodeTitle}
-        className="w-full h-full object-cover"
-      />
-    );
-  }
-
-  return (
-    <div className="w-full h-full flex items-center justify-center bg-white/5 text-white/10 font-bold">
-      {episodeNumber > 0 ? episodeNumber : '?'}
-    </div>
-  );
-}
-
 export function ContentDetailsModal({
   open,
   item,
@@ -286,6 +206,7 @@ export function ContentDetailsModal({
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
+  const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
 
   const handleEpisodeMarkWatched = async (episode: MediaItem) => {
     if (!onEpisodeSecondaryAction) return
@@ -1188,63 +1109,58 @@ export function ContentDetailsModal({
                   )}
 
                   {!isShow && (
-                    <div className="shrink-0 mb-2 flex items-center gap-6">
+                    <div className="shrink-0 mb-2 flex items-center gap-4">
                       <Button 
                         onClick={() => onPrimaryAction(displayItem)} 
                         className="h-14 px-10 rounded-full text-base font-bold tracking-tight shadow-[0_15px_40px_rgba(255,255,255,0.1)] hover:shadow-[0_20px_50px_rgba(255,255,255,0.15)] hover:scale-[1.02] active:scale-95 transition-all duration-500 bg-white text-black hover:bg-white"
                       >
                         <Play className="w-4 h-4 mr-2.5 fill-current" /> Play Now
                       </Button>
+
+                      <div className="flex items-center gap-2 p-1 rounded-full bg-white/5 border border-white/10 shadow-sm">
+                        {displayItem.is_cloud && displayItem.cloud_file_id && (
+                          <button
+                            onClick={() => {
+                              setShareFileId(displayItem.cloud_file_id || null)
+                              setShareFileName(displayItem.title)
+                            }}
+                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            title="Share"
+                          >
+                            <Share2 className="w-4 h-4" />
+                            <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Share</span>
+                          </button>
+                        )}
+                        {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
+                          <button
+                            onClick={() => onDownloadAction(displayItem)}
+                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            title="Download"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Download</span>
+                          </button>
+                        )}
+                        {onSecondaryAction && secondaryActionLabel && (
+                          <button
+                            onClick={() => onSecondaryAction(displayItem)}
+                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            title={secondaryActionLabel}
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">{secondaryActionLabel}</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
-
-                {/* The DOCK - Vertical Floating Action Sidebar */}
-                {!isShow && (
-                  <div className="absolute right-5 top-1/2 -translate-y-1/2 z-30 hidden sm:flex flex-col gap-2.5">
-                    <div className="flex flex-col p-1.5 gap-2 rounded-full bg-black/40 backdrop-blur-3xl border border-white/5 shadow-2xl">
-                      {displayItem.is_cloud && displayItem.cloud_file_id && (
-                        <button
-                          onClick={() => {
-                            setShareFileId(displayItem.cloud_file_id || null)
-                            setShareFileName(displayItem.title)
-                          }}
-                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
-                          title="Share"
-                        >
-                          <Share2 className="w-4 h-4" />
-                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Share</span>
-                        </button>
-                      )}
-                      {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
-                        <button
-                          onClick={() => onDownloadAction(displayItem)}
-                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
-                          title="Download"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Download</span>
-                        </button>
-                      )}
-                      {onSecondaryAction && secondaryActionLabel && (
-                        <button
-                          onClick={() => onSecondaryAction(displayItem)}
-                          className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
-                          title={secondaryActionLabel}
-                        >
-                          <Check className="w-4 h-4" />
-                          <span className="absolute right-full mr-3 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">{secondaryActionLabel}</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 
             {isShow && (
               <div className="flex-1 min-h-0 flex flex-col px-6 pb-6 sm:px-10 sm:pb-8 pt-0">
-                <div className="flex items-center gap-3 mb-2 shrink-0">
+                <div className="flex items-center gap-3 mb-4 shrink-0">
                   <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
                       <button 
@@ -1261,30 +1177,41 @@ export function ContentDetailsModal({
                       </button>
                     ))}
                   </div>
-                  
-                  <div className="ml-auto flex max-w-[420px] shrink-0 flex-col items-end gap-1.5">
-                    <p className="max-w-[360px] text-right text-[10px] font-medium leading-4 text-white/42">
-                      Changing audio or subtitles inside MPV can cause issues. Change them here only. If tracks are missing, play 2 seconds of the first episode and quit; this list will update automatically.
-                    </p>
-                    <div className="flex flex-wrap justify-end gap-2">
+
+                  {/* The DOCK - Horizontal Action Bar */}
+                  <div className="hidden sm:flex items-center gap-1.5 p-1 rounded-full bg-white/5 border border-white/10 shrink-0 shadow-sm">
+                    {item?.tmdb_id && (
                       <button
                         type="button"
                         onClick={() => void handleRefreshMetadata()}
-                        disabled={isRefreshingMetadata || !item?.tmdb_id}
-                        className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-45"
+                        disabled={isRefreshingMetadata}
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative disabled:cursor-not-allowed disabled:opacity-45"
+                        title="Refresh Metadata"
                       >
-                        <RefreshCw className={cn("w-2.5 h-2.5", isRefreshingMetadata && "animate-spin")} />
-                        <span>{isRefreshingMetadata ? "Refreshing" : "Refresh Metadata"}</span>
+                        <RefreshCw className={cn("w-3.5 h-3.5", isRefreshingMetadata && "animate-spin")} />
+                        <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Refresh</span>
                       </button>
+                    )}
+                    {filteredEpisodes.some(ep => ep.file_path || ep.zip_entry_path) && (
                       <button
                         type="button"
-                        onClick={() => setPlaybackSettingsOpen(true)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 backdrop-blur-xl border border-white/10 text-[9px] font-bold uppercase tracking-[0.22em] text-white/88 transition-colors hover:bg-white/15 hover:border-white/20"
+                        onClick={() => setShowEpisodeUrls(true)}
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                        title="Show Episode Files"
                       >
-                        <span>Audio & Subtitles</span>
-                        <SlidersHorizontal className="w-2.5 h-2.5" />
+                        <FileText className="w-3.5 h-3.5" />
+                        <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Files</span>
                       </button>
-                    </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setPlaybackSettingsOpen(true)}
+                      className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                      title="Audio & Subtitles"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Audio</span>
+                    </button>
                   </div>
                 </div>
                 
@@ -1485,6 +1412,54 @@ export function ContentDetailsModal({
           )}
         </section>
       </DialogContent>
+
+      <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
+        <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col">
+          <DialogTitle className="text-lg font-bold text-white px-1 shrink-0">
+            Episode Files — {item?.title} (Season {selectedSeason})
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            File names for each episode in season {selectedSeason}
+          </DialogDescription>
+          <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
+            <div className="flex flex-col gap-2 py-2">
+              {filteredEpisodes
+                .filter(ep => ep.file_path || ep.zip_entry_path)
+                .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+                .map(ep => {
+                  const episodeLabel = `S${String(ep.season_number || selectedSeason).padStart(2, '0')}E${String(ep.episode_number || 0).padStart(2, '0')} — ${ep.episode_title || ep.title}`
+                  const fileName = (() => {
+                    const p = ep.file_path || ep.zip_entry_path
+                    if (!p) return ''
+                    const norm = p.replace(/\\/g, '/')
+                    const idx = norm.lastIndexOf('/')
+                    return idx >= 0 ? norm.slice(idx + 1) : norm
+                  })()
+                  return (
+                    <div key={ep.id} className="flex items-start gap-2 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-white/90 truncate">{episodeLabel}</p>
+                        <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(fileName)
+                        }}
+                        className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
+                        title="Copy file name"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              {filteredEpisodes.filter(ep => ep.file_path || ep.zip_entry_path).length === 0 && (
+                <p className="text-sm text-white/40 text-center py-8">No file path info available for episodes in this season.</p>
+              )}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

@@ -3,7 +3,7 @@
   "author": "Suman Patgiri",
   "license": "MIT",
   "private": true,
-  "version": "3.0.44",
+  "version": "3.0.45",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -40,7 +40,6 @@
     "lucide-react": "^0.344.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-
     "tailwind-merge": "^2.2.1",
     "tailwindcss-animate": "^1.0.7"
   },

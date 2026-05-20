@@ -122,11 +122,10 @@ mp.register_event("end-file", function(event)
     save_progress()
 end)
 
--- Initial save
-mp.register_event("file-loaded", function()
-    -- Wait a bit for duration to be available
-    mp.add_timeout(1, save_progress)
-end)
+    -- Initial save - reduced delay for faster startup detection
+    mp.register_event("file-loaded", function()
+        mp.add_timeout(0.2, save_progress)
+    end)
 
 mp.msg.info("SlasshyVault progress tracker loaded.")
 "#,

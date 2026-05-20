@@ -2819,8 +2819,9 @@ async fn delete_media_files(
     for (id, file_path, is_cloud, cloud_file_id, parent_zip_id, ddl_source_id) in media_info {
         if is_cloud {
             if ddl_source_id.is_some() {
-                // DDL item - no cloud file to delete on Google Drive
+                // DDL item - no cloud file to delete on Google Drive, just remove from DB
                 db_media_ids_to_delete.push(id);
+                deleted_count += 1;
                 continue;
             }
 
@@ -3078,12 +3079,21 @@ async fn get_episodes_for_delete(
             let archive_info = zip_archive_details
                 .entry(zip_file_id.to_string())
                 .or_insert_with(|| {
+                    // Try zip_archives table first, then ddl_sources table for DDL items
                     state
                         .db
                         .lock()
                         .ok()
-                        .and_then(|db| db.get_zip_archive(zip_file_id).ok())
-                        .map(|archive| (archive.filename, 0, Some(archive.file_size_bytes)))
+                        .and_then(|db| {
+                            db.get_zip_archive(zip_file_id)
+                                .ok()
+                                .map(|a| (a.filename, 0, Some(a.file_size_bytes)))
+                                .or_else(|| {
+                                    db.get_ddl_source(zip_file_id)
+                                        .ok()
+                                        .map(|s| (s.filename, 0, None))
+                                })
+                        })
                         .unwrap_or_else(|| ("ZIP archive".to_string(), 0, None))
                 });
             archive_info.1 += 1;
@@ -3095,6 +3105,23 @@ async fn get_episodes_for_delete(
 
     for episode in episodes {
         if let Some(zip_file_id) = episode.parent_zip_id.clone() {
+            if episode.ddl_source_id.is_some() {
+                // DDL episode — show individually (not grouped), each can be deleted on its own
+                result.push(EpisodeDeleteInfo {
+                    id: episode.id,
+                    title: episode.title,
+                    episode_title: episode.episode_title,
+                    season_number: episode.season_number,
+                    episode_number: episode.episode_number,
+                    file_path: Some("Direct-link item".to_string()),
+                    parent_zip_id: Some(zip_file_id),
+                    delete_kind: "ddl_source".to_string(),
+                    archive_episode_count: None,
+                    file_size_bytes: None,
+                });
+                continue;
+            }
+
             if seen_zip_archives.insert(zip_file_id.clone()) {
                 let (archive_name, archive_episode_count, file_size_bytes) = zip_archive_details
                     .get(&zip_file_id)
@@ -5926,11 +5953,8 @@ async fn play_with_mpv(
                                     Some(zip_stream_proxy::ProxyCacheSpec {
                                         cache_paths: snapshot.paths,
                                         cache_config,
-                                        // Direct-link hosts are often heavily throttled per
-                                        // connection. If cache priming starts immediately, it
-                                        // competes with MPV's first read and slows startup.
-                                        start_delay_ms: 5_000,
-                                        throttle_delay_ms: 250,
+                                        start_delay_ms: 0,
+                                        throttle_delay_ms: 0,
                                     }),
                                     local_cache_path,
                                     snapshot.is_complete,
@@ -9795,8 +9819,8 @@ async fn build_zip_stream_url(
                     Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
                         cache_paths,
                         cache_config: cache_config.clone(),
-                        start_delay_ms: 4_000,
-                        throttle_delay_ms: 250,
+                        start_delay_ms: 0,
+                        throttle_delay_ms: 0,
                     }),
                     Err(error) => {
                         println!(

@@ -50,8 +50,18 @@ export function DeleteEpisodesModal({
         [episodes]
     );
 
+    const allDdlTargets = useMemo(
+        () => episodes.length > 0 && episodes.every((ep) => ep.delete_kind === "ddl_source"),
+        [episodes]
+    );
+
     const hasZipArchiveTargets = useMemo(
         () => episodes.some((ep) => ep.delete_kind === "zip_archive"),
+        [episodes]
+    );
+
+    const hasDdlTargets = useMemo(
+        () => episodes.some((ep) => ep.delete_kind === "ddl_source"),
         [episodes]
     );
 
@@ -60,7 +70,12 @@ export function DeleteEpisodesModal({
         [episodes, selectedIds]
     );
 
-    const selectedEpisodeCount = selectedIds.size - selectedZipArchiveCount;
+    const selectedDdlCount = useMemo(
+        () => episodes.filter((ep) => selectedIds.has(ep.id) && ep.delete_kind === "ddl_source").length,
+        [episodes, selectedIds]
+    );
+
+    const selectedEpisodeCount = selectedIds.size - selectedZipArchiveCount - selectedDdlCount;
 
     // Load episodes when modal opens
     useEffect(() => {
@@ -178,10 +193,15 @@ export function DeleteEpisodesModal({
                 <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
                     <DialogTitle className="flex items-center gap-2 text-xl">
                         <Trash2 className="w-5 h-5 text-red-500" />
-                        {allZipArchiveTargets ? "Delete ZIP Archives" : hasZipArchiveTargets ? "Delete Items" : "Delete Episodes"} - {seriesTitle}
+                        {allZipArchiveTargets ? "Delete ZIP Archives" : allDdlTargets ? "Delete Direct-Link Items" : hasZipArchiveTargets || hasDdlTargets ? "Delete Items" : "Delete Episodes"} - {seriesTitle}
                     </DialogTitle>
                     <DialogDescription className="text-muted-foreground">
-                        {hasZipArchiveTargets ? (
+                        {hasDdlTargets ? (
+                            <span className="flex items-center gap-2 text-amber-500">
+                                <AlertTriangle className="w-4 h-4" />
+                                Direct-link items are indexed from remote archives. Deleting removes them from your library (no cloud file to delete).
+                            </span>
+                        ) : hasZipArchiveTargets ? (
                             <span className="flex items-center gap-2 text-amber-500">
                                 <AlertTriangle className="w-4 h-4" />
                                 ZIP-backed episodes are indexed from archive files. Deleting a ZIP item removes the archive from Google Drive and all indexed episodes from it.
@@ -258,7 +278,7 @@ export function DeleteEpisodesModal({
                             <div className="flex h-full min-h-[240px] items-center justify-center text-muted-foreground">
                                 No episodes found for this series.
                             </div>
-                        ) : hasZipArchiveTargets ? (
+                        ) : hasZipArchiveTargets || hasDdlTargets ? (
                             <div className="space-y-3">
                                 <AnimatePresence>
                                     {episodes.map((ep) => (
@@ -291,6 +311,15 @@ export function DeleteEpisodesModal({
                                                         </div>
                                                         <div className="mt-1 break-all text-xs text-muted-foreground">
                                                             {ep.file_path || "Deletes the archive file from Google Drive."}
+                                                        </div>
+                                                    </>
+                                                ) : ep.delete_kind === "ddl_source" ? (
+                                                    <>
+                                                        <div className="mt-1 text-xs uppercase tracking-[0.14em] text-sky-400/90">
+                                                            Direct Link
+                                                        </div>
+                                                        <div className="mt-1 break-all text-xs text-muted-foreground">
+                                                            {ep.file_path || "Direct-link item (no cloud file)"}
                                                         </div>
                                                     </>
                                                 ) : (
@@ -405,13 +434,21 @@ export function DeleteEpisodesModal({
                         ) : (
                             <>
                                 <Trash2 className="w-4 h-4 mr-2" />
-                                {allZipArchiveTargets
-                                    ? `Delete ${selectedIds.size} ZIP Archive${selectedIds.size !== 1 ? "s" : ""}`
-                                    : selectedZipArchiveCount > 0 && selectedEpisodeCount > 0
-                                        ? `Delete ${selectedIds.size} Selected Item${selectedIds.size !== 1 ? "s" : ""}`
-                                        : selectedZipArchiveCount > 0
-                                            ? `Delete ${selectedZipArchiveCount} ZIP Archive${selectedZipArchiveCount !== 1 ? "s" : ""}`
-                                            : `Delete ${selectedEpisodeCount} Episode${selectedEpisodeCount !== 1 ? "s" : ""}`}
+                                {allDdlTargets
+                                    ? `Delete ${selectedIds.size} Direct-Link Item${selectedIds.size !== 1 ? "s" : ""}`
+                                    : allZipArchiveTargets
+                                        ? `Delete ${selectedIds.size} ZIP Archive${selectedIds.size !== 1 ? "s" : ""}`
+                                        : selectedZipArchiveCount > 0 && selectedDdlCount > 0
+                                            ? `Delete ${selectedIds.size} Selected Item${selectedIds.size !== 1 ? "s" : ""}`
+                                            : selectedZipArchiveCount > 0 && selectedEpisodeCount > 0
+                                                ? `Delete ${selectedIds.size} Selected Item${selectedIds.size !== 1 ? "s" : ""}`
+                                                : selectedDdlCount > 0 && selectedEpisodeCount > 0
+                                                    ? `Delete ${selectedIds.size} Selected Item${selectedIds.size !== 1 ? "s" : ""}`
+                                                    : selectedZipArchiveCount > 0
+                                                        ? `Delete ${selectedZipArchiveCount} ZIP Archive${selectedZipArchiveCount !== 1 ? "s" : ""}`
+                                                        : selectedDdlCount > 0
+                                                            ? `Delete ${selectedDdlCount} Direct-Link Item${selectedDdlCount !== 1 ? "s" : ""}`
+                                                            : `Delete ${selectedEpisodeCount} Episode${selectedEpisodeCount !== 1 ? "s" : ""}`}
                             </>
                         )}
                     </Button>
