@@ -97,6 +97,10 @@ plan/
 # AI/editor config
 .claudeignore
 
+# Design docs
+DESIGN.md
+PRODUCT.md
+
 # Scratch / prompt scratchpads
 FRONTEND_REMINDER_*.md
 

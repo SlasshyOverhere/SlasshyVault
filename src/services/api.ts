@@ -421,7 +421,7 @@ export interface EpisodeDeleteInfo {
   episode_number?: number;
   file_path?: string;
   parent_zip_id?: string;
-  delete_kind?: "episode" | "zip_archive";
+  delete_kind?: "episode" | "zip_archive" | "ddl_source";
   archive_episode_count?: number;
   file_size_bytes?: number;
 }

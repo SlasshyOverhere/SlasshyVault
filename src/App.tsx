@@ -69,7 +69,7 @@ import {
   Search, Loader2, Film, Tv,
   ChevronRight, LayoutGrid, List,
   TrendingUp, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
-  Maximize2, Minimize2, Archive
+  Maximize2, Minimize2, Archive, AlertCircle
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -91,8 +91,9 @@ import {
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 // Lazy load heavy components
 const loadSettingsModal = () => import('@/components/SettingsModal')
@@ -423,6 +424,14 @@ function App() {
     progressPercent: number
     isCompletionConfirmation?: boolean // True when MPV detected end chapter
   } | null>(null)
+
+  // Expired DDL link dialog state
+  const [ddlExpiredDialogOpen, setDdlExpiredDialogOpen] = useState(false)
+  const [ddlExpiredSourceId, setDdlExpiredSourceId] = useState<string | null>(null)
+  const [ddlExpiredItem, setDdlExpiredItem] = useState<MediaItem | null>(null)
+  const [ddlExpiredNewUrl, setDdlExpiredNewUrl] = useState('')
+  const [ddlExpiredError, setDdlExpiredError] = useState('')
+  const [ddlExpiredRefreshing, setDdlExpiredRefreshing] = useState(false)
 
   // Authentication state
   const { isAuthenticated, isAuthLoading, isLoggingIn, login: handleLogin, logout: handleLogout, showIndexingPrompt, isIndexing, confirmIndexing, declineIndexing } = useAuth()
@@ -1332,7 +1341,16 @@ function App() {
         toast({ title: "Playing", description: `Now playing: ${item.title}` })
       }
     } catch (e) {
-      toast({ title: "Error", description: String(e) || "Failed to start playback", variant: "destructive" })
+      const msg = String(e)
+      if (msg.includes("Link expired") && item.ddl_source_id) {
+        setDdlExpiredSourceId(item.ddl_source_id)
+        setDdlExpiredItem(item)
+        setDdlExpiredNewUrl('')
+        setDdlExpiredError('')
+        setDdlExpiredDialogOpen(true)
+      } else {
+        toast({ title: "Error", description: msg || "Failed to start playback", variant: "destructive" })
+      }
     }
   }, [launchPlaybackWithZipLoading, toast])
 
@@ -1391,7 +1409,16 @@ function App() {
       setResumeDialogOpen(false)
       setResumeDialogData(null)
     } catch (e) {
-      toast({ title: "Error", description: String(e) || "Failed to start playback", variant: "destructive" })
+      const msg = String(e)
+      if (msg.includes("Link expired") && item.ddl_source_id) {
+        setDdlExpiredSourceId(item.ddl_source_id)
+        setDdlExpiredItem(item)
+        setDdlExpiredNewUrl('')
+        setDdlExpiredError('')
+        setDdlExpiredDialogOpen(true)
+      } else {
+        toast({ title: "Error", description: msg || "Failed to start playback", variant: "destructive" })
+      }
     }
   }
 
@@ -1625,9 +1652,11 @@ function App() {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
     } else {
-      const deletePrompt = item.parent_zip_id
-        ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
-        : `Are you sure you want to permanently delete "${item.title}"?`
+      const deletePrompt = item.ddl_source_id
+        ? `"${item.title}" is a direct-link item. Deleting it will remove it from your library. Continue?`
+        : item.parent_zip_id
+          ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
+          : `Are you sure you want to permanently delete "${item.title}"?`
       // TODO: Replace with custom modal
       const confirmed = confirm(deletePrompt)
       if (confirmed) {
@@ -1646,6 +1675,33 @@ function App() {
       }
     }
   }, [toast])
+
+  const handleDdlRefreshAndRetry = useCallback(async () => {
+    if (!ddlExpiredSourceId || !ddlExpiredItem) return
+    setDdlExpiredError('')
+    setDdlExpiredRefreshing(true)
+    try {
+      const result = await invoke<{ accepted: boolean; message: string }>('ddl_refresh_link', {
+        sourceId: ddlExpiredSourceId,
+        newUrl: ddlExpiredNewUrl.trim(),
+      })
+      if (result.accepted) {
+        setDdlExpiredDialogOpen(false)
+        setDdlExpiredSourceId(null)
+        const item = ddlExpiredItem
+        setDdlExpiredItem(null)
+        setDdlExpiredNewUrl('')
+        toast({ title: "Link refreshed", description: "Retrying playback..." })
+        await startPlaybackFlow(item)
+      } else {
+        setDdlExpiredError(result.message)
+      }
+    } catch (err: unknown) {
+      setDdlExpiredError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDdlExpiredRefreshing(false)
+    }
+  }, [ddlExpiredSourceId, ddlExpiredItem, ddlExpiredNewUrl, toast, startPlaybackFlow])
 
   const handleDeleteComplete = useCallback(async (message?: string) => {
     await fetchDataRef.current()
@@ -2744,6 +2800,67 @@ function App() {
               onDeleteComplete={handleDeleteComplete}
             />
           )}
+
+          {/* Expired DDL link dialog */}
+          <Dialog open={ddlExpiredDialogOpen} onOpenChange={(open) => { if (!open && !ddlExpiredRefreshing) { setDdlExpiredDialogOpen(false); setDdlExpiredSourceId(null); setDdlExpiredItem(null); setDdlExpiredNewUrl(''); setDdlExpiredError('') } }}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <RefreshCw className="w-5 h-5" />
+                  Link Expired
+                </DialogTitle>
+                <DialogDescription>
+                  The direct download link for this content has expired. Provide a fresh URL for the exact same archive to restore streaming.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                  <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    The previous link has expired. Please provide a fresh URL for the <span className="text-foreground font-medium">exact same archive</span>.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-muted-foreground">New Session URL</label>
+                  <Input
+                    type="url"
+                    placeholder="https://server.com/new_session_url.zip"
+                    value={ddlExpiredNewUrl}
+                    onChange={e => setDdlExpiredNewUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleDdlRefreshAndRetry() }}
+                    disabled={ddlExpiredRefreshing}
+                    autoFocus
+                  />
+                </div>
+
+                {ddlExpiredError && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive"
+                  >
+                    {ddlExpiredError}
+                  </motion.div>
+                )}
+              </div>
+
+              <DialogFooter className="gap-2">
+                <Button variant="ghost" onClick={() => { setDdlExpiredDialogOpen(false); setDdlExpiredSourceId(null); setDdlExpiredItem(null); setDdlExpiredNewUrl(''); setDdlExpiredError('') }} disabled={ddlExpiredRefreshing}>
+                  Skip
+                </Button>
+                <Button
+                  onClick={handleDdlRefreshAndRetry}
+                  disabled={!ddlExpiredNewUrl.trim() || ddlExpiredRefreshing}
+                  className="min-w-[160px]"
+                >
+                  {ddlExpiredRefreshing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Refresh & Retry
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {/* Mark Complete Dialog */}
           {markCompleteData && (

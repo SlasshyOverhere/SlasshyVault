@@ -393,9 +393,9 @@ function MovieCardBase({
             {onDelete && (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+                <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label={item.ddl_source_id ? "Delete content" : "Delete from drive"}>
                   <Trash2 className="w-4 h-4 text-red-400/70" />
-                  <span>Delete from Drive</span>
+                  <span>{item.ddl_source_id ? 'Delete content' : 'Delete from Drive'}</span>
                 </ContextMenuItem>
               </>
             )}
@@ -711,9 +711,9 @@ function MovieCardBase({
         {onDelete && (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label="Delete from drive">
+            <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label={item.ddl_source_id ? "Delete content" : "Delete from drive"}>
               <Trash2 className="w-4 h-4 text-red-400/70" />
-              <span>Delete from Drive</span>
+              <span>{item.ddl_source_id ? 'Delete content' : 'Delete from Drive'}</span>
             </ContextMenuItem>
           </>
         )}
