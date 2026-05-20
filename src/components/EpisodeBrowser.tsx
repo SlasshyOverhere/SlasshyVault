@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, memo, useRef } from "react"
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, ChevronUp, RefreshCw, Users } from "lucide-react"
+import { Play, ChevronLeft, Clock, Check, Loader2, Star, Timer, ChevronDown, ChevronUp, RefreshCw, Users, FileText, Copy } from "lucide-react"
 import {
     MediaItem, getEpisodes, playMedia, getResumeInfo,
     getCachedImageUrl, ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
@@ -12,6 +12,12 @@ import { useToast } from "@/components/ui/use-toast"
 import { PlayerModal } from "@/components/PlayerModal"
 import { ResumeDialog } from "@/components/ResumeDialog"
 import { ContentDetailsModal } from "@/components/ContentDetailsModal"
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog"
 import { ZipPlaybackLoadingOverlay } from "@/components/ZipPlaybackLoadingOverlay"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
@@ -444,6 +450,7 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
 
     // Metadata refresh state
     const [isRefreshing, setIsRefreshing] = useState(false)
+    const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
 
     useEffect(() => {
         loadEpisodes()
@@ -805,6 +812,16 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
                                     {isRefreshing ? "..." : "↻"}
                                 </button>
                             )}
+                            {filteredEpisodes.some(ep => ep.file_path) && (
+                                <button
+                                    onClick={() => setShowEpisodeUrls(true)}
+                                    className="px-2 py-0.5 lg:px-2.5 lg:py-1 rounded-lg bg-muted hover:bg-muted/80 text-xs flex items-center gap-1 transition-colors"
+                                    title="Show file names for all episodes in this season"
+                                >
+                                    <FileText className="w-3 h-3" />
+                                    Files
+                                </button>
+                            )}
                         </div>
 
                         {/* Overview - hidden on smaller screens */}
@@ -921,6 +938,54 @@ export function EpisodeBrowser({ show, onBack, onWatchTogether, onDownload }: Ep
                 onSecondaryAction={handleMarkWatched}
                 secondaryActionLabel="Mark as watched"
             />
+
+            <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
+                <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col">
+                    <DialogTitle className="text-lg font-bold text-white px-1 shrink-0">
+                        Episode Files — {show.title} (Season {selectedSeason})
+                    </DialogTitle>
+                    <DialogDescription className="sr-only">
+                        File names for each episode in season {selectedSeason}
+                    </DialogDescription>
+                    <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
+                        <div className="flex flex-col gap-2 py-2">
+                            {filteredEpisodes
+                                .filter(ep => ep.file_path || ep.zip_entry_path)
+                                .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+                                .map(ep => {
+                                    const episodeLabel = `S${String(ep.season_number || selectedSeason).padStart(2, '0')}E${String(ep.episode_number || 0).padStart(2, '0')} — ${ep.episode_title || ep.title}`
+                                    const fileName = (() => {
+                                        const p = ep.file_path || ep.zip_entry_path
+                                        if (!p) return ''
+                                        const norm = p.replace(/\\/g, '/')
+                                        const idx = norm.lastIndexOf('/')
+                                        return idx >= 0 ? norm.slice(idx + 1) : norm
+                                    })()
+                                    return (
+                                        <div key={ep.id} className="flex items-start gap-2 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-semibold text-white/90 truncate">{episodeLabel}</p>
+                                                <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(fileName)
+                                                }}
+                                                className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
+                                                title="Copy file name"
+                                            >
+                                                <Copy className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    )
+                                })}
+                            {filteredEpisodes.filter(ep => ep.file_path || ep.zip_entry_path).length === 0 && (
+                                <p className="text-sm text-white/40 text-center py-8">No file path info available for episodes in this season.</p>
+                            )}
+                        </div>
+                    </ScrollArea>
+                </DialogContent>
+            </Dialog>
         </>
     )
 }

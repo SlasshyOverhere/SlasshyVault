@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react"
-import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download, Pin, PinOff } from "lucide-react"
+import { Play, Edit, Trash2, X, Clock, Check, Users, Sparkles, Download, Pin, PinOff, FileText, Copy } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { getCachedImageUrl, MediaItem } from "@/services/api"
+import { getCachedImageUrl, getEpisodes, MediaItem } from "@/services/api"
 import { getPinnedIds, togglePin as togglePinStorage } from "@/utils/pins"
 import { motion } from "framer-motion"
 import { getMediaProgressPercent, isProgressPastAutoCompleteThreshold } from "@/utils/playbackProgress"
@@ -12,6 +12,20 @@ import {
   ContextMenuTrigger,
   ContextMenuSeparator
 } from "@/components/ui/context-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
+
+const getFileName = (path?: string | null): string | null => {
+  if (!path) return null
+  const normalized = path.replace(/\\/g, '/')
+  const lastSlash = normalized.lastIndexOf('/')
+  return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized
+}
 
 export interface MovieCardProps {
   item: MediaItem
@@ -121,6 +135,10 @@ function MovieCardBase({
     togglePinStorage(item.id);
     setPinnedIds(getPinnedIds());
   };
+  const [showFileInfo, setShowFileInfo] = useState(false)
+  const [fileInfoCopied, setFileInfoCopied] = useState(false)
+  const [tvShowEpisodes, setTvShowEpisodes] = useState<MediaItem[] | null>(null)
+  const [tvShowLoading, setTvShowLoading] = useState(false)
   const directorName = item.director?.trim()
   const [isLightArea, setIsLightArea] = useState<boolean | null>(null)
   const samplePosterLuminance = useCallback((img: HTMLImageElement) => {
@@ -311,6 +329,28 @@ function MovieCardBase({
               <Edit className="w-4 h-4 text-foreground/40" />
               <span>Fix Match</span>
             </ContextMenuItem>
+
+            {(item.file_path || item.media_type === "tvshow") && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={async () => {
+                  setFileInfoCopied(false)
+                  if (item.media_type === "tvshow") {
+                    setTvShowLoading(true)
+                    setTvShowEpisodes(null)
+                    try {
+                      const eps = await getEpisodes(item.id)
+                      setTvShowEpisodes(eps)
+                    } catch { setTvShowEpisodes([]) }
+                    setTvShowLoading(false)
+                  }
+                  setShowFileInfo(true)
+                }} aria-label="Show file name">
+                  <FileText className="w-4 h-4 text-foreground/70" />
+                  <span>Show File Name</span>
+                </ContextMenuItem>
+              </>
+            )}
 
             {onDownload && item.is_cloud && (
               <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
@@ -619,6 +659,28 @@ function MovieCardBase({
           <span>Fix Match</span>
         </ContextMenuItem>
 
+        {(item.file_path || item.media_type === "tvshow") && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={async () => {
+              setFileInfoCopied(false)
+              if (item.media_type === "tvshow") {
+                setTvShowLoading(true)
+                setTvShowEpisodes(null)
+                try {
+                  const eps = await getEpisodes(item.id)
+                  setTvShowEpisodes(eps)
+                } catch { setTvShowEpisodes([]) }
+                setTvShowLoading(false)
+              }
+              setShowFileInfo(true)
+            }} aria-label="Show file name">
+              <FileText className="w-4 h-4 text-foreground/70" />
+              <span>Show File Name</span>
+            </ContextMenuItem>
+          </>
+        )}
+
         {onDownload && item.is_cloud && (
           <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
             <Download className="w-4 h-4 text-foreground/70" />
@@ -669,6 +731,80 @@ function MovieCardBase({
         </ContextMenuContent>
       </ContextMenu>
 
+      <Dialog open={showFileInfo} onOpenChange={setShowFileInfo}>
+        <DialogContent className={cn(
+          "flex flex-col",
+          item.media_type === "tvshow" ? "sm:max-w-2xl max-h-[80vh] !h-[80vh]" : "sm:max-w-lg"
+        )}>
+          <DialogHeader className="shrink-0">
+            <DialogTitle>
+              {item.media_type === "tvshow" ? "Episode Files" : "File Name"} — {item.title}
+            </DialogTitle>
+          </DialogHeader>
+
+          {item.media_type === "tvshow" ? (
+            <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
+              <div className="flex flex-col gap-2 py-2">
+                {tvShowLoading ? (
+                  <p className="text-sm text-white/40 text-center py-8">Loading episodes...</p>
+                ) : tvShowEpisodes && tvShowEpisodes.length > 0 ? (
+                  tvShowEpisodes
+                    .filter(ep => ep.file_path || ep.zip_entry_path)
+                    .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+                    .map(ep => {
+                      const label = `S${String(ep.season_number || 1).padStart(2, '0')}E${String(ep.episode_number || 0).padStart(2, '0')} — ${ep.episode_title || ep.title}`
+                      const fileName = getFileName(ep.file_path || ep.zip_entry_path) || ep.file_path || ep.zip_entry_path || ''
+                      return (
+                        <div key={ep.id} className="flex items-start gap-2 p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-white/90 truncate">{label}</p>
+                            <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(fileName)
+                              setFileInfoCopied(true)
+                              setTimeout(() => setFileInfoCopied(false), 2000)
+                            }}
+                            className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
+                            title="Copy file name"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })
+                ) : (
+                  <p className="text-sm text-white/40 text-center py-8">No file info available for episodes.</p>
+                )}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
+                <FileText className="w-4 h-4 text-white/40 shrink-0" />
+                <span className="text-sm text-white/90 break-all select-all">
+                  {getFileName(item.file_path || item.zip_entry_path) || item.file_path || item.zip_entry_path || '(no file path)'}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  const text = getFileName(item.file_path || item.zip_entry_path) || item.file_path || item.zip_entry_path || ''
+                  if (text) {
+                    navigator.clipboard.writeText(text)
+                    setFileInfoCopied(true)
+                    setTimeout(() => setFileInfoCopied(false), 2000)
+                  }
+                }}
+                className="flex items-center justify-center gap-2 w-full h-10 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-colors"
+              >
+                <Copy className="w-4 h-4" />
+                <span>{fileInfoCopied ? 'Copied!' : 'Copy File Name'}</span>
+              </button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

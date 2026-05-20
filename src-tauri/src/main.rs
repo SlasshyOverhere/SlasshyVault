@@ -5926,11 +5926,8 @@ async fn play_with_mpv(
                                     Some(zip_stream_proxy::ProxyCacheSpec {
                                         cache_paths: snapshot.paths,
                                         cache_config,
-                                        // Direct-link hosts are often heavily throttled per
-                                        // connection. If cache priming starts immediately, it
-                                        // competes with MPV's first read and slows startup.
-                                        start_delay_ms: 5_000,
-                                        throttle_delay_ms: 250,
+                                        start_delay_ms: 0,
+                                        throttle_delay_ms: 0,
                                     }),
                                     local_cache_path,
                                     snapshot.is_complete,
@@ -9795,8 +9792,8 @@ async fn build_zip_stream_url(
                     Ok(cache_paths) => Some(zip_stream_proxy::ProxyCacheSpec {
                         cache_paths,
                         cache_config: cache_config.clone(),
-                        start_delay_ms: 4_000,
-                        throttle_delay_ms: 250,
+                        start_delay_ms: 0,
+                        throttle_delay_ms: 0,
                     }),
                     Err(error) => {
                         println!(
