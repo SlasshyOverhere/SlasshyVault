@@ -14,8 +14,8 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime};
 
 const TURBO_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
-const TURBO_PREWARM_BYTES: u64 = 8 * 1024 * 1024;
-const TURBO_PREFETCH_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
+const TURBO_PREWARM_BYTES: u64 = 1024 * 1024;
+const TURBO_PREFETCH_WINDOW_BYTES: u64 = 32 * 1024 * 1024;
 const TURBO_HOT_CACHE_BYTES: u64 = 500 * 1024 * 1024;
 const TURBO_MIN_CONNECTIONS: usize = 3;
 const TURBO_MAX_CONNECTIONS: usize = 8;
@@ -92,10 +92,6 @@ struct TurboProxyState {
     stop_flag: Arc<AtomicBool>,
     cache_spec: ProxyCacheSpec,
     inner: Arc<(Mutex<TurboProxyInner>, Condvar)>,
-    http_client: Client,
-    cached_token: Arc<Mutex<Option<(String, Instant)>>>,
-    first_response_served: Arc<AtomicBool>,
-    prewarm_started: Arc<AtomicBool>,
 }
 
 struct TurboProxyInner {
@@ -107,7 +103,6 @@ struct TurboProxyInner {
     in_flight: usize,
     max_parallel: usize,
     paused_until: Option<Instant>,
-    rate_limit_count: u64,
 }
 
 #[derive(Clone)]
@@ -202,12 +197,6 @@ impl TurboProxyState {
             .ok_or_else(|| "Invalid ZIP byte range".to_string())?;
         let total_chunks = total_length.div_ceil(TURBO_CHUNK_BYTES);
         let contiguous_prefix_bytes = existing_prefix_len(&cache_spec);
-        let http_client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(TURBO_FETCH_TIMEOUT_SECS))
-            .tcp_nodelay(true)
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
         Ok(Self {
             spec,
@@ -228,35 +217,28 @@ impl TurboProxyState {
                     in_flight: 0,
                     max_parallel: TURBO_MIN_CONNECTIONS,
                     paused_until: None,
-                    rate_limit_count: 0,
                 }),
                 Condvar::new(),
             )),
-            http_client,
-            cached_token: Arc::new(Mutex::new(None)),
-            first_response_served: Arc::new(AtomicBool::new(false)),
-            prewarm_started: Arc::new(AtomicBool::new(false)),
         })
     }
 
     fn start_prewarm(&self) {
         let turbo = self.clone();
         thread::spawn(move || {
-            if turbo.cache_spec.start_delay_ms > 0 {
-                thread::sleep(Duration::from_millis(turbo.cache_spec.start_delay_ms));
-            }
-            turbo.schedule_prefetch_from(0, true);
-            for chunk_index in 0..turbo.prewarm_chunks.min(turbo.total_chunks) {
-                let _ = turbo.get_chunk(chunk_index);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if turbo.cache_spec.start_delay_ms > 0 {
+                    thread::sleep(Duration::from_millis(turbo.cache_spec.start_delay_ms));
+                }
+                turbo.schedule_prefetch_from(0, true);
+                for chunk_index in 0..turbo.prewarm_chunks.min(turbo.total_chunks) {
+                    let _ = turbo.get_chunk(chunk_index);
+                }
+            }));
+            if let Err(panic_err) = result {
+                dev_elog!("[ZIP PROXY] Prewarm thread panicked: {:?}", panic_err);
             }
         });
-    }
-
-    fn ensure_prewarm_started(&self) {
-        if !self.prewarm_started.swap(true, Ordering::Relaxed) {
-            dev_log!("[ZIP PROXY] Starting prewarm after first response");
-            self.start_prewarm();
-        }
     }
 
     fn get_chunk(&self, chunk_index: u64) -> Result<Arc<Vec<u8>>, String> {
@@ -343,7 +325,6 @@ impl TurboProxyState {
                 return;
             }
             inner.paused_until = None;
-            dev_log!("[ZIP PROXY] Rate limit backoff expired, resuming fetches");
         }
 
         while inner.in_flight < inner.max_parallel {
@@ -370,14 +351,8 @@ impl TurboProxyState {
                 }
             });
 
-            let effective_delay = if inner.rate_limit_count > 0 {
-                (inner.rate_limit_count * 50).min(500)
-            } else {
-                self.cache_spec.throttle_delay_ms
-            };
-
-            if effective_delay > 0 {
-                thread::sleep(Duration::from_millis(effective_delay));
+            if self.cache_spec.throttle_delay_ms > 0 {
+                thread::sleep(Duration::from_millis(self.cache_spec.throttle_delay_ms));
             }
         }
     }
@@ -395,85 +370,28 @@ impl TurboProxyState {
 
         inner.in_flight = inner.in_flight.saturating_sub(1);
 
-        let writes = match result {
+        match result {
             Ok(bytes) => {
-                inner.rate_limit_count = 0;
                 if inner.max_parallel < TURBO_MAX_CONNECTIONS {
                     inner.max_parallel += 1;
                 }
                 let bytes = Arc::new(bytes);
                 inner.insert_hot(chunk_index, bytes.clone(), self.hot_limit_bytes);
-                self.collect_pending_writes(&mut inner)
+                if let Err(error) = self.persist_contiguous_chunks_locked(&mut inner) {
+                    dev_elog!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
+                }
             }
             Err(error) => {
                 if matches!(error.kind, FetchErrorKind::RateLimited) {
-                    inner.rate_limit_count = inner.rate_limit_count.saturating_add(1);
-                    let double_count = inner.rate_limit_count.min(6);
-                    let backoff_secs = (TURBO_RATE_LIMIT_BACKOFF_SECS as u64)
-                        .saturating_mul(1u64 << double_count)
-                        .min(120);
-                    let jitter = 0.75
-                        + (((chunk_index.wrapping_mul(2654435761) ^ (inner.rate_limit_count * 0x9e3779b9))
-                            % 100)
-                            as f64)
-                            / 200.0;
-                    let backoff = Duration::from_secs_f64(backoff_secs as f64 * jitter);
-                    inner.max_parallel = std::cmp::max(1, inner.max_parallel / 2);
-                    inner.paused_until = Some(Instant::now() + backoff);
-                    dev_log!(
-                        "[ZIP PROXY] Rate limited (count={}), backing off {:?}, max_parallel={}",
-                        inner.rate_limit_count,
-                        backoff,
-                        inner.max_parallel,
+                    inner.max_parallel = 1;
+                    inner.paused_until = Some(
+                        Instant::now() + Duration::from_secs(TURBO_RATE_LIMIT_BACKOFF_SECS),
                     );
                 } else if inner.max_parallel > TURBO_MIN_CONNECTIONS {
                     inner.max_parallel -= 1;
                 }
                 inner.chunks.insert(chunk_index, ChunkState::Failed(error.message));
-                Vec::new()
             }
-        };
-
-        let has_writes = !writes.is_empty();
-        let total_written: u64 = writes.iter().map(|(_, d)| d.len() as u64).sum();
-
-        // Drop the lock before disk I/O
-        drop(inner);
-
-        // Write pending chunks to disk without holding the lock
-        for (offset, data) in &writes {
-            if let Err(error) = append_bytes_at_offset(
-                &self.cache_spec.cache_paths.temp_path,
-                *offset,
-                data,
-            ) {
-                dev_elog!("[ZIP PROXY] Failed to persist turbo cache chunk: {}", error);
-            }
-        }
-
-        // Re-acquire lock to update contiguous prefix and check finalization
-        let (lock, cvar) = &*self.inner;
-        let mut inner = match lock.lock() {
-            Ok(inner) => inner,
-            Err(error) => {
-                dev_elog!("[ZIP PROXY] Failed to re-lock turbo cache state: {}", error);
-                return;
-            }
-        };
-
-        if has_writes {
-            inner.contiguous_prefix_bytes = inner.contiguous_prefix_bytes.saturating_add(total_written);
-
-            let prefix = inner.contiguous_prefix_bytes;
-            if prefix >= self.total_length {
-                if let Err(error) = zip_manager::finalize_stream_cache_target(
-                    &self.cache_spec.cache_paths,
-                    &self.cache_spec.cache_config,
-                ) {
-                    dev_elog!("[ZIP PROXY] Failed to finalize turbo cache target: {:?}", error);
-                }
-            }
-            inner.evict_hot_if_needed(self.hot_limit_bytes, prefix);
         }
 
         self.maybe_spawn_fetch_locked(&mut inner);
@@ -485,8 +403,6 @@ impl TurboProxyState {
         let upstream_start = self.spec.byte_start + chunk_start;
         let upstream_end = self.spec.byte_start + chunk_end;
 
-        let mut exhausted_token = false;
-
         for attempt in 0..TURBO_FETCH_RETRIES {
             if self.stop_flag.load(Ordering::Relaxed) {
                 return Err(FetchError {
@@ -495,15 +411,28 @@ impl TurboProxyState {
                 });
             }
 
-            let access_token = self.resolve_or_refresh_token(exhausted_token).map_err(|error| {
+            let client = Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(TURBO_FETCH_TIMEOUT_SECS))
+                .tcp_nodelay(true)
+                .build()
+                .map_err(|error| FetchError {
+                    message: format!("Failed to build HTTP client: {}", error),
+                    kind: FetchErrorKind::Fatal,
+                })?;
+
+            let auth_runtime = build_auth_runtime(&self.spec.auth).map_err(|error| FetchError {
+                message: error,
+                kind: FetchErrorKind::Fatal,
+            })?;
+            let access_token = resolve_access_token(&self.spec, &auth_runtime).map_err(|error| {
                 FetchError {
                     message: error,
                     kind: FetchErrorKind::Fatal,
                 }
             })?;
 
-            let mut request = self
-                .http_client
+            let mut request = client
                 .get(&self.spec.drive_url)
                 .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
             if !access_token.is_empty() {
@@ -518,13 +447,6 @@ impl TurboProxyState {
                             message: format!("Upstream rate limited chunk {}", chunk_index),
                             kind: FetchErrorKind::RateLimited,
                         });
-                    }
-
-                    if status.as_u16() == 401 || status.as_u16() == 403 {
-                        exhausted_token = true;
-                        if attempt + 1 < TURBO_FETCH_RETRIES {
-                            continue;
-                        }
                     }
 
                     let response = response.error_for_status().map_err(|error| FetchError {
@@ -587,49 +509,41 @@ impl TurboProxyState {
         })
     }
 
-    fn resolve_or_refresh_token(&self, force_refresh: bool) -> Result<String, String> {
-        match &self.spec.auth {
-            ProxyAuth::None => Ok(String::new()),
-            ProxyAuth::GoogleDrive(client) => {
-                let mut cached = self.cached_token.lock().map_err(|e| e.to_string())?;
-                if !force_refresh {
-                    if let Some((token, resolved_at)) = cached.clone() {
-                        if resolved_at.elapsed() < Duration::from_secs(45 * 60) {
-                            return Ok(token);
-                        }
-                    }
-                }
-                let runtime = build_auth_runtime(&self.spec.auth)?;
-                let runtime = runtime.ok_or_else(|| "Missing auth runtime".to_string())?;
-                let token = runtime.block_on(client.get_access_token())?;
-                *cached = Some((token.clone(), Instant::now()));
-                Ok(token)
-            }
-        }
-    }
-
-    fn collect_pending_writes(&self, inner: &mut TurboProxyInner) -> Vec<(u64, Vec<u8>)> {
-        let mut writes = Vec::new();
-        let mut next_offset = inner.contiguous_prefix_bytes;
+    fn persist_contiguous_chunks_locked(&self, inner: &mut TurboProxyInner) -> Result<(), String> {
         loop {
-            if next_offset >= self.total_length {
+            if inner.contiguous_prefix_bytes >= self.total_length {
                 break;
             }
 
-            let next_chunk = next_offset / TURBO_CHUNK_BYTES;
+            let next_chunk = inner.contiguous_prefix_bytes / TURBO_CHUNK_BYTES;
             let Some(ChunkState::Ready(bytes)) = inner.chunks.get(&next_chunk).cloned() else {
                 break;
             };
 
             let expected_start = next_chunk * TURBO_CHUNK_BYTES;
-            if expected_start != next_offset {
+            if expected_start != inner.contiguous_prefix_bytes {
                 break;
             }
 
-            writes.push((next_offset, bytes.as_slice().to_vec()));
-            next_offset = next_offset.saturating_add(bytes.len() as u64);
+            append_bytes_at_offset(
+                &self.cache_spec.cache_paths.temp_path,
+                inner.contiguous_prefix_bytes,
+                bytes.as_slice(),
+            )?;
+            inner.contiguous_prefix_bytes = inner.contiguous_prefix_bytes.saturating_add(bytes.len() as u64);
         }
-        writes
+
+        if inner.contiguous_prefix_bytes >= self.total_length {
+            if let Err(error) = zip_manager::finalize_stream_cache_target(
+                &self.cache_spec.cache_paths,
+                &self.cache_spec.cache_config,
+            ) {
+                dev_elog!("[ZIP PROXY] Failed to finalize turbo cache target: {:?}", error);
+            }
+        }
+
+        inner.evict_hot_if_needed(self.hot_limit_bytes, inner.contiguous_prefix_bytes);
+        Ok(())
     }
 
     fn is_chunk_on_disk(&self, contiguous_prefix_bytes: u64, chunk_index: u64) -> bool {
@@ -741,6 +655,10 @@ pub fn start_proxy(spec: ProxyStreamSpec) -> Result<ZipStreamProxyHandle, String
         )?),
         None => None,
     };
+
+    if let Some(turbo) = turbo_state.as_ref() {
+        turbo.start_prewarm();
+    }
 
     let join_handle = thread::spawn(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -969,84 +887,45 @@ fn handle_request(
     }
 
     if let Some(turbo) = turbo_state {
-        if turbo.first_response_served.swap(true, Ordering::Relaxed) {
-            let reader: Box<dyn Read + Send> = Box::new(TurboStreamReader::new(
-                turbo.clone(),
-                relative_start,
-                relative_end,
-            ));
-            let response = Response::new(
-                StatusCode(response_status),
-                headers,
-                reader,
-                Some(body_length),
-                None,
-            )
-            .with_chunked_threshold(usize::MAX);
-            request
-                .take()
-                .expect("request should be present before responding")
-                .respond(response.boxed())
-                .map_err(|e| (None, e.to_string()))?;
-            dev_log!(
-                "[ZIP PROXY] Served turbo response in {} ms (turbo-cached)",
-                started_at.elapsed().as_millis()
-            );
-            return Ok(());
-        }
+        let reader: Box<dyn Read + Send> = Box::new(TurboStreamReader::new(
+            turbo.clone(),
+            relative_start,
+            relative_end,
+        ));
+        let response = Response::new(
+            StatusCode(response_status),
+            headers,
+            reader,
+            Some(body_length),
+            None,
+        )
+        .with_chunked_threshold(usize::MAX);
+        request
+            .take()
+            .expect("request should be present before responding")
+            .respond(response.boxed())
+            .map_err(|e| (None, e.to_string()))?;
         dev_log!(
-            "[ZIP PROXY] First request: streaming directly while turbo cache fills in background"
+            "[ZIP PROXY] Served turbo response in {} ms",
+            started_at.elapsed().as_millis()
         );
+        return Ok(());
     }
 
     let upstream_start = spec.byte_start + relative_start;
     let upstream_end = spec.byte_start + relative_end;
-
-    let should_start_prewarm = turbo_state.is_some() && !turbo_state.unwrap().prewarm_started.load(Ordering::Relaxed);
-
-    let (access_token, upstream) = if let Some(turbo) = turbo_state {
-        // Use the turbo proxy's shared client and cached token for the first request,
-        // so the prewarm and first request share a connection pool and token cache.
-        let fetch_client = &turbo.http_client;
-        let token_start = Instant::now();
-        let token = turbo.resolve_or_refresh_token(false).map_err(|e| {
-            dev_elog!("[ZIP PROXY] Direct token resolve failed: {}", e);
-            e
-        }).unwrap_or_default();
-        dev_log!("[ZIP PROXY] Resolved auth token in {} ms", token_start.elapsed().as_millis());
-
-        let mut gdrive_req = fetch_client
-            .get(&spec.drive_url)
-            .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
-        if !token.is_empty() {
-            gdrive_req = gdrive_req.header(AUTHORIZATION, format!("Bearer {}", token));
-        }
-        let upstream = gdrive_req
-            .send()
-            .and_then(|response| response.error_for_status())
-            .map_err(|error| (request.take(), format!("Upstream request failed: {}", error)))?;
-        (token, upstream)
-    } else {
-        let token = resolve_access_token(spec, auth_runtime)
-            .map_err(|error| (request.take(), error))?;
-        let mut gdrive_req = client
-            .get(&spec.drive_url)
-            .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
-        if !token.is_empty() {
-            gdrive_req = gdrive_req.header(AUTHORIZATION, format!("Bearer {}", token));
-        }
-        let upstream = gdrive_req
-            .send()
-            .and_then(|response| response.error_for_status())
-            .map_err(|error| (request.take(), format!("Upstream request failed: {}", error)))?;
-        (token, upstream)
-    };
-
-    dev_log!(
-        "[ZIP PROXY] GDrive first byte fetched (token={}) in {} ms — now streaming to MPV",
-        if access_token.is_empty() { "none" } else { "ok" },
-        started_at.elapsed().as_millis()
-    );
+    let access_token = resolve_access_token(spec, auth_runtime)
+        .map_err(|error| (request.take(), error))?;
+    let mut req = client
+        .get(&spec.drive_url)
+        .header(RANGE, format!("bytes={}-{}", upstream_start, upstream_end));
+    if !access_token.is_empty() {
+        req = req.header(AUTHORIZATION, format!("Bearer {}", access_token));
+    }
+    let upstream = req
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| (request.take(), format!("Upstream request failed: {}", error)))?;
 
     let response = Response::new(
         StatusCode(response_status),
@@ -1061,15 +940,8 @@ fn handle_request(
         .expect("request should be present before responding")
         .respond(response.boxed())
         .map_err(|e| (None, e.to_string()))?;
-
-    if should_start_prewarm {
-        if let Some(turbo) = turbo_state {
-            turbo.ensure_prewarm_started();
-        }
-    }
-
     dev_log!(
-        "[ZIP PROXY] Streamed upstream response in {} ms (total)",
+        "[ZIP PROXY] Streamed upstream response in {} ms",
         started_at.elapsed().as_millis()
     );
     Ok(())
