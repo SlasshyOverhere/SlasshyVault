@@ -162,6 +162,85 @@ export interface LibraryStats {
   episodes: number;
 }
 
+// ==================== ANALYTICS TYPES ====================
+
+export interface AnalyticsOverview {
+  total_watch_time_seconds: number;
+  movies_completed: number;
+  episodes_completed: number;
+  total_completion_rate: number;
+  current_streak_days: number;
+  total_events: number;
+}
+
+export interface HeatmapDay {
+  date: string;
+  watch_seconds: number;
+  event_count: number;
+}
+
+export interface DailyWatchPoint {
+  date: string;
+  watch_seconds: number;
+  movie_count: number;
+  episode_count: number;
+}
+
+export interface ContentTypeBreakdown {
+  content_type: string;
+  count: number;
+  total_seconds: number;
+}
+
+export interface SourceBreakdown {
+  source: string;
+  count: number;
+  total_seconds: number;
+}
+
+export interface TopWatchedItem {
+  title: string;
+  parent_title?: string | null;
+  media_type: string;
+  watch_count: number;
+  total_seconds: number;
+  poster_path?: string | null;
+  tmdb_id?: string | null;
+}
+
+export interface HourDistribution {
+  hour: number;
+  event_count: number;
+  total_seconds: number;
+}
+
+export interface DayOfWeekDistribution {
+  day_of_week: number;
+  event_count: number;
+  total_seconds: number;
+}
+
+export interface CompletionFunnel {
+  started: number;
+  in_progress_25: number;
+  mostly_done_75: number;
+  completed: number;
+}
+
+export interface AnalyticsData {
+  overview: AnalyticsOverview;
+  heatmap: HeatmapDay[];
+  daily_trend: DailyWatchPoint[];
+  content_breakdown: ContentTypeBreakdown[];
+  source_breakdown: SourceBreakdown[];
+  top_watched: TopWatchedItem[];
+  hour_distribution: HourDistribution[];
+  day_distribution: DayOfWeekDistribution[];
+  completion_funnel: CompletionFunnel;
+  library_stats: LibraryStats;
+  recent_events: WatchHistoryEvent[];
+}
+
 export interface DownloadJob {
   id: string;
   mediaId: number;
@@ -312,6 +391,27 @@ export const getWatchHistoryEvents = async (): Promise<WatchHistoryEvent[]> => {
   } catch (error) {
     console.error("Failed to get watch history events:", error);
     return [];
+  }
+};
+
+export const getAnalyticsData = async (): Promise<AnalyticsData> => {
+  try {
+    return await invoke<AnalyticsData>("get_analytics_data");
+  } catch (error) {
+    console.error("Failed to get analytics data:", error);
+    return {
+      overview: { total_watch_time_seconds: 0, movies_completed: 0, episodes_completed: 0, total_completion_rate: 0, current_streak_days: 0, total_events: 0 },
+      heatmap: [],
+      daily_trend: [],
+      content_breakdown: [],
+      source_breakdown: [],
+      top_watched: [],
+      hour_distribution: [],
+      day_distribution: [],
+      completion_funnel: { started: 0, in_progress_25: 0, mostly_done_75: 0, completed: 0 },
+      library_stats: { movies: 0, shows: 0, episodes: 0 },
+      recent_events: [],
+    };
   }
 };
 
@@ -1019,6 +1119,39 @@ export const setSeriesSubtitlePreference = (
     );
   } catch (error) {
     console.error("Failed to save series subtitle preference:", error);
+  }
+};
+
+const SERIES_SPOILER_PREFERENCE_KEY = "slasshyvault_series_spoiler_preferences";
+
+const readSeriesSpoilerPreferenceMap = (): Record<string, boolean> =>
+  readMapFromStorage<boolean>(SERIES_SPOILER_PREFERENCE_KEY);
+
+export const getSeriesSpoilerEnabled = (
+  seriesId: number,
+): boolean => {
+  const stored = readSeriesSpoilerPreferenceMap()[String(seriesId)];
+  return stored !== false;
+};
+
+export const setSeriesSpoilerEnabled = (
+  seriesId: number,
+  enabled: boolean,
+): void => {
+  try {
+    const preferences = readSeriesSpoilerPreferenceMap();
+    if (enabled) {
+      delete preferences[String(seriesId)];
+    } else {
+      preferences[String(seriesId)] = false;
+    }
+
+    localStorage.setItem(
+      SERIES_SPOILER_PREFERENCE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch (error) {
+    console.error("Failed to save series spoiler preference:", error);
   }
 };
 

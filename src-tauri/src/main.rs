@@ -6,6 +6,7 @@ mod config;
 mod database;
 mod direct_link_manager;
 mod download_manager;
+mod http_client;
 mod gdrive;
 mod log_buffer;
 mod media_manager;
@@ -523,6 +524,15 @@ async fn get_recent_watch_activities(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_recent_watch_activities(&since_timestamp)
         .map_err(|e| e.to_string())
+}
+
+// Get all analytics data for the analytics dashboard
+#[tauri::command]
+async fn get_analytics_data(
+    state: State<'_, AppState>,
+) -> Result<database::AnalyticsData, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_analytics_data().map_err(|e| e.to_string())
 }
 
 // ==================== GOOGLE DRIVE COMMANDS ====================
@@ -6814,28 +6824,9 @@ fn http_get_with_retry_auth(
             );
         }
 
-        // Create a fresh client for each attempt to avoid stale connection issues
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .pool_max_idle_per_host(0)
-            .tcp_keepalive(std::time::Duration::from_secs(20))
-            .http1_only()
-            .tcp_nodelay(true)
-            .user_agent("SlasshyVault/1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                last_error = format!("Failed to build HTTP client: {}", e);
-                println!(
-                    "[HTTP] Client build failed (attempt {}): {}",
-                    attempt + 1,
-                    last_error
-                );
-                continue;
-            }
-        };
+        // Use the shared global client to avoid creating/dropping a reqwest
+        // blocking client inside spawn_blocking (which panics in reqwest 0.12).
+        let client = http_client::shared_client();
 
         let request = if use_bearer {
             client
@@ -6897,34 +6888,9 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
             );
         }
 
-        // Create a fresh client for each attempt to avoid stale connection issues
-        // This is important on Windows where error 10054 can occur with pooled connections
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            // Disable connection pooling to avoid stale connection issues on Windows
-            .pool_max_idle_per_host(0)
-            // Enable TCP keepalive to detect dead connections faster
-            .tcp_keepalive(std::time::Duration::from_secs(20))
-            // Force HTTP/1.1 to avoid potential HTTP/2 connection issues
-            .http1_only()
-            // Set TCP nodelay for faster request/response
-            .tcp_nodelay(true)
-            // Add a user agent (some APIs block requests without one)
-            .user_agent("SlasshyVault/1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                last_error = format!("Failed to build HTTP client: {}", e);
-                println!(
-                    "[HTTP] Client build failed (attempt {}): {}",
-                    attempt + 1,
-                    last_error
-                );
-                continue;
-            }
-        };
+        // Use the shared global client to avoid creating/dropping a reqwest
+        // blocking client inside spawn_blocking (which panics in reqwest 0.12).
+        let client = http_client::shared_client();
 
         match client.get(url).send() {
             Ok(response) => {
@@ -7033,13 +6999,7 @@ struct OmdbEpisodeRating {
 fn fetch_imdb_rating_for_id(credential: &str, imdb_id: &str) -> Option<OmdbEpisodeRating> {
     let url = build_omdb_url(credential, imdb_id);
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_max_idle_per_host(0)
-        .user_agent("SlasshyVault/1.0")
-        .build()
-        .ok()?;
+    let client = http_client::shared_client();
 
     let response = client.get(&url).send().ok()?;
     if !response.status().is_success() {
@@ -7065,12 +7025,7 @@ fn find_tmdb_id_by_imdb_id(
         "external_source=imdb_id",
     );
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .pool_max_idle_per_host(0)
-        .user_agent("SlasshyVault/1.0")
-        .build()
-        .ok()?;
+    let client = http_client::shared_client();
 
     let use_bearer = crate::is_access_token(tmdb_credential)
         && !tmdb::is_backend_proxy_credential(tmdb_credential);
@@ -7563,12 +7518,7 @@ async fn get_episode_imdb_ratings(
         }
 
         let imdb_id: Option<String> = {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .pool_max_idle_per_host(0)
-                .user_agent("SlasshyVault/1.0")
-                .build()
-                .map_err(|e| e.to_string())?;
+            let client = http_client::shared_client();
 
             let use_bearer = crate::is_access_token(&tmdb_credential)
                 && !tmdb::is_backend_proxy_credential(&tmdb_credential);
@@ -7867,12 +7817,7 @@ fn is_release_date_in_future(release_date: Option<&str>) -> bool {
 }
 
 fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent("SlasshyVault/1.0")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_client::shared_client();
 
     let response = client.get(url).send().map_err(|e| e.to_string())?;
     if response.status().as_u16() == 404 {
@@ -14073,6 +14018,7 @@ fn main() {
             // Social sync commands
             get_watch_stats,
             get_recent_watch_activities,
+            get_analytics_data,
             // App reset command
             clear_all_app_data,
             restart_app,

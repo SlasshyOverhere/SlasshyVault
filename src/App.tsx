@@ -64,6 +64,8 @@ import {
   deleteDownloadJob,
   clearDownloadHistory,
   openDownloadJobTarget,
+  getAnalyticsData,
+  AnalyticsData,
 } from '@/services/api'
 import {
   Search, Loader2, Film, Tv,
@@ -262,6 +264,7 @@ function App() {
   const [isMaximized, setIsMaximized] = useState(false)
   const [isClearingHistory, setIsClearingHistory] = useState(false)
   const [isHistorySyncing, setIsHistorySyncing] = useState(false)
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
 
   // Sub-tabs for Cloud view
   const [cloudSubTab, setCloudSubTab] = useState<MediaSubTab>('movies')
@@ -789,6 +792,15 @@ function App() {
     }
   }, [])
 
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const data = await getAnalyticsData()
+      setAnalyticsData(data)
+    } catch (error) {
+      console.error('Failed to load analytics data', error)
+    }
+  }, [])
+
   const runWatchHistorySync = useCallback(async () => {
     setIsHistorySyncing(true)
     try {
@@ -1154,11 +1166,15 @@ function App() {
           loadHistoryEvents()
           return
         }
+        if (view === 'analytics') {
+          loadAnalytics()
+          return
+        }
         fetchData()
       }, delayMs)
       return () => window.clearTimeout(timer)
     }
-  }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents])
+  }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents, loadAnalytics])
 
   useEffect(() => {
     if (view !== 'downloads') return
@@ -2500,8 +2516,8 @@ function App() {
 
 
 
-                    {/* History View */}
-                    {view === 'history' && (
+                    {/* History View (includes Analytics as sub-view) */}
+                    {(view === 'history' || view === 'analytics') && (
                       <motion.div
                         key="history"
                         initial={{ opacity: 0 }}
@@ -2515,6 +2531,9 @@ function App() {
                           onClearHistory={handleClearHistory}
                           onOpenEvent={handleHistoryEntryOpen}
                           onRemoveEvent={handleRemoveHistoryEntry}
+                          analyticsData={analyticsData}
+                          onAnalyticsTabActive={loadAnalytics}
+                          initialSubView={view === 'analytics' ? 'stats' : 'activity'}
                         />
                       </motion.div>
                     )}

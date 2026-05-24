@@ -225,6 +225,95 @@ pub struct WatchHistoryEvent {
     pub updated_at: String,
 }
 
+// ==================== ANALYTICS TYPES ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyticsOverview {
+    pub total_watch_time_seconds: f64,
+    pub movies_completed: i64,
+    pub episodes_completed: i64,
+    pub total_completion_rate: f64,
+    pub current_streak_days: i32,
+    pub total_events: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapDay {
+    pub date: String,
+    pub watch_seconds: f64,
+    pub event_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyWatchPoint {
+    pub date: String,
+    pub watch_seconds: f64,
+    pub movie_count: i64,
+    pub episode_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentTypeBreakdown {
+    pub content_type: String,
+    pub count: i64,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceBreakdown {
+    pub source: String,
+    pub count: i64,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopWatchedItem {
+    pub title: String,
+    pub parent_title: Option<String>,
+    pub media_type: String,
+    pub watch_count: i64,
+    pub total_seconds: f64,
+    pub poster_path: Option<String>,
+    pub tmdb_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourDistribution {
+    pub hour: i32,
+    pub event_count: i64,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayOfWeekDistribution {
+    pub day_of_week: i32,
+    pub event_count: i64,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionFunnel {
+    pub started: i64,
+    pub in_progress_25: i64,
+    pub mostly_done_75: i64,
+    pub completed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyticsData {
+    pub overview: AnalyticsOverview,
+    pub heatmap: Vec<HeatmapDay>,
+    pub daily_trend: Vec<DailyWatchPoint>,
+    pub content_breakdown: Vec<ContentTypeBreakdown>,
+    pub source_breakdown: Vec<SourceBreakdown>,
+    pub top_watched: Vec<TopWatchedItem>,
+    pub hour_distribution: Vec<HourDistribution>,
+    pub day_distribution: Vec<DayOfWeekDistribution>,
+    pub completion_funnel: CompletionFunnel,
+    pub library_stats: LibraryStats,
+    pub recent_events: Vec<WatchHistoryEvent>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudIndexFailure {
     pub cloud_file_id: String,
@@ -4318,6 +4407,394 @@ impl Database {
         activities.sort_by(|a, b| b.last_watched.cmp(&a.last_watched));
 
         Ok(activities)
+    }
+
+    /// Get all analytics data in a single call for the analytics dashboard.
+    /// Pulls from ALL three data sources: watch_history_events, media, and streaming_history.
+    pub fn get_analytics_data(&self) -> Result<AnalyticsData> {
+        // === UNIFIED VIEW: combine watch_history_events + media + streaming_history ===
+        // CTE creates a unified timeline of all watch activity across all sources.
+
+        // 1. Overview totals from all sources
+        let (total_events, completed_events, total_watch_time): (i64, i64, f64) = self.conn.query_row(
+            "WITH all_activity AS (
+                -- watch_history_events (detailed event log)
+                SELECT
+                    event_id as id,
+                    media_type,
+                    duration_seconds * (progress_percent / 100.0) as watched_sec,
+                    CASE WHEN completed = 1 THEN 1 ELSE 0 END as is_completed,
+                    ended_at as activity_date,
+                    started_at,
+                    is_cloud,
+                    COALESCE(parent_title, title) as display_title,
+                    parent_title,
+                    poster_path,
+                    COALESCE(parent_tmdb_id, tmdb_id) as tid,
+                    progress_percent as progress
+                FROM watch_history_events
+                UNION ALL
+                -- media table: completed watches (resume_position = 0 means completed)
+                SELECT
+                    'media-' || id,
+                    media_type,
+                    duration_seconds,
+                    CASE WHEN resume_position_seconds = 0 AND last_watched IS NOT NULL AND duration_seconds > 0 THEN 1 ELSE 0 END,
+                    last_watched,
+                    last_watched,
+                    COALESCE(is_cloud, 0),
+                    CASE WHEN media_type = 'tvepisode'
+                        THEN (SELECT COALESCE(p.title, '') FROM media p WHERE p.id = media.parent_id)
+                        ELSE title END,
+                    CASE WHEN media_type = 'tvepisode'
+                        THEN (SELECT p.title FROM media p WHERE p.id = media.parent_id)
+                        ELSE NULL END,
+                    poster_path,
+                    COALESCE(
+                        CASE WHEN media_type = 'tvepisode'
+                            THEN (SELECT p.tmdb_id FROM media p WHERE p.id = media.parent_id)
+                            ELSE tmdb_id END,
+                        tmdb_id
+                    ),
+                    CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
+                         WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
+                         ELSE 0 END
+                FROM media
+                WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                -- streaming_history: online streaming watches
+                SELECT
+                    'stream-' || id,
+                    media_type,
+                    duration_seconds,
+                    CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0
+                         OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93 THEN 1 ELSE 0 END,
+                    last_watched,
+                    last_watched,
+                    1,
+                    title,
+                    NULL,
+                    poster_path,
+                    tmdb_id,
+                    CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
+                         WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
+                         ELSE 0 END
+                FROM streaming_history
+                WHERE duration_seconds > 0
+            )
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(is_completed), 0),
+                COALESCE(SUM(watched_sec), 0)
+            FROM all_activity",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        let (movies_completed, episodes_completed): (i64, i64) = self.conn.query_row(
+            "WITH all_activity AS (
+                SELECT media_type, CASE WHEN completed = 1 THEN 1 ELSE 0 END as is_completed FROM watch_history_events
+                UNION ALL
+                SELECT media_type, CASE WHEN resume_position_seconds = 0 AND last_watched IS NOT NULL AND duration_seconds > 0 THEN 1 ELSE 0 END
+                FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT media_type, CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93 THEN 1 ELSE 0 END
+                FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT
+                COALESCE(SUM(CASE WHEN media_type = 'movie' AND is_completed = 1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type IN ('tvepisode', 'tv') AND is_completed = 1 THEN 1 ELSE 0 END), 0)
+            FROM all_activity",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let completion_rate = if total_events > 0 {
+            (completed_events as f64 / total_events as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // 2. Current streak: consecutive days from all sources
+        let streak_days = self.compute_watch_streak_unified()?;
+
+        // 3. Heatmap: daily activity for last 365 days from all sources
+        let mut heatmap_stmt = self.conn.prepare(
+            "WITH all_days AS (
+                SELECT date(ended_at) as day, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events WHERE ended_at >= date('now', '-365 days')
+                UNION ALL
+                SELECT date(last_watched), duration_seconds FROM media WHERE last_watched >= date('now', '-365 days') AND duration_seconds > 0 AND last_watched IS NOT NULL
+                UNION ALL
+                SELECT date(last_watched), duration_seconds FROM streaming_history WHERE last_watched >= date('now', '-365 days') AND duration_seconds > 0
+            )
+            SELECT day, COALESCE(SUM(sec), 0), COUNT(*) FROM all_days GROUP BY day ORDER BY day"
+        )?;
+        let heatmap: Vec<HeatmapDay> = heatmap_stmt.query_map([], |row| {
+            Ok(HeatmapDay {
+                date: row.get(0)?,
+                watch_seconds: row.get(1)?,
+                event_count: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 4. Daily trend: last 90 days with media_type split from all sources
+        let mut trend_stmt = self.conn.prepare(
+            "WITH all_trend AS (
+                SELECT date(ended_at) as day, duration_seconds * (progress_percent / 100.0) as sec, media_type FROM watch_history_events WHERE ended_at >= date('now', '-90 days')
+                UNION ALL
+                SELECT date(last_watched), duration_seconds, media_type FROM media WHERE last_watched >= date('now', '-90 days') AND duration_seconds > 0 AND last_watched IS NOT NULL
+                UNION ALL
+                SELECT date(last_watched), duration_seconds, CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END FROM streaming_history WHERE last_watched >= date('now', '-90 days') AND duration_seconds > 0
+            )
+            SELECT day,
+                COALESCE(SUM(sec), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN media_type = 'tvepisode' THEN 1 ELSE 0 END), 0)
+            FROM all_trend GROUP BY day ORDER BY day"
+        )?;
+        let daily_trend: Vec<DailyWatchPoint> = trend_stmt.query_map([], |row| {
+            Ok(DailyWatchPoint {
+                date: row.get(0)?,
+                watch_seconds: row.get(1)?,
+                movie_count: row.get(2)?,
+                episode_count: row.get(3)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 5. Content breakdown by type from all sources
+        let mut type_stmt = self.conn.prepare(
+            "WITH all_types AS (
+                SELECT media_type, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
+                UNION ALL
+                SELECT media_type, duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END, duration_seconds FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT media_type, COUNT(*), COALESCE(SUM(sec), 0) FROM all_types GROUP BY media_type"
+        )?;
+        let content_breakdown: Vec<ContentTypeBreakdown> = type_stmt.query_map([], |row| {
+            Ok(ContentTypeBreakdown {
+                content_type: row.get(0)?,
+                count: row.get(1)?,
+                total_seconds: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 6. Source breakdown: cloud vs local from all sources
+        let mut source_stmt = self.conn.prepare(
+            "WITH all_sources AS (
+                SELECT CASE WHEN is_cloud = 1 THEN 'cloud' ELSE 'local' END as src, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
+                UNION ALL
+                SELECT CASE WHEN COALESCE(is_cloud, 0) = 1 THEN 'cloud' ELSE 'local' END, duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT 'cloud', duration_seconds FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT src, COUNT(*), COALESCE(SUM(sec), 0) FROM all_sources GROUP BY src"
+        )?;
+        let source_breakdown: Vec<SourceBreakdown> = source_stmt.query_map([], |row| {
+            Ok(SourceBreakdown {
+                source: row.get(0)?,
+                count: row.get(1)?,
+                total_seconds: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 7. Top watched content from all sources (grouped by show/movie title)
+        let mut top_stmt = self.conn.prepare(
+            "WITH all_titles AS (
+                SELECT
+                    COALESCE(parent_title, title) as display_title,
+                    parent_title,
+                    CASE WHEN media_type = 'tvepisode' THEN 'tvshow' ELSE media_type END as type,
+                    duration_seconds * (progress_percent / 100.0) as sec,
+                    poster_path,
+                    COALESCE(parent_tmdb_id, tmdb_id) as tid
+                FROM watch_history_events
+                UNION ALL
+                SELECT
+                    CASE WHEN m.media_type = 'tvepisode'
+                        THEN (SELECT COALESCE(p.title, '') FROM media p WHERE p.id = m.parent_id)
+                        ELSE m.title END,
+                    CASE WHEN m.media_type = 'tvepisode'
+                        THEN (SELECT p.title FROM media p WHERE p.id = m.parent_id)
+                        ELSE NULL END,
+                    CASE WHEN m.media_type = 'tvepisode' THEN 'tvshow' ELSE m.media_type END,
+                    m.duration_seconds,
+                    m.poster_path,
+                    COALESCE(
+                        CASE WHEN m.media_type = 'tvepisode'
+                            THEN (SELECT p.tmdb_id FROM media p WHERE p.id = m.parent_id)
+                            ELSE m.tmdb_id END,
+                        m.tmdb_id
+                    )
+                FROM media m
+                WHERE m.last_watched IS NOT NULL AND m.duration_seconds > 0
+                UNION ALL
+                SELECT
+                    s.title, NULL, 'tvshow', s.duration_seconds, s.poster_path, s.tmdb_id
+                FROM streaming_history s
+                WHERE s.duration_seconds > 0 AND s.media_type = 'tv'
+                UNION ALL
+                SELECT
+                    s.title, NULL, s.media_type, s.duration_seconds, s.poster_path, s.tmdb_id
+                FROM streaming_history s
+                WHERE s.duration_seconds > 0 AND s.media_type = 'movie'
+            )
+            SELECT display_title, parent_title, type, COUNT(*) as cnt, COALESCE(SUM(sec), 0), MAX(poster_path), MAX(tid)
+            FROM all_titles
+            GROUP BY display_title
+            ORDER BY cnt DESC
+            LIMIT 10"
+        )?;
+        let top_watched: Vec<TopWatchedItem> = top_stmt.query_map([], |row| {
+            Ok(TopWatchedItem {
+                title: row.get(0)?,
+                parent_title: row.get(1)?,
+                media_type: row.get(2)?,
+                watch_count: row.get(3)?,
+                total_seconds: row.get(4)?,
+                poster_path: row.get(5)?,
+                tmdb_id: row.get(6)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 8. Hour distribution (0-23) from all sources
+        let mut hour_stmt = self.conn.prepare(
+            "WITH all_hours AS (
+                SELECT CAST(strftime('%H', started_at) AS INTEGER) as hr, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
+                UNION ALL
+                SELECT CAST(strftime('%H', last_watched) AS INTEGER), duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT CAST(strftime('%H', last_watched) AS INTEGER), duration_seconds FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT hr, COUNT(*), COALESCE(SUM(sec), 0) FROM all_hours GROUP BY hr ORDER BY hr"
+        )?;
+        let hour_distribution: Vec<HourDistribution> = hour_stmt.query_map([], |row| {
+            Ok(HourDistribution {
+                hour: row.get(0)?,
+                event_count: row.get(1)?,
+                total_seconds: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 9. Day of week distribution (0=Sun, 6=Sat) from all sources
+        let mut dow_stmt = self.conn.prepare(
+            "WITH all_dows AS (
+                SELECT CAST(strftime('%w', started_at) AS INTEGER) as dow, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
+                UNION ALL
+                SELECT CAST(strftime('%w', last_watched) AS INTEGER), duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT CAST(strftime('%w', last_watched) AS INTEGER), duration_seconds FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT dow, COUNT(*), COALESCE(SUM(sec), 0) FROM all_dows GROUP BY dow ORDER BY dow"
+        )?;
+        let day_distribution: Vec<DayOfWeekDistribution> = dow_stmt.query_map([], |row| {
+            Ok(DayOfWeekDistribution {
+                day_of_week: row.get(0)?,
+                event_count: row.get(1)?,
+                total_seconds: row.get(2)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+
+        // 10. Completion funnel from all sources
+        let (started, in_progress, mostly_done, completed): (i64, i64, i64, i64) = self.conn.query_row(
+            "WITH all_progress AS (
+                SELECT progress_percent as pct FROM watch_history_events
+                UNION ALL
+                SELECT CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
+                     WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
+                     ELSE 0 END FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
+                UNION ALL
+                SELECT CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
+                     WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
+                     ELSE 0 END FROM streaming_history WHERE duration_seconds > 0
+            )
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN pct >= 25 AND pct < 75 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN pct >= 75 AND pct < 93 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN pct >= 93 THEN 1 ELSE 0 END), 0)
+            FROM all_progress",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+
+        // 11. Library stats (reuse existing query)
+        let library_stats = self.get_library_stats(None)?;
+
+        // 12. Recent events (reuse existing query)
+        let recent_events = self.get_watch_history_events(20)?;
+
+        Ok(AnalyticsData {
+            overview: AnalyticsOverview {
+                total_watch_time_seconds: total_watch_time,
+                movies_completed,
+                episodes_completed,
+                total_completion_rate: completion_rate,
+                current_streak_days: streak_days,
+                total_events,
+            },
+            heatmap,
+            daily_trend,
+            content_breakdown,
+            source_breakdown,
+            top_watched,
+            hour_distribution,
+            day_distribution,
+            completion_funnel: CompletionFunnel {
+                started,
+                in_progress_25: in_progress,
+                mostly_done_75: mostly_done,
+                completed,
+            },
+            library_stats,
+            recent_events,
+        })
+    }
+
+    /// Compute consecutive days with watch activity from all sources.
+    fn compute_watch_streak_unified(&self) -> Result<i32> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT day FROM (
+                SELECT date(ended_at) as day FROM watch_history_events
+                UNION
+                SELECT date(last_watched) FROM media WHERE last_watched IS NOT NULL
+                UNION
+                SELECT date(last_watched) FROM streaming_history WHERE last_watched IS NOT NULL
+            ) ORDER BY day DESC"
+        )?;
+
+        let days: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if days.is_empty() {
+            return Ok(0);
+        }
+
+        let mut streak: i32 = 0;
+        let mut expected = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        // If today has no events, check if yesterday does
+        if days.first().map(|d| d.as_str()) != Some(expected.as_str()) {
+            expected = (chrono::Local::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+            if days.first().map(|d| d.as_str()) != Some(expected.as_str()) {
+                return Ok(0);
+            }
+        }
+
+        for day in &days {
+            if day.as_str() == expected.as_str() {
+                streak += 1;
+                expected = (chrono::NaiveDate::parse_from_str(&expected, "%Y-%m-%d")
+                    .unwrap_or_default() - chrono::Duration::days(1))
+                    .format("%Y-%m-%d").to_string();
+            } else if day.as_str() < expected.as_str() {
+                break;
+            }
+        }
+
+        Ok(streak)
     }
 
     fn map_media_item(row: &rusqlite::Row) -> rusqlite::Result<MediaItem> {
