@@ -1,11 +1,8 @@
 import { useEffect, useState, memo } from "react";
 import {
-  CalendarRange,
   CheckCircle2,
   Clock3,
   HardDrive,
-  PlayCircle,
-  Timer,
   Trash2,
   Tv,
 } from "lucide-react";
@@ -58,7 +55,7 @@ const buildEpisodeLabel = (event: WatchHistoryEvent) => {
   const code = `S${String(event.season_number).padStart(2, "0")}E${String(
     event.episode_number,
   ).padStart(2, "0")}`;
-  return event.episode_title ? `${code} • ${event.episode_title}` : code;
+  return event.episode_title ? `${code} \u2022 ${event.episode_title}` : code;
 };
 
 export const HistoryEventCard = memo(function HistoryEventCard({
@@ -100,177 +97,156 @@ export const HistoryEventCard = memo(function HistoryEventCard({
   }, [event.poster_path]);
 
   return (
-    <div className="rounded-[18px] border border-white/8 bg-[#161616]/88 px-3 py-3 shadow-[0_10px_26px_rgba(0,0,0,0.14)] backdrop-blur-xl">
-      <div className="hidden grid-cols-[minmax(0,1.9fr)_110px_100px_110px_94px_44px] items-center gap-4 lg:grid">
+    <div className="group relative rounded-[18px] border border-white/[0.06] bg-white/[0.03] backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:border-white/[0.12] hover:shadow-[0_12px_40px_rgba(0,0,0,0.3)] overflow-hidden">
+      {/* Desktop layout */}
+      <div className="hidden lg:flex items-center gap-4 px-4 py-3">
+        {/* Poster */}
         <button
           type="button"
           onClick={() => onOpen?.(event)}
           disabled={!canOpen}
           aria-label={canOpen ? `Open ${title}` : undefined}
           className={cn(
-            "flex min-w-0 items-center gap-3 rounded-[14px] border border-transparent px-2 py-1.5 text-left transition-colors",
-            canOpen ? "hover:border-white/8 hover:bg-white/[0.03]" : "cursor-default",
+            "relative h-[72px] w-12 shrink-0 overflow-hidden rounded-[10px] border border-white/[0.08] bg-white/[0.04]",
+            canOpen ? "cursor-pointer" : "cursor-default",
           )}
         >
-          <div className="relative h-16 w-12 shrink-0 overflow-hidden rounded-[12px] border border-white/10 bg-white/5">
-            {posterUrl ? (
-              <img src={posterUrl} alt={title} className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center bg-white/5 text-white/35">
-                <Tv className="h-4 w-4" />
-              </div>
-            )}
-          </div>
-
-          <div className="min-w-0">
-            <p className="truncate text-[10px] font-bold uppercase tracking-[0.16em] text-white/34">
-              {event.media_type === "movie" ? "Movie" : "Episode"}
-            </p>
-            <h3 className="truncate text-sm font-semibold tracking-tight text-white">{title}</h3>
-            <p className="truncate text-xs text-white/52">{subtitle}</p>
-            {event.overview && (
-              <p className="mt-1 line-clamp-1 text-[11px] text-white/42">{event.overview}</p>
-            )}
-          </div>
-        </button>
-
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/32">Watched</p>
-          <p className="mt-1 flex items-center gap-1.5 text-xs text-white/70">
-            <Clock3 className="h-3.5 w-3.5 text-white/38" />
-            <span className="truncate">{formatEventTime(event.ended_at)}</span>
-          </p>
-          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-white/42">
-            <CalendarRange className="h-3.5 w-3.5 text-white/30" />
-            <span className="truncate">Started {formatEventTime(event.started_at)}</span>
-          </p>
-        </div>
-
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/32">Progress</p>
-          <p className="mt-1 flex items-center gap-1.5 text-xs text-white/70">
-            <PlayCircle className="h-3.5 w-3.5 text-white/38" />
-            {event.completed ? "Finished" : `${progress}%`}
-          </p>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
-            <div
-              className="h-full rounded-full bg-white/68 transition-all duration-300"
-              style={{ width: `${Math.max(progress, event.completed ? 100 : 4)}%` }}
-            />
-          </div>
-        </div>
-
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/32">Time</p>
-          <p className="mt-1 flex items-center gap-1.5 text-xs text-white/70">
-            <Timer className="h-3.5 w-3.5 text-white/38" />
-            {formatDuration(watchedSeconds)}
-          </p>
-        </div>
-
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/32">Source</p>
-          <div className="mt-1 inline-flex items-center gap-1.5 rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/68">
-            <HardDrive className="h-3 w-3" />
-            {event.is_cloud ? "Drive" : "Local"}
-          </div>
-          {event.completed && (
-            <div className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] text-white/72">
-              <CheckCircle2 className="h-3 w-3" />
-              Done
+          {posterUrl ? (
+            <img src={posterUrl} alt={title} className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
+              <Tv className="h-4 w-4" />
             </div>
           )}
+        </button>
+
+        {/* Info */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/30">
+              {event.media_type === "movie" ? "Movie" : "Episode"}
+            </span>
+            {event.completed && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-black">
+                <CheckCircle2 className="h-2.5 w-2.5" />
+                Done
+              </span>
+            )}
+          </div>
+          <h3 className="mt-0.5 truncate text-sm font-semibold tracking-tight text-white">{title}</h3>
+          <p className="truncate text-xs text-white/45">{subtitle}</p>
         </div>
 
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => onRemove(event)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-white/[0.04] text-white/65 transition-colors hover:bg-white/[0.08] hover:text-white"
-            aria-label="Remove history entry"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+        {/* Watched time */}
+        <div className="hidden xl:block min-w-[140px]">
+          <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/25">Watched</p>
+          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/60">
+            <Clock3 className="h-3 w-3 text-white/30" />
+            {formatEventTime(event.ended_at)}
+          </p>
         </div>
+
+        {/* Duration pill */}
+        <div className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/55">
+          {formatDuration(watchedSeconds)}
+        </div>
+
+        {/* Source pill */}
+        <div className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/55 inline-flex items-center gap-1.5">
+          <HardDrive className="h-3 w-3" />
+          {event.is_cloud ? "Cloud" : "Local"}
+        </div>
+
+        {/* Delete */}
+        <button
+          type="button"
+          onClick={() => onRemove(event)}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white opacity-0 group-hover:opacity-100"
+          aria-label="Remove history entry"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <div className="flex flex-col gap-3 lg:hidden">
+      {/* Mobile layout */}
+      <div className="flex flex-col gap-3 p-3 lg:hidden">
         <div className="flex items-start gap-3">
           <button
             type="button"
             onClick={() => onOpen?.(event)}
             disabled={!canOpen}
             className={cn(
-              "relative h-20 w-14 shrink-0 overflow-hidden rounded-[14px] border border-white/10 bg-white/5",
+              "relative h-20 w-14 shrink-0 overflow-hidden rounded-[10px] border border-white/[0.08] bg-white/[0.04]",
               canOpen ? "cursor-pointer" : "cursor-default",
             )}
           >
             {posterUrl ? (
               <img src={posterUrl} alt={title} className="h-full w-full object-cover" />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-white/5 text-white/35">
+              <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
                 <Tv className="h-4 w-4" />
               </div>
             )}
           </button>
 
           <div className="min-w-0 flex-1">
-            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/34">
-              {event.media_type === "movie" ? "Movie" : "Episode"}
-            </p>
-            <h3 className="truncate text-sm font-semibold tracking-tight text-white">{title}</h3>
-            <p className="truncate text-xs text-white/54">{subtitle}</p>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/64">
-              <span className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-1">
-                {event.completed ? "Finished" : `${progress}%`}
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/30">
+                {event.media_type === "movie" ? "Movie" : "Episode"}
               </span>
-              <span className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-1">
-                {formatDuration(watchedSeconds)}
-              </span>
-              <span className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-1">
-                {event.is_cloud ? "Drive" : "Local"}
-              </span>
+              {event.completed && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-black">
+                  <CheckCircle2 className="h-2.5 w-2.5" />
+                  Done
+                </span>
+              )}
             </div>
+            <h3 className="mt-0.5 truncate text-sm font-semibold tracking-tight text-white">{title}</h3>
+            <p className="truncate text-xs text-white/45">{subtitle}</p>
           </div>
 
           <button
             type="button"
             onClick={() => onRemove(event)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-white/[0.04] text-white/65 transition-colors hover:bg-white/[0.08] hover:text-white"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white"
             aria-label="Remove history entry"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
 
-        <div className="grid gap-2 text-[11px] text-white/46 sm:grid-cols-2">
-          <div className="flex items-center gap-1.5">
-            <Clock3 className="h-3.5 w-3.5 text-white/34" />
-            <span className="truncate">{formatEventTime(event.ended_at)}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <CalendarRange className="h-3.5 w-3.5 text-white/34" />
-            <span className="truncate">Started {formatEventTime(event.started_at)}</span>
-          </div>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between text-[10px] text-white/42">
-            <span>Progress</span>
-            <span>{progress}%</span>
-          </div>
-          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/8">
-            <div
-              className="h-full rounded-full bg-white/68 transition-all duration-300"
-              style={{ width: `${Math.max(progress, event.completed ? 100 : 4)}%` }}
-            />
-          </div>
+        <div className="flex flex-wrap gap-1.5">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
+            <Clock3 className="h-3 w-3" />
+            {formatEventTime(event.ended_at)}
+          </span>
+          <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
+            {event.completed ? "Finished" : `${progress}%`}
+          </span>
+          <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
+            {formatDuration(watchedSeconds)}
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
+            <HardDrive className="h-3 w-3" />
+            {event.is_cloud ? "Cloud" : "Local"}
+          </span>
         </div>
 
         {event.overview && (
-          <p className="line-clamp-2 text-xs leading-5 text-white/48">{event.overview}</p>
+          <p className="line-clamp-2 text-xs leading-5 text-white/40">{event.overview}</p>
         )}
+      </div>
+
+      {/* Progress bar at bottom */}
+      <div className="h-[3px] w-full bg-white/[0.04]">
+        <div
+          className={cn(
+            "h-full transition-all duration-500",
+            event.completed ? "bg-white/50" : "bg-white/30",
+          )}
+          style={{ width: `${Math.max(progress, event.completed ? 100 : 2)}%` }}
+        />
       </div>
     </div>
   );
-})
+});
