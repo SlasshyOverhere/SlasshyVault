@@ -95,6 +95,7 @@ export function SettingsModal({
     ffprobe_path: "",
     ffmpeg_path: "",
     tmdb_api_key: "",
+    omdb_api_key: "",
     cloud_cache_enabled: false,
     cloud_cache_dir: "",
     cloud_cache_max_mb: 1024,
@@ -292,6 +293,7 @@ export function SettingsModal({
         ffprobe_path: data.ffprobe_path || "",
         ffmpeg_path: data.ffmpeg_path || "",
         tmdb_api_key: data.tmdb_api_key || "",
+        omdb_api_key: data.omdb_api_key || "",
         cloud_cache_enabled: data.cloud_cache_enabled ?? false,
         cloud_cache_dir: data.cloud_cache_dir || "",
         cloud_cache_max_mb: data.cloud_cache_max_mb ?? 1024,
@@ -1236,7 +1238,7 @@ export function SettingsModal({
                         </p>
                       </div>
 
-                      {/* TMDB API Key Mode Selection */}
+                      {/* API Keys */}
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
@@ -1244,10 +1246,10 @@ export function SettingsModal({
                           </div>
                           <div>
                             <Label className="text-base font-medium">
-                              TMDB API Key
+                              API Keys
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Used for metadata, posters, and search
+                              TMDB (metadata) and OMDb (IMDb ratings)
                             </p>
                           </div>
                         </div>
@@ -1257,7 +1259,7 @@ export function SettingsModal({
                           type="button"
                           onClick={() => {
                             setUseOwnApiKey(false);
-                            setConfig({ ...config, tmdb_api_key: "" });
+                            setConfig({ ...config, tmdb_api_key: "", omdb_api_key: "" });
                           }}
                           className={cn(
                             "w-full p-3 rounded-xl border text-left transition-all",
@@ -1282,15 +1284,15 @@ export function SettingsModal({
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
                                 <span className="text-sm font-medium">
-                                  Use Built-in API Key
+                                  Use Built-in Backend
                                 </span>
                                 <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded">
                                   FREE
                                 </span>
                               </div>
                               <p className="text-xs text-muted-foreground mt-0.5">
-                                No setup needed. Shared across all users, so it
-                                may hit rate limits during peak usage.
+                                Uses the app's official backend with shared TMDB
+                                and OMDb key pools.
                               </p>
                             </div>
                           </div>
@@ -1323,52 +1325,85 @@ export function SettingsModal({
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
                                 <span className="text-sm font-medium">
-                                  Use Your Own API Key
+                                  Use Your Own API Keys
                                 </span>
                                 <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/20 text-blue-400 rounded">
                                   RECOMMENDED
                                 </span>
                               </div>
                               <p className="text-xs text-muted-foreground mt-0.5">
-                                Get your own free key for unlimited requests
-                                with no rate limits.
+                                Provide your own TMDB and OMDb keys for direct
+                                access with no shared rate limits.
                               </p>
                             </div>
                           </div>
                         </button>
 
-                        {/* Custom API Key Input - Only shown when "Use Your Own" is selected */}
+                        {/* Custom API Key Inputs - Only shown when "Use Your Own" is selected */}
                         {useOwnApiKey && (
                           <motion.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
                             exit={{ opacity: 0, height: 0 }}
-                            className="space-y-3 pt-1"
+                            className="space-y-4 pt-1"
                           >
-                            <Input
-                              type="password"
-                              value={config.tmdb_api_key || ""}
-                              onChange={(e) =>
-                                setConfig({
-                                  ...config,
-                                  tmdb_api_key: e.target.value,
-                                })
-                              }
-                              placeholder="Enter your TMDB API key or Access Token"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              You can use either an <strong>API Key</strong> (v3
-                              auth) or <strong>Access Token</strong> (v4 auth /
-                              Bearer token). Get yours at{" "}
-                              <a
-                                href="https://www.themoviedb.org/settings/api"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-white hover:underline"
-                              >
-                                themoviedb.org
-                              </a>
-                            </p>
+                            {/* TMDB Key */}
+                            <div>
+                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                                TMDB API Key
+                              </label>
+                              <Input
+                                type="password"
+                                value={config.tmdb_api_key || ""}
+                                onChange={(e) =>
+                                  setConfig({
+                                    ...config,
+                                    tmdb_api_key: e.target.value,
+                                  })
+                                }
+                                placeholder="Enter your TMDB API key or Access Token"
+                              />
+                              <p className="text-xs text-muted-foreground mt-1.5">
+                                Used for metadata, posters, and search. Get yours at{" "}
+                                <a
+                                  href="https://www.themoviedb.org/settings/api"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-white hover:underline"
+                                >
+                                  themoviedb.org
+                                </a>
+                              </p>
+                            </div>
+
+                            {/* OMDb Key */}
+                            <div>
+                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                                OMDb API Key (IMDb Ratings)
+                              </label>
+                              <Input
+                                type="password"
+                                value={config.omdb_api_key || ""}
+                                onChange={(e) =>
+                                  setConfig({
+                                    ...config,
+                                    omdb_api_key: e.target.value,
+                                  })
+                                }
+                                placeholder="Enter your OMDb API key"
+                              />
+                              <p className="text-xs text-muted-foreground mt-1.5">
+                                Used for fetching IMDb ratings for episodes. Get yours at{" "}
+                                <a
+                                  href="https://www.omdbapi.com/apikey.aspx"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-white hover:underline"
+                                >
+                                  omdbapi.com
+                                </a>
+                              </p>
+                            </div>
                           </motion.div>
                         )}
                       </div>

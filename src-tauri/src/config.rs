@@ -321,6 +321,8 @@ pub struct Config {
     pub ffmpeg_path: Option<String>,
     #[serde(default)]
     pub tmdb_api_key: Option<String>,
+    #[serde(default)]
+    pub omdb_api_key: Option<String>,
     // Cloud cache settings
     #[serde(default)]
     pub cloud_cache_enabled: bool,
@@ -385,6 +387,7 @@ impl Default for Config {
             ffprobe_path: None,
             ffmpeg_path: None,
             tmdb_api_key: None,
+            omdb_api_key: None,
             cloud_cache_enabled: false,
             cloud_cache_dir: None,
             cloud_cache_max_mb: 1024,
@@ -434,7 +437,7 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     };
     // Apply validation bounds
     config.cloud_cache_max_mb = config.cloud_cache_max_mb.min(100000);
-    config.zip_cache_max_gb = config.zip_cache_max_gb.min(100);
+    config.zip_cache_max_gb = config.zip_cache_max_gb.min(500);
     config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
     Ok(config)
 }

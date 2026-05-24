@@ -6,7 +6,6 @@ use flate2::read::GzDecoder;
 use rar_stream::{
     FileMedia as RarFileMedia, ParseOptions as RarParseOptions, RarFilesPackage, ReadInterval,
 };
-use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, RANGE};
 use reqwest::Client as AsyncClient;
 use serde::Serialize;
@@ -391,7 +390,7 @@ fn fetch_drive_media_response(
     access_token: &str,
     file_id: &str,
 ) -> Result<reqwest::blocking::Response, String> {
-    let client = Client::builder().build().map_err(|e| e.to_string())?;
+    let client = crate::http_client::shared_client();
     client
         .get(format!(
             "{}/files/{}?alt=media&supportsAllDrives=true",
@@ -404,7 +403,7 @@ fn fetch_drive_media_response(
 }
 
 fn fetch_drive_file_size(access_token: &str, file_id: &str) -> Result<u64, String> {
-    let client = Client::builder().build().map_err(|e| e.to_string())?;
+    let client = crate::http_client::shared_client();
     let payload = client
         .get(format!(
             "{}/files/{}?fields=size&supportsAllDrives=true",

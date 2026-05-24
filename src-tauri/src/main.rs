@@ -6,6 +6,7 @@ mod config;
 mod database;
 mod direct_link_manager;
 mod download_manager;
+mod http_client;
 mod gdrive;
 mod log_buffer;
 mod media_manager;
@@ -79,7 +80,8 @@ pub struct AppState {
     pub gdrive_client: gdrive::GoogleDriveClient,
     pub watch_together: Arc<tokio::sync::Mutex<watch_together::WatchTogetherManager>>,
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
-    pub oauth_listener: Arc<Mutex<Option<std::net::TcpListener>>>,
+    pub oauth_listener: Arc<Mutex<Option<tokio::net::TcpListener>>>,
+    pub oauth_nonce: Arc<Mutex<Option<String>>>,
 }
 
 // API Response types
@@ -524,12 +526,21 @@ async fn get_recent_watch_activities(
         .map_err(|e| e.to_string())
 }
 
+// Get all analytics data for the analytics dashboard
+#[tauri::command]
+async fn get_analytics_data(
+    state: State<'_, AppState>,
+) -> Result<database::AnalyticsData, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_analytics_data().map_err(|e| e.to_string())
+}
+
 // ==================== GOOGLE DRIVE COMMANDS ====================
 
 /// Check if user is connected to Google Drive
 #[tauri::command]
 async fn gdrive_is_connected(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.gdrive_client.is_authenticated())
+    Ok(state.gdrive_client.validate_tokens().await)
 }
 
 /// Get Google Drive access token for social features
@@ -549,12 +560,21 @@ async fn gdrive_get_account_info(
 /// Start Google Drive OAuth flow - returns auth URL
 #[tauri::command]
 async fn gdrive_start_auth(state: State<'_, AppState>) -> Result<String, String> {
+    // Drop any previous listener first to free the port
+    *state.oauth_listener.lock().unwrap() = None;
+
     // Start local TCP listener BEFORE opening browser so it's ready
     // to receive the callback redirect from the backend
-    let listener = gdrive::start_oauth_listener()?;
+    let listener = gdrive::start_oauth_listener().await?;
     *state.oauth_listener.lock().unwrap() = Some(listener);
 
-    let auth_url = gdrive::get_auth_url();
+    // Generate a cryptographic nonce for CSRF/client-session binding.
+    // The backend will store this alongside the OAuth state and return it
+    // in the callback redirect, so we can verify the flow was initiated by us.
+    let nonce = Uuid::new_v4().to_string();
+    *state.oauth_nonce.lock().unwrap() = Some(nonce.clone());
+
+    let auth_url = gdrive::get_auth_url_with_nonce(&nonce);
 
     // Open the URL in the default browser
     if let Err(e) = open::that(&auth_url) {
@@ -576,9 +596,12 @@ async fn gdrive_complete_auth(
         "OAuth callback listener not started. Did you call gdrive_start_auth first?".to_string()
     })?;
 
+    // Retrieve the expected nonce (set in gdrive_start_auth)
+    let expected_nonce = state.oauth_nonce.lock().unwrap().take();
+
     // Wait for tokens from backend (it redirects to localhost with tokens)
-    let tokens = gdrive::wait_for_oauth_callback(&listener).await?;
-    println!("[GDRIVE] Received tokens from backend");
+    let tokens = gdrive::wait_for_oauth_callback_with_nonce(&listener, expected_nonce.as_deref()).await?;
+    println!("[GDRIVE] Received tokens from backend (nonce verified)");
 
     // Store tokens
     state.gdrive_client.store_tokens(tokens)?;
@@ -591,20 +614,10 @@ async fn gdrive_complete_auth(
 /// Disconnect from Google Drive
 #[tauri::command]
 async fn gdrive_disconnect(state: State<'_, AppState>) -> Result<ApiResponse, String> {
-    state.gdrive_client.clear_tokens()?;
+    state.gdrive_client.revoke_and_clear_tokens().await?;
     Ok(ApiResponse {
         message: "Disconnected from Google Drive".to_string(),
     })
-}
-
-/// Complete OAuth with manually entered authorization code
-/// NOTE: This is deprecated. The new flow uses backend proxy which handles token exchange.
-#[tauri::command]
-async fn gdrive_auth_with_code(
-    _state: State<'_, AppState>,
-    _code: String,
-) -> Result<gdrive::DriveAccountInfo, String> {
-    Err("Manual code entry is no longer supported. Please use the 'Connect Google Drive' button which opens the browser for authentication.".to_string())
 }
 
 /// List folders in Google Drive
@@ -5695,7 +5708,17 @@ async fn clear_progress(state: State<'_, AppState>, media_id: i64) -> Result<Api
     })
 }
 
-// Fix match - update metadata from TMDB
+#[tauri::command]
+async fn update_episode_duration(state: State<'_, AppState>, media_id: i64, duration_seconds: f64) -> Result<ApiResponse, String> {
+    if duration_seconds <= 0.0 {
+        return Ok(ApiResponse { message: "Skipped: invalid duration.".to_string() });
+    }
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_duration(media_id, duration_seconds).map_err(|e| e.to_string())?;
+    Ok(ApiResponse { message: "Duration updated.".to_string() })
+}
+
+// Fix match - update metadata from TMDB (or OMDb hybrid)
 #[tauri::command]
 async fn fix_match(
     window: Window,
@@ -5703,6 +5726,7 @@ async fn fix_match(
     media_id: i64,
     tmdb_id: String,
     media_type: String,
+    imdb_id: Option<String>,
 ) -> Result<ApiResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
@@ -5710,28 +5734,60 @@ async fn fix_match(
     };
 
     let api_key = tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default());
+    let omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
     let image_cache_dir = database::get_image_cache_dir();
-    let api_key_clone = api_key.clone();
-    let tmdb_id_clone = tmdb_id.clone();
-    let media_type_clone = media_type.clone();
-    let image_cache_dir_clone = image_cache_dir.clone();
 
-    // Prevent Update Match from hanging indefinitely on unstable network/image requests.
-    let metadata = tokio::time::timeout(
-        Duration::from_secs(40),
-        tokio::task::spawn_blocking(move || {
-            tmdb::fetch_metadata_by_id(
-                &api_key_clone,
-                &tmdb_id_clone,
-                &media_type_clone,
-                &image_cache_dir_clone,
-            )
-            .map_err(|e| e.to_string())
-        }),
-    )
-    .await
-    .map_err(|_| "Fix Match timed out while fetching metadata. Please try again.".to_string())?
-    .map_err(|e| e.to_string())??;
+    let metadata = if let Some(ref imdb) = imdb_id {
+        // IMDb ID provided: resolve via TMDB /find, then fetch full TMDB metadata
+        let api_key_c = api_key.clone();
+        let imdb_c = imdb.clone();
+        let img_c = image_cache_dir.clone();
+
+        tokio::time::timeout(
+            Duration::from_secs(40),
+            tokio::task::spawn_blocking(move || -> Result<tmdb::TmdbMetadata, String> {
+                let (tmdb_id_resolved, resolved_type) = find_tmdb_id_by_imdb_id(&api_key_c, &imdb_c)
+                    .ok_or_else(|| format!("No TMDB match found for IMDb ID {}", imdb_c))?;
+
+                let mut meta = tmdb::fetch_metadata_by_id(
+                    &api_key_c,
+                    &tmdb_id_resolved,
+                    &resolved_type,
+                    &img_c,
+                )
+                .map_err(|e| format!("TMDB fetch failed: {}", e))?;
+
+                meta.imdb_id = Some(imdb_c);
+                Ok(meta)
+            }),
+        )
+        .await
+        .map_err(|_| "Fix Match timed out while fetching metadata".to_string())?
+        .map_err(|e| e.to_string())??
+
+    } else {
+        // Standard TMDB-only mode
+        let api_key_clone = api_key.clone();
+        let tmdb_id_clone = tmdb_id.clone();
+        let media_type_clone = media_type.clone();
+        let image_cache_dir_clone = image_cache_dir.clone();
+
+        tokio::time::timeout(
+            Duration::from_secs(40),
+            tokio::task::spawn_blocking(move || {
+                tmdb::fetch_metadata_by_id(
+                    &api_key_clone,
+                    &tmdb_id_clone,
+                    &media_type_clone,
+                    &image_cache_dir_clone,
+                )
+                .map_err(|e| e.to_string())
+            }),
+        )
+        .await
+        .map_err(|_| "Fix Match timed out while fetching metadata. Please try again.".to_string())?
+        .map_err(|e| e.to_string())??
+    };
 
     let updated_title = metadata.title.clone();
     let updated_tmdb_id = metadata.tmdb_id.clone();
@@ -6241,6 +6297,24 @@ async fn play_with_mpv(
 
     let display_title = build_mpv_display_title(&media);
 
+    // Resolve effective file size for dynamic cache calculation.
+    // For ZIP media, zip_uncompressed_size is the individual entry size (correct),
+    // while file_size_bytes may contain the total archive size (wrong for caching).
+    let effective_file_size = if media.parent_zip_id.is_some() {
+        media
+            .zip_uncompressed_size
+            .or(media.zip_compressed_size)
+            .or(media.file_size_bytes)
+    } else {
+        media.file_size_bytes
+    };
+
+    println!(
+        "[MPV] Dynamic cache inputs: file_size_bytes={:?}, zip_uncompressed={:?}, zip_compressed={:?} -> effective={:?}, duration={:?}",
+        media.file_size_bytes, media.zip_uncompressed_size, media.zip_compressed_size,
+        effective_file_size, media.duration_seconds
+    );
+
     let pid = match mpv_ipc::launch_mpv_with_tracking(
         &mpv_path_clone,
         &playback_url_clone,
@@ -6252,6 +6326,8 @@ async fn play_with_mpv(
         audio_language.as_deref(),
         subtitle_language.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
+        effective_file_size,
+        media.duration_seconds,
     ) {
         Ok(pid) => pid,
         Err(error) => {
@@ -6778,28 +6854,9 @@ fn http_get_with_retry_auth(
             );
         }
 
-        // Create a fresh client for each attempt to avoid stale connection issues
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .pool_max_idle_per_host(0)
-            .tcp_keepalive(std::time::Duration::from_secs(20))
-            .http1_only()
-            .tcp_nodelay(true)
-            .user_agent("SlasshyVault/1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                last_error = format!("Failed to build HTTP client: {}", e);
-                println!(
-                    "[HTTP] Client build failed (attempt {}): {}",
-                    attempt + 1,
-                    last_error
-                );
-                continue;
-            }
-        };
+        // Use the shared global client to avoid creating/dropping a reqwest
+        // blocking client inside spawn_blocking (which panics in reqwest 0.12).
+        let client = http_client::shared_client();
 
         let request = if use_bearer {
             client
@@ -6861,34 +6918,9 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
             );
         }
 
-        // Create a fresh client for each attempt to avoid stale connection issues
-        // This is important on Windows where error 10054 can occur with pooled connections
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            // Disable connection pooling to avoid stale connection issues on Windows
-            .pool_max_idle_per_host(0)
-            // Enable TCP keepalive to detect dead connections faster
-            .tcp_keepalive(std::time::Duration::from_secs(20))
-            // Force HTTP/1.1 to avoid potential HTTP/2 connection issues
-            .http1_only()
-            // Set TCP nodelay for faster request/response
-            .tcp_nodelay(true)
-            // Add a user agent (some APIs block requests without one)
-            .user_agent("SlasshyVault/1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                last_error = format!("Failed to build HTTP client: {}", e);
-                println!(
-                    "[HTTP] Client build failed (attempt {}): {}",
-                    attempt + 1,
-                    last_error
-                );
-                continue;
-            }
-        };
+        // Use the shared global client to avoid creating/dropping a reqwest
+        // blocking client inside spawn_blocking (which panics in reqwest 0.12).
+        let client = http_client::shared_client();
 
         match client.get(url).send() {
             Ok(response) => {
@@ -6923,6 +6955,144 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
         "Failed after {} retries: {}",
         max_retries, last_error
     ))
+}
+
+// ============================================
+// OMDb Helpers
+// ============================================
+
+const OMDB_PROXY_CREDENTIAL: &str = "__OMDB_BACKEND_PROXY__";
+const DEFAULT_OMDB_PROXY_BASE_URL: &str =
+    "https://slasshyvault.onrender.com/api/omdb";
+
+fn get_omdb_proxy_base_url() -> String {
+    // Check media_config.json for dev_backend_url override
+    let config_path = crate::database::get_app_data_dir().join("media_config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
+                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if !trimmed.is_empty() {
+                    return format!("{}/api/omdb", trimmed);
+                }
+            }
+        }
+    }
+
+    if let Ok(proxy_url) = std::env::var("OMDB_PROXY_URL") {
+        let trimmed = proxy_url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.trim_end_matches('/').to_string();
+        }
+    }
+
+    DEFAULT_OMDB_PROXY_BASE_URL.to_string()
+}
+
+fn is_omdb_backend_proxy(credential: &str) -> bool {
+    credential == OMDB_PROXY_CREDENTIAL
+}
+
+fn get_omdb_credential(user_key: &str) -> String {
+    let trimmed = user_key.trim();
+    if trimmed.is_empty() {
+        OMDB_PROXY_CREDENTIAL.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn build_omdb_url(credential: &str, imdb_id: &str) -> String {
+    if is_omdb_backend_proxy(credential) {
+        let base = get_omdb_proxy_base_url();
+        format!("{}?i={}", base, imdb_id)
+    } else {
+        format!(
+            "https://www.omdbapi.com/?i={}&apikey={}",
+            imdb_id, credential
+        )
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct OmdbEpisodeRating {
+    #[serde(default)]
+    imdbRating: Option<String>,
+    #[serde(default)]
+    imdbVotes: Option<String>,
+    #[serde(default)]
+    Response: Option<String>,
+    #[serde(default)]
+    Error: Option<String>,
+}
+
+fn fetch_imdb_rating_for_id(credential: &str, imdb_id: &str) -> Option<OmdbEpisodeRating> {
+    let url = build_omdb_url(credential, imdb_id);
+
+    let client = http_client::shared_client();
+
+    let response = client.get(&url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let rating: OmdbEpisodeRating = response.json().ok()?;
+    if rating.Response.as_deref() == Some("False") {
+        return None;
+    }
+
+    Some(rating)
+}
+
+fn find_tmdb_id_by_imdb_id(
+    tmdb_credential: &str,
+    imdb_id: &str,
+) -> Option<(String, String)> {
+    // Returns (tmdb_id, media_type)
+    let url = build_tmdb_api_url(
+        &format!("/find/{}", imdb_id),
+        tmdb_credential,
+        "external_source=imdb_id",
+    );
+
+    let client = http_client::shared_client();
+
+    let use_bearer = crate::is_access_token(tmdb_credential)
+        && !tmdb::is_backend_proxy_credential(tmdb_credential);
+
+    let req = if use_bearer {
+        client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", tmdb_credential))
+    } else {
+        client.get(&url)
+    };
+
+    #[derive(serde::Deserialize)]
+    struct TmdbFindResult {
+        #[serde(default)]
+        movie_results: Vec<TmdbFindItem>,
+        #[serde(default)]
+        tv_results: Vec<TmdbFindItem>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TmdbFindItem {
+        id: i64,
+    }
+
+    let response = req.send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let result: TmdbFindResult = response.json().ok()?;
+
+    result
+        .movie_results
+        .first()
+        .map(|r| (r.id.to_string(), "movie".to_string()))
+        .or_else(|| result.tv_results.first().map(|r| (r.id.to_string(), "tv".to_string())))
 }
 
 // TMDB Search result for frontend
@@ -7337,6 +7507,94 @@ async fn get_tv_season_episodes(
     Ok(result)
 }
 
+#[derive(serde::Serialize, Clone)]
+struct ImdbEpisodeRating {
+    imdb_id: String,
+    imdb_rating: Option<f64>,
+    imdb_votes: Option<i64>,
+}
+
+#[tauri::command]
+async fn get_episode_imdb_ratings(
+    state: State<'_, AppState>,
+    tv_id: i64,
+    season_number: i32,
+    episode_numbers: Vec<i32>,
+) -> Result<std::collections::HashMap<i32, ImdbEpisodeRating>, String> {
+    let omdb_credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default())
+    };
+
+    let tmdb_credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let mut results = std::collections::HashMap::new();
+
+    for ep_num in episode_numbers {
+        // Step 1: Get IMDb ID from TMDB external_ids
+        let ext_url = build_tmdb_api_url(
+            &format!("/tv/{}/season/{}/episode/{}/external_ids", tv_id, season_number, ep_num),
+            &tmdb_credential,
+            "",
+        );
+
+        #[derive(serde::Deserialize)]
+        struct EpisodeExternalIds {
+            #[serde(default)]
+            imdb_id: Option<String>,
+        }
+
+        let imdb_id: Option<String> = {
+            let client = http_client::shared_client();
+
+            let use_bearer = crate::is_access_token(&tmdb_credential)
+                && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+
+            let req = if use_bearer {
+                client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
+            } else {
+                client.get(&ext_url)
+            };
+
+            match req.send() {
+                Ok(resp) if resp.status().is_success() => {
+                    let ids: EpisodeExternalIds = resp.json().map_err(|e| e.to_string())?;
+                    ids.imdb_id.filter(|id| !id.trim().is_empty())
+                }
+                _ => None,
+            }
+        };
+
+        let Some(imdb_id) = imdb_id else {
+            continue;
+        };
+
+        // Step 2: Fetch OMDb rating
+        let rating = fetch_imdb_rating_for_id(&omdb_credential, &imdb_id);
+
+        let parsed_rating = rating.as_ref().and_then(|r| {
+            r.imdbRating.as_deref().and_then(|v| v.parse::<f64>().ok())
+        });
+
+        let parsed_votes = rating.as_ref().and_then(|r| {
+            r.imdbVotes.as_deref().and_then(|v| {
+                v.replace(',', "").parse::<i64>().ok()
+            })
+        });
+
+        results.insert(ep_num, ImdbEpisodeRating {
+            imdb_id,
+            imdb_rating: parsed_rating,
+            imdb_votes: parsed_votes,
+        });
+    }
+
+    Ok(results)
+}
+
 // Force refresh episode metadata for a TV series (re-downloads images ONLY for owned episodes)
 #[tauri::command]
 async fn refresh_series_metadata(
@@ -7589,12 +7847,7 @@ fn is_release_date_in_future(release_date: Option<&str>) -> bool {
 }
 
 fn tvmaze_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Option<T>, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent("SlasshyVault/1.0")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_client::shared_client();
 
     let response = client.get(url).send().map_err(|e| e.to_string())?;
     if response.status().as_u16() == 404 {
@@ -8651,6 +8904,83 @@ async fn search_tmdb(
         total_results: results.len(),
         results,
     })
+}
+
+#[derive(serde::Serialize)]
+struct HybridSearchResult {
+    title: String,
+    year: Option<String>,
+    imdb_id: String,
+    media_type: String,
+    plot: Option<String>,
+    poster_url: Option<String>,
+    genre: Option<String>,
+    director: Option<String>,
+    actors: Option<String>,
+    imdb_rating: Option<f64>,
+    // TMDB cross-ref data
+    tmdb_id: Option<i64>,
+    tmdb_poster_path: Option<String>,
+    tmdb_backdrop_path: Option<String>,
+    tmdb_vote_average: Option<f64>,
+}
+
+#[derive(serde::Serialize)]
+struct HybridSearchResponse {
+    results: Vec<HybridSearchResult>,
+}
+
+#[tauri::command]
+async fn search_content(
+    state: State<'_, AppState>,
+    query: String,
+    year: Option<i32>,
+    media_type: Option<String>,
+) -> Result<HybridSearchResponse, String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+
+    let tmdb_credential = tmdb::get_tmdb_credential(&config.tmdb_api_key.unwrap_or_default());
+
+    let tmdb_c = tmdb_credential.clone();
+    let q = query.clone();
+
+    let results = tokio::task::spawn_blocking(move || -> Vec<HybridSearchResult> {
+        let Ok(tmdb_results) = tmdb::search_multi_raw(&tmdb_c, &q) else {
+            return Vec::new();
+        };
+
+        tmdb_results
+            .into_iter()
+            .filter(|item| {
+                media_type.as_ref().map_or(true, |mt| item.media_type == *mt)
+            })
+            .map(|item| HybridSearchResult {
+                title: item.title.unwrap_or_else(|| item.name.unwrap_or_default()),
+                year: item.release_date.as_deref().or(item.first_air_date.as_deref())
+                    .and_then(|d| d.get(..4)).map(|y| y.to_string()),
+                imdb_id: String::new(),
+                media_type: item.media_type,
+                plot: item.overview,
+                poster_url: item.poster_path.as_ref()
+                    .map(|p| format!("https://image.tmdb.org/t/p/w500{}", p)),
+                genre: None,
+                director: None,
+                actors: None,
+                imdb_rating: None,
+                tmdb_id: Some(item.id),
+                tmdb_poster_path: item.poster_path,
+                tmdb_backdrop_path: item.backdrop_path,
+                tmdb_vote_average: item.vote_average,
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(HybridSearchResponse { results })
 }
 
 #[tauri::command]
@@ -10452,6 +10782,8 @@ async fn background_cloud_poll(app_handle: AppHandle) {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     println!("[CLOUD BG] Background cloud polling started (5-second interval)");
+    let mut last_zip_cache_cleanup = std::time::Instant::now();
+    const ZIP_CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
     loop {
         // Get state from app handle
@@ -10462,6 +10794,26 @@ async fn background_cloud_poll(app_handle: AppHandle) {
             // Not connected - wait and retry (silent, don't spam logs)
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
+        }
+
+        // Periodic zip cache cleanup (runs regardless of cloud poll results)
+        if last_zip_cache_cleanup.elapsed() >= ZIP_CACHE_CLEANUP_INTERVAL {
+            let zip_cache_config = {
+                let config = state.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                build_zip_cache_config(&config)
+            };
+            match tokio::task::spawn_blocking(move || zip_manager::cleanup_stale_zip_cache(&zip_cache_config)).await {
+                Ok(Ok(())) => {
+                    println!("[ZIP CACHE] Periodic cleanup completed");
+                }
+                Ok(Err(e)) => {
+                    println!("[ZIP CACHE] Periodic cleanup warning: {}", e);
+                }
+                Err(e) => {
+                    println!("[ZIP CACHE] Periodic cleanup task error: {}", e);
+                }
+            }
+            last_zip_cache_cleanup = std::time::Instant::now();
         }
 
         // Cloud-only mode: No folder check needed - we monitor entire Drive
@@ -13426,6 +13778,7 @@ fn main() {
         )),
         wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
         oauth_listener: Arc::new(Mutex::new(None)),
+        oauth_nonce: Arc::new(Mutex::new(None)),
     };
 
     // Create system tray menu
@@ -13717,6 +14070,7 @@ fn main() {
             // Social sync commands
             get_watch_stats,
             get_recent_watch_activities,
+            get_analytics_data,
             // App reset command
             clear_all_app_data,
             restart_app,
@@ -13745,6 +14099,7 @@ fn main() {
             zip_get_stream_info,
             update_progress,
             clear_progress,
+            update_episode_duration,
             fix_match,
             play_with_mpv,
             play_with_vlc,
@@ -13760,10 +14115,12 @@ fn main() {
             stop_transcode_stream,
             get_stream_info_with_transcode,
             search_tmdb,
+            search_content,
             get_tmdb_trending,
             get_movie_details,
             get_tv_details,
             get_tv_season_episodes,
+            get_episode_imdb_ratings,
             refresh_series_metadata,
             get_tmdb_release_schedule,
             create_movie_reminder,
@@ -13783,7 +14140,6 @@ fn main() {
             gdrive_get_account_info,
             gdrive_start_auth,
             gdrive_complete_auth,
-            gdrive_auth_with_code,
             gdrive_disconnect,
             gdrive_list_folders,
             gdrive_list_files,

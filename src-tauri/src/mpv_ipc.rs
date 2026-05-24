@@ -9,6 +9,27 @@ use std::time::Duration;
 
 const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
 
+/// Calculate dynamic demuxer cache size for a given target buffer duration.
+/// Falls back to 200 MiB if file size or duration is unknown.
+fn calculate_dynamic_demuxer_bytes(file_size_bytes: Option<i64>, duration_seconds: Option<f64>, target_secs: f64) -> String {
+    const MIN_BYTES: u64 = 50 * 1024 * 1024;       // 50 MiB floor
+    const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;  // 2 GiB ceiling
+    const FALLBACK: &str = "200MiB";
+
+    let (Some(size), Some(duration)) = (file_size_bytes, duration_seconds) else {
+        return FALLBACK.to_string();
+    };
+    if duration <= 0.0 || size <= 0 {
+        return FALLBACK.to_string();
+    }
+
+    let bytes_per_sec = (size as f64) / duration;
+    let target = (bytes_per_sec * target_secs) as u64;
+    let clamped = target.clamp(MIN_BYTES, MAX_BYTES);
+
+    format!("{}MiB", clamped / (1024 * 1024))
+}
+
 /// Progress info saved/loaded from temp file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MpvProgressInfo {
@@ -242,6 +263,8 @@ pub fn launch_mpv_with_tracking(
     audio_language: Option<&str>,
     subtitle_language: Option<&str>,
     ipc_server: Option<&str>,
+    file_size_bytes: Option<i64>,
+    duration_seconds: Option<f64>,
 ) -> Result<u32, String> {
     crate::config::validate_executable_path(mpv_path, "mpv")?;
 
@@ -448,10 +471,17 @@ pub fn launch_mpv_with_tracking(
         // Always set cache options for URL sources
         cmd.arg("--cache=yes");
         if is_local_zip_proxy {
-            cmd.arg("--demuxer-max-bytes=200MiB");
-            cmd.arg("--demuxer-max-back-bytes=128MiB");
+            let dynamic_bytes = calculate_dynamic_demuxer_bytes(file_size_bytes, duration_seconds, 120.0);
+            cmd.arg(format!("--demuxer-max-bytes={}", dynamic_bytes));
+            // Back buffer: ~30 seconds of video
+            let back_bytes = calculate_dynamic_demuxer_bytes(
+                file_size_bytes,
+                duration_seconds,
+                30.0,
+            );
+            cmd.arg(format!("--demuxer-max-back-bytes={}", back_bytes));
             cmd.arg("--demuxer-readahead-secs=30");
-            println!("[MPV] Using turbo cache profile for local ZIP proxy");
+            println!("[MPV] Using dynamic cache profile for ZIP proxy (forward={}, back={})", dynamic_bytes, back_bytes);
         } else {
             cmd.arg("--demuxer-max-bytes=500MiB");
             cmd.arg("--demuxer-max-back-bytes=100MiB");

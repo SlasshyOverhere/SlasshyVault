@@ -6,7 +6,6 @@ use percent_encoding::percent_decode_str;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, RANGE};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 const DDL_TAIL_BYTES: u64 = 131_072;
 const DDL_LOCAL_HEADER_PREFETCH_BYTES: u64 = 4096;
@@ -361,10 +360,7 @@ fn index_zip_archive(
 }
 
 fn build_client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+    Ok(crate::http_client::long_client().clone())
 }
 
 fn fetch_range(client: &Client, url: &str, start: u64, end: u64) -> Result<Vec<u8>, String> {

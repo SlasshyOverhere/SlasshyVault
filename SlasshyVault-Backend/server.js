@@ -14,6 +14,7 @@ const app = express();
 app.disable('x-powered-by');
 
 const PORT = process.env.PORT || 3001;
+const OAUTH_CALLBACK_BASE = process.env.OAUTH_CALLBACK_URL || 'http://localhost:8085/callback';
 
 // Google OAuth credentials (stored securely on server)
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -21,15 +22,21 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 // Auto-detect redirect URI from request if not set
 const getRedirectUri = (req) => {
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+
+  // For local dev, always construct from the actual request so the
+  // OAuth state (stored in-memory on this server) matches the callback.
+  if (host && (host.startsWith('localhost') || host.startsWith('127.'))) {
+    return `${protocol}://${host}/auth/callback`;
+  }
+
   if (process.env.OAUTH_REDIRECT_URL) {
     return process.env.OAUTH_REDIRECT_URL;
   }
   if (process.env.REDIRECT_URI) {
     return process.env.REDIRECT_URI;
   }
-  // Fallback: construct from request
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${protocol}://${host}/auth/callback`;
 };
 
@@ -84,6 +91,19 @@ const TMDB_MAX_INFLIGHT_PER_KEY = parseNonNegativeInt(process.env.TMDB_MAX_INFLI
 const TMDB_PROXY_LOGS_ENABLED = process.env.TMDB_PROXY_LOGS !== '0';
 const TMDB_PROXY_DEBUG_ENABLED = process.env.TMDB_PROXY_DEBUG === '1';
 
+// ============================================
+// OMDb Credential Pool (up to 5 keys)
+// ============================================
+
+const OMDB_API_BASE = 'https://www.omdbapi.com';
+// No limit on OMDb keys - users can add as many as they want
+const OMDB_RATE_LIMIT_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_RATE_LIMIT_COOLDOWN_MS, 15000);
+const OMDB_AUTH_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_AUTH_FAILURE_COOLDOWN_MS, 60000);
+const OMDB_SERVER_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_SERVER_FAILURE_COOLDOWN_MS, 3000);
+const OMDB_MAX_INFLIGHT_PER_KEY = parseNonNegativeInt(process.env.OMDB_MAX_INFLIGHT_PER_KEY, 0);
+const OMDB_PROXY_LOGS_ENABLED = process.env.OMDB_PROXY_LOGS !== '0';
+const OMDB_PROXY_DEBUG_ENABLED = process.env.OMDB_PROXY_DEBUG === '1';
+
 const WT_LIVE_LOGS_ENABLED = process.env.WT_LIVE_LOGS === '1';
 
 function isCorsOriginAllowed(origin) {
@@ -96,6 +116,7 @@ app.use(cors({
   origin(origin, callback) {
     callback(null, isCorsOriginAllowed(origin));
   },
+  credentials: true,
 }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -137,14 +158,42 @@ const runtimeRateByIp = new Map();
 const runtimeAuthByIp = new Map();
 
 const tokenCache = new Map(); // accessToken -> { userInfo, expiresAt }
-const TOKEN_CACHE_TTL = 60 * 1000; // 60 seconds
+const TOKEN_CACHE_TTL = 30 * 1000; // 30 seconds
 const TOKEN_CACHE_MAX_SIZE = 500;
 
+/**
+ * Explicitly invalidate a cached token entry (e.g. on logout).
+ * @param {string} token - The access token to evict from cache.
+ */
+function invalidateTokenCache(token) {
+  const normalized = normalizeId(token || '', 4096);
+  if (normalized) tokenCache.delete(normalized);
+}
+
 const oauthSessionStore = new Map(); // sessionId -> { tokens, createdAt }
-const oauthStateStore = new Map(); // state -> createdAt
-const OAUTH_SESSION_TTL = 30000; // 30 seconds
+const oauthStateStore = new Map(); // state -> { createdAt, nonce }
+const OAUTH_SESSION_TTL = 300000; // 5 minutes
 
 const rateLimiterMap = new Map(); // IP -> { count, resetAt }
+
+const sessionRateByIp = new Map(); // IP -> { timestamps: [] }
+const SESSION_RATE_WINDOW_MS = 60 * 1000; // 1 minute
+const SESSION_RATE_MAX_REQUESTS = 10; // 10 requests per minute
+
+function consumeSessionRate(ip, now) {
+  const existing = sessionRateByIp.get(ip) || { timestamps: [] };
+  existing.timestamps = existing.timestamps.filter((ts) => now - ts < SESSION_RATE_WINDOW_MS);
+  existing.timestamps.push(now);
+  sessionRateByIp.set(ip, existing);
+
+  if (existing.timestamps.length > SESSION_RATE_MAX_REQUESTS) {
+    const oldestTs = existing.timestamps[0];
+    const retryAfterMs = Math.max(1000, SESSION_RATE_WINDOW_MS - (now - oldestTs));
+    return { allowed: false, retryAfterMs };
+  }
+
+  return { allowed: true };
+}
 
 function wtDebugLog(...args) {
   if (!WT_LIVE_LOGS_ENABLED) return;
@@ -367,7 +416,7 @@ setInterval(() => {
 
 }, Math.max(60 * 1000, RUNTIME_SECURITY_CLEANUP_MS)).unref?.();
 
-// Clean up expired OAuth sessions
+// Clean up expired OAuth sessions, rate limiter entries, and token cache
 setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of oauthSessionStore) {
@@ -375,14 +424,27 @@ setInterval(() => {
       oauthSessionStore.delete(id);
     }
   }
-  for (const [state, createdAt] of oauthStateStore) {
-    if (now - createdAt > OAUTH_SESSION_TTL) {
+  for (const [state, entry] of oauthStateStore) {
+    if (now - entry.createdAt > OAUTH_SESSION_TTL) {
       oauthStateStore.delete(state);
     }
   }
   for (const [ip, entry] of rateLimiterMap) {
     if (now > entry.resetAt) {
       rateLimiterMap.delete(ip);
+    }
+  }
+  for (const [ip, state] of sessionRateByIp.entries()) {
+    state.timestamps = state.timestamps.filter((ts) => now - ts < SESSION_RATE_WINDOW_MS);
+    if (state.timestamps.length === 0) {
+      sessionRateByIp.delete(ip);
+    } else {
+      sessionRateByIp.set(ip, state);
+    }
+  }
+  for (const [token, entry] of tokenCache) {
+    if (now > entry.expiresAt) {
+      tokenCache.delete(token);
     }
   }
 }, 30000).unref?.();
@@ -490,6 +552,310 @@ const tmdbCredentialState = tmdbCredentials.map(() => ({
   totalFailures: 0,
 }));
 let tmdbCredentialCursor = 0;
+
+// ============================================
+// OMDb Credential Pool
+// ============================================
+
+function collectOmdbCredentialCandidates() {
+  const candidates = [];
+
+  // Explicit list vars (comma/newline/semicolon separated)
+  candidates.push(...splitEnvList(process.env.OMDB_API_KEYS));
+
+  // Single value vars
+  candidates.push(...splitEnvList(process.env.OMDB_API_KEY));
+
+  // Numbered vars (e.g. OMDB_API_KEY_1 ... OMDB_API_KEY_5)
+  const numbered = Object.entries(process.env)
+    .filter(([name, value]) => {
+      if (!value) return false;
+      return /^OMDB_API_KEY(?:_?\d+)?$/i.test(name);
+    })
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  for (const [, value] of numbered) {
+    candidates.push(...splitEnvList(value));
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    const value = raw.trim();
+    if (!value || value.length < 5) continue; // OMDb keys are at least 5 chars
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+
+  return unique.map((value, index) => ({
+    id: index + 1,
+    type: 'apiKey',
+    value,
+  }));
+}
+
+const omdbCredentials = collectOmdbCredentialCandidates();
+const omdbCredentialState = omdbCredentials.map(() => ({
+  cooldownUntil: 0,
+  inFlight: 0,
+  totalRequests: 0,
+  totalSuccess: 0,
+  totalRateLimited: 0,
+  totalFailures: 0,
+}));
+let omdbCredentialCursor = 0;
+
+function selectOmdbCredentialIndex(excluded = new Set()) {
+  if (omdbCredentials.length === 0) return null;
+
+  const now = Date.now();
+  const total = omdbCredentials.length;
+
+  let bestReadyIdx = null;
+  let bestReadyInFlight = Number.POSITIVE_INFINITY;
+  let bestReadyOffset = Number.POSITIVE_INFINITY;
+
+  let bestReadyIgnoringCapIdx = null;
+  let bestReadyIgnoringCapInFlight = Number.POSITIVE_INFINITY;
+  let bestReadyIgnoringCapOffset = Number.POSITIVE_INFINITY;
+
+  let earliestCooldownIdx = null;
+  let earliestCooldownTs = Number.POSITIVE_INFINITY;
+  let earliestCooldownOffset = Number.POSITIVE_INFINITY;
+  let earliestCooldownInFlight = Number.POSITIVE_INFINITY;
+
+  for (let offset = 0; offset < total; offset++) {
+    const idx = (omdbCredentialCursor + offset) % total;
+    if (excluded.has(idx)) continue;
+
+    const state = omdbCredentialState[idx];
+    const inFlight = state.inFlight || 0;
+    const isReady = state.cooldownUntil <= now;
+    const underCap = OMDB_MAX_INFLIGHT_PER_KEY <= 0 || inFlight < OMDB_MAX_INFLIGHT_PER_KEY;
+
+    if (isReady && underCap) {
+      if (
+        bestReadyIdx === null ||
+        inFlight < bestReadyInFlight ||
+        (inFlight === bestReadyInFlight && offset < bestReadyOffset)
+      ) {
+        bestReadyIdx = idx;
+        bestReadyInFlight = inFlight;
+        bestReadyOffset = offset;
+      }
+      continue;
+    }
+
+    if (isReady) {
+      if (
+        bestReadyIgnoringCapIdx === null ||
+        inFlight < bestReadyIgnoringCapInFlight ||
+        (inFlight === bestReadyIgnoringCapInFlight && offset < bestReadyIgnoringCapOffset)
+      ) {
+        bestReadyIgnoringCapIdx = idx;
+        bestReadyIgnoringCapInFlight = inFlight;
+        bestReadyIgnoringCapOffset = offset;
+      }
+      continue;
+    }
+
+    if (
+      earliestCooldownIdx === null ||
+      state.cooldownUntil < earliestCooldownTs ||
+      (state.cooldownUntil === earliestCooldownTs && inFlight < earliestCooldownInFlight) ||
+      (state.cooldownUntil === earliestCooldownTs && inFlight === earliestCooldownInFlight && offset < earliestCooldownOffset)
+    ) {
+      earliestCooldownIdx = idx;
+      earliestCooldownTs = state.cooldownUntil;
+      earliestCooldownInFlight = inFlight;
+      earliestCooldownOffset = offset;
+    }
+  }
+
+  if (bestReadyIdx !== null) {
+    omdbCredentialCursor = (bestReadyIdx + 1) % total;
+    return bestReadyIdx;
+  }
+
+  if (bestReadyIgnoringCapIdx !== null) {
+    omdbCredentialCursor = (bestReadyIgnoringCapIdx + 1) % total;
+    return bestReadyIgnoringCapIdx;
+  }
+
+  if (earliestCooldownIdx !== null) {
+    omdbCredentialCursor = (earliestCooldownIdx + 1) % total;
+    return earliestCooldownIdx;
+  }
+
+  return null;
+}
+
+function omdbLog(level, requestId, message, meta = null) {
+  if (!OMDB_PROXY_LOGS_ENABLED) return;
+
+  const prefix = requestId ? `[OMDB][${requestId}]` : '[OMDB]';
+  const suffix = meta ? ` ${JSON.stringify(meta)}` : '';
+  const line = `${prefix} ${message}${suffix}`;
+
+  if (level === 'error') {
+    console.error(line);
+    return;
+  }
+  if (level === 'warn') {
+    console.warn(line);
+    return;
+  }
+  console.log(line);
+}
+
+async function fetchOmdbOnce(queryParams, credential) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(queryParams)) {
+    if (value !== undefined && value !== null) {
+      params.append(key, String(value));
+    }
+  }
+  // Never allow clients to force a key
+  params.delete('apikey');
+
+  const url = new URL(OMDB_API_BASE);
+  params.set('apikey', credential.value);
+  url.search = params.toString();
+
+  return fetch(url.toString(), {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+}
+
+async function fetchOmdbWithFailover(queryParams, requestId = null) {
+  if (omdbCredentials.length === 0) {
+    omdbLog('error', requestId, 'OMDb proxy request failed - credential pool is empty');
+    return {
+      error: {
+        status: 503,
+        message: 'OMDb credentials are not configured on the backend',
+      },
+    };
+  }
+
+  const attempted = new Set();
+  let lastFailure = {
+    status: 502,
+    message: 'OMDb request failed for all configured credentials',
+  };
+
+  for (let attempt = 0; attempt < omdbCredentials.length; attempt++) {
+    const credentialIndex = selectOmdbCredentialIndex(attempted);
+    if (credentialIndex === null) break;
+    attempted.add(credentialIndex);
+
+    const credential = omdbCredentials[credentialIndex];
+    const state = omdbCredentialState[credentialIndex];
+    const attemptStartedAtMs = Date.now();
+    const cooldownRemainingMs = Math.max(0, state.cooldownUntil - attemptStartedAtMs);
+
+    state.inFlight += 1;
+    state.totalRequests += 1;
+
+    omdbLog('info', requestId, 'Trying OMDb credential', {
+      attempt: attempt + 1,
+      keyId: credential.id,
+      inFlight: state.inFlight,
+      cooldownRemainingMs,
+    });
+
+    try {
+      const response = await fetchOmdbOnce(queryParams, credential);
+
+      if (response.status === 429) {
+        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after')) || OMDB_RATE_LIMIT_COOLDOWN_MS;
+        state.cooldownUntil = Date.now() + retryAfterMs;
+        state.totalRateLimited += 1;
+        omdbLog('warn', requestId, 'OMDb rate limit on credential, rotating key', {
+          keyId: credential.id,
+          retryAfterMs,
+          inFlight: state.inFlight,
+        });
+        lastFailure = {
+          status: 429,
+          message: `OMDb rate limit hit on credential #${credential.id}`,
+        };
+        continue;
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        state.cooldownUntil = Date.now() + OMDB_AUTH_FAILURE_COOLDOWN_MS;
+        state.totalFailures += 1;
+        omdbLog('warn', requestId, 'OMDb credential rejected, rotating key', {
+          keyId: credential.id,
+          status: response.status,
+          cooldownMs: OMDB_AUTH_FAILURE_COOLDOWN_MS,
+          inFlight: state.inFlight,
+        });
+        lastFailure = {
+          status: response.status,
+          message: `OMDb credential #${credential.id} was rejected`,
+        };
+        continue;
+      }
+
+      if (response.status >= 500) {
+        state.cooldownUntil = Date.now() + OMDB_SERVER_FAILURE_COOLDOWN_MS;
+        state.totalFailures += 1;
+        omdbLog('warn', requestId, 'OMDb upstream 5xx, rotating key', {
+          keyId: credential.id,
+          status: response.status,
+          cooldownMs: OMDB_SERVER_FAILURE_COOLDOWN_MS,
+          inFlight: state.inFlight,
+        });
+        lastFailure = {
+          status: response.status,
+          message: `OMDb upstream error ${response.status}`,
+        };
+        continue;
+      }
+
+      // Success
+      state.cooldownUntil = 0;
+      state.totalSuccess += 1;
+      omdbLog('info', requestId, 'OMDb request completed', {
+        keyId: credential.id,
+        status: response.status,
+        attemptsUsed: attempt + 1,
+        inFlight: state.inFlight,
+      });
+      return {
+        response,
+        credentialId: credential.id,
+        attemptsUsed: attempt + 1,
+      };
+    } catch (error) {
+      state.cooldownUntil = Date.now() + OMDB_SERVER_FAILURE_COOLDOWN_MS;
+      state.totalFailures += 1;
+      omdbLog('warn', requestId, 'OMDb network error, rotating key', {
+        keyId: credential.id,
+        cooldownMs: OMDB_SERVER_FAILURE_COOLDOWN_MS,
+        error: error.message || 'unknown network error',
+        inFlight: state.inFlight,
+      });
+      lastFailure = {
+        status: 502,
+        message: `OMDb request failed: ${error.message || 'unknown network error'}`,
+      };
+    } finally {
+      state.inFlight = Math.max(0, state.inFlight - 1);
+    }
+  }
+
+  omdbLog('error', requestId, 'OMDb request failed across credential pool', {
+    attempts: attempted.size,
+    finalStatus: lastFailure.status,
+    finalMessage: lastFailure.message,
+  });
+  return { error: lastFailure };
+}
 
 function selectTmdbCredentialIndex(excluded = new Set()) {
   if (tmdbCredentials.length === 0) return null;
@@ -1185,6 +1551,16 @@ app.get('/health/runtime', runtimeMetricsAuth, (req, res) => {
       totalRateLimited: tmdbCredentialState[index].totalRateLimited,
       totalFailures: tmdbCredentialState[index].totalFailures,
     })),
+    omdbCredentials: omdbCredentials.length,
+    omdbPool: omdbCredentials.map((credential, index) => ({
+      id: credential.id,
+      inFlight: omdbCredentialState[index].inFlight,
+      cooldownRemainingMs: Math.max(0, omdbCredentialState[index].cooldownUntil - now),
+      totalRequests: omdbCredentialState[index].totalRequests,
+      totalSuccess: omdbCredentialState[index].totalSuccess,
+      totalRateLimited: omdbCredentialState[index].totalRateLimited,
+      totalFailures: omdbCredentialState[index].totalFailures,
+    })),
   });
 });
 
@@ -1243,6 +1619,54 @@ app.get('/api/tmdb/*tmdbPath', async (req, res) => {
   res.status(response.status).send(payload);
 });
 
+// ============================================
+// OMDb Proxy Endpoint
+// ============================================
+
+app.get('/api/omdb', async (req, res) => {
+  const requestId = createTmdbRequestId(); // reuse same generator
+  const startMs = Date.now();
+
+  const queryParams = { ...req.query };
+  const hasValidParam = queryParams.i || queryParams.t || queryParams.s;
+  if (!hasValidParam) {
+    omdbLog('warn', requestId, 'Rejected OMDb request - missing i, t, or s parameter');
+    return res.status(400).json({ error: 'Missing required parameter: i (IMDb ID), t (title), or s (search)' });
+  }
+
+  if (OMDB_PROXY_DEBUG_ENABLED) {
+    omdbLog('info', requestId, 'Incoming OMDb proxy request', {
+      queryKeys: Object.keys(queryParams),
+      poolSize: omdbCredentials.length,
+    });
+  }
+
+  const result = await fetchOmdbWithFailover(queryParams, requestId);
+  if (result.error) {
+    omdbLog('error', requestId, 'Returning OMDb proxy error to client', {
+      status: result.error.status || 502,
+      message: result.error.message,
+      durationMs: Date.now() - startMs,
+    });
+    return res.status(result.error.status || 502).json({ error: result.error.message });
+  }
+
+  const { response } = result;
+  const contentType = response.headers.get('content-type');
+  const payload = Buffer.from(await response.arrayBuffer());
+
+  omdbLog('info', requestId, 'Returning OMDb proxy response', {
+    upstreamStatus: response.status,
+    keyId: result.credentialId,
+    attemptsUsed: result.attemptsUsed,
+    payloadBytes: payload.length,
+    durationMs: Date.now() - startMs,
+  });
+
+  if (contentType) res.set('Content-Type', contentType);
+  res.status(response.status).send(payload);
+});
+
 app.use('/api/social', socialRateLimiter);
 app.use('/api/watchtogether', socialRateLimiter);
 
@@ -1252,48 +1676,136 @@ app.use('/api/watchtogether', socialRateLimiter);
 
 // Token verification cache to avoid hitting Google's userinfo API on every request.
 // Maps accessToken -> { userInfo, expiresAt }
-// Clean up expired tokens periodically
+// Expired entries are cleaned up in the 30s OAuth/rate-limiter cleanup interval above.
+// Use invalidateTokenCache(token) for immediate eviction (e.g. on logout).
+
+// Social auth session store (HttpOnly cookie-based sessions)
+const socialSessionStore = new Map(); // sessionId -> { googleId, accessToken, userInfo, expiresAt }
+const SOCIAL_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const SOCIAL_SESSION_COOKIE = 'sv_session';
+
+// Periodic cleanup of expired social sessions
 setInterval(() => {
   const now = Date.now();
-  for (const [token, entry] of tokenCache) {
+  for (const [id, entry] of socialSessionStore) {
     if (now > entry.expiresAt) {
-      tokenCache.delete(token);
+      socialSessionStore.delete(id);
     }
   }
-}, 60 * 1000); // Every 60 seconds
+}, 5 * 60 * 1000); // Every 5 minutes
+
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  const result = {};
+  for (const pair of header.split(';')) {
+    const idx = pair.indexOf('=');
+    if (idx < 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const val = pair.slice(idx + 1).trim();
+    result[key] = decodeURIComponent(val);
+  }
+  return result;
+}
+
+function getSessionFromCookie(req) {
+  const cookies = parseCookies(req);
+  const sid = cookies[SOCIAL_SESSION_COOKIE];
+  if (!sid) return null;
+  const entry = socialSessionStore.get(sid);
+  if (!entry || Date.now() > entry.expiresAt) {
+    if (entry) socialSessionStore.delete(sid);
+    return null;
+  }
+  return entry;
+}
 
 // Auth middleware for social endpoints
+// Accepts either a Bearer token (existing flow) or an HttpOnly session cookie.
 const socialAuth = async (req, res, next) => {
   const accessToken = extractBearerToken(req);
-  if (!accessToken) {
-    return res.status(401).json({ error: 'Missing or invalid authorization header' });
-  }
 
-  try {
-    const userInfo = await resolveGoogleUserFromAccessToken(accessToken);
-    if (!userInfo) {
-      return res.status(401).json({ error: 'Invalid access token' });
+  // Path 1: Bearer token present (existing flow, unchanged)
+  if (accessToken) {
+    try {
+      const userInfo = await resolveGoogleUserFromAccessToken(accessToken);
+      if (!userInfo) {
+        return res.status(401).json({ error: 'Invalid access token' });
+      }
+
+      req.googleId = userInfo.id;
+      req.accessToken = accessToken;
+      req.userInfo = userInfo;
+      social.touchUserSession(req.googleId, accessToken);
+      return next();
+    } catch (error) {
+      console.error('[Social] Auth error:', error);
+      return res.status(500).json({ error: 'Authentication failed' });
     }
-
-    req.googleId = userInfo.id;
-    req.accessToken = accessToken;
-    req.userInfo = userInfo;
-    social.touchUserSession(req.googleId, accessToken);
-    return next();
-  } catch (error) {
-    console.error('[Social] Auth error:', error);
-    return res.status(500).json({ error: 'Authentication failed' });
   }
+
+  // Path 2: No Bearer token -- check for session cookie
+  const session = getSessionFromCookie(req);
+  if (session) {
+    req.googleId = session.googleId;
+    req.accessToken = session.accessToken;
+    req.userInfo = session.userInfo;
+    social.touchUserSession(req.googleId, session.accessToken);
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Missing or invalid authorization header' });
 };
 
 // Initialize social profile (called after OAuth)
 app.post('/api/social/init', socialAuth, async (req, res) => {
   try {
     const profile = await social.initUserSocial(req.googleId, req.accessToken, req.userInfo);
+
+    // Issue an HttpOnly session cookie for defense-in-depth
+    const sessionId = crypto.randomUUID();
+    socialSessionStore.set(sessionId, {
+      googleId: req.googleId,
+      accessToken: req.accessToken,
+      userInfo: req.userInfo,
+      expiresAt: Date.now() + SOCIAL_SESSION_TTL,
+    });
+
+    res.cookie(SOCIAL_SESSION_COOKIE, sessionId, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      maxAge: SOCIAL_SESSION_TTL,
+      path: '/',
+    });
+
     res.json({ success: true, profile });
   } catch (error) {
     console.error('[Social] Init error:', error);
     res.status(500).json({ error: 'Failed to initialize social profile' });
+  }
+});
+
+// Logout: clear social state (WS, caches, session cookie)
+app.post('/api/social/logout', socialAuth, async (req, res) => {
+  try {
+    // Clear the social session cookie
+    const cookies = parseCookies(req);
+    const sid = cookies[SOCIAL_SESSION_COOKIE];
+    if (sid) socialSessionStore.delete(sid);
+
+    res.clearCookie(SOCIAL_SESSION_COOKIE, { path: '/' });
+
+    // Evict the access token from the verification cache
+    invalidateTokenCache(req.accessToken);
+
+    // Clear all in-memory social state for this user
+    social.logoutUser(req.googleId);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Social] Logout error:', error);
+    res.status(500).json({ error: 'Failed to logout' });
   }
 });
 
@@ -1612,6 +2124,17 @@ app.post('/api/social/chat/:friendId', socialAuth, async (req, res) => {
 
 // Token session retrieval endpoint
 app.get('/auth/session/:sessionId', async (req, res) => {
+  const sourceIp = getClientIp(req);
+  const now = Date.now();
+
+  const rateCheck = consumeSessionRate(sourceIp, now);
+  if (!rateCheck.allowed) {
+    const retryAfterSec = Math.ceil(rateCheck.retryAfterMs / 1000);
+    res.set('Retry-After', String(retryAfterSec));
+    console.warn(`[SECURITY] /auth/session rate limited for IP ${sourceIp} (retry after ${retryAfterSec}s)`);
+    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  }
+
   const { sessionId } = req.params;
   const session = oauthSessionStore.get(sessionId);
   if (!session) {
@@ -1788,8 +2311,16 @@ function redirectToGoogleAuth(req, res, scopes) {
     return res.status(500).json({ error: 'GOOGLE_CLIENT_ID not configured' });
   }
 
+  // CSRF protection: require a client-generated nonce that must be verified on callback
+  const nonce = req.query.nonce;
+  if (!nonce || typeof nonce !== 'string' || nonce.length < 16 || nonce.length > 128) {
+    return res.status(400).json({ error: 'A valid nonce parameter is required (16-128 chars)' });
+  }
+
   const state = crypto.randomUUID();
-  oauthStateStore.set(state, Date.now());
+  oauthStateStore.set(state, { createdAt: Date.now(), nonce });
+  // Persist state in Redis so it survives Render spin-downs (with nonce for client binding)
+  redis.saveOAuthState(state, nonce).catch(() => {});
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
@@ -1820,17 +2351,27 @@ app.get('/auth/callback', async (req, res) => {
   const { code, error, state } = req.query;
 
   if (error) {
-    return res.redirect(`http://localhost:8085/callback?error=${encodeURIComponent(error)}`);
+    return res.redirect(`${OAUTH_CALLBACK_BASE}?error=${encodeURIComponent(error)}`);
   }
 
-  // Validate state
-  if (!state || !oauthStateStore.has(state)) {
-    return res.redirect(`http://localhost:8085/callback?error=invalid_state`);
+  // Validate state (check in-memory first, then Redis for Render spin-down resilience)
+  if (!state) {
+    return res.redirect(`${OAUTH_CALLBACK_BASE}?error=invalid_state`);
+  }
+  let stateData = oauthStateStore.get(state);
+  if (!stateData) {
+    const redisNonce = await redis.getOAuthStateInitToken(state);
+    if (redisNonce === null) {
+      return res.redirect(`${OAUTH_CALLBACK_BASE}?error=invalid_state`);
+    }
+    // Redis fallback: recover the nonce from Redis for client binding verification
+    stateData = { nonce: redisNonce };
   }
   oauthStateStore.delete(state);
+  redis.deleteOAuthState(state).catch(() => {});
 
   if (!code) {
-    return res.redirect(`http://localhost:8085/callback?error=no_code`);
+    return res.redirect(`${OAUTH_CALLBACK_BASE}?error=no_code`);
   }
 
   try {
@@ -1856,7 +2397,7 @@ app.get('/auth/callback', async (req, res) => {
         error: tokens.error,
         error_description: tokens.error_description,
       });
-      return res.redirect(`http://localhost:8085/callback?error=${encodeURIComponent(tokens.error_description || tokens.error)}`);
+      return res.redirect(`${OAUTH_CALLBACK_BASE}?error=${encodeURIComponent(tokens.error_description || tokens.error)}`);
     }
 
     // Store tokens server-side with session ID
@@ -1869,12 +2410,13 @@ app.get('/auth/callback', async (req, res) => {
       createdAt: Date.now()
     });
 
-    // Redirect with only session ID
-    res.redirect(`http://localhost:8085/callback?session_id=${sessionId}`);
+    // Redirect with session ID and nonce for CSRF verification by client
+    const nonceParam = stateData.nonce ? `&nonce=${encodeURIComponent(stateData.nonce)}` : '';
+    res.redirect(`${OAUTH_CALLBACK_BASE}?session_id=${sessionId}${nonceParam}`);
 
   } catch (err) {
     console.error('Token exchange error:', err);
-    res.redirect(`http://localhost:8085/callback?error=token_exchange_failed`);
+    res.redirect(`${OAUTH_CALLBACK_BASE}?error=token_exchange_failed`);
   }
 });
 

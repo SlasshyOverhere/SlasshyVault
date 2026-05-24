@@ -2,14 +2,16 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event"
 import {
   ChevronLeft, Loader2, RefreshCw, FileText,
-  SlidersHorizontal, Info,
+  SlidersHorizontal, Info, EyeOff, Eye,
 } from "lucide-react"
 import {
   MediaItem, getEpisodes, playMedia, getResumeInfo,
   ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
-  markAsComplete, refreshSeriesMetadata,
+  ImdbEpisodeRating, getEpisodeImdbRatings,
+  markAsComplete, refreshSeriesMetadata, updateEpisodeDuration,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
+  getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { ResumeDialog } from "@/components/ResumeDialog"
@@ -33,6 +35,7 @@ import {
 } from "@/utils/zipPlayback"
 import {
   isProgressPastAutoCompleteThreshold,
+  isMediaMarkedWatched,
 } from "@/utils/playbackProgress"
 import { EpisodeItem } from "@/components/EpisodeItem"
 
@@ -60,6 +63,7 @@ export function EpisodeBrowser({
   const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<
     Map<number, Map<number, TmdbEpisodeInfo>>
   >(new Map())
+  const [imdbRatings, setImdbRatings] = useState<Record<number, ImdbEpisodeRating>>({})
   const [expandedEpisode, setExpandedEpisode] = useState<number | null>(null)
   const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
   const [contentDetailsItem, setContentDetailsItem] = useState<MediaItem | null>(null)
@@ -72,6 +76,8 @@ export function EpisodeBrowser({
     useState<ZipPlaybackLoadingState | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
+  const [spoilerEnabled, setSpoilerEnabled] = useState(() => getSeriesSpoilerEnabled(show.id))
+  const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     loadEpisodes()
@@ -102,17 +108,48 @@ export function EpisodeBrowser({
   }, [selectedSeason])
 
   const loadTmdb = async (season: number) => {
-    if (!show.tmdb_id || tmdbEpisodesBySeason.has(season)) return
+    if (!show.tmdb_id) return
+    const tmdbId = parseInt(show.tmdb_id)
+
+    // Load TMDB episodes
+    if (!tmdbEpisodesBySeason.has(season)) {
+      try {
+        const sd = await getTvSeasonEpisodes(tmdbId, season)
+        if (sd) {
+          const m = new Map<number, TmdbEpisodeInfo>()
+          sd.episodes.forEach(e => m.set(e.episode_number, e))
+          setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+
+          // Write TMDB runtime back to DB for episodes missing duration
+          for (const tmdbEp of sd.episodes) {
+            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
+            const localEp = episodes.find(
+              e => (e.season_number || 1) === season && e.episode_number === tmdbEp.episode_number
+            )
+            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
+              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
+            }
+          }
+        }
+      } catch {
+        /* skip tmdb for this season */
+      }
+    }
+
+    // Fetch IMDb ratings for episodes in this season
     try {
-      const tmdbId = parseInt(show.tmdb_id)
-      const sd = await getTvSeasonEpisodes(tmdbId, season)
-      if (sd) {
-        const m = new Map<number, TmdbEpisodeInfo>()
-        sd.episodes.forEach(e => m.set(e.episode_number, e))
-        setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+      const epNums = episodes
+        .filter(e => (e.season_number || 1) === season)
+        .map(e => e.episode_number || 0)
+        .filter(n => n > 0)
+      if (epNums.length > 0) {
+        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums)
+        if (Object.keys(ratings).length > 0) {
+          setImdbRatings(p => ({ ...p, ...ratings }))
+        }
       }
     } catch {
-      /* skip tmdb for this season */
+      /* imdb ratings unavailable */
     }
   }
 
@@ -160,6 +197,26 @@ export function EpisodeBrowser({
         .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0)),
     [episodes, selectedSeason],
   )
+
+  const toggleSpoiler = useCallback(() => {
+    setSpoilerEnabled(prev => {
+      const next = !prev
+      setSeriesSpoilerEnabled(show.id, next)
+      return next
+    })
+  }, [show.id])
+
+  const handleToggleSpoiler = useCallback((ep: MediaItem) => {
+    setRevealedEpisodes(prev => {
+      const next = new Set(prev)
+      if (next.has(ep.id)) {
+        next.delete(ep.id)
+      } else {
+        next.add(ep.id)
+      }
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     setVisibleEpisodeCount(20)
@@ -328,6 +385,21 @@ export function EpisodeBrowser({
                   Audio
                 </span>
               </button>
+
+              <button
+                onClick={toggleSpoiler}
+                className={cn(
+                  "w-9 h-9 flex items-center justify-center rounded-xl border transition-all duration-200 group relative shadow-sm",
+                  spoilerEnabled
+                    ? "bg-zinc-900/80 border-zinc-700 text-white hover:bg-zinc-800"
+                    : "bg-zinc-900/80 border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800",
+                )}
+              >
+                {spoilerEnabled ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
+                  Spoiler {spoilerEnabled ? "On" : "Off"}
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -380,16 +452,25 @@ export function EpisodeBrowser({
                     const tmdb = tmdbEpisodesBySeason
                       .get(selectedSeason)
                       ?.get(ep.episode_number || 0)
+                    const epNum = ep.episode_number || 0
+                    const imdb = imdbRatings[epNum]
+                    const imdbRatingProp = imdb
+                      ? { rating: imdb.imdb_rating, votes: imdb.imdb_votes }
+                      : null
                     return (
                       <EpisodeItem
                         key={ep.id}
                         episode={ep}
                         index={i}
                         tmdbData={tmdb}
+                        imdbRating={imdbRatingProp}
                         isExpanded={expandedEpisode === ep.id}
+                        spoilerProtected={spoilerEnabled && !isMediaMarkedWatched(ep)}
+                        isRevealed={revealedEpisodes.has(ep.id)}
                         onEpisodeClick={handleEpisodeClick}
                         onToggleExpand={handleToggleExpand}
                         onMarkWatched={handleMarkWatched}
+                        onToggleSpoiler={handleToggleSpoiler}
                         onDownload={onDownload}
                       />
                     )

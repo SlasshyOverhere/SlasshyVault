@@ -96,22 +96,6 @@ export const completeGDriveAuth = async (): Promise<DriveAccountInfo> => {
 };
 
 /**
- * Complete the OAuth flow with a manually entered authorization code
- * Used when the user copies the code from the external callback page
- * Returns account info on success
- */
-export const completeGDriveAuthWithCode = async (
-  code: string,
-): Promise<DriveAccountInfo> => {
-  try {
-    return await invoke<DriveAccountInfo>("gdrive_auth_with_code", { code });
-  } catch (error) {
-    console.error("[GDrive] Failed to complete auth with code:", error);
-    throw error;
-  }
-};
-
-/**
  * Disconnect from Google Drive (revoke access)
  */
 export const disconnectGDrive = async (): Promise<void> => {

@@ -14,3 +14,4 @@ export * from './NotificationCenter'
 export * from './Reminders';
 export * from './DownloadsView';
 export * from './DeveloperConsole';
+export * from './AnalyticsView';

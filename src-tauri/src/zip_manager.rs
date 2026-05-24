@@ -12,7 +12,10 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+
+static CACHE_POLICY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const ZIP_TAIL_BYTES: u64 = 131_072;
@@ -639,10 +642,7 @@ pub fn extract_episode_metadata(entry: &ZipEntry) -> Result<media_manager::Parse
 }
 
 fn build_client() -> Result<Client, ZipError> {
-    Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|_| ZipError::NotAValidZip)
+    Ok(crate::http_client::long_client().clone())
 }
 
 fn fetch_drive_metadata(
@@ -946,6 +946,9 @@ fn copy_and_hash_with_progress<R: Read, W: Write, F: FnMut(u64, u64)>(
 }
 
 fn enforce_cache_policy(cache_config: &ZipCacheConfig, reserve_bytes: u64) -> Result<(), ZipError> {
+    let lock = CACHE_POLICY_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
     let cache_dir = ensure_zip_cache_dir(cache_config)?;
     cleanup_temporary_cache_files(&cache_dir)?;
     let expiry_seconds = u64::from(cache_config.expiry_days).saturating_mul(86_400);
@@ -974,8 +977,9 @@ fn enforce_cache_policy(cache_config: &ZipCacheConfig, reserve_bytes: u64) -> Re
             break;
         }
 
-        remove_cache_entry(&entry)?;
-        total_size = total_size.saturating_sub(entry.size_bytes);
+        if remove_cache_entry(&entry) {
+            total_size = total_size.saturating_sub(entry.size_bytes);
+        }
     }
 
     Ok(())
@@ -1037,14 +1041,30 @@ fn touch_cache_entry(meta_path: &Path, size_bytes: u64) -> Result<(), ZipError> 
     write_cache_metadata(meta_path, &metadata)
 }
 
-fn remove_cache_entry(entry: &ZipCacheEntry) -> Result<(), ZipError> {
+/// Returns `true` if the entry was fully removed, `false` if deletion failed (e.g. file locked).
+fn remove_cache_entry(entry: &ZipCacheEntry) -> bool {
+    let mut ok = true;
     if entry.media_path.exists() {
-        fs::remove_file(&entry.media_path).map_err(|_| ZipError::CorruptedArchive)?;
+        if let Err(e) = fs::remove_file(&entry.media_path) {
+            eprintln!(
+                "[ZIP CACHE] Warning: could not delete {}: {}",
+                entry.media_path.to_string_lossy(),
+                e
+            );
+            ok = false;
+        }
     }
     if entry.meta_path.exists() {
-        fs::remove_file(&entry.meta_path).map_err(|_| ZipError::CorruptedArchive)?;
+        if let Err(e) = fs::remove_file(&entry.meta_path) {
+            eprintln!(
+                "[ZIP CACHE] Warning: could not delete {}: {}",
+                entry.meta_path.to_string_lossy(),
+                e
+            );
+            ok = false;
+        }
     }
-    Ok(())
+    ok
 }
 
 fn is_cache_metadata_file(path: &Path) -> bool {

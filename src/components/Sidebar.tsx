@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
-  History, Settings,
-  Home, RotateCw, Cloud, Clapperboard, Download, Link2
+  Settings,
+  Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
@@ -102,7 +102,7 @@ export function Sidebar({
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "directlinks", label: "Direct Links", icon: Link2 },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
-    { id: "history", label: "History", icon: History },
+    { id: "analytics", label: "History & Analytics", icon: BarChart3 },
   ].filter(item => !item.hidden);
 
   return (

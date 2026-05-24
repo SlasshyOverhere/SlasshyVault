@@ -93,6 +93,7 @@ export interface Config {
   ffprobe_path?: string;
   ffmpeg_path?: string;
   tmdb_api_key?: string;
+  omdb_api_key?: string;
   // Cloud cache settings
   cloud_cache_enabled?: boolean;
   cloud_cache_dir?: string;
@@ -159,6 +160,85 @@ export interface LibraryStats {
   movies: number;
   shows: number;
   episodes: number;
+}
+
+// ==================== ANALYTICS TYPES ====================
+
+export interface AnalyticsOverview {
+  total_watch_time_seconds: number;
+  movies_completed: number;
+  episodes_completed: number;
+  total_completion_rate: number;
+  current_streak_days: number;
+  total_events: number;
+}
+
+export interface HeatmapDay {
+  date: string;
+  watch_seconds: number;
+  event_count: number;
+}
+
+export interface DailyWatchPoint {
+  date: string;
+  watch_seconds: number;
+  movie_count: number;
+  episode_count: number;
+}
+
+export interface ContentTypeBreakdown {
+  content_type: string;
+  count: number;
+  total_seconds: number;
+}
+
+export interface SourceBreakdown {
+  source: string;
+  count: number;
+  total_seconds: number;
+}
+
+export interface TopWatchedItem {
+  title: string;
+  parent_title?: string | null;
+  media_type: string;
+  watch_count: number;
+  total_seconds: number;
+  poster_path?: string | null;
+  tmdb_id?: string | null;
+}
+
+export interface HourDistribution {
+  hour: number;
+  event_count: number;
+  total_seconds: number;
+}
+
+export interface DayOfWeekDistribution {
+  day_of_week: number;
+  event_count: number;
+  total_seconds: number;
+}
+
+export interface CompletionFunnel {
+  started: number;
+  in_progress_25: number;
+  mostly_done_75: number;
+  completed: number;
+}
+
+export interface AnalyticsData {
+  overview: AnalyticsOverview;
+  heatmap: HeatmapDay[];
+  daily_trend: DailyWatchPoint[];
+  content_breakdown: ContentTypeBreakdown[];
+  source_breakdown: SourceBreakdown[];
+  top_watched: TopWatchedItem[];
+  hour_distribution: HourDistribution[];
+  day_distribution: DayOfWeekDistribution[];
+  completion_funnel: CompletionFunnel;
+  library_stats: LibraryStats;
+  recent_events: WatchHistoryEvent[];
 }
 
 export interface DownloadJob {
@@ -311,6 +391,27 @@ export const getWatchHistoryEvents = async (): Promise<WatchHistoryEvent[]> => {
   } catch (error) {
     console.error("Failed to get watch history events:", error);
     return [];
+  }
+};
+
+export const getAnalyticsData = async (): Promise<AnalyticsData> => {
+  try {
+    return await invoke<AnalyticsData>("get_analytics_data");
+  } catch (error) {
+    console.error("Failed to get analytics data:", error);
+    return {
+      overview: { total_watch_time_seconds: 0, movies_completed: 0, episodes_completed: 0, total_completion_rate: 0, current_streak_days: 0, total_events: 0 },
+      heatmap: [],
+      daily_trend: [],
+      content_breakdown: [],
+      source_breakdown: [],
+      top_watched: [],
+      hour_distribution: [],
+      day_distribution: [],
+      completion_funnel: { started: 0, in_progress_25: 0, mostly_done_75: 0, completed: 0 },
+      library_stats: { movies: 0, shows: 0, episodes: 0 },
+      recent_events: [],
+    };
   }
 };
 
@@ -732,6 +833,15 @@ export const clearProgress = async (id: number): Promise<void> => {
   }
 };
 
+// Update duration for a media item (write-back from TMDB)
+export const updateEpisodeDuration = async (mediaId: number, durationSeconds: number): Promise<void> => {
+  try {
+    await invoke("update_episode_duration", { mediaId, durationSeconds });
+  } catch (error) {
+    console.warn("Failed to update episode duration:", error);
+  }
+};
+
 // Play media with MPV (external player)
 export const playMedia = async (
   id: number,
@@ -770,6 +880,7 @@ export const fixMatch = async (
   id: number,
   tmdbId: string,
   type: "movie" | "tv",
+  imdbId?: string,
 ): Promise<void> => {
   try {
     const timeoutMs = 45000;
@@ -778,6 +889,7 @@ export const fixMatch = async (
         mediaId: id,
         tmdbId,
         mediaType: type,
+        imdbId,
       }),
       new Promise((_, reject) => {
         setTimeout(
@@ -801,6 +913,41 @@ export const searchTmdb = async (
   } catch (error) {
     console.error("Failed to search TMDB:", error);
     throw error;
+  }
+};
+
+export interface HybridSearchResult {
+  title: string;
+  year: string | null;
+  imdb_id: string;
+  media_type: string;
+  plot: string | null;
+  poster_url: string | null;
+  genre: string | null;
+  director: string | null;
+  actors: string | null;
+  imdb_rating: number | null;
+  tmdb_id: number | null;
+  tmdb_poster_path: string | null;
+  tmdb_backdrop_path: string | null;
+  tmdb_vote_average: number | null;
+}
+
+export const searchContent = async (
+  query: string,
+  year?: number,
+  media_type?: string,
+): Promise<HybridSearchResult[]> => {
+  try {
+    const response = await invoke<{ results: HybridSearchResult[] }>("search_content", {
+      query,
+      year,
+      mediaType: media_type,
+    });
+    return response.results;
+  } catch (error) {
+    console.error("Failed to search content:", error);
+    return [];
   }
 };
 
@@ -981,6 +1128,39 @@ export const setSeriesSubtitlePreference = (
     );
   } catch (error) {
     console.error("Failed to save series subtitle preference:", error);
+  }
+};
+
+const SERIES_SPOILER_PREFERENCE_KEY = "slasshyvault_series_spoiler_preferences";
+
+const readSeriesSpoilerPreferenceMap = (): Record<string, boolean> =>
+  readMapFromStorage<boolean>(SERIES_SPOILER_PREFERENCE_KEY);
+
+export const getSeriesSpoilerEnabled = (
+  seriesId: number,
+): boolean => {
+  const stored = readSeriesSpoilerPreferenceMap()[String(seriesId)];
+  return stored !== false;
+};
+
+export const setSeriesSpoilerEnabled = (
+  seriesId: number,
+  enabled: boolean,
+): void => {
+  try {
+    const preferences = readSeriesSpoilerPreferenceMap();
+    if (enabled) {
+      delete preferences[String(seriesId)];
+    } else {
+      preferences[String(seriesId)] = false;
+    }
+
+    localStorage.setItem(
+      SERIES_SPOILER_PREFERENCE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch (error) {
+    console.error("Failed to save series spoiler preference:", error);
   }
 };
 
@@ -1272,6 +1452,12 @@ export interface TmdbEpisodeInfo {
   air_date?: string;
   runtime?: number;
   vote_average?: number;
+}
+
+export interface ImdbEpisodeRating {
+  imdb_id: string;
+  imdb_rating: number | null;
+  imdb_votes: number | null;
 }
 
 // Season details with episodes from TMDB
@@ -1569,6 +1755,24 @@ export const getTvSeasonEpisodes = async (
   } catch (error) {
     console.error("Failed to get season episodes:", error);
     return null;
+  }
+};
+
+// Fetch IMDb ratings for season episodes (uses OMDb API)
+export const getEpisodeImdbRatings = async (
+  tvId: number,
+  seasonNumber: number,
+  episodeNumbers: number[],
+): Promise<Record<number, ImdbEpisodeRating>> => {
+  try {
+    const ratings = await invoke<Record<number, ImdbEpisodeRating>>(
+      "get_episode_imdb_ratings",
+      { tvId, seasonNumber, episodeNumbers },
+    );
+    return ratings;
+  } catch (error) {
+    console.error("Failed to get IMDb ratings:", error);
+    return {};
   }
 };
 

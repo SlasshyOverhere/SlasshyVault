@@ -7,7 +7,7 @@ It indexes video content from Google Drive, enriches it with TMDB metadata, and 
 
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.45-white?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.48-black?style=flat-square)
 
 ## What SlasshyVault Does
 

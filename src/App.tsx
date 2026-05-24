@@ -64,6 +64,8 @@ import {
   deleteDownloadJob,
   clearDownloadHistory,
   openDownloadJobTarget,
+  getAnalyticsData,
+  AnalyticsData,
 } from '@/services/api'
 import {
   Search, Loader2, Film, Tv,
@@ -262,6 +264,7 @@ function App() {
   const [isMaximized, setIsMaximized] = useState(false)
   const [isClearingHistory, setIsClearingHistory] = useState(false)
   const [isHistorySyncing, setIsHistorySyncing] = useState(false)
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
 
   // Sub-tabs for Cloud view
   const [cloudSubTab, setCloudSubTab] = useState<MediaSubTab>('movies')
@@ -789,6 +792,15 @@ function App() {
     }
   }, [])
 
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const data = await getAnalyticsData()
+      setAnalyticsData(data)
+    } catch (error) {
+      console.error('Failed to load analytics data', error)
+    }
+  }, [])
+
   const runWatchHistorySync = useCallback(async () => {
     setIsHistorySyncing(true)
     try {
@@ -1154,11 +1166,15 @@ function App() {
           loadHistoryEvents()
           return
         }
+        if (view === 'analytics') {
+          loadAnalytics()
+          return
+        }
         fetchData()
       }, delayMs)
       return () => window.clearTimeout(timer)
     }
-  }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents])
+  }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents, loadAnalytics])
 
   useEffect(() => {
     if (view !== 'downloads') return
@@ -1943,7 +1959,7 @@ function App() {
                   className="pointer-events-none h-4 w-4 object-contain"
                 />
                 <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
-                  SlasshyVault
+                  SlasshyVault{import.meta.env.DEV ? ' dev' : ''}
                 </span>
               </div>
               <div className="flex items-center gap-1 pr-1.5">
@@ -2500,8 +2516,8 @@ function App() {
 
 
 
-                    {/* History View */}
-                    {view === 'history' && (
+                    {/* History View (includes Analytics as sub-view) */}
+                    {(view === 'history' || view === 'analytics') && (
                       <motion.div
                         key="history"
                         initial={{ opacity: 0 }}
@@ -2515,6 +2531,9 @@ function App() {
                           onClearHistory={handleClearHistory}
                           onOpenEvent={handleHistoryEntryOpen}
                           onRemoveEvent={handleRemoveHistoryEntry}
+                          analyticsData={analyticsData}
+                          onAnalyticsTabActive={loadAnalytics}
+                          initialSubView={view === 'analytics' ? 'stats' : 'activity'}
                         />
                       </motion.div>
                     )}

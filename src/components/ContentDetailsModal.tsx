@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy } from "lucide-react"
-import { 
-  MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl, 
-  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
+import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy, EyeOff, Eye } from "lucide-react"
+import {
+  MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl,
+  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata, updateEpisodeDuration,
   getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
   getMediaTechnicalDetails,
+  ImdbEpisodeRating, getEpisodeImdbRatings,
+  getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
   type AudioTrackOption, type SubtitleTrackOption, type MediaTechnicalDetails
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogPortal, DialogTitle } from "@/components/ui/dialog"
@@ -190,6 +192,7 @@ export function ContentDetailsModal({
   const [loadingEpisodes, setLoadingEpisodes] = useState(false)
   const [selectedSeason, setSelectedSeason] = useState<number>(1)
   const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<Map<number, Map<number, TmdbEpisodeInfo>>>(new Map())
+  const [imdbEpisodeRatings, setImdbEpisodeRatings] = useState<Record<number, ImdbEpisodeRating>>({})
   const [selectedAudioPreference, setSelectedAudioPreference] = useState<string>(AUTO_AUDIO_VALUE)
   const [customAudioPreference, setCustomAudioPreference] = useState("")
   const [detectedAudioTracks, setDetectedAudioTracks] = useState<AudioTrackOption[]>([])
@@ -207,6 +210,8 @@ export function ContentDetailsModal({
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
+  const [spoilerEnabled, setSpoilerEnabled] = useState(true)
+  const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
 
   const handleEpisodeMarkWatched = async (episode: MediaItem) => {
     if (!onEpisodeSecondaryAction) return
@@ -297,6 +302,34 @@ export function ContentDetailsModal({
     if (item.media_type === "tvepisode") return item.parent_id ?? null
     return null
   }, [item])
+
+  useEffect(() => {
+    if (seriesPreferenceId) {
+      setSpoilerEnabled(getSeriesSpoilerEnabled(seriesPreferenceId))
+      setRevealedEpisodes(new Set())
+    }
+  }, [seriesPreferenceId])
+
+  const toggleSpoiler = useCallback(() => {
+    if (!seriesPreferenceId) return
+    setSpoilerEnabled(prev => {
+      const next = !prev
+      setSeriesSpoilerEnabled(seriesPreferenceId, next)
+      return next
+    })
+  }, [seriesPreferenceId])
+
+  const handleToggleSpoiler = useCallback((ep: MediaItem) => {
+    setRevealedEpisodes(prev => {
+      const next = new Set(prev)
+      if (next.has(ep.id)) {
+        next.delete(ep.id)
+      } else {
+        next.add(ep.id)
+      }
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (!seriesPreferenceId) {
@@ -442,8 +475,6 @@ export function ContentDetailsModal({
       return
     }
 
-    if (tmdbEpisodesBySeason.get(selectedSeason)) return
-
     const loadTmdbMetadata = async () => {
       try {
         const data = await getTvSeasonEpisodes(tmdbId, selectedSeason)
@@ -460,6 +491,28 @@ export function ContentDetailsModal({
             next.set(selectedSeason, episodeMap)
             return next
           })
+
+          // Write TMDB runtime back to DB for episodes missing duration
+          for (const tmdbEp of data.episodes) {
+            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
+            const localEp = episodes.find(
+              e => (e.season_number || 1) === selectedSeason && e.episode_number === tmdbEp.episode_number
+            )
+            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
+              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
+            }
+          }
+
+          // Fetch IMDb ratings for these episodes
+          const epNums = data.episodes
+            .map(e => e.episode_number)
+            .filter(n => n > 0)
+          if (epNums.length > 0) {
+            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums)
+            if (Object.keys(ratings).length > 0) {
+              setImdbEpisodeRatings(p => ({ ...p, ...ratings }))
+            }
+          }
         }
       } catch (error) {
         console.error("Failed to load TMDB episode metadata:", error)
@@ -1000,6 +1053,7 @@ export function ContentDetailsModal({
   ) : null
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogPortal>
         <div
@@ -1212,6 +1266,20 @@ export function ContentDetailsModal({
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Audio</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={toggleSpoiler}
+                      className={cn(
+                        "w-8 h-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
+                        spoilerEnabled
+                          ? "bg-white/15 hover:bg-white/25 text-white"
+                          : "bg-white/5 hover:bg-white/10 text-white/50 hover:text-white",
+                      )}
+                      title={`Spoiler ${spoilerEnabled ? "On" : "Off"}`}
+                    >
+                      {spoilerEnabled ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Spoiler {spoilerEnabled ? "On" : "Off"}</span>
+                    </button>
                   </div>
                 </div>
                 
@@ -1230,10 +1298,12 @@ export function ContentDetailsModal({
                       <div className="grid grid-cols-1 gap-3 pb-8">
                         {filteredEpisodes.map(ep => {
                           const tmdbData = tmdbEpisodesBySeason.get(selectedSeason)?.get(ep.episode_number || 0)
-                          const rating = tmdbData?.vote_average
+                          const imdbRatingData = imdbEpisodeRatings[ep.episode_number || 0]
+                          const rating = imdbRatingData?.imdb_rating ?? tmdbData?.vote_average
                           const airDate = tmdbData?.air_date
                           const runtime = tmdbData?.runtime
                           const isWatched = isMediaMarkedWatched(ep)
+                          const isSpoiler = spoilerEnabled && !isWatched && !revealedEpisodes.has(ep.id)
                           const episodeSizeLabel = formatEpisodeSize(getPreferredEpisodeSize(ep))
                           const episodeZipCompressionLabel = ep.parent_zip_id
                             ? getZipCompressionLabel(ep.zip_compression_method)
@@ -1243,30 +1313,32 @@ export function ContentDetailsModal({
                             selectedSeasonHasZipEpisodes ? technicalDetails : null,
                             false,
                           )
-                          
+
                           return (
-                            <div 
-                              key={ep.id} 
-                              onClick={() => onPrimaryAction(ep)} 
+                            <div
+                              key={ep.id}
+                              onClick={() => onPrimaryAction(ep)}
                               className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
-                                <EpisodeThumbnailImage 
-                                  localStillPath={ep.still_path} 
-                                  tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')} 
-                                  episodeTitle={tmdbData?.name || ep.title} 
-                                  episodeNumber={ep.episode_number || 0} 
+                                <div className={cn(isSpoiler && "blur-md")}>
+                                <EpisodeThumbnailImage
+                                  localStillPath={ep.still_path}
+                                  tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')}
+                                  episodeTitle={tmdbData?.name || ep.title}
+                                  episodeNumber={ep.episode_number || 0}
                                 />
-                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 backdrop-blur-[2px]">
+                                </div>
+                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
                                   <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
                                     <Play className="w-6 h-6 text-black fill-black ml-1" />
                                   </div>
                                 </div>
                                 {ep.progress_percent ? (
                                   <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40">
-                                    <div 
-                                      className="h-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" 
-                                      style={{ width: `${ep.progress_percent}%` }} 
+                                    <div
+                                      className="h-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]"
+                                      style={{ width: `${ep.progress_percent}%` }}
                                     />
                                   </div>
                                 ) : null}
@@ -1287,7 +1359,7 @@ export function ContentDetailsModal({
                                         </span>
                                       )}
                                     </div>
-                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
+                                    <h4 className={cn("text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight", isSpoiler && "blur-sm")}>{tmdbData?.name || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
                                     {isWatched ? (
@@ -1369,8 +1441,35 @@ export function ContentDetailsModal({
                                     )}
                                   </div>
                                 )}
-                                
-                                <p className="text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors">{ep.overview || tmdbData?.overview || "No description available."}</p>
+
+                                {spoilerEnabled && !isWatched && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleToggleSpoiler(ep)
+                                    }}
+                                    className={cn(
+                                      "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all duration-200 w-fit",
+                                      revealedEpisodes.has(ep.id)
+                                        ? "bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white/50 hover:text-white"
+                                        : "bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 text-white/70 hover:text-white",
+                                    )}
+                                  >
+                                    {revealedEpisodes.has(ep.id) ? (
+                                      <>
+                                        <Eye className="w-3 h-3" />
+                                        Hide Spoilers
+                                      </>
+                                    ) : (
+                                      <>
+                                        <EyeOff className="w-3 h-3" />
+                                        Show Spoilers
+                                      </>
+                                    )}
+                                  </button>
+                                )}
+
+                                <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || "No description available."}</p>
                               </div>
                             </div>
                           )
@@ -1461,5 +1560,6 @@ export function ContentDetailsModal({
         </DialogContent>
       </Dialog>
     </Dialog>
+    </>
   )
 }
