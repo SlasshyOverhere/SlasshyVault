@@ -12,7 +12,7 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const ZIP_TAIL_BYTES: u64 = 131_072;
@@ -639,10 +639,7 @@ pub fn extract_episode_metadata(entry: &ZipEntry) -> Result<media_manager::Parse
 }
 
 fn build_client() -> Result<Client, ZipError> {
-    Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|_| ZipError::NotAValidZip)
+    Ok(crate::http_client::long_client().clone())
 }
 
 fn fetch_drive_metadata(
