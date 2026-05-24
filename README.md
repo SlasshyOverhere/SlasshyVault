@@ -44,7 +44,7 @@ If SlasshyVault detects a `.tar` file, it informs the user in the UI and explain
 Playback is powered by [MPV](https://mpv.io/).
 
 SlasshyVault bundles a pre-built MPV binary for hassle-free installation — you don't need to install MPV separately. The bundled binary is downloaded from the official MPV project on first launch.
-- Either use the inbuilt MPV build or use this specific for hassle free playback : 20251217 
+- Use either the built-in MPV build or this specific version (20251217) for hassle-free playback. 
 
 > **Acknowledgments:** MPV is released under GPLv2. All rights and credits for MPV belong to the [mpv project](https://mpv.io/) and its contributors. SlasshyVault is not affiliated with or endorsed by the MPV team.
 
