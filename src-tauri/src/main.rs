@@ -6287,6 +6287,24 @@ async fn play_with_mpv(
 
     let display_title = build_mpv_display_title(&media);
 
+    // Resolve effective file size for dynamic cache calculation.
+    // For ZIP media, zip_uncompressed_size is the individual entry size (correct),
+    // while file_size_bytes may contain the total archive size (wrong for caching).
+    let effective_file_size = if media.parent_zip_id.is_some() {
+        media
+            .zip_uncompressed_size
+            .or(media.zip_compressed_size)
+            .or(media.file_size_bytes)
+    } else {
+        media.file_size_bytes
+    };
+
+    println!(
+        "[MPV] Dynamic cache inputs: file_size_bytes={:?}, zip_uncompressed={:?}, zip_compressed={:?} -> effective={:?}, duration={:?}",
+        media.file_size_bytes, media.zip_uncompressed_size, media.zip_compressed_size,
+        effective_file_size, media.duration_seconds
+    );
+
     let pid = match mpv_ipc::launch_mpv_with_tracking(
         &mpv_path_clone,
         &playback_url_clone,
@@ -6298,6 +6316,8 @@ async fn play_with_mpv(
         audio_language.as_deref(),
         subtitle_language.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
+        effective_file_size,
+        media.duration_seconds,
     ) {
         Ok(pid) => pid,
         Err(error) => {
@@ -10752,6 +10772,8 @@ async fn background_cloud_poll(app_handle: AppHandle) {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     println!("[CLOUD BG] Background cloud polling started (5-second interval)");
+    let mut last_zip_cache_cleanup = std::time::Instant::now();
+    const ZIP_CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
     loop {
         // Get state from app handle
@@ -10762,6 +10784,26 @@ async fn background_cloud_poll(app_handle: AppHandle) {
             // Not connected - wait and retry (silent, don't spam logs)
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
+        }
+
+        // Periodic zip cache cleanup (runs regardless of cloud poll results)
+        if last_zip_cache_cleanup.elapsed() >= ZIP_CACHE_CLEANUP_INTERVAL {
+            let zip_cache_config = {
+                let config = state.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                build_zip_cache_config(&config)
+            };
+            match tokio::task::spawn_blocking(move || zip_manager::cleanup_stale_zip_cache(&zip_cache_config)).await {
+                Ok(Ok(())) => {
+                    println!("[ZIP CACHE] Periodic cleanup completed");
+                }
+                Ok(Err(e)) => {
+                    println!("[ZIP CACHE] Periodic cleanup warning: {}", e);
+                }
+                Err(e) => {
+                    println!("[ZIP CACHE] Periodic cleanup task error: {}", e);
+                }
+            }
+            last_zip_cache_cleanup = std::time::Instant::now();
         }
 
         // Cloud-only mode: No folder check needed - we monitor entire Drive

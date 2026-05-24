@@ -437,7 +437,7 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     };
     // Apply validation bounds
     config.cloud_cache_max_mb = config.cloud_cache_max_mb.min(100000);
-    config.zip_cache_max_gb = config.zip_cache_max_gb.min(100);
+    config.zip_cache_max_gb = config.zip_cache_max_gb.min(500);
     config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
     Ok(config)
 }
