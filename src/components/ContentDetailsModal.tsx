@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy, EyeOff, Eye } from "lucide-react"
 import {
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl,
-  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata,
+  searchTmdb, getEpisodes, getTvSeasonEpisodes, TmdbEpisodeInfo, TmdbMovieDetails, TmdbShowDetails, getTvDetails, getMediaInfo, refreshSeriesMetadata, updateEpisodeDuration,
   getSeriesAudioPreference, setSeriesAudioPreference, getSeriesSubtitlePreference, setSeriesSubtitlePreference, getAudioTracks, getSubtitleTracks,
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
@@ -491,6 +491,17 @@ export function ContentDetailsModal({
             next.set(selectedSeason, episodeMap)
             return next
           })
+
+          // Write TMDB runtime back to DB for episodes missing duration
+          for (const tmdbEp of data.episodes) {
+            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
+            const localEp = episodes.find(
+              e => (e.season_number || 1) === selectedSeason && e.episode_number === tmdbEp.episode_number
+            )
+            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
+              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
+            }
+          }
 
           // Fetch IMDb ratings for these episodes
           const epNums = data.episodes

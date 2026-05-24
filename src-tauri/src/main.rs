@@ -5708,6 +5708,16 @@ async fn clear_progress(state: State<'_, AppState>, media_id: i64) -> Result<Api
     })
 }
 
+#[tauri::command]
+async fn update_episode_duration(state: State<'_, AppState>, media_id: i64, duration_seconds: f64) -> Result<ApiResponse, String> {
+    if duration_seconds <= 0.0 {
+        return Ok(ApiResponse { message: "Skipped: invalid duration.".to_string() });
+    }
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_duration(media_id, duration_seconds).map_err(|e| e.to_string())?;
+    Ok(ApiResponse { message: "Duration updated.".to_string() })
+}
+
 // Fix match - update metadata from TMDB (or OMDb hybrid)
 #[tauri::command]
 async fn fix_match(
@@ -14089,6 +14099,7 @@ fn main() {
             zip_get_stream_info,
             update_progress,
             clear_progress,
+            update_episode_duration,
             fix_match,
             play_with_mpv,
             play_with_vlc,

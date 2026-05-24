@@ -833,6 +833,15 @@ export const clearProgress = async (id: number): Promise<void> => {
   }
 };
 
+// Update duration for a media item (write-back from TMDB)
+export const updateEpisodeDuration = async (mediaId: number, durationSeconds: number): Promise<void> => {
+  try {
+    await invoke("update_episode_duration", { mediaId, durationSeconds });
+  } catch (error) {
+    console.warn("Failed to update episode duration:", error);
+  }
+};
+
 // Play media with MPV (external player)
 export const playMedia = async (
   id: number,

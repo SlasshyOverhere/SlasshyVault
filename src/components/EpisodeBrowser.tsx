@@ -8,7 +8,7 @@ import {
   MediaItem, getEpisodes, playMedia, getResumeInfo,
   ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
   ImdbEpisodeRating, getEpisodeImdbRatings,
-  markAsComplete, refreshSeriesMetadata,
+  markAsComplete, refreshSeriesMetadata, updateEpisodeDuration,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
   getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
@@ -119,6 +119,17 @@ export function EpisodeBrowser({
           const m = new Map<number, TmdbEpisodeInfo>()
           sd.episodes.forEach(e => m.set(e.episode_number, e))
           setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+
+          // Write TMDB runtime back to DB for episodes missing duration
+          for (const tmdbEp of sd.episodes) {
+            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
+            const localEp = episodes.find(
+              e => (e.season_number || 1) === season && e.episode_number === tmdbEp.episode_number
+            )
+            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
+              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
+            }
+          }
         }
       } catch {
         /* skip tmdb for this season */

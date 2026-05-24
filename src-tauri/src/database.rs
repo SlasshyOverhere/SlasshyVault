@@ -4239,6 +4239,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_duration(&self, media_id: i64, duration_seconds: f64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET duration_seconds = ? WHERE id = ? AND (duration_seconds IS NULL OR duration_seconds = 0)",
+            params![duration_seconds, media_id],
+        )?;
+        Ok(())
+    }
+
     // ==================== SOCIAL SYNC FUNCTIONS ====================
 
     /// Get aggregated watch stats from both media and streaming_history tables.
