@@ -1,5 +1,5 @@
 import { memo } from "react"
-import { Play, Check, Download, Share2, Star, Timer, Calendar } from "lucide-react"
+import { Play, Check, Download, Share2, Star, Timer, Calendar, EyeOff, Eye } from "lucide-react"
 import {
   MediaItem,
   TmdbEpisodeInfo,
@@ -19,9 +19,12 @@ export interface EpisodeItemProps {
   tmdbData?: TmdbEpisodeInfo
   imdbRating?: { rating: number | null; votes: number | null } | null
   isExpanded: boolean
+  spoilerProtected: boolean
+  isRevealed: boolean
   onEpisodeClick: (episode: MediaItem) => void
   onToggleExpand: (episodeId: number) => void
   onMarkWatched: (episode: MediaItem) => void
+  onToggleSpoiler?: (episode: MediaItem) => void
   onDownload?: (episode: MediaItem) => void | Promise<void>
 }
 
@@ -31,11 +34,15 @@ function EpisodeItemBase({
   tmdbData,
   imdbRating,
   isExpanded,
+  spoilerProtected,
+  isRevealed,
   onEpisodeClick,
   onToggleExpand,
   onMarkWatched,
+  onToggleSpoiler,
   onDownload,
 }: EpisodeItemProps) {
+  const spoilerActive = spoilerProtected && !isRevealed
   const progress = getMediaProgressPercent(episode)
   const isFinished = isMediaMarkedWatched(episode)
   const hasProgress = progress > 0 && !isFinished
@@ -142,7 +149,10 @@ function EpisodeItemBase({
       >
         {/* Thumbnail */}
         <div className="relative aspect-video overflow-hidden bg-zinc-800/50">
-          <div className="absolute inset-0 transition-transform duration-500 group-hover:scale-105">
+          <div className={cn(
+            "absolute inset-0 transition-transform duration-500 group-hover:scale-105",
+            spoilerActive && "blur-md",
+          )}>
             <EpisodeThumbnailImage
               localStillPath={localStillPath}
               tmdbStillUrl={stillUrl}
@@ -154,7 +164,7 @@ function EpisodeItemBase({
           {/* Gradient overlay + Play button (on hover) */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-14 h-14 rounded-xl bg-amber-500 flex items-center justify-center shadow-2xl shadow-amber-500/25 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
+              <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shadow-2xl shadow-black/50 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
                 <Play className="w-6 h-6 text-black fill-black ml-0.5" />
               </div>
             </div>
@@ -200,7 +210,10 @@ function EpisodeItemBase({
 
         {/* Info */}
         <div className="p-4 space-y-2.5">
-          <h3 className="text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300">
+          <h3 className={cn(
+            "text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300",
+            spoilerActive && "blur-sm",
+          )}>
             {episodeTitle}
           </h3>
 
@@ -226,16 +239,45 @@ function EpisodeItemBase({
             )}
           </div>
 
+          {/* Spoiler toggle pill */}
+          {spoilerProtected && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleSpoiler?.(episode)
+              }}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all duration-200 w-fit",
+                isRevealed
+                  ? "bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white/50 hover:text-white"
+                  : "bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 text-white/70 hover:text-white",
+              )}
+            >
+              {isRevealed ? (
+                <>
+                  <Eye className="w-3 h-3" />
+                  Hide Spoilers
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3 h-3" />
+                  Show Spoilers
+                </>
+              )}
+            </button>
+          )}
+
           {/* Description */}
           {descriptionText && (
             <p className={cn(
               "text-xs text-white/40 leading-relaxed",
               isExpanded ? "" : "line-clamp-2",
+              spoilerActive && "blur-sm",
             )}>
               {descriptionText}
             </p>
           )}
-          {showExpandToggle && (
+          {showExpandToggle && !spoilerActive && (
             <button
               onClick={handleToggleExpandClick}
               className="text-[10px] font-bold uppercase tracking-wider text-amber-400/60 hover:text-amber-400 transition-colors"
@@ -287,12 +329,15 @@ const areEpisodeItemPropsEqual = (
 ) =>
   prevProps.episode === nextProps.episode &&
   prevProps.isExpanded === nextProps.isExpanded &&
+  prevProps.spoilerProtected === nextProps.spoilerProtected &&
+  prevProps.isRevealed === nextProps.isRevealed &&
   prevProps.index === nextProps.index &&
   prevProps.tmdbData === nextProps.tmdbData &&
   prevProps.imdbRating === nextProps.imdbRating &&
   prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
   prevProps.onToggleExpand === nextProps.onToggleExpand &&
   prevProps.onMarkWatched === nextProps.onMarkWatched &&
+  prevProps.onToggleSpoiler === nextProps.onToggleSpoiler &&
   prevProps.onDownload === nextProps.onDownload
 
 export const EpisodeItem = memo(EpisodeItemBase, areEpisodeItemPropsEqual)
