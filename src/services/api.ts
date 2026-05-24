@@ -93,6 +93,7 @@ export interface Config {
   ffprobe_path?: string;
   ffmpeg_path?: string;
   tmdb_api_key?: string;
+  omdb_api_key?: string;
   // Cloud cache settings
   cloud_cache_enabled?: boolean;
   cloud_cache_dir?: string;
@@ -770,6 +771,7 @@ export const fixMatch = async (
   id: number,
   tmdbId: string,
   type: "movie" | "tv",
+  imdbId?: string,
 ): Promise<void> => {
   try {
     const timeoutMs = 45000;
@@ -778,6 +780,7 @@ export const fixMatch = async (
         mediaId: id,
         tmdbId,
         mediaType: type,
+        imdbId,
       }),
       new Promise((_, reject) => {
         setTimeout(
@@ -801,6 +804,41 @@ export const searchTmdb = async (
   } catch (error) {
     console.error("Failed to search TMDB:", error);
     throw error;
+  }
+};
+
+export interface HybridSearchResult {
+  title: string;
+  year: string | null;
+  imdb_id: string;
+  media_type: string;
+  plot: string | null;
+  poster_url: string | null;
+  genre: string | null;
+  director: string | null;
+  actors: string | null;
+  imdb_rating: number | null;
+  tmdb_id: number | null;
+  tmdb_poster_path: string | null;
+  tmdb_backdrop_path: string | null;
+  tmdb_vote_average: number | null;
+}
+
+export const searchContent = async (
+  query: string,
+  year?: number,
+  media_type?: string,
+): Promise<HybridSearchResult[]> => {
+  try {
+    const response = await invoke<{ results: HybridSearchResult[] }>("search_content", {
+      query,
+      year,
+      mediaType: media_type,
+    });
+    return response.results;
+  } catch (error) {
+    console.error("Failed to search content:", error);
+    return [];
   }
 };
 
@@ -1274,6 +1312,12 @@ export interface TmdbEpisodeInfo {
   vote_average?: number;
 }
 
+export interface ImdbEpisodeRating {
+  imdb_id: string;
+  imdb_rating: number | null;
+  imdb_votes: number | null;
+}
+
 // Season details with episodes from TMDB
 export interface TmdbSeasonDetails {
   season_number: number;
@@ -1569,6 +1613,24 @@ export const getTvSeasonEpisodes = async (
   } catch (error) {
     console.error("Failed to get season episodes:", error);
     return null;
+  }
+};
+
+// Fetch IMDb ratings for season episodes (uses OMDb API)
+export const getEpisodeImdbRatings = async (
+  tvId: number,
+  seasonNumber: number,
+  episodeNumbers: number[],
+): Promise<Record<number, ImdbEpisodeRating>> => {
+  try {
+    const ratings = await invoke<Record<number, ImdbEpisodeRating>>(
+      "get_episode_imdb_ratings",
+      { tvId, seasonNumber, episodeNumbers },
+    );
+    return ratings;
+  } catch (error) {
+    console.error("Failed to get IMDb ratings:", error);
+    return {};
   }
 };
 

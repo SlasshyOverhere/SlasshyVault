@@ -189,6 +189,31 @@ impl GoogleDriveClient {
             .is_some()
     }
 
+    /// Validate that stored tokens are actually usable.
+    /// Checks expiry and attempts refresh if expired. Returns false if
+    /// tokens are missing or expired with no refresh token available.
+    pub async fn validate_tokens(&self) -> bool {
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match tokens {
+            Some(t) => {
+                // If we have an expiry, check it
+                if let Some(expires_at) = t.expires_at {
+                    let now = chrono::Utc::now().timestamp();
+                    if now >= expires_at - 60 {
+                        // Token expired — try to refresh
+                        if let Some(refresh_token) = &t.refresh_token {
+                            return self.refresh_access_token(refresh_token).await.is_ok();
+                        }
+                        return false;
+                    }
+                }
+                // No expiry info but tokens exist — assume valid
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Get the current access token, refreshing if needed
     pub async fn get_access_token(&self) -> Result<String, String> {
         let tokens = self
@@ -264,8 +289,25 @@ impl GoogleDriveClient {
         Ok(())
     }
 
-    /// Clear stored tokens (logout)
-    pub fn clear_tokens(&self) -> Result<(), String> {
+    /// Revoke tokens with Google, then clear local state (logout)
+    pub async fn revoke_and_clear_tokens(&self) -> Result<(), String> {
+        // Try to revoke the refresh token first (more important to revoke)
+        let tokens_snapshot = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(ref t) = tokens_snapshot {
+            let token_to_revoke = t.refresh_token.as_deref().unwrap_or(&t.access_token);
+            let _ = self
+                .http_client
+                .post(format!(
+                    "https://oauth2.googleapis.com/revoke?token={}",
+                    token_to_revoke
+                ))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .send()
+                .await;
+            // Ignore revocation errors - we still want to clear local state
+        }
+
+        // Clear local tokens
         *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let path = get_tokens_path();
         if path.exists() {
@@ -904,75 +946,47 @@ impl GoogleDriveClient {
 
 // ==================== OAuth Flow ====================
 
-/// Generate the OAuth authorization URL (via backend proxy)
-pub fn get_auth_url() -> String {
-    format!("{}/auth/google", get_auth_server_url())
-}
-
-/// Parse tokens from deep link callback URL
-/// The backend sends tokens via: slasshyvault://oauth/callback?tokens=BASE64_ENCODED_JSON
-pub fn parse_tokens_from_callback(url: &str) -> Result<GoogleTokens, String> {
-    // Parse the URL to get the tokens parameter
-    let url_parts: Vec<&str> = url.split('?').collect();
-    if url_parts.len() < 2 {
-        return Err("No query string in callback URL".to_string());
-    }
-
-    let query = url_parts[1];
-    let params: HashMap<&str, &str> = query
-        .split('&')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            Some((parts.next()?, parts.next()?))
-        })
-        .collect();
-
-    // Check for error
-    if let Some(error) = params.get("error") {
-        return Err(format!("OAuth error: {}", error));
-    }
-
-    // Get and decode the tokens
-    let tokens_b64 = params.get("tokens").ok_or("No tokens in callback URL")?;
-
-    let tokens_json = String::from_utf8(
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, tokens_b64)
-            .map_err(|e| format!("Failed to decode tokens: {}", e))?,
-    )
-    .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
-
-    let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
-        .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
-
-    let access_token = token_data["access_token"]
-        .as_str()
-        .ok_or("Missing access_token")?
-        .to_string();
-
-    let refresh_token = token_data["refresh_token"].as_str().map(String::from);
-
-    let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
-    let expires_at = chrono::Utc::now().timestamp() + expires_in;
-
-    let token_type = token_data["token_type"]
-        .as_str()
-        .unwrap_or("Bearer")
-        .to_string();
-
-    Ok(GoogleTokens {
-        access_token,
-        refresh_token,
-        expires_at: Some(expires_at),
-        token_type,
-    })
+/// Generate the OAuth authorization URL (via backend proxy), with a CSRF nonce
+pub fn get_auth_url_with_nonce(nonce: &str) -> String {
+    format!("{}/auth/google?nonce={}", get_auth_server_url(), urlencoding::encode(nonce))
 }
 
 /// Bind the OAuth callback listener BEFORE opening the browser
 /// so it's ready when the backend redirect comes back
-pub fn start_oauth_listener() -> Result<std::net::TcpListener, String> {
-    let listener = TcpListener::bind("127.0.0.1:8085")
+/// Uses SO_REUSEADDR to allow quick rebinding when the user retries auth
+/// (prevents EADDRINUSE from TIME_WAIT on Windows)
+pub async fn start_oauth_listener() -> Result<tokio::net::TcpListener, String> {
+    let address: std::net::SocketAddr = "127.0.0.1:8085"
+        .parse()
+        .map_err(|e| format!("Invalid address: {}", e))?;
+
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .map_err(|e| format!("Failed to create socket: {}", e))?;
+
+    socket
+        .set_reuse_address(true)
+        .map_err(|e| format!("Failed to set SO_REUSEADDR: {}", e))?;
+
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| format!("Failed to set nonblocking: {}", e))?;
+
+    socket
+        .bind(&address.into())
         .map_err(|e| format!("Failed to start OAuth callback server: {}", e))?;
-    listener.set_nonblocking(false).ok();
+
+    socket
+        .listen(1024)
+        .map_err(|e| format!("Failed to listen on OAuth callback socket: {}", e))?;
+
+    let std_listener: TcpListener = socket.into();
+
+    let listener = tokio::net::TcpListener::from_std(std_listener)
+        .map_err(|e| format!("Failed to create async listener: {}", e))?;
     println!("[GDRIVE] OAuth callback server listening on port 8085");
     Ok(listener)
 }
@@ -981,15 +995,135 @@ pub fn start_oauth_listener() -> Result<std::net::TcpListener, String> {
 /// The backend exchanges the code, stores tokens server-side with a session ID,
 /// then redirects here with: /callback?session_id=<uuid>
 /// We then fetch the tokens from the backend using that session ID.
-pub async fn wait_for_oauth_callback(
-    listener: &std::net::TcpListener,
+pub async fn wait_for_oauth_callback_with_nonce(
+    listener: &tokio::net::TcpListener,
+    expected_nonce: Option<&str>,
 ) -> Result<GoogleTokens, String> {
     println!("[GDRIVE] Waiting for OAuth callback...");
 
-    // Accept one connection
-    let (mut stream, _) = listener
+    // Accept one connection (async, cancellable)
+    let (tokio_stream, _) = listener
         .accept()
+        .await
         .map_err(|e| format!("Failed to accept OAuth callback: {}", e))?;
+    // Convert to std stream for synchronous I/O
+    let mut stream = tokio_stream
+        .into_std()
+        .map_err(|e| format!("Failed to convert stream: {}", e))?;
+
+    // The tokio stream is non-blocking; set to blocking mode so BufReader works
+    stream
+        .set_nonblocking(false)
+        .map_err(|e| format!("Failed to set stream to blocking mode: {}", e))?;
+
+    // Helper: send an HTTP response to the browser (best-effort)
+    let send_http = |stream: &mut std::net::TcpStream, status: &str, body: &str| {
+        let response = format!(
+            "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status,
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    };
+
+    // Helper: error HTML page (SlasshyVault dark glassmorphism aesthetic)
+    let error_page = |title: &str, message: &str| -> String {
+        format!(r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>SlasshyVault - {}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  body{{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    display:flex;justify-content:center;align-items:center;height:100vh;
+    background:#0a0a0a;color:#fafafa;overflow:hidden;position:relative}}
+  body::before{{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;
+    background:radial-gradient(circle at 30% 20%,rgba(229,62,62,0.06) 0%,transparent 50%),
+    radial-gradient(circle at 70% 80%,rgba(229,62,62,0.04) 0%,transparent 50%);
+    pointer-events:none}}
+  .card{{position:relative;background:rgba(18,18,18,0.8);backdrop-filter:blur(40px) saturate(180%);
+    border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:48px 56px;
+    text-align:center;max-width:420px;width:90%;
+    box-shadow:0 0 80px rgba(229,62,62,0.08),0 20px 60px rgba(0,0,0,0.5)}}
+  .icon-wrap{{width:56px;height:56px;border-radius:14px;margin:0 auto 20px;
+    background:rgba(229,62,62,0.12);border:1px solid rgba(229,62,62,0.2);
+    display:flex;align-items:center;justify-content:center}}
+  .icon-wrap svg{{width:28px;height:28px;color:#e53e3e}}
+  h1{{font-size:20px;font-weight:700;color:#fafafa;letter-spacing:-0.02em;margin-bottom:8px}}
+  .msg{{font-size:14px;color:#8c8c8c;line-height:1.6;margin-bottom:24px}}
+  .hint{{font-size:12px;color:#555;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06)}}
+  .logo{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+    font-size:11px;font-weight:600;color:rgba(255,255,255,0.15);letter-spacing:0.08em;text-transform:uppercase}}
+</style></head>
+<body>
+  <div class="card">
+    <div class="icon-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
+      </svg>
+    </div>
+    <h1>{}</h1>
+    <p class="msg">{}</p>
+    <p class="hint">You can close this window and try again.</p>
+  </div>
+  <div class="logo">SlasshyVault</div>
+</body></html>"#, title, title, message)
+    };
+
+    // Helper: success HTML page (SlasshyVault dark glassmorphism aesthetic)
+    let success_page = || -> String {
+        r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>SlasshyVault - Connected</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    display:flex;justify-content:center;align-items:center;height:100vh;
+    background:#0a0a0a;color:#fafafa;overflow:hidden;position:relative}
+  body::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;
+    background:radial-gradient(circle at 30% 20%,rgba(255,255,255,0.04) 0%,transparent 50%),
+    radial-gradient(circle at 70% 80%,rgba(255,255,255,0.03) 0%,transparent 50%);
+    pointer-events:none}
+  .orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.06;pointer-events:none}
+  .orb-1{width:300px;height:300px;background:#fff;top:10%;left:15%;animation:float 25s ease-in-out infinite}
+  .orb-2{width:250px;height:250px;background:#fff;bottom:15%;right:10%;animation:float 25s ease-in-out infinite reverse}
+  @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-30px)}}
+  .card{position:relative;background:rgba(18,18,18,0.8);backdrop-filter:blur(40px) saturate(180%);
+    border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:48px 56px;
+    text-align:center;max-width:420px;width:90%;
+    box-shadow:0 0 60px rgba(255,255,255,0.05),0 20px 60px rgba(0,0,0,0.5);
+    animation:cardIn 0.5s cubic-bezier(0.16,1,0.3,1) forwards;opacity:0;transform:translateY(12px)}
+  @keyframes cardIn{to{opacity:1;transform:translateY(0)}}
+  .icon-wrap{width:56px;height:56px;border-radius:14px;margin:0 auto 20px;
+    background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 30px rgba(255,255,255,0.06)}
+  .icon-wrap svg{width:28px;height:28px;color:#fafafa}
+  .checkmark{animation:checkPop 0.4s cubic-bezier(0.16,1,0.3,1) 0.3s forwards;opacity:0;transform:scale(0.5)}
+  @keyframes checkPop{to{opacity:1;transform:scale(1)}}
+  h1{font-size:20px;font-weight:700;color:#fafafa;letter-spacing:-0.02em;margin-bottom:8px}
+  .msg{font-size:14px;color:#8c8c8c;line-height:1.6}
+  .logo{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+    font-size:11px;font-weight:600;color:rgba(255,255,255,0.15);letter-spacing:0.08em;text-transform:uppercase}
+</style></head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="card">
+    <div class="icon-wrap">
+      <svg class="checkmark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/>
+      </svg>
+    </div>
+    <h1>Connected</h1>
+    <p class="msg">Google Drive linked successfully.<br>You can close this window and return to SlasshyVault.</p>
+  </div>
+  <div class="logo">SlasshyVault</div>
+</body></html>"#.to_string()
+    };
 
     // Read the HTTP request
     let buf_reader = BufReader::new(&stream);
@@ -1008,14 +1142,23 @@ pub async fn wait_for_oauth_callback(
     println!("[GDRIVE] Received callback: {}", safe_line);
 
     // Parse query parameters from the request path
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or("Invalid request line")?;
+    let path = match request_line.split_whitespace().nth(1) {
+        Some(p) => p,
+        None => {
+            send_http(&mut stream, "400 Bad Request", &error_page("Invalid Request", "Could not parse request path."));
+            return Err("Invalid request line".to_string());
+        }
+    };
 
     // Check for error from backend
     if path.contains("error=") {
-        let query_start = path.find('?').ok_or("No query string")?;
+        let query_start = match path.find('?') {
+            Some(qs) => qs,
+            None => {
+                send_http(&mut stream, "400 Bad Request", &error_page("Invalid Callback", "Error present but no query string."));
+                return Err("No query string".to_string());
+            }
+        };
         let query = &path[query_start + 1..];
         let params: HashMap<&str, &str> = query
             .split('&')
@@ -1026,10 +1169,18 @@ pub async fn wait_for_oauth_callback(
             .collect();
 
         let error = params.get("error").unwrap_or(&"unknown_error");
+        println!("[GDRIVE] OAuth error from backend: {}", error);
+        send_http(&mut stream, "400 Bad Request", &error_page("OAuth Error", &format!("The authentication server returned an error: {}", error)));
         return Err(format!("OAuth error: {}", error));
     }
 
-    let query_start = path.find('?').ok_or("No query string in callback URL")?;
+    let query_start = match path.find('?') {
+        Some(qs) => qs,
+        None => {
+            send_http(&mut stream, "400 Bad Request", &error_page("Invalid Callback", "No query string in callback URL."));
+            return Err("No query string in callback URL".to_string());
+        }
+    };
     let query = &path[query_start + 1..];
 
     let params: HashMap<&str, &str> = query
@@ -1040,34 +1191,76 @@ pub async fn wait_for_oauth_callback(
         })
         .collect();
 
+    // CSRF verification: check that the nonce matches what we sent
+    if let Some(expected) = expected_nonce {
+        match params.get("nonce") {
+            Some(received) if *received == expected => {
+                // Nonce matches — callback was initiated by this instance
+                println!("[GDRIVE] CSRF nonce verified OK");
+            }
+            Some(received) => {
+                println!("[GDRIVE] CSRF nonce mismatch: expected={}, received={}", expected, received);
+                send_http(&mut stream, "403 Forbidden", &error_page("Security Error", "Nonce mismatch — this login attempt may have been tampered with."));
+                return Err("CSRF nonce mismatch — possible OAuth session fixation attack".to_string());
+            }
+            None => {
+                // Backend doesn't support nonces yet (old deployment) — warn but allow
+                println!("[GDRIVE] WARNING: Callback missing nonce (backend may not be updated yet) — skipping CSRF check");
+            }
+        }
+    }
+
     // Resolve tokens: either from session_id or legacy tokens param
     let tokens = if let Some(session_id) = params.get("session_id") {
         println!("[GDRIVE] Fetching tokens for session...");
         let auth_url = get_auth_server_url();
         let session_url = format!("{}/auth/session/{}", auth_url, session_id);
-        let response = reqwest::Client::builder()
+        let response = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?
-            .get(&session_url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to fetch session tokens: {}", e))?;
+        {
+            Ok(client) => match client.get(&session_url).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let msg = format!("Failed to fetch session tokens: {}", e);
+                    println!("[GDRIVE] {}", msg);
+                    send_http(&mut stream, "502 Bad Gateway", &error_page("Token Fetch Failed", "Could not reach the authentication server to retrieve tokens."));
+                    return Err(msg);
+                }
+            },
+            Err(e) => {
+                let msg = format!("Failed to build HTTP client: {}", e);
+                send_http(&mut stream, "500 Internal Server Error", &error_page("Internal Error", "Failed to create HTTP client."));
+                return Err(msg);
+            }
+        };
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Session token fetch failed: {}", error_text));
+            let msg = format!("Session token fetch failed ({}): {}", status, error_text);
+            println!("[GDRIVE] {}", msg);
+            send_http(&mut stream, "502 Bad Gateway", &error_page("Token Fetch Failed", &format!("Server returned an error. Session may have expired.")));
+            return Err(msg);
         }
 
-        let token_data: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse session tokens: {}", e))?;
+        let token_data: serde_json::Value = match response.json().await {
+            Ok(data) => data,
+            Err(e) => {
+                let msg = format!("Failed to parse session tokens: {}", e);
+                println!("[GDRIVE] {}", msg);
+                send_http(&mut stream, "502 Bad Gateway", &error_page("Token Parse Error", "Received invalid token data from the authentication server."));
+                return Err(msg);
+            }
+        };
 
-        let access_token = token_data["access_token"]
-            .as_str()
-            .ok_or("Missing access_token")?
-            .to_string();
+        let access_token = match token_data["access_token"].as_str() {
+            Some(t) => t.to_string(),
+            None => {
+                send_http(&mut stream, "502 Bad Gateway", &error_page("Token Error", "Server response missing access token."));
+                return Err("Missing access_token".to_string());
+            }
+        };
 
         let refresh_token = token_data["refresh_token"].as_str().map(String::from);
 
@@ -1079,6 +1272,8 @@ pub async fn wait_for_oauth_callback(
             .unwrap_or("Bearer")
             .to_string();
 
+        println!("[GDRIVE] Tokens received successfully from session");
+
         GoogleTokens {
             access_token,
             refresh_token,
@@ -1088,20 +1283,35 @@ pub async fn wait_for_oauth_callback(
     } else if let Some(tokens_b64) = params.get("tokens") {
         // Legacy flow: tokens are base64-encoded in the URL
         println!("[GDRIVE] Decoding tokens from callback URL...");
-        let tokens_json = String::from_utf8(
-            base64::engine::general_purpose::STANDARD
-                .decode(tokens_b64)
-                .map_err(|e| format!("Failed to decode tokens: {}", e))?,
-        )
-        .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
+        let tokens_json = match base64::engine::general_purpose::STANDARD.decode(tokens_b64) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    send_http(&mut stream, "400 Bad Request", &error_page("Token Error", "Invalid token encoding."));
+                    return Err(format!("Invalid UTF-8 in tokens: {}", e));
+                }
+            },
+            Err(e) => {
+                send_http(&mut stream, "400 Bad Request", &error_page("Token Error", "Could not decode token data."));
+                return Err(format!("Failed to decode tokens: {}", e));
+            }
+        };
 
-        let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
-            .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
+        let token_data: serde_json::Value = match serde_json::from_str(&tokens_json) {
+            Ok(data) => data,
+            Err(e) => {
+                send_http(&mut stream, "400 Bad Request", &error_page("Token Error", "Invalid token JSON."));
+                return Err(format!("Failed to parse tokens JSON: {}", e));
+            }
+        };
 
-        let access_token = token_data["access_token"]
-            .as_str()
-            .ok_or("Missing access_token")?
-            .to_string();
+        let access_token = match token_data["access_token"].as_str() {
+            Some(t) => t.to_string(),
+            None => {
+                send_http(&mut stream, "400 Bad Request", &error_page("Token Error", "Token data missing access token."));
+                return Err("Missing access_token".to_string());
+            }
+        };
 
         let refresh_token = token_data["refresh_token"].as_str().map(String::from);
 
@@ -1120,116 +1330,16 @@ pub async fn wait_for_oauth_callback(
             token_type,
         }
     } else {
+        send_http(&mut stream, "400 Bad Request", &error_page("Invalid Callback", "No session_id or tokens in callback URL."));
         return Err("No session_id or tokens in callback URL".to_string());
     };
 
     // Send a success response
-    let response_body = r#"
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Authorization Successful</title>
-            <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                       display: flex; justify-content: center; align-items: center; height: 100vh;
-                       margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-                .container { text-align: center; background: white; padding: 40px 60px;
-                            border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
-                h1 { color: #22c55e; margin-bottom: 10px; }
-                p { color: #666; }
-            </style>
-        </head>
-        <body>
-            <h1>✓ Authorization Successful!</h1>
-            <p>You can close this window and return to SlasshyVault.</p>
-        </body>
-        </html>
-    "#;
-
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        response_body.len(),
-        response_body
-    );
-
-    stream.write_all(response.as_bytes()).ok();
-    stream.flush().ok();
+    let response_body = success_page();
+    send_http(&mut stream, "200 OK", &response_body);
+    println!("[GDRIVE] Auth callback completed successfully");
 
     Ok(tokens)
-}
-
-/// Extract tokens from callback request
-fn extract_tokens_from_request(request_line: &str) -> Result<GoogleTokens, String> {
-    // Parse: GET /callback?tokens=BASE64_DATA HTTP/1.1
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Err("Invalid request line".to_string());
-    }
-
-    let path = parts[1];
-
-    // Check for error
-    if path.contains("error=") {
-        let query_start = path.find('?').ok_or("No query string")?;
-        let query = &path[query_start + 1..];
-        let params: HashMap<&str, &str> = query
-            .split('&')
-            .filter_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                Some((parts.next()?, parts.next()?))
-            })
-            .collect();
-
-        let error = params.get("error").unwrap_or(&"unknown_error");
-        return Err(format!("OAuth error: {}", error));
-    }
-
-    // Parse query parameters
-    let query_start = path.find('?').ok_or("No query string in callback URL")?;
-    let query = &path[query_start + 1..];
-
-    let params: HashMap<&str, &str> = query
-        .split('&')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            Some((parts.next()?, parts.next()?))
-        })
-        .collect();
-
-    // Get and decode the tokens
-    let tokens_b64 = params.get("tokens").ok_or("No tokens in callback URL")?;
-
-    let tokens_json = String::from_utf8(
-        base64::engine::general_purpose::STANDARD
-            .decode(tokens_b64)
-            .map_err(|e| format!("Failed to decode tokens: {}", e))?,
-    )
-    .map_err(|e| format!("Invalid UTF-8 in tokens: {}", e))?;
-
-    let token_data: serde_json::Value = serde_json::from_str(&tokens_json)
-        .map_err(|e| format!("Failed to parse tokens JSON: {}", e))?;
-
-    let access_token = token_data["access_token"]
-        .as_str()
-        .ok_or("Missing access_token")?
-        .to_string();
-
-    let refresh_token = token_data["refresh_token"].as_str().map(String::from);
-
-    let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
-    let expires_at = chrono::Utc::now().timestamp() + expires_in;
-
-    let token_type = token_data["token_type"]
-        .as_str()
-        .unwrap_or("Bearer")
-        .to_string();
-
-    Ok(GoogleTokens {
-        access_token,
-        refresh_token,
-        expires_at: Some(expires_at),
-        token_type,
-    })
 }
 
 // ==================== Helpers ====================
@@ -1239,14 +1349,103 @@ fn get_tokens_path() -> PathBuf {
 }
 
 fn obfuscate(data: &str) -> String {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    BASE64.encode(data)
+    use rand::RngCore;
+
+    let key = derive_encryption_key();
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .expect("AES-256-GCM key should always be 32 bytes");
+
+    // Generate a random 12-byte nonce
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, data.as_bytes())
+        .expect("Encryption should not fail for valid inputs");
+
+    // Prepend nonce to ciphertext so we can extract it during decryption
+    let mut output = Vec::with_capacity(12 + ciphertext.len());
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&ciphertext);
+
+    BASE64.encode(&output)
 }
 
 fn deobfuscate(data: &str) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    // First, try AES-256-GCM decryption (new format)
+    if let Ok(result) = deobfuscate_aes(data) {
+        return Ok(result);
+    }
+
+    // Fall back to plain base64 (legacy format) for backward compatibility / migration
     let bytes = BASE64.decode(data).map_err(|e| e.to_string())?;
     String::from_utf8(bytes).map_err(|e| e.to_string())
+}
+
+/// Attempts AES-256-GCM decryption on data produced by `obfuscate`.
+fn deobfuscate_aes(data: &str) -> Result<String, String> {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    let decoded = BASE64.decode(data).map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+    // Minimum size: 12 bytes nonce + 16 bytes auth tag + at least 1 byte ciphertext
+    if decoded.len() < 29 {
+        return Err("Data too short for AES-GCM".to_string());
+    }
+
+    let (nonce_bytes, ciphertext) = decoded.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let key = derive_encryption_key();
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .expect("AES-256-GCM key should always be 32 bytes");
+
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
+
+    String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))
+}
+
+/// Derives a machine-specific encryption key. Combines a hardcoded app secret
+/// with the current username, hostname, and app data path to produce a key that
+/// is unique per machine + user. Not military-grade, but a significant upgrade
+/// over plain base64: tokens encrypted on one machine/user can't be trivially
+/// decrypted on another, and offline cracking requires knowing the secret.
+fn derive_encryption_key() -> [u8; 32] {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    const APP_SECRET: &[u8] = b"SlasshyVault-TokenEncrypt-v1-2024";
+
+    let mut hasher = DefaultHasher::new();
+    APP_SECRET.hash(&mut hasher);
+
+    if let Ok(user) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
+        user.hash(&mut hasher);
+    }
+    if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
+        host.hash(&mut hasher);
+    }
+    if let Some(data_dir) = crate::database::get_app_data_dir().to_str() {
+        data_dir.hash(&mut hasher);
+    }
+
+    let seed = hasher.finish();
+    let seed_bytes = seed.to_le_bytes();
+
+    // Expand the 8-byte hash seed into a 32-byte key using the app secret
+    let mut key = [0u8; 32];
+    for i in 0..32 {
+        key[i] = seed_bytes[i % 8]
+            .wrapping_add(APP_SECRET[i % APP_SECRET.len()])
+            .wrapping_mul(i as u8 + 1);
+    }
+    key
 }
 
 fn save_tokens(tokens: &GoogleTokens) -> Result<(), String> {
@@ -1267,8 +1466,22 @@ fn load_tokens() -> Result<GoogleTokens, String> {
     let path = get_tokens_path();
     let encoded = fs::read_to_string(&path).map_err(|e| format!("Failed to read tokens: {}", e))?;
 
+    // Check if the data is in the old base64-only format (not AES-GCM).
+    // If so, we'll re-save after loading to migrate to the encrypted format.
+    let is_legacy = deobfuscate_aes(&encoded).is_err();
+
     let json = deobfuscate(&encoded)?;
-    serde_json::from_str(&json).map_err(|e| format!("Failed to parse tokens: {}", e))
+    let tokens: GoogleTokens = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse tokens: {}", e))?;
+
+    // Transparently re-encrypt legacy tokens so the file is upgraded in place
+    if is_legacy {
+        if let Err(e) = save_tokens(&tokens) {
+            eprintln!("Warning: failed to re-encrypt legacy tokens: {}", e);
+        }
+    }
+
+    Ok(tokens)
 }
 
 // ==================== URL Encoding Helper ====================

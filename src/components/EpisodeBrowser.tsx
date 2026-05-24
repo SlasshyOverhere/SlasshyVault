@@ -7,6 +7,7 @@ import {
 import {
   MediaItem, getEpisodes, playMedia, getResumeInfo,
   ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
+  ImdbEpisodeRating, getEpisodeImdbRatings,
   markAsComplete, refreshSeriesMetadata,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
@@ -60,6 +61,7 @@ export function EpisodeBrowser({
   const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<
     Map<number, Map<number, TmdbEpisodeInfo>>
   >(new Map())
+  const [imdbRatings, setImdbRatings] = useState<Record<number, ImdbEpisodeRating>>({})
   const [expandedEpisode, setExpandedEpisode] = useState<number | null>(null)
   const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
   const [contentDetailsItem, setContentDetailsItem] = useState<MediaItem | null>(null)
@@ -102,17 +104,37 @@ export function EpisodeBrowser({
   }, [selectedSeason])
 
   const loadTmdb = async (season: number) => {
-    if (!show.tmdb_id || tmdbEpisodesBySeason.has(season)) return
+    if (!show.tmdb_id) return
+    const tmdbId = parseInt(show.tmdb_id)
+
+    // Load TMDB episodes
+    if (!tmdbEpisodesBySeason.has(season)) {
+      try {
+        const sd = await getTvSeasonEpisodes(tmdbId, season)
+        if (sd) {
+          const m = new Map<number, TmdbEpisodeInfo>()
+          sd.episodes.forEach(e => m.set(e.episode_number, e))
+          setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+        }
+      } catch {
+        /* skip tmdb for this season */
+      }
+    }
+
+    // Fetch IMDb ratings for episodes in this season
     try {
-      const tmdbId = parseInt(show.tmdb_id)
-      const sd = await getTvSeasonEpisodes(tmdbId, season)
-      if (sd) {
-        const m = new Map<number, TmdbEpisodeInfo>()
-        sd.episodes.forEach(e => m.set(e.episode_number, e))
-        setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+      const epNums = episodes
+        .filter(e => (e.season_number || 1) === season)
+        .map(e => e.episode_number || 0)
+        .filter(n => n > 0)
+      if (epNums.length > 0) {
+        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums)
+        if (Object.keys(ratings).length > 0) {
+          setImdbRatings(p => ({ ...p, ...ratings }))
+        }
       }
     } catch {
-      /* skip tmdb for this season */
+      /* imdb ratings unavailable */
     }
   }
 
@@ -380,12 +402,18 @@ export function EpisodeBrowser({
                     const tmdb = tmdbEpisodesBySeason
                       .get(selectedSeason)
                       ?.get(ep.episode_number || 0)
+                    const epNum = ep.episode_number || 0
+                    const imdb = imdbRatings[epNum]
+                    const imdbRatingProp = imdb
+                      ? { rating: imdb.imdb_rating, votes: imdb.imdb_votes }
+                      : null
                     return (
                       <EpisodeItem
                         key={ep.id}
                         episode={ep}
                         index={i}
                         tmdbData={tmdb}
+                        imdbRating={imdbRatingProp}
                         isExpanded={expandedEpisode === ep.id}
                         onEpisodeClick={handleEpisodeClick}
                         onToggleExpand={handleToggleExpand}

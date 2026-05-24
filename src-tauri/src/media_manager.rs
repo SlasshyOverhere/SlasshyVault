@@ -402,6 +402,7 @@ pub fn process_tv_episode(
                                 director: None,
                                 poster_path: series_poster_path.clone(),
                                 tmdb_id: Some(tmdb_id.clone()),
+                                imdb_id: None,
                                 runtime_seconds: None,
                             };
                             if let Err(e) = db.update_metadata(id, &metadata) {

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Check, Film, Loader2, Search, Star, Tv } from "lucide-react"
-import { fixMatch, MediaItem, searchTmdb, TmdbSearchResult } from "@/services/api"
+import { Check, Film, Loader2, Search, Star, Tv, Globe } from "lucide-react"
+import { fixMatch, HybridSearchResult, MediaItem, searchContent } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 
@@ -18,22 +18,28 @@ const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w92"
 const DIRECT_MATCH_INPUT_RE =
   /(^\d+$)|(^tt\d+$)|(imdb\.com\/title\/tt\d+)|(themoviedb\.org\/(?:movie|tv)\/\d+)/i
 
-const getResultTitle = (result: TmdbSearchResult) => result.title || result.name || "Untitled"
+const getResultTitle = (result: HybridSearchResult) => result.title || "Untitled"
 
-const getResultYear = (result: TmdbSearchResult): string | null => {
-  const date = result.release_date || result.first_air_date
-  if (!date) return null
+const getResultYear = (result: HybridSearchResult): string | null => result.year || null
 
-  const year = new Date(date).getFullYear()
-  if (Number.isNaN(year)) return null
+const extractImdbId = (input: string): string | null => {
+  const match = input.match(/tt\d+/)
+  return match ? match[0] : null
+}
 
-  return year.toString()
+const extractTmdbId = (input: string): string | null => {
+  // Direct numeric TMDB ID
+  if (/^\d+$/.test(input.trim())) return input.trim()
+  // TMDB URL
+  const match = input.match(/themoviedb\.org\/(?:movie|tv)\/(\d+)/i)
+  return match ? match[1] : null
 }
 
 export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchModalProps) {
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<TmdbSearchResult[]>([])
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [results, setResults] = useState<HybridSearchResult[]>([])
+  const [selectedImdb, setSelectedImdb] = useState<string | null>(null)
+  const [selectedTmdb, setSelectedTmdb] = useState<number | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const searchTokenRef = useRef(0)
@@ -44,13 +50,15 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     const trimmedQuery = searchQuery.trim()
     if (!trimmedQuery) {
       setResults([])
-      setSelectedId(null)
+      setSelectedImdb(null)
+      setSelectedTmdb(null)
       return
     }
 
     if (DIRECT_MATCH_INPUT_RE.test(trimmedQuery)) {
       setResults([])
-      setSelectedId(null)
+      setSelectedImdb(null)
+      setSelectedTmdb(null)
       return
     }
 
@@ -58,26 +66,22 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     setIsSearching(true)
 
     try {
-      const response = await searchTmdb(trimmedQuery)
+      const hybridResults = await searchContent(trimmedQuery, undefined, mediaType)
       if (currentToken !== searchTokenRef.current) return
 
-      const filtered = response.results.filter((result) => result.media_type === mediaType)
-      setResults(filtered)
-      setSelectedId((currentId) => {
-        if (currentId && filtered.some((result) => result.id === currentId)) {
-          return currentId
-        }
-        return filtered[0]?.id ?? null
-      })
+      setResults(hybridResults)
+      const first = hybridResults[0]
+      setSelectedImdb(first?.imdb_id || null)
+      setSelectedTmdb(first?.tmdb_id || null)
     } catch (error) {
       if (currentToken !== searchTokenRef.current) return
 
-      console.error("TMDB search failed", error)
+      console.error("Search failed", error)
       const errorMessage = typeof error === "string" ? error : (error as { message?: string })?.message || "Unknown error"
       toast({
         title: "Search Failed",
         description: errorMessage.includes("API key")
-          ? "TMDB API key not configured. Please add it in Settings."
+          ? "API key not configured. Please add it in Settings."
           : `Search error: ${errorMessage}`,
         variant: "destructive"
       })
@@ -93,7 +97,8 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
       searchTokenRef.current += 1
       setQuery("")
       setResults([])
-      setSelectedId(null)
+      setSelectedImdb(null)
+      setSelectedTmdb(null)
       setIsSearching(false)
       setIsUpdating(false)
       return
@@ -104,7 +109,8 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
 
     setQuery(initialQuery)
     setResults([])
-    setSelectedId(null)
+    setSelectedImdb(null)
+    setSelectedTmdb(null)
 
     void runSearch(initialQuery, mediaType)
   }, [open, item, runSearch])
@@ -116,20 +122,45 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
   }
 
   const handleSave = async () => {
-    if (!item) {
+    if (!item) return
+
+    const type = item.media_type === "movie" ? "movie" : "tv"
+    const trimmedQuery = query.trim()
+
+    // Determine what to pass for fixMatch
+    let tmdbId: string
+    let imdbId: string | undefined
+
+    if (selectedTmdb !== null) {
+      // User selected a hybrid result
+      tmdbId = selectedTmdb.toString()
+      imdbId = selectedImdb || undefined
+    } else if (isDirectMatchInput) {
+      const extractedImdb = extractImdbId(trimmedQuery)
+      const extractedTmdb = extractTmdbId(trimmedQuery)
+
+      if (extractedImdb) {
+        // Direct IMDb ID/URL — pass it as imdbId
+        imdbId = extractedImdb
+        tmdbId = extractedTmdb || ""
+      } else if (extractedTmdb) {
+        tmdbId = extractedTmdb
+      } else {
+        tmdbId = trimmedQuery
+      }
+    } else {
+      toast({ title: "Error", description: "Please select a match first", variant: "destructive" })
       return
     }
 
-    const matchInput = selectedId !== null ? selectedId.toString() : query.trim()
-    if (!matchInput) {
+    if (!tmdbId && !imdbId) {
       toast({ title: "Error", description: "Please select a match first", variant: "destructive" })
       return
     }
 
     setIsUpdating(true)
     try {
-      const type = item.media_type === "movie" ? "movie" : "tv"
-      await fixMatch(item.id, matchInput, type)
+      await fixMatch(item.id, tmdbId, type, imdbId)
 
       toast({ title: "Success", description: "Metadata updated successfully" })
       onOpenChange(false)
@@ -151,11 +182,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     }
   }
 
-  const selectedResult = useMemo(
-    () => results.find((result) => result.id === selectedId) || null,
-    [results, selectedId]
-  )
-  const canSave = Boolean(selectedResult || isDirectMatchInput)
+  const canSave = Boolean(selectedTmdb !== null || isDirectMatchInput)
 
   const expectedTypeLabel = item?.media_type === "movie" ? "movie" : "show"
 
@@ -196,7 +223,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
             )}
             <p className="text-muted-foreground">
             {isSearching
-              ? "Searching TMDB..."
+              ? "Searching..."
               : isDirectMatchInput
                 ? "Direct match input detected. Click Update Match to fetch metadata from that TMDB/IMDb link or ID."
               : `Found ${results.length} ${results.length === 1 ? "result" : "results"} for ${expectedTypeLabel}s`}
@@ -211,16 +238,21 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
             )}
 
             {results.map((result) => {
-              const isSelected = selectedId === result.id
+              const isSelected = selectedTmdb === result.tmdb_id
               const title = getResultTitle(result)
               const year = getResultYear(result)
-              const posterUrl = result.poster_path ? `${TMDB_IMAGE_BASE}${result.poster_path}` : null
+              const posterUrl = result.tmdb_poster_path
+                ? `${TMDB_IMAGE_BASE}${result.tmdb_poster_path}`
+                : result.poster_url || null
 
               return (
                 <button
-                  key={`${result.media_type}-${result.id}`}
+                  key={`${result.media_type}-${result.tmdb_id || result.imdb_id}`}
                   type="button"
-                  onClick={() => setSelectedId(result.id)}
+                  onClick={() => {
+                    setSelectedTmdb(result.tmdb_id)
+                    setSelectedImdb(result.imdb_id || null)
+                  }}
                   className={cn(
                     "w-full rounded-lg border p-3 text-left transition-colors",
                     "hover:bg-muted/50",
@@ -249,16 +281,37 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                           </div>
                         </div>
 
-                        {typeof result.vote_average === "number" && result.vote_average > 0 && (
-                          <div className="flex items-center gap-1 text-xs text-yellow-400 shrink-0">
-                            <Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />
-                            {result.vote_average.toFixed(1)}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {typeof result.imdb_rating === "number" && result.imdb_rating > 0 && (
+                            <div className="flex items-center gap-1 text-xs text-yellow-400" title="IMDb Rating">
+                              <Globe className="w-3 h-3" />
+                              {result.imdb_rating.toFixed(1)}
+                            </div>
+                          )}
+                          {typeof result.tmdb_vote_average === "number" && result.tmdb_vote_average > 0 && (
+                            <div className="flex items-center gap-1 text-xs text-blue-400" title="TMDB Rating">
+                              <Star className="w-3 h-3 fill-blue-400 text-blue-400" />
+                              {result.tmdb_vote_average.toFixed(1)}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
-                      {result.overview && (
-                        <p className="text-xs text-muted-foreground line-clamp-2">{result.overview}</p>
+                      {result.plot && (
+                        <p className="text-xs text-muted-foreground line-clamp-2">{result.plot}</p>
+                      )}
+
+                      {result.director && (
+                        <p className="text-xs text-muted-foreground/70 line-clamp-1">
+                          <span className="font-medium">Director:</span> {result.director}
+                        </p>
+                      )}
+
+                      {result.imdb_id && (
+                        <p className="text-[10px] text-muted-foreground/50">
+                          IMDb: {result.imdb_id}
+                          {result.tmdb_id ? ` • TMDB: ${result.tmdb_id}` : ""}
+                        </p>
                       )}
                     </div>
 

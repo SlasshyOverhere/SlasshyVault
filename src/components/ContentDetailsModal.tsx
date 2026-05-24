@@ -7,6 +7,7 @@ import {
   getCachedSeriesAudioTracks, setCachedSeriesAudioTracks,
   getCachedSeriesSubtitleTracks, setCachedSeriesSubtitleTracks,
   getMediaTechnicalDetails,
+  ImdbEpisodeRating, getEpisodeImdbRatings,
   type AudioTrackOption, type SubtitleTrackOption, type MediaTechnicalDetails
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogPortal, DialogTitle } from "@/components/ui/dialog"
@@ -190,6 +191,7 @@ export function ContentDetailsModal({
   const [loadingEpisodes, setLoadingEpisodes] = useState(false)
   const [selectedSeason, setSelectedSeason] = useState<number>(1)
   const [tmdbEpisodesBySeason, setTmdbEpisodesBySeason] = useState<Map<number, Map<number, TmdbEpisodeInfo>>>(new Map())
+  const [imdbEpisodeRatings, setImdbEpisodeRatings] = useState<Record<number, ImdbEpisodeRating>>({})
   const [selectedAudioPreference, setSelectedAudioPreference] = useState<string>(AUTO_AUDIO_VALUE)
   const [customAudioPreference, setCustomAudioPreference] = useState("")
   const [detectedAudioTracks, setDetectedAudioTracks] = useState<AudioTrackOption[]>([])
@@ -442,8 +444,6 @@ export function ContentDetailsModal({
       return
     }
 
-    if (tmdbEpisodesBySeason.get(selectedSeason)) return
-
     const loadTmdbMetadata = async () => {
       try {
         const data = await getTvSeasonEpisodes(tmdbId, selectedSeason)
@@ -460,6 +460,17 @@ export function ContentDetailsModal({
             next.set(selectedSeason, episodeMap)
             return next
           })
+
+          // Fetch IMDb ratings for these episodes
+          const epNums = data.episodes
+            .map(e => e.episode_number)
+            .filter(n => n > 0)
+          if (epNums.length > 0) {
+            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums)
+            if (Object.keys(ratings).length > 0) {
+              setImdbEpisodeRatings(p => ({ ...p, ...ratings }))
+            }
+          }
         }
       } catch (error) {
         console.error("Failed to load TMDB episode metadata:", error)
@@ -1230,7 +1241,8 @@ export function ContentDetailsModal({
                       <div className="grid grid-cols-1 gap-3 pb-8">
                         {filteredEpisodes.map(ep => {
                           const tmdbData = tmdbEpisodesBySeason.get(selectedSeason)?.get(ep.episode_number || 0)
-                          const rating = tmdbData?.vote_average
+                          const imdbRatingData = imdbEpisodeRatings[ep.episode_number || 0]
+                          const rating = imdbRatingData?.imdb_rating ?? tmdbData?.vote_average
                           const airDate = tmdbData?.air_date
                           const runtime = tmdbData?.runtime
                           const isWatched = isMediaMarkedWatched(ep)

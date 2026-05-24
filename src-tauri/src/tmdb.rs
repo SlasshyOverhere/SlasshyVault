@@ -88,6 +88,7 @@ pub struct TmdbMetadata {
     pub director: Option<String>,
     pub poster_path: Option<String>,
     pub tmdb_id: Option<String>,
+    pub imdb_id: Option<String>,
     pub runtime_seconds: Option<f64>,
 }
 
@@ -1269,6 +1270,7 @@ fn create_metadata_from_item(
         director,
         poster_path,
         tmdb_id: Some(item.id.to_string()),
+        imdb_id: None,
         runtime_seconds: item
             .runtime
             .filter(|minutes| *minutes > 0)

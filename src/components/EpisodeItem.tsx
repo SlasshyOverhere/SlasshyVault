@@ -17,6 +17,7 @@ export interface EpisodeItemProps {
   episode: MediaItem
   index: number
   tmdbData?: TmdbEpisodeInfo
+  imdbRating?: { rating: number | null; votes: number | null } | null
   isExpanded: boolean
   onEpisodeClick: (episode: MediaItem) => void
   onToggleExpand: (episodeId: number) => void
@@ -28,6 +29,7 @@ function EpisodeItemBase({
   episode,
   index,
   tmdbData,
+  imdbRating,
   isExpanded,
   onEpisodeClick,
   onToggleExpand,
@@ -62,9 +64,15 @@ function EpisodeItemBase({
     ? getZipCompressionLabel(episode.zip_compression_method)
     : null
 
-  const rating = tmdbData?.vote_average && tmdbData.vote_average > 0
+  const imdbRatingValue = imdbRating?.rating && imdbRating.rating > 0
+    ? imdbRating.rating.toFixed(1)
+    : null
+
+  const tmdbRatingValue = tmdbData?.vote_average && tmdbData.vote_average > 0
     ? tmdbData.vote_average.toFixed(1)
     : null
+
+  const rating = imdbRatingValue ?? tmdbRatingValue
 
   const airDateLabel = tmdbData?.air_date
     ? new Date(tmdbData.air_date).toLocaleDateString("en-US", {
@@ -281,6 +289,7 @@ const areEpisodeItemPropsEqual = (
   prevProps.isExpanded === nextProps.isExpanded &&
   prevProps.index === nextProps.index &&
   prevProps.tmdbData === nextProps.tmdbData &&
+  prevProps.imdbRating === nextProps.imdbRating &&
   prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
   prevProps.onToggleExpand === nextProps.onToggleExpand &&
   prevProps.onMarkWatched === nextProps.onMarkWatched &&

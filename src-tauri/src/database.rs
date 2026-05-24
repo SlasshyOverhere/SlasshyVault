@@ -78,6 +78,7 @@ pub struct MediaItem {
     pub parent_id: Option<i64>,
     pub progress_percent: Option<f64>,
     pub tmdb_id: Option<String>,
+    pub imdb_id: Option<String>,
     pub episode_title: Option<String>,
     pub still_path: Option<String>,
     // Cloud storage fields
@@ -381,6 +382,10 @@ impl Database {
         if !columns.contains(&"tmdb_id".to_string()) {
             self.conn
                 .execute("ALTER TABLE media ADD COLUMN tmdb_id TEXT DEFAULT NULL", [])?;
+        }
+        if !columns.contains(&"imdb_id".to_string()) {
+            self.conn
+                .execute("ALTER TABLE media ADD COLUMN imdb_id TEXT DEFAULT NULL", [])?;
         }
         if !columns.contains(&"episode_title".to_string()) {
             self.conn.execute(
@@ -1825,6 +1830,7 @@ impl Database {
                  director = ?,
                  poster_path = ?,
                  tmdb_id = ?,
+                 imdb_id = ?,
                  duration_seconds = CASE
                      WHEN duration_seconds <= 0 AND ? > 0 THEN ?
                      ELSE duration_seconds
@@ -1838,6 +1844,7 @@ impl Database {
                 metadata.director,
                 metadata.poster_path,
                 metadata.tmdb_id,
+                metadata.imdb_id,
                 metadata.runtime_seconds.unwrap_or(0.0),
                 metadata.runtime_seconds.unwrap_or(0.0),
                 media_id
@@ -4352,6 +4359,7 @@ impl Database {
             parent_id: Self::get_optional_named(row, "parent_id"),
             progress_percent,
             tmdb_id: Self::get_optional_named(row, "tmdb_id"),
+            imdb_id: Self::get_optional_named(row, "imdb_id"),
             episode_title: Self::get_optional_named(row, "episode_title"),
             still_path: Self::get_optional_named(row, "still_path"),
             archive_format: Self::get_optional_named(row, "archive_format"),

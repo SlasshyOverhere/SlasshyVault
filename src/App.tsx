@@ -1943,7 +1943,7 @@ function App() {
                   className="pointer-events-none h-4 w-4 object-contain"
                 />
                 <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
-                  SlasshyVault
+                  SlasshyVault{import.meta.env.DEV ? ' dev' : ''}
                 </span>
               </div>
               <div className="flex items-center gap-1 pr-1.5">

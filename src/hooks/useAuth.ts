@@ -209,6 +209,21 @@ export function useAuth() {
   // Handle logout
   const logout = async () => {
     try {
+      // Notify backend to clear social state (WS, caches, session) BEFORE disconnecting.
+      // We need the access token to authenticate the request.
+      try {
+        const { getGDriveAccessToken } = await import('@/services/gdrive')
+        const token = await getGDriveAccessToken()
+        const config = await getConfig()
+        const backendUrl = (config.dev_backend_url || 'https://slasshyvault.onrender.com').replace(/\/+$/, '')
+        await fetch(`${backendUrl}/api/social/logout`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+        }).catch(() => { /* best-effort, don't block logout */ })
+      } catch {
+        // Token may already be invalid -- proceed with local disconnect regardless
+      }
+
       const { disconnectGDrive } = await import('@/services/gdrive')
       await disconnectGDrive()
       if (isMountedRef.current) {

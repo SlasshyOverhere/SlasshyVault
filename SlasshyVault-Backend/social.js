@@ -1488,6 +1488,39 @@ async function getOnlineFriends(googleId, accessToken) {
   return online;
 }
 
+/**
+ * Logout a user: close their WebSocket, broadcast offline, and clear all in-memory caches.
+ * Called when the user logs out from the client.
+ */
+function logoutUser(googleId) {
+  const userId = normalizeSocialId(googleId);
+  if (!userId) return;
+
+  // Close WebSocket if open and remove from onlineUsers
+  const session = onlineUsers.get(userId);
+  if (session?.ws) {
+    try {
+      session.ws.close(1000, 'User logged out');
+    } catch {
+      // Ignore close errors
+    }
+  }
+  onlineUsers.delete(userId);
+
+  // Notify friends that user is offline
+  broadcastToFriends(userId, {
+    type: 'friend_offline',
+    userId,
+  });
+
+  // Clear cached profile and relationship data
+  userProfiles.delete(userId);
+  friendships.delete(userId);
+  friendRequests.delete(userId);
+
+  socialDebugLog(`[Social] User logged out: ${userId}`);
+}
+
 module.exports = {
   initUserSocial,
   getProfile,
@@ -1519,5 +1552,6 @@ module.exports = {
   loadFileFromDrive,
   getChatId,
   userProfiles,
-  onlineUsers
+  onlineUsers,
+  logoutUser
 };

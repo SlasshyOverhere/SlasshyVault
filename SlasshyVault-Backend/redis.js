@@ -3,6 +3,7 @@ const { Redis } = require('@upstash/redis');
 const ROOM_TTL_SECONDS = 24 * 60 * 60;
 const EVENTS_TTL_SECONDS = 60 * 60;
 const PARTICIPANTS_TTL_SECONDS = 60 * 60;
+const OAUTH_STATE_TTL_SECONDS = 5 * 60; // 5 minutes
 
 let redis = null;
 
@@ -252,6 +253,45 @@ async function listRoomCodes() {
   }
 }
 
+async function saveOAuthState(state, initToken, ttlSeconds = OAUTH_STATE_TTL_SECONDS) {
+  if (!redis) return false;
+
+  try {
+    // Store the init_token as the value so it can be verified on callback
+    await redis.setex(`oauth:state:${state}`, ttlSeconds, initToken || '');
+    return true;
+  } catch (error) {
+    console.error('[Redis] saveOAuthState failed:', error.message);
+    return false;
+  }
+}
+
+async function getOAuthStateInitToken(state) {
+  if (!redis) return null;
+
+  try {
+    const value = await redis.get(`oauth:state:${state}`);
+    if (value === null) return null;
+    // Return the stored init_token (empty string means no binding, which is invalid)
+    return value || null;
+  } catch (error) {
+    console.error('[Redis] getOAuthStateInitToken failed:', error.message);
+    return null;
+  }
+}
+
+async function deleteOAuthState(state) {
+  if (!redis) return false;
+
+  try {
+    await redis.del(`oauth:state:${state}`);
+    return true;
+  } catch (error) {
+    console.error('[Redis] deleteOAuthState failed:', error.message);
+    return false;
+  }
+}
+
 module.exports = {
   initRedis,
   isConnected,
@@ -266,5 +306,8 @@ module.exports = {
   setRoomParticipant,
   getRoomParticipants,
   electNewHost,
-  listRoomCodes
+  listRoomCodes,
+  saveOAuthState,
+  getOAuthStateInitToken,
+  deleteOAuthState
 };
