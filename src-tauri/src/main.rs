@@ -5895,6 +5895,8 @@ async fn play_with_mpv(
     resume: bool,
     audio_language: Option<String>,
     subtitle_language: Option<String>,
+    duration_seconds_override: Option<f64>,
+    file_size_bytes_override: Option<i64>,
 ) -> Result<ApiResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
@@ -6297,22 +6299,32 @@ async fn play_with_mpv(
 
     let display_title = build_mpv_display_title(&media);
 
-    // Resolve effective file size for dynamic cache calculation.
-    // For ZIP media, zip_uncompressed_size is the individual entry size (correct),
-    // while file_size_bytes may contain the total archive size (wrong for caching).
+    // Resolve effective duration — prefer frontend override (TMDB data already resolved),
+    // fall back to DB value, then None.
+    let effective_duration = duration_seconds_override
+        .filter(|&v| v > 0.0)
+        .or(media.duration_seconds);
+
+    // Resolve effective file size — prefer frontend override,
+    // then for ZIP media use zip_uncompressed_size (individual entry, not archive),
+    // then compressed, then raw file_size_bytes.
     let effective_file_size = if media.parent_zip_id.is_some() {
-        media
-            .zip_uncompressed_size
+        file_size_bytes_override
+            .filter(|&v| v > 0)
+            .or(media.zip_uncompressed_size)
             .or(media.zip_compressed_size)
             .or(media.file_size_bytes)
     } else {
-        media.file_size_bytes
+        file_size_bytes_override
+            .filter(|&v| v > 0)
+            .or(media.file_size_bytes)
     };
 
     println!(
-        "[MPV] Dynamic cache inputs: file_size_bytes={:?}, zip_uncompressed={:?}, zip_compressed={:?} -> effective={:?}, duration={:?}",
+        "[MPV] Dynamic cache inputs: file_size_bytes={:?}, zip_uncompressed={:?}, zip_compressed={:?}, override_size={:?} -> effective={:?}, duration={:?}, override_duration={:?} -> effective_duration={:?}",
         media.file_size_bytes, media.zip_uncompressed_size, media.zip_compressed_size,
-        effective_file_size, media.duration_seconds
+        file_size_bytes_override, effective_file_size, media.duration_seconds,
+        duration_seconds_override, effective_duration
     );
 
     let pid = match mpv_ipc::launch_mpv_with_tracking(
@@ -6327,7 +6339,7 @@ async fn play_with_mpv(
         subtitle_language.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
         effective_file_size,
-        media.duration_seconds,
+        effective_duration,
     ) {
         Ok(pid) => pid,
         Err(error) => {

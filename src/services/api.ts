@@ -848,6 +848,8 @@ export const playMedia = async (
   resume: boolean,
   audioLanguage?: string | null,
   subtitleLanguage?: string | null,
+  durationSeconds?: number | null,
+  fileSizeBytes?: number | null,
 ): Promise<void> => {
   try {
     await invoke("play_with_mpv", {
@@ -855,6 +857,8 @@ export const playMedia = async (
       resume,
       audioLanguage: audioLanguage?.trim() || null,
       subtitleLanguage: subtitleLanguage?.trim() || null,
+      durationSecondsOverride: durationSeconds && durationSeconds > 0 ? durationSeconds : null,
+      fileSizeBytesOverride: fileSizeBytes && fileSizeBytes > 0 ? fileSizeBytes : null,
     });
   } catch (error) {
     console.error("Failed to play with MPV:", error);
