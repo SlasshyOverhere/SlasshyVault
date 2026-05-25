@@ -1,4 +1,4 @@
-import { Archive, Info, Loader2 } from "lucide-react";
+import { Play, Loader2, Info } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import type { ZipPlaybackLoadingState } from "@/utils/zipPlayback";
@@ -19,84 +19,58 @@ export function ZipPlaybackLoadingOverlay({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center bg-black/72 backdrop-blur-md`}
+          className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center bg-black/80 backdrop-blur-md`}
         >
           <motion.div
-            initial={{ scale: 0.94, y: 16 }}
+            initial={{ scale: 0.95, y: 12 }}
             animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.98, y: 8 }}
-            className="mx-4 w-full max-w-xl rounded-[28px] border border-white/10 bg-[#0e1015]/95 p-7 shadow-2xl shadow-black/50"
+            exit={{ scale: 0.98, y: 6 }}
+            className="mx-4 w-full max-w-md rounded-3xl border border-white/[0.08] bg-black p-8 shadow-2xl shadow-black"
           >
-            <div className="flex items-start gap-4">
-              <div className="relative mt-0.5 flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+            <div className="flex flex-col items-center text-center">
+              {/* Play Icon container - Black & White theme */}
+              <div className="relative mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/[0.03]">
                 <motion.div
-                  className="absolute inset-0 rounded-2xl border border-white/10"
-                  animate={{ scale: [1, 1.18, 1], opacity: [0.2, 0.55, 0.2] }}
-                  transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                  className="absolute inset-0 rounded-full border border-white/10"
+                  animate={{ scale: [1, 1.25, 1], opacity: [0.15, 0.4, 0.15] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
-                <Archive className="h-6 w-6 text-white/80" />
+                <Play className="h-6 w-6 text-white fill-white/10 ml-0.5" />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="mb-2 flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-white/80" />
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/45">
-                    Preparing ZIP Playback
-                  </span>
-                </div>
-                <h3 className="mb-2 text-xl font-semibold tracking-tight text-white">
-                  {loadingState.resume
-                    ? "Resuming ZIP episode"
-                    : "Opening ZIP episode"}
-                </h3>
-                <p className="mb-3 text-sm leading-relaxed text-white/70">
-                  {loadingState.detail}
-                </p>
-                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-                      Episode
-                    </div>
-                    <div className="mt-1 line-clamp-1 text-sm font-medium text-white/85">
-                      {loadingState.title}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-                      Estimated Startup
-                    </div>
-                    <div className="mt-1 text-sm font-medium text-white/85">
-                      About {loadingState.estimatedSeconds}s for{" "}
-                      {loadingState.sizeLabel}
-                    </div>
-                  </div>
-                </div>
-                <div className="overflow-hidden rounded-full bg-white/8">
-                  <motion.div
-                    className="h-1.5 rounded-full bg-gradient-to-r from-white/55 via-white to-white/55"
-                    animate={{ x: ["-45%", "120%"] }}
-                    transition={{ duration: 1.35, repeat: Infinity, ease: "easeInOut" }}
-                    style={{ width: "42%" }}
-                  />
-                </div>
-                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                  <div className="flex items-start gap-3">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-white/60" />
-                    <div className="text-sm leading-relaxed text-white/80">
-                      For more uninterrupted ZIP playback, set{" "}
-                      <span className="font-semibold text-white">
-                        ZIP Cache Directory
-                      </span>{" "}
-                      and{" "}
-                      <span className="font-semibold text-white">
-                        ZIP Cache Size Limit (GB)
-                      </span>{" "}
-                      in{" "}
-                      <span className="font-semibold text-white">
-                        Settings -&gt; Cloud -&gt; ZIP Archive Support
-                      </span>
-                      .
-                    </div>
-                  </div>
+
+              {/* Status Header */}
+              <div className="mb-2.5 flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" />
+                <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-white/40">
+                  Preparing Playback
+                </span>
+              </div>
+
+              <h3 className="mb-2 text-xl font-bold tracking-tight text-white">
+                {loadingState.resume
+                  ? "Resuming Playback"
+                  : "Starting Playback"}
+              </h3>
+
+              <p className="mb-6 text-sm leading-relaxed text-white/60">
+                The media player window should open shortly.
+              </p>
+
+              {/* Minimalist White Progress Bar */}
+              <div className="w-full h-1 overflow-hidden rounded-full bg-white/10 mb-6">
+                <motion.div
+                  className="h-full rounded-full bg-white"
+                  animate={{ x: ["-100%", "100%"] }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+                  style={{ width: "40%" }}
+                />
+              </div>
+
+              {/* Info container - Black & White styling */}
+              <div className="flex items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4 text-left w-full">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-white/65" />
+                <div className="text-xs leading-relaxed text-white/70">
+                  <span className="font-semibold text-white">Note:</span> If the media player window does not open or nothing happens, please restart the application.
                 </div>
               </div>
             </div>

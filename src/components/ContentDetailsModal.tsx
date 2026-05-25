@@ -1321,13 +1321,13 @@ export function ContentDetailsModal({
                               className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
-                                <div className={cn(isSpoiler && "blur-md")}>
-                                <EpisodeThumbnailImage
-                                  localStillPath={ep.still_path}
-                                  tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')}
-                                  episodeTitle={tmdbData?.name || ep.title}
-                                  episodeNumber={ep.episode_number || 0}
-                                />
+                                <div className={cn("w-full h-full", isSpoiler && "blur-md")}>
+                                  <EpisodeThumbnailImage
+                                    localStillPath={ep.still_path}
+                                    tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')}
+                                    episodeTitle={tmdbData?.name || ep.title}
+                                    episodeNumber={ep.episode_number || 0}
+                                  />
                                 </div>
                                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
                                   <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
