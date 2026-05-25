@@ -1318,8 +1318,11 @@ function App() {
       overlayVisibleSince = Date.now()
     }
 
+    const effectiveDuration = item.duration_seconds && item.duration_seconds > 0 ? item.duration_seconds : null
+    const effectiveSize = item.zip_uncompressed_size ?? item.zip_compressed_size ?? item.file_size_bytes ?? null
+
     try {
-      await playMedia(item.id, resume, audioPreference, subtitlePreference)
+      await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize)
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
         await waitForMinimumZipOverlayVisibility(overlayVisibleSince)

@@ -273,12 +273,19 @@ export function EpisodeBrowser({
       const ls = ep.parent_zip_id ? buildZipPlaybackLoadingState(ep, resume) : null
       let t = 0
       if (ls) { setZipPlaybackLoading(ls); await waitForZipLoadingOverlayPaint(); t = Date.now() }
+      const tmdbEp = tmdbEpisodesBySeason
+        .get(ep.season_number || 1)
+        ?.get(ep.episode_number || 0)
+      const effectiveDuration = (ep.duration_seconds && ep.duration_seconds > 0
+        ? ep.duration_seconds
+        : (tmdbEp?.runtime && tmdbEp.runtime > 0 ? tmdbEp.runtime * 60 : null))
+      const effectiveSize = ep.zip_uncompressed_size ?? ep.zip_compressed_size ?? ep.file_size_bytes ?? null
       try {
-        await playMedia(ep.id, resume, audio, sub)
+        await playMedia(ep.id, resume, audio, sub, effectiveDuration, effectiveSize)
         if (ls) { await waitForMpvPlaybackStart(ep.id); await waitForMinimumZipOverlayVisibility(t) }
       } finally { if (ls) setZipPlaybackLoading(null) }
     },
-    [],
+    [tmdbEpisodesBySeason],
   )
 
   const handlePlay = async (ep: MediaItem) => {
