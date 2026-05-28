@@ -42,13 +42,13 @@ export function WatchTogetherBanner({
             {syncPhase === 'paused' && (
                 <div className="flex items-center gap-2 text-amber-400 text-sm">
                     <span className="animate-pulse">●</span>
-                    Syncing — waiting for all participants...
+                    Syncing, waiting for all participants…
                 </div>
             )}
             {syncPhase === 'loading' && (
                 <div className="flex items-center gap-2 text-emerald-400 text-sm">
                     <span className="animate-spin">⟳</span>
-                    Pre-buffering for smooth playback...
+                    Pre-buffering for smooth playback…
                 </div>
             )}
                 <Button

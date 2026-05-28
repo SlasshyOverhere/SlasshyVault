@@ -62,7 +62,7 @@ export function ParticipantList({ participants, currentUserId, syncStates }: Par
                             </div>
                         )}
                         {syncStates?.get(participant.id) === 'loading' && (
-                            <span className="text-xs text-amber-400">buffering...</span>
+                            <span className="text-xs text-amber-400">buffering…</span>
                         )}
                         {syncStates?.get(participant.id) === 'ready' && (
                             <span className="text-xs text-emerald-400">ready</span>

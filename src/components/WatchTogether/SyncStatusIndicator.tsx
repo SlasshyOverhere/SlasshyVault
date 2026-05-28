@@ -34,7 +34,7 @@ export function SyncStatusIndicator({
             <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full bg-amber-500/20 backdrop-blur-sm">
                 <span className="animate-spin text-xs text-amber-400">⟳</span>
                 <span className="text-xs font-medium text-amber-400">
-                    Pre-buffering...
+                    Pre-buffering…
                 </span>
             </div>
         );
@@ -45,7 +45,7 @@ export function SyncStatusIndicator({
             <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full bg-amber-500/20 backdrop-blur-sm">
                 <span className="animate-pulse text-xs text-amber-400">●</span>
                 <span className="text-xs font-medium text-amber-400">
-                    Syncing...
+                    Syncing…
                 </span>
             </div>
         );
@@ -103,7 +103,7 @@ export function SyncStatusIndicator({
         <div
             className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full ${config.bgColor} backdrop-blur-sm`}
         >
-            <Icon className={`w-4 h-4 ${config.color}`} />
+            <Icon className={`size-4 ${config.color}`} />
             <span className={`text-xs font-medium ${config.color}`}>
                 {config.label}
             </span>

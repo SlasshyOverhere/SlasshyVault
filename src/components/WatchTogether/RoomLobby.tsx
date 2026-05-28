@@ -177,7 +177,7 @@ export function RoomLobby({
 
                 {!isHost && isReady && (
                     <p className="text-center text-sm text-zinc-400">
-                        Waiting for host to start playback...
+                        Waiting for host to start playback…
                     </p>
                 )}
 
@@ -199,7 +199,7 @@ export function RoomLobby({
         </div>
 
             {syncPhase === 'loading' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center py-8 space-y-4">
+                <div className="absolute inset-0 flex flex-col items-center justify-center py-8 gap-y-4">
                     <div className="animate-spin rounded-full size-10 border-2 border-emerald-500 border-t-transparent" />
                     <h3 className="text-lg font-semibold text-white">Preparing Watch Together</h3>
                     <p className="text-sm text-zinc-400 text-center max-w-md">
