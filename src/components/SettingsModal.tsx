@@ -48,7 +48,7 @@ import { open as openDialog } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { Switch } from "@/components/ui/switch";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings";
 import { ZipGuideModal } from "@/components/ZipGuideModal";
@@ -223,7 +223,7 @@ export function SettingsModal({
 
       toast({
         title: "Download Complete",
-        description: "Installing update and restarting...",
+        description: "Installing update and restarting…",
       });
 
       // Small delay to show the toast
@@ -499,7 +499,7 @@ export function SettingsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <>
+      <LazyMotion features={domAnimation}>
         <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
           <div className="flex flex-1 min-h-0">
             {/* Sidebar */}
@@ -509,6 +509,7 @@ export function SettingsModal({
                   Settings
                 </h2>
                 <button
+                  type="button"
                   onClick={() => onOpenChange(false)}
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                   aria-label="Close settings"
@@ -520,6 +521,7 @@ export function SettingsModal({
               <nav className="space-y-1">
                 {sections.map((section) => (
                   <button
+                    type="button"
                     key={section.id}
                     onClick={() => setActiveSection(section.id)}
                     className={cn(
@@ -547,7 +549,7 @@ export function SettingsModal({
                   {/* General Section */}
                   {/* ===== General Settings ===== */}
                   {activeSection === "general" && (
-                    <motion.div
+                    <m.div
                       key="general"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -655,7 +657,7 @@ export function SettingsModal({
                                     <Loader2 className="size-3 animate-spin" />
                                     {bundledMpvProgress > 0
                                       ? `${Math.round(bundledMpvProgress)}%`
-                                      : "Installing..."}
+                                      : "Installing…"}
                                   </>
                                 ) : bundledMpvInfo?.exists ? (
                                   "Reinstall"
@@ -728,7 +730,7 @@ export function SettingsModal({
                                   className="shrink-0"
                                   aria-label="Browse for MPV executable"
                                 >
-                                  <FolderOpen className="h-4 w-4" />
+                                  <FolderOpen className="size-4" />
                                 </Button>
                                 <Button
                                   variant="outline"
@@ -743,7 +745,7 @@ export function SettingsModal({
                                       detectingMpv && "animate-spin",
                                     )}
                                   />
-                                  {detectingMpv ? "Detecting..." : "Detect"}
+                                  {detectingMpv ? "Detecting…" : "Detect"}
                                 </Button>
                               </div>
                             </div>
@@ -752,12 +754,12 @@ export function SettingsModal({
                       </div>
 
 
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (
-                    <motion.div
+                    <m.div
                       key="beta"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -897,12 +899,12 @@ export function SettingsModal({
 
                       </div>
 
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Account ===== */}
                   {activeSection === "account" && (
-                    <motion.div
+                    <m.div
                       key="account"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -948,7 +950,7 @@ export function SettingsModal({
                             onClick={() => setShowLogoutConfirm(true)}
                             className="w-full"
                           >
-                            <Power className="mr-2 h-4 w-4" />
+                            <Power className="mr-2 size-4" />
                             Sign Out
                           </Button>
                         ) : (
@@ -986,7 +988,7 @@ export function SettingsModal({
                                 {loggingOut ? (
                                   <>
                                     <Loader2 className="size-4 mr-2 animate-spin" />
-                                    Signing Out...
+                                    Signing Out…
                                   </>
                                 ) : (
                                   "Yes, Sign Out"
@@ -996,12 +998,12 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Updates & Security ===== */}
                   {activeSection === "updates" && (
-                    <motion.div
+                    <m.div
                       key="updates"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1028,7 +1030,7 @@ export function SettingsModal({
                               About & Updates
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Version {appVersion || "..."}
+                              Version {appVersion || "…"}
                             </p>
                           </div>
                         </div>
@@ -1048,7 +1050,7 @@ export function SettingsModal({
                               )}
                             />
                             {checkingUpdate
-                              ? "Checking..."
+                              ? "Checking…"
                               : "Check for Updates"}
                           </Button>
                         )}
@@ -1086,7 +1088,7 @@ export function SettingsModal({
                                   />
                                 </div>
                                 <p className="text-xs text-center text-muted-foreground">
-                                  Downloading... {downloadProgress.toFixed(0)}%
+                                  Downloading… {downloadProgress.toFixed(0)}%
                                 </p>
                               </div>
                             ) : (
@@ -1102,12 +1104,12 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Cache and Storage ===== */}
                   {activeSection === "cloud" && (
-                    <motion.div
+                    <m.div
                       key="cloud"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1161,7 +1163,7 @@ export function SettingsModal({
                                 onClick={browseZipCacheDir}
                                 title="Browse"
                               >
-                                <FolderOpen className="h-4 w-4" />
+                                <FolderOpen className="size-4" />
                               </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
@@ -1217,12 +1219,12 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== API Configuration ===== */}
                   {activeSection === "api" && (
-                    <motion.div
+                    <m.div
                       key="api"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1341,7 +1343,7 @@ export function SettingsModal({
 
                         {/* Custom API Key Inputs - Only shown when "Use Your Own" is selected */}
                         {useOwnApiKey && (
-                          <motion.div
+                          <m.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
                             exit={{ opacity: 0, height: 0 }}
@@ -1349,10 +1351,11 @@ export function SettingsModal({
                           >
                             {/* TMDB Key */}
                             <div>
-                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                              <label htmlFor="tmdb-api-key" className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
                                 TMDB API Key
                               </label>
                               <Input
+                                id="tmdb-api-key"
                                 type="password"
                                 value={config.tmdb_api_key || ""}
                                 onChange={(e) =>
@@ -1378,10 +1381,11 @@ export function SettingsModal({
 
                             {/* OMDb Key */}
                             <div>
-                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                              <label htmlFor="omdb-api-key" className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
                                 OMDb API Key (IMDb Ratings)
                               </label>
                               <Input
+                                id="omdb-api-key"
                                 type="password"
                                 value={config.omdb_api_key || ""}
                                 onChange={(e) =>
@@ -1404,15 +1408,15 @@ export function SettingsModal({
                                 </a>
                               </p>
                             </div>
-                          </motion.div>
+                          </m.div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Dev Panel (only shown in dev mode) ===== */}
                   {import.meta.env.DEV && activeSection === "dev" && (
-                    <motion.div
+                    <m.div
                       key="dev"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1553,12 +1557,12 @@ export function SettingsModal({
                           </Button>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Nightly Section (only shown in nightly builds) ===== */}
                   {import.meta.env.VITE_IS_NIGHTLY === 'true' && activeSection === "nightly" && (
-                    <motion.div
+                    <m.div
                       key="nightly"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1626,12 +1630,12 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Factory Reset (Danger Zone) ===== */}
                   {activeSection === "danger" && (
-                    <motion.div
+                    <m.div
                       key="danger"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1675,7 +1679,7 @@ export function SettingsModal({
                             onClick={() => setShowResetConfirm(true)}
                             className="w-full"
                           >
-                            <Trash2 className="mr-2 h-4 w-4" />
+                            <Trash2 className="mr-2 size-4" />
                             Reset App to Factory State
                           </Button>
                         ) : (
@@ -1707,7 +1711,7 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
 
@@ -1733,13 +1737,13 @@ export function SettingsModal({
                 className="gap-2"
               >
                 <Save className="size-4" />
-                {loading ? "Saving..." : "Save"}
+                {loading ? "Saving…" : "Save"}
               </Button>
             </div>
           </div>
         </DialogContent>
         <ZipGuideModal open={showZipGuide} onOpenChange={setShowZipGuide} />
-      </>
+      </LazyMotion>
     </Dialog>
   );
 }
