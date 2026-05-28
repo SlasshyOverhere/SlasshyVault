@@ -75,7 +75,7 @@ const parsePositiveFloat = (rawValue, fallback) => {
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
-const CORS_ALLOWED_ORIGINS = new Set(splitEnvList(process.env.CORS_ALLOWED_ORIGINS).map((origin) => origin.trim()).filter(Boolean));
+const CORS_ALLOWED_ORIGINS = new Set(splitEnvList(process.env.CORS_ALLOWED_ORIGINS).flatMap((origin) => { const t = origin.trim(); return t ? [t] : []; }));
 const RUNTIME_METRICS_USERNAME = (process.env.RUNTIME_METRICS_USERNAME || 'runtime').trim();
 const RUNTIME_METRICS_PASSWORD = (process.env.RUNTIME_METRICS_PASSWORD || '').trim();
 const RUNTIME_RATE_WINDOW_MS = parsePositiveInt(process.env.RUNTIME_RATE_WINDOW_MS, 10 * 60 * 1000);
@@ -490,8 +490,7 @@ function splitEnvList(value) {
   if (!value) return [];
   return value
     .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+    .flatMap((item) => { const t = item.trim(); return t ? [t] : []; });
 }
 
 function isTmdbBearerToken(value) {
@@ -1196,8 +1195,7 @@ function extractMediaMatchKeys(value) {
   }
   return normalized
     .split('|')
-    .map((token) => token.trim())
-    .filter(Boolean);
+    .flatMap((token) => { const t = token.trim(); return t ? [t] : []; });
 }
 
 function hasMatchingMediaKey(roomKeyValue, joinKeyValue) {
@@ -1321,8 +1319,7 @@ function buildPersistedRoomState(room) {
     position_updated_at: Date.now(),
     sync_mode: room.sync_mode || WT_SYNC_MODE,
     participants: Array.from(room.participants.values())
-      .map(serializeRoomParticipant)
-      .filter(Boolean),
+      .flatMap((p) => { const s = serializeRoomParticipant(p); return s ? [s] : []; }),
     created_at: Number(room.created_at) || Date.now(),
     lastActivity: Number(room.lastActivity) || Date.now(),
     last_sync_from: room.last_sync_from || null,
@@ -1399,8 +1396,7 @@ async function syncRoomParticipantsInRedis(room) {
   if (!redis.isConnected() || !room) return false;
 
   const participants = Array.from(room.participants.values())
-    .map(serializeRoomParticipant)
-    .filter(Boolean);
+    .flatMap((p) => { const s = serializeRoomParticipant(p); return s ? [s] : []; });
 
   await redis.updateRoomParticipants(room.code, participants);
 
@@ -2002,7 +1998,7 @@ app.get('/api/social/activity/genres', socialAuth, async (req, res) => {
     }
 
     const friends = await database.getFriends(req.googleId);
-    const friendIds = friends.map((friend) => friend.id).filter(Boolean);
+    const friendIds = friends.flatMap((f) => { const id = f.id; return id ? [id] : []; });
 
     if (friendIds.length === 0) {
       return res.json({ genres: [] });
@@ -2877,13 +2873,15 @@ wss.on('connection', (ws, req) => {
               room: getRoomState(room)
             });
 
-            await persistRoomState(room);
-            await syncRoomParticipantsInRedis(room);
-            await logRoomEvent(room.code, {
-              type: 'participant_ready',
-              participant_id: participantId,
-              duration: message.duration || 0
-            });
+            await Promise.all([
+              persistRoomState(room),
+              syncRoomParticipantsInRedis(room),
+              logRoomEvent(room.code, {
+                type: 'participant_ready',
+                participant_id: participantId,
+                duration: message.duration || 0
+              })
+            ]);
           }
           break;
         }
@@ -3319,13 +3317,15 @@ async function handleSocketClose(room, participantId, ws) {
     void handleParticipantLeave(room, participantId);
   }, DISCONNECT_GRACE_MS);
 
-  await persistRoomState(room);
-  await syncRoomParticipantsInRedis(room);
-  await logRoomEvent(room.code, {
-    type: 'participant_disconnected',
-    participant_id: participantId,
-    nickname: participant.nickname
-  });
+  await Promise.all([
+    persistRoomState(room),
+    syncRoomParticipantsInRedis(room),
+    logRoomEvent(room.code, {
+      type: 'participant_disconnected',
+      participant_id: participantId,
+      nickname: participant.nickname
+    })
+  ]);
 }
 
 async function handleParticipantLeave(room, participantId) {
@@ -3425,13 +3425,15 @@ async function handleParticipantLeave(room, participantId) {
   }
 
   await removeRoomParticipantFromRedis(room.code, participantId);
-  await persistRoomState(room);
-  await syncRoomParticipantsInRedis(room);
-  await logRoomEvent(room.code, {
-    type: 'participant_left',
-    participant_id: participantId,
-    nickname: participant.nickname
-  });
+  await Promise.all([
+    persistRoomState(room),
+    syncRoomParticipantsInRedis(room),
+    logRoomEvent(room.code, {
+      type: 'participant_left',
+      participant_id: participantId,
+      nickname: participant.nickname
+    })
+  ]);
 
   // Notify remaining participants
   broadcastToRoom(room, {
