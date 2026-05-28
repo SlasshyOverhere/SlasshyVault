@@ -15,7 +15,7 @@ import {
 } from '@/services/api'
 import { CountdownTimer } from './CountdownTimer'
 import { formatLocalReleaseTime, getLocalTimezoneLabel } from './CountdownTimer.utils'
-import { motion, AnimatePresence } from 'framer-motion'
+import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
 
 interface ReminderEditorProps {
   open: boolean
@@ -203,6 +203,7 @@ export function ReminderEditor({
   const isEdit = initialData && 'id' in initialData
 
   return (
+    <LazyMotion features={domAnimation}>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] bg-background/95 backdrop-blur-[32px] border border-white/10 text-white p-0 overflow-hidden shadow-[0_0_120px_rgba(0,0,0,0.8)] rounded-[2rem]">
         <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
@@ -263,21 +264,21 @@ export function ReminderEditor({
                 )}
                 <AnimatePresence>
                   {suggesting && (
-                    <motion.div 
+                    <m.div 
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       className="absolute right-5 top-1/2 -translate-y-1/2"
                     >
                       <Loader2 className="size-5 animate-spin text-white/20" />
-                    </motion.div>
+                    </m.div>
                   )}
                 </AnimatePresence>
               </div>
 
               <AnimatePresence>
                 {schedule && (source === 'tmdb' || source === 'tvmaze') && (
-                  <motion.div 
+                  <m.div 
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="flex items-start gap-3 p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10"
@@ -291,7 +292,7 @@ export function ReminderEditor({
                           : schedule.releaseDate}
                       </span>.
                     </div>
-                  </motion.div>
+                  </m.div>
                 )}
               </AnimatePresence>
               
@@ -361,5 +362,6 @@ export function ReminderEditor({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </LazyMotion>
   )
 }

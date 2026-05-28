@@ -11,7 +11,7 @@ import {
   setMovieReminderActive 
 } from '@/services/api'
 import { cn } from '@/lib/utils'
-import { motion, AnimatePresence } from 'framer-motion'
+import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
 import { CountdownTimer } from './CountdownTimer'
 import { formatLocalReleaseTime } from './CountdownTimer.utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -83,10 +83,11 @@ export function RemindersList({
 
   if (reminders.length === 0) {
     return (
-      <motion.div 
+      <LazyMotion features={domAnimation}>
+      <m.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="flex h-full min-h-0 flex-col items-center justify-center overflow-hidden text-center space-y-6"
+        className="flex h-full min-h-0 flex-col items-center justify-center overflow-hidden text-center gap-y-6"
       >
         <div className="relative">
           <div className="absolute inset-0 bg-white/10 blur-3xl rounded-full" />
@@ -94,17 +95,19 @@ export function RemindersList({
             <Bell className="size-8 text-white/30" />
           </div>
         </div>
-        <div className="space-y-2 max-w-sm">
+        <div className="gap-y-2 max-w-sm">
           <h2 className="text-xl font-black text-white tracking-tight">No reminders yet</h2>
           <p className="text-sm text-white/40 leading-relaxed font-medium px-6">
             Discover movies and TV shows and set reminders to get notified when they're released or available.
           </p>
         </div>
-      </motion.div>
+      </m.div>
+      </LazyMotion>
     )
   }
 
   return (
+    <LazyMotion features={domAnimation}>
     <div className="grid h-full min-h-0 grid-rows-[minmax(0,170px)_minmax(0,1fr)] gap-4 overflow-hidden">
       <div className="shrink-0 overflow-hidden">
         {upcoming.length > 0 && <NextUpPanel reminder={upcoming[0]} />}
@@ -134,7 +137,7 @@ export function RemindersList({
         <ScrollArea className="flex-1 min-h-0 pr-3">
           <div className="pb-5">
             {upcoming.length > 0 ? (
-              <motion.div 
+              <m.div 
                 variants={containerVariants}
                 initial="hidden"
                 animate="visible"
@@ -152,7 +155,7 @@ export function RemindersList({
                     />
                   ))}
                 </AnimatePresence>
-              </motion.div>
+              </m.div>
             ) : (
               <div className="grid content-start grid-cols-1 gap-4 opacity-60 grayscale-[0.3] xl:grid-cols-2">
                 {past.map((reminder) => (
@@ -171,12 +174,14 @@ export function RemindersList({
         </ScrollArea>
       </section>
     </div>
+    </LazyMotion>
   )
 }
 
 function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
   return (
-    <motion.div
+    <LazyMotion features={domAnimation}>
+    <m.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       className="group relative h-full overflow-hidden rounded-[2rem] border border-white/[0.05] bg-white/[0.02] p-8 shadow-inner"
@@ -230,7 +235,8 @@ function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
           />
         </div>
       </div>
-    </motion.div>
+    </m.div>
+    </LazyMotion>
   )
 }
 function ReminderCard({ 
@@ -251,7 +257,7 @@ function ReminderCard({
   const sourceLabel = reminder.source === 'tvmaze' ? 'TVmaze' : (reminder.source === 'tmdb' ? 'TMDB' : 'Manual')
   
   return (
-    <motion.div
+    <m.div
       variants={itemVariants}
       layout
       className={cn(
@@ -338,6 +344,7 @@ function ReminderCard({
                 />
               )}
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); onToggle(); }}
                 className={cn(
                   "size-8 rounded-lg flex items-center justify-center transition-all border border-white/[0.08] bg-white/[0.03]",
@@ -353,6 +360,6 @@ function ReminderCard({
           </div>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   )
 }
