@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/tauri"
 import { listen } from "@tauri-apps/api/event"
-import { motion, AnimatePresence } from "framer-motion"
+import { LazyMotion, m, domAnimation, AnimatePresence } from "framer-motion"
 import {
   Link2, Plus, Trash2, RefreshCw,
   AlertCircle, CheckCircle, Loader2, Archive,
@@ -238,9 +238,10 @@ export default function DirectLinksView({
       try {
         const indexedMedia = await invoke<MediaItem[]>("ddl_get_source_media", { sourceId: indexedSource.id })
         setSourceMedia(current => ({ ...current, [indexedSource.id]: indexedMedia }))
-        indexedMediaIds = indexedMedia
-          .filter(m => m.media_type !== "tvshow")
-          .map(m => m.id)
+        indexedMediaIds = indexedMedia.reduce<number[]>((ids, m) => {
+          if (m.media_type !== "tvshow") ids.push(m.id)
+          return ids
+        }, [])
       } catch { /* skip */ }
       setTimeout(() => {
         setShowAddModal(false)
@@ -305,6 +306,7 @@ export default function DirectLinksView({
   }
 
   return (
+    <LazyMotion features={domAnimation}>
     <div className="flex flex-col relative h-full">
 
       <div className="px-8 py-12 relative z-10 flex flex-col h-full">
@@ -352,7 +354,7 @@ export default function DirectLinksView({
             ))}
           </div>
         ) : sources.length === 0 ? (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex flex-col items-center justify-center py-24 text-center rounded-2xl border border-dashed border-border bg-card/40"
@@ -364,10 +366,11 @@ export default function DirectLinksView({
             <p className="text-sm text-muted-foreground max-w-xs mx-auto leading-relaxed">
               Your direct streaming library is empty. Add a ZIP link to start watching instantly.
             </p>
-          </motion.div>
+          </m.div>
         ) : (
           <div className="relative">
             <button
+              type="button"
               onClick={() => setIsSourcesDropdownOpen(!isSourcesDropdownOpen)}
               className="flex items-center gap-3 w-full rounded-xl bg-card border border-border p-4 hover:border-white/20 transition-all duration-200 text-left cursor-pointer"
             >
@@ -402,7 +405,7 @@ export default function DirectLinksView({
 
             <AnimatePresence>
               {isSourcesDropdownOpen && (
-                <motion.div
+                <m.div
                   initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
                   animate={{ opacity: 1, y: 0, scaleY: 1 }}
                   exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
@@ -479,7 +482,7 @@ export default function DirectLinksView({
                       </div>
                     </div>
                   ))}
-                </motion.div>
+                </m.div>
               )}
             </AnimatePresence>
           </div>
@@ -511,8 +514,9 @@ export default function DirectLinksView({
 
           <div className="space-y-4 min-w-0 overflow-hidden">
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">Source URL</label>
+              <label htmlFor="add-archive-url" className="text-xs font-medium text-muted-foreground">Source URL</label>
               <Input
+                id="add-archive-url"
                 type="url"
                 placeholder="https://server.com/archive_01.zip"
                 value={addUrl}
@@ -526,7 +530,7 @@ export default function DirectLinksView({
 
             <AnimatePresence mode="wait">
               {addStep === "validating" && (
-                <motion.div
+                <m.div
                   key="validating"
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -534,12 +538,12 @@ export default function DirectLinksView({
                   className="flex items-center justify-center gap-3 py-6 text-sm text-muted-foreground"
                 >
                   <Loader2 className="size-5 animate-spin" />
-                  Validating endpoint...
-                </motion.div>
+                  Validating endpoint…
+                </m.div>
               )}
 
               {addStep === "indexing" && addValidation && (
-                <motion.div
+                <m.div
                   key="indexing"
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -570,7 +574,7 @@ export default function DirectLinksView({
                     </div>
 
                     <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <motion.div
+                      <m.div
                         className="h-full rounded-full bg-foreground"
                         initial={{ width: "0%" }}
                         animate={isIndeterminateProgress
@@ -583,7 +587,7 @@ export default function DirectLinksView({
                     </div>
 
                     {addProgress?.episodeTitle && (
-                      <motion.div
+                      <m.div
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
                         className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 border border-border min-w-0"
@@ -592,14 +596,14 @@ export default function DirectLinksView({
                         <span className="text-xs text-muted-foreground truncate">
                           {addProgress.stage === "fetching-episode-metadata" ? "Metadata:" : "Discovered:"} {addProgress.episodeTitle}
                         </span>
-                      </motion.div>
+                      </m.div>
                     )}
                   </div>
-                </motion.div>
+                </m.div>
               )}
 
               {addStep === "done" && (
-                <motion.div
+                <m.div
                   key="done"
                   initial={{ scale: 0.9, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
@@ -609,11 +613,11 @@ export default function DirectLinksView({
                     <CheckCircle className="size-7 text-background" />
                   </div>
                   <p className="text-sm font-medium text-foreground uppercase tracking-wider">Mapping Complete</p>
-                </motion.div>
+                </m.div>
               )}
 
               {addStep === "error" && (
-                <motion.div
+                <m.div
                   key="error"
                   initial={{ x: 20, opacity: 0 }}
                   animate={{ x: 0, opacity: 1 }}
@@ -624,7 +628,7 @@ export default function DirectLinksView({
                     <p className="text-sm font-medium text-destructive">Index Failed</p>
                     <p className="text-xs text-muted-foreground mt-1">{addError}</p>
                   </div>
-                </motion.div>
+                </m.div>
               )}
             </AnimatePresence>
 
@@ -652,7 +656,7 @@ export default function DirectLinksView({
               className="min-w-[120px] sm:min-w-[140px]"
             >
               {addStep === "validating" || addStep === "indexing" ? (
-                <><Loader2 className="size-4 mr-2 animate-spin" />{addStep === "validating" ? "Validating..." : "Indexing..."}</>
+                <><Loader2 className="size-4 mr-2 animate-spin" />{addStep === "validating" ? "Validating…" : "Indexing…"}</>
               ) : addStep === "error" ? "Retry Index" : "Start Indexing"}
             </Button>
           </DialogFooter>
@@ -679,8 +683,9 @@ export default function DirectLinksView({
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">New Session URL</label>
+              <label htmlFor="refresh-session-url" className="text-xs font-medium text-muted-foreground">New Session URL</label>
               <Input
+                id="refresh-session-url"
                 type="url"
                 placeholder="https://server.com/new_session_url.zip"
                 value={refreshUrl}
@@ -692,13 +697,13 @@ export default function DirectLinksView({
             </div>
 
             {refreshError && (
-              <motion.div
+              <m.div
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive"
               >
                 {refreshError}
-              </motion.div>
+              </m.div>
             )}
           </div>
 
@@ -719,5 +724,6 @@ export default function DirectLinksView({
       </Dialog>
 
     </div>
+    </LazyMotion>
   )
 }

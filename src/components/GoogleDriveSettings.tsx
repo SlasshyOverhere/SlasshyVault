@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { LazyMotion, m, domAnimation } from 'framer-motion'
 import { Cloud, LogIn, LogOut, Loader2, CheckCircle2, HardDrive, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -111,6 +111,7 @@ export function GoogleDriveSettings() {
     }
 
     return (
+        <LazyMotion features={domAnimation}>
         <div className="space-y-6">
             {/* Header */}
             <div>
@@ -121,7 +122,7 @@ export function GoogleDriveSettings() {
             </div>
 
             {/* Connection Status Card */}
-            <motion.div
+            <m.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="p-5 rounded-xl bg-card border border-border"
@@ -207,7 +208,7 @@ export function GoogleDriveSettings() {
                                     {isConnecting ? (
                                         <>
                                             <Loader2 className="size-4 animate-spin" />
-                                            Opening browser...
+                                            Opening browser…
                                         </>
                                     ) : (
                                         <>
@@ -220,8 +221,9 @@ export function GoogleDriveSettings() {
                         )}
                     </div>
                 </div>
-            </motion.div>
+            </m.div>
 
         </div>
+        </LazyMotion>
     )
 }
