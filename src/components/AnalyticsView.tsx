@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react"
-import { motion } from "framer-motion"
+import { LazyMotion, m, domAnimation } from "framer-motion"
 import { Activity } from "lucide-react"
 import type { AnalyticsData, HeatmapDay } from "@/services/api"
 import { getCachedImageUrl } from "@/services/api"
@@ -105,13 +105,13 @@ function HeatmapCalendar({ data }: { data: HeatmapDay[] }) {
   return (
     <div className="relative flex flex-col items-center">
       <div className="flex gap-[3px] justify-center">
-        {weeks.map((week, wi) => (
-          <div key={wi} className="flex flex-col gap-[3px]">
-            {week.map((day, di) => {
+        {weeks.map((week) => (
+          <div key={week[0]!.date.toISOString()} className="flex flex-col gap-[3px]">
+            {week.map((day) => {
               const level = day.day ? getHeatmapIntensity(day.day.watch_seconds, maxSeconds) : 0
               return (
                 <div
-                  key={di}
+                  key={day.date.toISOString()}
                   className={`h-[12px] w-[12px] rounded-[3px] transition-colors cursor-pointer ${getIntensityClass(level)} hover:ring-1 hover:ring-white/30`}
                   onMouseEnter={(e) => {
                     setHoveredDay(day.day)
@@ -170,13 +170,15 @@ function AreaChart({ data }: { data: { date: string; value: number }[] }) {
   const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding.top + chartH} L ${points[0].x} ${padding.top + chartH} Z`
 
   const labelInterval = Math.max(Math.floor(data.length / 8), 1)
-  const xLabels = data.filter((_, i) => i % labelInterval === 0 || i === data.length - 1).map((d) => {
-    const idx = data.indexOf(d)
-    return {
-      x: padding.left + idx * xStep,
-      label: new Date(d.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+  const xLabels = data.reduce<{ x: number; label: string }[]>((acc, d, i) => {
+    if (i % labelInterval === 0 || i === data.length - 1) {
+      acc.push({
+        x: padding.left + i * xStep,
+        label: new Date(d.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      })
     }
-  })
+    return acc
+  }, [])
 
   const ySteps = 4
   const yLabels = Array.from({ length: ySteps + 1 }, (_, i) => {
@@ -192,16 +194,16 @@ function AreaChart({ data }: { data: { date: string; value: number }[] }) {
           <stop offset="100%" stopColor="white" stopOpacity="0" />
         </linearGradient>
       </defs>
-      {yLabels.map((yl, i) => (
-        <g key={i}>
+      {yLabels.map((yl) => (
+        <g key={yl.label}>
           <line x1={padding.left} y1={yl.y} x2={width - padding.right} y2={yl.y} stroke="white" strokeOpacity="0.05" />
           <text x={padding.left - 6} y={yl.y + 3} textAnchor="end" fill="white" fillOpacity="0.25" fontSize="9" fontFamily="inherit">{yl.label}</text>
         </g>
       ))}
       <path d={areaPath} fill="url(#areaGrad)" />
       <path d={linePath} fill="none" stroke="white" strokeWidth="1.5" strokeOpacity="0.5" />
-      {xLabels.map((xl, i) => (
-        <text key={i} x={xl.x} y={height - 6} textAnchor="middle" fill="white" fillOpacity="0.25" fontSize="9" fontFamily="inherit">{xl.label}</text>
+      {xLabels.map((xl) => (
+        <text key={xl.label} x={xl.x} y={height - 6} textAnchor="middle" fill="white" fillOpacity="0.25" fontSize="9" fontFamily="inherit">{xl.label}</text>
       ))}
     </svg>
   )
@@ -215,7 +217,7 @@ function DistributionGrid({ items, maxVal }: { items: { label: string; value: nu
       {items.map((item, i) => {
         const level = maxVal > 0 ? getHeatmapIntensity(item.value, maxVal) : 0
         return (
-          <div key={i} className="group relative">
+          <div key={`${item.label}-${i}`} className="group relative">
             <div className={`size-7 rounded-[6px] flex items-center justify-center text-[10px] font-medium ${getIntensityClass(level)} ${level >= 3 ? "text-black" : "text-white/40"}`}>
               {item.label}
             </div>
@@ -291,19 +293,22 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
 
   if (!hasData) {
     return (
-      <div className="px-6 py-16 text-center">
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <Activity className="size-8 text-white/20 mx-auto mb-3" />
-          <h3 className="text-base font-medium text-white/60 mb-1">No activity yet</h3>
-          <p className="text-sm text-white/30">Start watching something to see your analytics</p>
-        </motion.div>
-      </div>
+      <LazyMotion features={domAnimation}>
+        <div className="px-6 py-16 text-center">
+          <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <Activity className="size-8 text-white/20 mx-auto mb-3" />
+            <h3 className="text-base font-medium text-white/60 mb-1">No activity yet</h3>
+            <p className="text-sm text-white/30">Start watching something to see your analytics</p>
+          </m.div>
+        </div>
+      </LazyMotion>
     )
   }
 
   return (
-    <div className="pb-8 px-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}>
+    <LazyMotion features={domAnimation}>
+      <div className="pb-8 px-6">
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}>
 
         {/* Stats */}
         <div className="flex items-baseline gap-6 flex-wrap mb-8">
@@ -313,8 +318,8 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
             { label: "Episodes", value: String(data.overview.episodes_completed) },
             { label: "Streak", value: `${data.overview.current_streak_days}d` },
             { label: "Completion", value: `${Math.round(data.overview.total_completion_rate)}%` },
-          ].map((s, i) => (
-            <div key={i}>
+          ].map((s) => (
+            <div key={s.label}>
               <div className="text-[10px] font-medium uppercase tracking-[0.15em] text-white/30 mb-1">{s.label}</div>
               <div className="text-3xl font-bold tracking-tight text-white">{s.value}</div>
             </div>
@@ -334,13 +339,14 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
             <p className="text-xs text-white/35 mt-0.5">Last 90 days</p>
           </div>
           <div className="flex gap-1">
-            {(["all", "movies", "episodes"] as const).map((m) => (
+            {(["all", "movies", "episodes"] as const).map((mode) => (
               <button
-                key={m}
-                onClick={() => setTrendMode(m)}
-                className={`px-2.5 py-1 rounded-full text-xs transition-all ${trendMode === m ? "bg-white text-black font-medium" : "text-white/35 hover:text-white/60"}`}
+                type="button"
+                key={mode}
+                onClick={() => setTrendMode(mode)}
+                className={`px-2.5 py-1 rounded-full text-xs transition-all ${trendMode === mode ? "bg-white text-black font-medium" : "text-white/35 hover:text-white/60"}`}
               >
-                {m.charAt(0).toUpperCase() + m.slice(1)}
+                {mode.charAt(0).toUpperCase() + mode.slice(1)}
               </button>
             ))}
           </div>
@@ -365,7 +371,7 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
                       <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
                     </div>
                     <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                      <motion.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
+                      <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
                     </div>
                   </div>
                 )
@@ -386,7 +392,7 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
                         <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
                       </div>
                       <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                        <motion.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
+                        <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
                       </div>
                     </div>
                   )
@@ -400,7 +406,7 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
             <SectionLabel title="Most Watched" subtitle="Top 10" />
             <div className="space-y-1">
               {data.top_watched.map((item, i) => (
-                <div key={i} className="flex items-center gap-3 py-2">
+                <div key={item.title} className="flex items-center gap-3 py-2">
                   <span className="w-4 text-[10px] text-white/20 text-right shrink-0">{i + 1}</span>
                   <PosterThumb path={item.poster_path} title={item.title} />
                   <div className="flex-1 min-w-0">
@@ -441,13 +447,13 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
                 { label: "Mostly Done", value: data.completion_funnel.mostly_done_75, pct: (data.completion_funnel.mostly_done_75 / Math.max(data.completion_funnel.started, 1)) * 100 },
                 { label: "Completed", value: data.completion_funnel.completed, pct: (data.completion_funnel.completed / Math.max(data.completion_funnel.started, 1)) * 100 },
               ].map((s, i) => (
-                <div key={i}>
+                <div key={s.label}>
                   <div className="flex items-baseline justify-between mb-1">
                     <span className="text-xs text-white/60">{s.label}</span>
                     <span className="text-[10px] text-white/30">{s.value}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                    <motion.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${Math.max(s.pct, 1)}%` }} transition={{ duration: 0.8, delay: i * 0.08, ease: "easeOut" }} />
+                    <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${Math.max(s.pct, 1)}%` }} transition={{ duration: 0.8, delay: i * 0.08, ease: "easeOut" }} />
                   </div>
                 </div>
               ))}
@@ -480,7 +486,8 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
           })}
         </div>
 
-      </motion.div>
-    </div>
+        </m.div>
+      </div>
+    </LazyMotion>
   )
 }

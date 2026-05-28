@@ -20,7 +20,7 @@ import {
   Cloud,
   Globe,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, m, AnimatePresence, domAnimation } from "framer-motion";
 import { useState, useMemo, memo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -174,13 +174,14 @@ export function DownloadsView({
   ];
 
   return (
-    <div className="h-full overflow-hidden relative">
+    <LazyMotion features={domAnimation}>
+      <div className="h-full overflow-hidden relative">
       <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
       <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
       <div className="absolute inset-0 noise-overlay opacity-[0.02] pointer-events-none" />
 
       <div className="relative h-full overflow-y-auto pt-24 pb-4 scrollbar-none">
-        <motion.div
+        <m.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
@@ -188,7 +189,7 @@ export function DownloadsView({
         >
           {/* Header */}
           <section className="flex flex-shrink-0 flex-col gap-6 px-2 sm:flex-row sm:items-center sm:justify-between">
-            <motion.div
+            <m.div
               initial={{ x: -20, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1] }}
@@ -201,7 +202,7 @@ export function DownloadsView({
                 </div>
               </div>
               <div className="space-y-0.5">
-                <h1 className="text-4xl font-black tracking-tighter leading-none bg-clip-text text-transparent bg-gradient-to-b from-white to-white/40">
+                <h1 className="text-4xl font-black tracking-tighter leading-none text-white">
                   Downloads
                 </h1>
                 <div className="flex items-center gap-2">
@@ -214,9 +215,9 @@ export function DownloadsView({
                   </p>
                 </div>
               </div>
-            </motion.div>
+            </m.div>
 
-            <motion.div
+            <m.div
               initial={{ x: 20, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.1 }}
@@ -225,11 +226,11 @@ export function DownloadsView({
               <MetricChip label="Active" value={stats.active} active={stats.active > 0} />
               <MetricChip label="Completed" value={stats.completed} />
               <MetricChip label="Failed" value={stats.failed} alert={stats.failed > 0} />
-            </motion.div>
+            </m.div>
           </section>
 
           {/* Toolbar */}
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.15 }}
@@ -253,7 +254,7 @@ export function DownloadsView({
               
               <AnimatePresence>
                 {selectionMode && selectedIds.size > 0 && (
-                  <motion.div
+                  <m.div
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -10 }}
@@ -267,7 +268,7 @@ export function DownloadsView({
                       <Trash2 className="mr-2 size-3.5" />
                       Delete ({selectedIds.size})
                     </Button>
-                  </motion.div>
+                  </m.div>
                 )}
               </AnimatePresence>
             </div>
@@ -281,10 +282,10 @@ export function DownloadsView({
             >
               Clear History
             </Button>
-          </motion.div>
+          </m.div>
 
           {/* Tab Bar */}
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.2 }}
@@ -292,6 +293,7 @@ export function DownloadsView({
           >
             {TABS.map((tab) => (
               <button
+                type="button"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
@@ -312,7 +314,7 @@ export function DownloadsView({
                 )}
               </button>
             ))}
-          </motion.div>
+          </m.div>
 
           {/* Active Downloads Section */}
           {(activeTab === "all" || activeTab === "active") && (
@@ -324,7 +326,7 @@ export function DownloadsView({
               <AnimatePresence mode="popLayout">
                 <div className="grid gap-3 min-w-0">
                   {activeJobs.map((job, idx) => (
-                    <motion.div
+                    <m.div
                       key={job.id}
                       layout
                       initial={{ opacity: 0, y: 20 }}
@@ -341,7 +343,7 @@ export function DownloadsView({
                         onToggleSelect={() => toggleSelect(job.id)}
                         compact
                       />
-                    </motion.div>
+                    </m.div>
                   ))}
                 </div>
               </AnimatePresence>
@@ -363,7 +365,7 @@ export function DownloadsView({
               onShowHistory={() => setIsHistoryOpen(true)}
             />
           )}
-        </motion.div>
+        </m.div>
       </div>
 
       {/* History Dialog */}
@@ -389,7 +391,7 @@ export function DownloadsView({
             <ScrollArea className="h-full pr-4">
               <div className="grid gap-4 pb-8">
                 {archivedJobs.map((job, idx) => (
-                  <motion.div
+                  <m.div
                     key={job.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -405,7 +407,7 @@ export function DownloadsView({
                       onToggleSelect={() => toggleSelect(job.id)}
                       compact
                     />
-                  </motion.div>
+                  </m.div>
                 ))}
               </div>
             </ScrollArea>
@@ -413,6 +415,7 @@ export function DownloadsView({
         </DialogContent>
       </Dialog>
     </div>
+    </LazyMotion>
   );
 }
 
@@ -515,7 +518,8 @@ function ArchivedSection({
           onToggleSelect={() => onToggleSelect(latestFiltered.id)}
         />
         {filteredArchived.length > 1 && (
-          <motion.button
+          <m.button
+            type="button"
             onClick={onShowHistory}
             whileHover={{ scale: 1.005 }}
             className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-3.5 transition-all hover:bg-white/[0.04] hover:border-white/10 group"
@@ -529,7 +533,7 @@ function ArchivedSection({
               </span>
             </div>
             <ChevronRight className="size-4 text-zinc-700 group-hover:text-white transition-all transform group-hover:translate-x-1" />
-          </motion.button>
+          </m.button>
         )}
       </div>
     </section>
@@ -538,7 +542,7 @@ function ArchivedSection({
 
 function EmptyDownloadsState() {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
@@ -551,7 +555,7 @@ function EmptyDownloadsState() {
       <p className="mx-auto max-w-sm text-zinc-500 mt-2 text-xs leading-relaxed">
         The pipeline is idle. Initiate a transfer from the cloud drive to begin acquisition.
       </p>
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -580,7 +584,7 @@ const DownloadRow = memo(function DownloadRow({
   const timeRemaining = formatTimeRemaining(job);
 
   return (
-    <motion.div
+    <m.div
       layout
       className={cn(
         "group relative rounded-[2rem] border transition-all w-full min-w-0 overflow-hidden",
@@ -692,7 +696,7 @@ const DownloadRow = memo(function DownloadRow({
               )}>{Math.round(job.progress)}%</span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
-              <motion.div
+              <m.div
                 className={cn(
                   "h-full transition-all",
                   active ? "bg-white shadow-[0_0_15px_rgba(255,255,255,0.5)]" : "bg-white/30"
@@ -764,6 +768,6 @@ const DownloadRow = memo(function DownloadRow({
           </div>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   );
 });

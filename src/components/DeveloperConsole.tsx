@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, m, AnimatePresence, domAnimation } from "framer-motion";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Trash2, Terminal, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -156,9 +156,11 @@ export function DeveloperConsole() {
   const totalCount = logs.length;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+    <LazyMotion features={domAnimation}>
+      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
       {/* Toggle button */}
       <button
+        type="button"
         onClick={() => setOpen(!open)}
         className={cn(
           "flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all",
@@ -175,7 +177,7 @@ export function DeveloperConsole() {
 
       <AnimatePresence>
         {open && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -193,6 +195,7 @@ export function DeveloperConsole() {
                 {/* Filter buttons */}
                 {(["all", "info", "warn", "error"] as const).map((f) => (
                   <button
+                    type="button"
                     key={f}
                     onClick={() => setFilter(f)}
                     className={cn(
@@ -207,6 +210,7 @@ export function DeveloperConsole() {
                 ))}
                 <div className="w-px h-4 bg-zinc-700 mx-1" />
                 <button
+                  type="button"
                   onClick={() => setAutoScroll(!autoScroll)}
                   className={cn(
                     "px-1.5 py-0.5 text-[10px] rounded transition-colors",
@@ -216,6 +220,7 @@ export function DeveloperConsole() {
                   AUTO
                 </button>
                 <button
+                  type="button"
                   onClick={clearLogs}
                   className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
                   title="Clear logs"
@@ -258,10 +263,11 @@ export function DeveloperConsole() {
                 {filter !== "all" ? `Showing ${filteredCount}/${totalCount}` : `${totalCount} total`}
               </span>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
     </div>
+    </LazyMotion>
   );
 }
 
