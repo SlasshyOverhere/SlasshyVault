@@ -112,10 +112,10 @@ export const HistoryEventCard = memo(function HistoryEventCard({
           )}
         >
           {posterUrl ? (
-            <img src={posterUrl} alt={title} className="h-full w-full object-cover" />
+            <img src={posterUrl} alt={title} className="size-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
-              <Tv className="h-4 w-4" />
+              <Tv className="size-4" />
             </div>
           )}
         </button>
@@ -128,7 +128,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
             </span>
             {event.completed && (
               <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-black">
-                <CheckCircle2 className="h-2.5 w-2.5" />
+                <CheckCircle2 className="size-2.5" />
                 Done
               </span>
             )}
@@ -141,7 +141,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
         <div className="hidden xl:block min-w-[140px]">
           <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/25">Watched</p>
           <p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/60">
-            <Clock3 className="h-3 w-3 text-white/30" />
+            <Clock3 className="size-3 text-white/30" />
             {formatEventTime(event.ended_at)}
           </p>
         </div>
@@ -153,7 +153,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
 
         {/* Source pill */}
         <div className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/55 inline-flex items-center gap-1.5">
-          <HardDrive className="h-3 w-3" />
+          <HardDrive className="size-3" />
           {event.is_cloud ? "Cloud" : "Local"}
         </div>
 
@@ -161,10 +161,10 @@ export const HistoryEventCard = memo(function HistoryEventCard({
         <button
           type="button"
           onClick={() => onRemove(event)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white opacity-0 group-hover:opacity-100"
+          className="inline-flex size-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white opacity-0 group-hover:opacity-100"
           aria-label="Remove history entry"
         >
-          <Trash2 className="h-3.5 w-3.5" />
+          <Trash2 className="size-3.5" />
         </button>
       </div>
 
@@ -181,10 +181,10 @@ export const HistoryEventCard = memo(function HistoryEventCard({
             )}
           >
             {posterUrl ? (
-              <img src={posterUrl} alt={title} className="h-full w-full object-cover" />
+              <img src={posterUrl} alt={title} className="size-full object-cover" />
             ) : (
               <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
-                <Tv className="h-4 w-4" />
+                <Tv className="size-4" />
               </div>
             )}
           </button>
@@ -196,7 +196,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
               </span>
               {event.completed && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-black">
-                  <CheckCircle2 className="h-2.5 w-2.5" />
+                  <CheckCircle2 className="size-2.5" />
                   Done
                 </span>
               )}
@@ -208,10 +208,10 @@ export const HistoryEventCard = memo(function HistoryEventCard({
           <button
             type="button"
             onClick={() => onRemove(event)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white"
+            className="inline-flex size-8 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.03] text-white/40 transition-all hover:bg-white/[0.08] hover:text-white"
             aria-label="Remove history entry"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash2 className="size-3.5" />
           </button>
         </div>
 
@@ -227,7 +227,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
             {formatDuration(watchedSeconds)}
           </span>
           <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
-            <HardDrive className="h-3 w-3" />
+            <HardDrive className="size-3" />
             {event.is_cloud ? "Cloud" : "Local"}
           </span>
         </div>

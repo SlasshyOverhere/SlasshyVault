@@ -466,34 +466,34 @@ export function SettingsModal({
     label: string;
     icon: React.ReactNode;
   }[] = [
-    { id: "general", label: "General", icon: <Settings className="w-4 h-4" /> },
+    { id: "general", label: "General", icon: <Settings className="size-4" /> },
     {
       id: "account",
       label: "Account",
-      icon: <Power className="w-4 h-4" />,
+      icon: <Power className="size-4" />,
     },
     {
       id: "updates",
       label: "Updates",
-      icon: <Shield className="w-4 h-4" />,
+      icon: <Shield className="size-4" />,
     },
     {
       id: "cloud",
       label: "Cache & Storage",
-      icon: <Cloud className="w-4 h-4" />,
+      icon: <Cloud className="size-4" />,
     },
-    { id: "api", label: "API Keys", icon: <Key className="w-4 h-4" /> },
+    { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
     {
       id: "danger",
       label: "Factory Reset",
-      icon: <AlertTriangle className="w-4 h-4" />,
+      icon: <AlertTriangle className="size-4" />,
     },
-    { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
+    { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
     ...(import.meta.env.DEV
-      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
+      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
       : []),
     ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
-      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="w-4 h-4" /> }]
+      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
       : []),
   ];
 
@@ -513,7 +513,7 @@ export function SettingsModal({
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                   aria-label="Close settings"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="size-4" />
                 </button>
               </div>
 
@@ -568,7 +568,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-white/10">
-                              <Power className="w-5 h-5 text-white" />
+                              <Power className="size-5 text-white" />
                             </div>
                             <div>
                               <Label className="text-base font-medium">
@@ -590,7 +590,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-white/8">
-                            <MonitorPlay className="w-5 h-5 text-foreground" />
+                            <MonitorPlay className="size-5 text-foreground" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -617,7 +617,7 @@ export function SettingsModal({
                                   bundledMpvInfo?.exists ? "bg-white/10" : "bg-muted"
                                 )}>
                                   <Wifi className={cn(
-                                    "w-5 h-5",
+                                    "size-5",
                                     bundledMpvInfo?.exists ? "text-foreground" : "text-muted-foreground"
                                   )} />
                                 </div>
@@ -652,7 +652,7 @@ export function SettingsModal({
                               >
                                 {downloadingBundledMpv ? (
                                   <>
-                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <Loader2 className="size-3 animate-spin" />
                                     {bundledMpvProgress > 0
                                       ? `${Math.round(bundledMpvProgress)}%`
                                       : "Installing..."}
@@ -668,7 +668,7 @@ export function SettingsModal({
                             {/* Warning when bundled not actively used */}
                             {bundledMpvInfo?.exists && config.mpv_path && config.mpv_path !== bundledMpvInfo.path && (
                               <div className="flex items-start gap-2 mt-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                                <AlertTriangle className="size-4 text-amber-400 shrink-0 mt-0.5" />
                                 <p className="text-[11px] text-amber-300/90 leading-relaxed">
                                   You're using a different MPV build. Newer builds can cause
                                   playback errors. Switch back to the bundled player above.
@@ -691,7 +691,7 @@ export function SettingsModal({
                           {showCustomMpv && (
                             <div className="mt-3 p-3 rounded-xl bg-red-500/5 border border-red-500/20 space-y-3">
                               <div className="flex items-start gap-2">
-                                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                                <AlertTriangle className="size-4 text-red-400 shrink-0 mt-0.5" />
                                 <div>
                                   <p className="text-xs font-semibold text-red-300">
                                     Not recommended
@@ -739,7 +739,7 @@ export function SettingsModal({
                                 >
                                   <RefreshCw
                                     className={cn(
-                                      "w-3 h-3",
+                                      "size-3",
                                       detectingMpv && "animate-spin",
                                     )}
                                   />
@@ -783,7 +783,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-purple-500/20">
-                              <FlaskConical className="w-5 h-5 text-purple-400" />
+                              <FlaskConical className="size-5 text-purple-400" />
                             </div>
                             <div>
                               <div className="flex items-center gap-2">
@@ -834,7 +834,7 @@ export function SettingsModal({
                       {/* Warning Banner */}
                       <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                         <div className="flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <AlertTriangle className="size-4 text-yellow-500 mt-0.5 flex-shrink-0" />
                           <div className="space-y-1">
                             <p className="text-xs font-medium text-yellow-500">
                               Heads up
@@ -871,7 +871,7 @@ export function SettingsModal({
                             >
                               <Radio
                                 className={cn(
-                                  "w-5 h-5",
+                                  "size-5",
                                   betaEnabled
                                     ? "text-purple-400"
                                     : "text-muted-foreground",
@@ -925,7 +925,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-red-500/20">
-                            <Power className="w-5 h-5 text-red-400" />
+                            <Power className="size-5 text-red-400" />
                           </div>
                           <div>
                             <p className="text-base font-medium">
@@ -985,7 +985,7 @@ export function SettingsModal({
                               >
                                 {loggingOut ? (
                                   <>
-                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    <Loader2 className="size-4 mr-2 animate-spin" />
                                     Signing Out...
                                   </>
                                 ) : (
@@ -1021,7 +1021,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-center gap-3 mb-2">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Download className="w-5 h-5 text-white" />
+                            <Download className="size-5 text-white" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -1043,7 +1043,7 @@ export function SettingsModal({
                           >
                             <RefreshCw
                               className={cn(
-                                "w-4 h-4",
+                                "size-4",
                                 checkingUpdate && "animate-spin",
                               )}
                             />
@@ -1095,7 +1095,7 @@ export function SettingsModal({
                                 disabled={!updateInfo.download_url}
                                 className="w-full gap-2 bg-white text-black hover:bg-gray-200"
                               >
-                                <Download className="w-4 h-4" />
+                                <Download className="size-4" />
                                 Download & Install
                               </Button>
                             )}
@@ -1117,7 +1117,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Archive className="w-5 h-5 text-white" />
+                            <Archive className="size-5 text-white" />
                           </div>
                           <div className="flex-1">
                             <Label className="text-base font-medium">
@@ -1242,7 +1242,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Zap className="w-5 h-5 text-white" />
+                            <Zap className="size-5 text-white" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -1271,14 +1271,14 @@ export function SettingsModal({
                           <div className="flex items-center gap-3">
                             <div
                               className={cn(
-                                "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
                                 !useOwnApiKey
                                   ? "border-white"
                                   : "border-muted-foreground",
                               )}
                             >
                               {!useOwnApiKey && (
-                                <div className="w-2 h-2 rounded-full bg-white" />
+                                <div className="size-2 rounded-full bg-white" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1312,14 +1312,14 @@ export function SettingsModal({
                           <div className="flex items-center gap-3">
                             <div
                               className={cn(
-                                "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
                                 useOwnApiKey
                                   ? "border-white"
                                   : "border-muted-foreground",
                               )}
                             >
                               {useOwnApiKey && (
-                                <div className="w-2 h-2 rounded-full bg-white" />
+                                <div className="size-2 rounded-full bg-white" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1438,7 +1438,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-yellow-500/20">
-                            <Code className="w-5 h-5 text-yellow-400" />
+                            <Code className="size-5 text-yellow-400" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -1584,7 +1584,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-white/10">
-                              <Bug className="w-5 h-5 text-white" />
+                              <Bug className="size-5 text-white" />
                             </div>
                             <div>
                               <Label className="text-base font-medium">
@@ -1614,7 +1614,7 @@ export function SettingsModal({
                       {/* Info card */}
                       <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                         <div className="flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <AlertTriangle className="size-4 text-yellow-500 mt-0.5 flex-shrink-0" />
                           <div className="space-y-1">
                             <p className="text-xs font-medium text-yellow-500">
                               Nightly Build
@@ -1652,7 +1652,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl border border-destructive/30 bg-destructive/5 space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-destructive/20">
-                            <AlertTriangle className="w-5 h-5 text-destructive" />
+                            <AlertTriangle className="size-5 text-destructive" />
                           </div>
                           <div>
                             <Label className="text-base font-medium text-destructive">
@@ -1732,7 +1732,7 @@ export function SettingsModal({
                 disabled={loading}
                 className="gap-2"
               >
-                <Save className="w-4 h-4" />
+                <Save className="size-4" />
                 {loading ? "Saving..." : "Save"}
               </Button>
             </div>
