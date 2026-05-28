@@ -3,8 +3,8 @@ import {
   Settings,
   Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3
 } from "lucide-react"
-import { motion } from "framer-motion"
-import { useState, useEffect, useRef } from "react"
+import { LazyMotion, domAnimation, m } from "framer-motion"
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react"
 import { isGDriveConnected, getGDriveAccountInfo, DriveAccountInfo, formatStorageSize } from "@/services/gdrive"
 
 interface SidebarProps {
@@ -38,7 +38,12 @@ export function Sidebar({
   betaEnabled: _betaEnabled = false,
   downloadJobCount = 0,
 }: SidebarProps) {
-  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const subscribeWindowResize = useCallback((callback: () => void) => {
+    window.addEventListener("resize", callback);
+    return () => window.removeEventListener("resize", callback);
+  }, []);
+  const getWindowWidth = useCallback(() => window.innerWidth, []);
+  const windowWidth = useSyncExternalStore(subscribeWindowResize, getWindowWidth);
   const [isHovered, setIsHovered] = useState(false);
   const [gdriveConnected, setGdriveConnected] = useState(false);
   const [gdriveInfo, setGdriveInfo] = useState<DriveAccountInfo | null>(null);
@@ -84,18 +89,6 @@ export function Sidebar({
     return () => clearInterval(interval);
   }, []);
 
-  // Responsive sidebar
-  useEffect(() => {
-    const handleResize = () => {
-      setWindowWidth(window.innerWidth);
-    };
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
@@ -106,7 +99,8 @@ export function Sidebar({
   ].filter(item => !item.hidden);
 
   return (
-    <motion.aside
+    <LazyMotion features={domAnimation}>
+    <m.aside
       data-tour="sidebar"
       className={cn(
         "h-screen flex flex-col z-[100]",
@@ -138,12 +132,13 @@ export function Sidebar({
       <div className={cn("flex-1 px-3 pt-14 pb-3 flex flex-col", isCollapsed ? "px-1.5 pt-12" : "")}>
         {/* Navigation Items */}
         <div className="flex-1 flex items-start pt-12">
-          <nav className="w-full space-y-2 overflow-visible">
+          <nav className="w-full gap-y-2 flex flex-col overflow-visible">
             {menuItems.map((item) => {
               const isActive = currentView === item.id;
 
               return (
                   <button
+                    type="button"
                     key={item.id}
                     data-tour={`nav-${item.id}`}
                     aria-label={item.label}
@@ -160,16 +155,18 @@ export function Sidebar({
                   {/* Active Indicator & Glow */}
                   {isActive && (
                     <>
-                      <motion.div
+                      <m.div
                         layoutId="active-glow"
                         className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/10 to-transparent blur-xl opacity-50"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
-                      <motion.div
+
+                      <m.div
                         layoutId="active-pill"
                         className="absolute left-1 inset-y-0 my-auto w-1 h-6 bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.6)] z-10"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       />
+
                     </>
                   )}
 
@@ -228,9 +225,10 @@ export function Sidebar({
 
         {/* Cloud Sync Status */}
         {gdriveConnected && (
-          <div className="space-y-3 flex flex-col items-center">
+          <div className="gap-y-3 flex flex-col items-center">
             {onCloudScan && (
               <button
+                type="button"
                 data-tour="scan-library-btn"
                 onClick={onCloudScan}
                 disabled={isCloudIndexing || isScanning}
@@ -323,6 +321,7 @@ export function Sidebar({
           <div className="space-y-1.5">
             <div className="group relative">
               <button
+                type="button"
                 data-tour="settings-btn"
                 onClick={onOpenSettings}
                 title="Open settings"
@@ -340,6 +339,7 @@ export function Sidebar({
         ) : (
           <div className="flex flex-col gap-2">
               <button
+                type="button"
                 data-tour="settings-btn"
                 onClick={onOpenSettings}
                 title="Open settings"
@@ -352,6 +352,7 @@ export function Sidebar({
           </div>
         )}
       </div>
-    </motion.aside>
+    </m.aside>
+    </LazyMotion>
   )
 }

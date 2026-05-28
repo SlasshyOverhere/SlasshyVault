@@ -41,6 +41,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           </div>
           <div className="flex items-center gap-1 pr-1.5">
             <button
+              type="button"
               onClick={() => appWindow.minimize()}
               className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
               title="Minimize"
@@ -49,10 +50,11 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
               <Minus className="mx-auto size-3.5" />
             </button>
             <button
+              type="button"
               onClick={async () => {
                 await appWindow.hide()
               }}
-              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
               title="Close"
               aria-label="Hide window"
             >
@@ -118,6 +120,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
 
           {/* Google Sign In Button */}
           <button
+            type="button"
             onClick={onLogin}
             disabled={isLoading}
             onMouseEnter={() => setIsHovered(true)}
@@ -136,7 +139,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
             {isLoading ? (
               <>
                 <Loader2 className="size-5 animate-spin" />
-                <span>Signing in...</span>
+                <span>Signing in…</span>
               </>
             ) : (
               <>
