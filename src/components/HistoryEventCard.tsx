@@ -114,7 +114,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
           {posterUrl ? (
             <img src={posterUrl} alt={title} className="size-full object-cover" />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
+            <div className="flex size-full items-center justify-center bg-white/[0.04] text-white/30">
               <Tv className="size-4" />
             </div>
           )}
@@ -183,7 +183,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
             {posterUrl ? (
               <img src={posterUrl} alt={title} className="size-full object-cover" />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/30">
+              <div className="flex size-full items-center justify-center bg-white/[0.04] text-white/30">
                 <Tv className="size-4" />
               </div>
             )}
@@ -217,7 +217,7 @@ export const HistoryEventCard = memo(function HistoryEventCard({
 
         <div className="flex flex-wrap gap-1.5">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
-            <Clock3 className="h-3 w-3" />
+            <Clock3 className="size-3" />
             {formatEventTime(event.ended_at)}
           </span>
           <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[10px] text-white/50">
