@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { isMediaMarkedWatched } from "@/utils/playbackProgress"
+import { KebabMenu } from "@/components/KebabMenu"
 import { useToast } from "@/components/ui/use-toast"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ShareDialog } from "@/components/ShareDialog"
@@ -33,6 +34,7 @@ interface ContentDetailsModalProps {
   secondaryActionLabel?: string
   onEpisodeSecondaryAction?: (item: MediaItem) => void | Promise<void>
   episodeSecondaryActionLabel?: string
+  onEpisodeUnwatchAction?: (item: MediaItem) => void | Promise<void>
   onMetadataRefresh?: (itemId: number) => Promise<MediaItem | null> | MediaItem | null
 }
 
@@ -179,6 +181,7 @@ export function ContentDetailsModal({
   secondaryActionLabel,
   onEpisodeSecondaryAction,
   episodeSecondaryActionLabel,
+  onEpisodeUnwatchAction,
   onMetadataRefresh,
 }: ContentDetailsModalProps) {
   const { toast } = useToast()
@@ -218,8 +221,7 @@ export function ContentDetailsModal({
   const handleEpisodeMarkWatched = async (episode: MediaItem) => {
     if (!onEpisodeSecondaryAction) return
 
-    await onEpisodeSecondaryAction(episode)
-
+    // Optimistic update: update UI immediately
     const markedAt = new Date().toISOString()
     setEpisodes((currentEpisodes) =>
       currentEpisodes.map((currentEpisode) =>
@@ -246,6 +248,39 @@ export function ContentDetailsModal({
           }
         : currentActiveItem,
     )
+
+    // Fire server call in background
+    void onEpisodeSecondaryAction(episode)
+  }
+
+  const handleEpisodeUnwatched = (episode: MediaItem) => {
+    // Optimistic update: clear watch state immediately
+    setEpisodes((currentEpisodes) =>
+      currentEpisodes.map((currentEpisode) =>
+        currentEpisode.id === episode.id
+          ? {
+              ...currentEpisode,
+              progress_percent: 0,
+              resume_position_seconds: 0,
+              last_watched: undefined,
+            }
+          : currentEpisode,
+      ),
+    )
+
+    setActiveItem((currentActiveItem) =>
+      currentActiveItem?.id === episode.id
+        ? {
+            ...currentActiveItem,
+            progress_percent: 0,
+            resume_position_seconds: 0,
+            last_watched: undefined,
+          }
+        : currentActiveItem,
+    )
+
+    // Fire server call in background
+    void onEpisodeUnwatchAction?.(episode)
   }
 
   if (!item && lastItemIdRef.current !== null) {
@@ -1378,51 +1413,18 @@ export function ContentDetailsModal({
                                     <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
-                                    {isWatched ? (
+                                    {isWatched && (
                                       <div className="inline-flex items-center gap-1.5 rounded-full border border-green-500/35 bg-green-500/18 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-green-300">
                                         <Check className="size-3.5" />
                                         Watched
                                       </div>
-                                    ) : onEpisodeSecondaryAction && episodeSecondaryActionLabel ? (
-                                      <button
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          void handleEpisodeMarkWatched(ep)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/6 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/78 transition-colors hover:bg-white/12 hover:text-white"
-                                      >
-                                        <Check className="size-3.5" />
-                                        {episodeSecondaryActionLabel}
-                                      </button>
-                                    ) : null}
-                                    {onDownloadAction && ep.is_cloud ? (
-                                      <button
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          void onDownloadAction(ep)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-100 transition-colors hover:bg-amber-400/16 hover:border-amber-300/35"
-                                      >
-                                        <Download className="size-3.5" />
-                                        Download
-                                      </button>
-                                    ) : null}
-                                    {ep.is_cloud && ep.cloud_file_id ? (
-                                      <button
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setShareFileId(ep.cloud_file_id || null)
-                                          setShareFileName(ep.episode_title || ep.title)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/18 bg-violet-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-violet-100 transition-colors hover:bg-violet-400/16 hover:border-violet-300/35"
-                                      >
-                                        <Share2 className="size-3.5" />
-                                        Share
-                                      </button>
-                                    ) : null}
+                                    )}
+                                    <KebabMenu items={[
+                                      ...(isWatched && onEpisodeUnwatchAction ? [{ icon: Check, label: "Unmark Watched", onClick: () => handleEpisodeUnwatched(ep) }] : []),
+                                      ...(!isWatched && onEpisodeSecondaryAction ? [{ icon: Check, label: episodeSecondaryActionLabel || "Mark Watched", onClick: () => void handleEpisodeMarkWatched(ep) }] : []),
+                                      ...(onDownloadAction && ep.is_cloud ? [{ icon: Download, label: "Download", onClick: () => void onDownloadAction(ep) }] : []),
+                                      ...(ep.is_cloud && ep.cloud_file_id ? [{ icon: Share2, label: "Share", onClick: () => { setShareFileId(ep.cloud_file_id || null); setShareFileName(ep.episode_title || ep.title) } }] : []),
+                                    ]} />
                                     {rating && rating > 0 && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
                                         <Star className="size-3 fill-current text-yellow-500" />

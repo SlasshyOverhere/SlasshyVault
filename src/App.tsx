@@ -27,23 +27,19 @@ import {
   getWatchHistory,
   getWatchHistoryEvents,
   getRecentlyAdded,
-  removeFromWatchHistory,
-  removeWatchHistoryEntry,
-  clearAllWatchHistory,
   deleteMediaFiles,
   MediaItem,
-  WatchHistoryEvent,
   WatchRoom,
   playMedia,
   getResumeInfo,
   getMediaInfo,
-  resolveWatchHistoryMedia,
   ResumeInfo,
   getCachedImageUrl,
   getTabVisibility,
   setTabVisibility,
   TabVisibility,
   markAsComplete,
+  clearProgress,
   isBetaEnabled,
   setBetaEnabled,
   checkForUpdates,
@@ -258,12 +254,9 @@ function App() {
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([])
-  const [historyEvents, setHistoryEvents] = useState<WatchHistoryEvent[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
-  const [isClearingHistory, setIsClearingHistory] = useState(false)
-  const [isHistorySyncing, setIsHistorySyncing] = useState(false)
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
 
   // Sub-tabs for Cloud view
@@ -776,8 +769,7 @@ function App() {
 
   const loadHistoryEvents = useCallback(async () => {
     try {
-      const events = await getWatchHistoryEvents()
-      setHistoryEvents(events)
+      await getWatchHistoryEvents()
     } catch (error) {
       console.error('Failed to load history events', error)
     }
@@ -793,13 +785,10 @@ function App() {
   }, [])
 
   const runWatchHistorySync = useCallback(async () => {
-    setIsHistorySyncing(true)
     try {
       await syncWatchHistory()
     } catch (error) {
       console.warn('[History] Sync failed:', error)
-    } finally {
-      setIsHistorySyncing(false)
     }
   }, [])
 
@@ -882,7 +871,6 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      setHistoryEvents([])
       return
     }
 
@@ -1398,6 +1386,25 @@ function App() {
     }
   }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync, toast])
 
+  const handleDetailsUnwatch = useCallback(async (item: MediaItem) => {
+    try {
+      await clearProgress(item.id)
+      toast({
+        title: "Removed from watched",
+        description: `${item.title} marked as unwatched.`,
+      })
+      await Promise.all([
+        loadContinueWatching(),
+        loadRecentlyAdded(),
+        loadHistoryEvents(),
+        runWatchHistorySync(),
+        fetchData(),
+      ])
+    } catch {
+      toast({ title: "Error", description: "Failed to remove watched status", variant: "destructive" })
+    }
+  }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync, toast])
+
   const handleResumeChoice = async (resume: boolean) => {
     if (!resumeDialogData) return
     const { item, resumeInfo } = resumeDialogData
@@ -1596,54 +1603,6 @@ function App() {
       return null
     }
   }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, loadLibraryStats, selectedShow])
-
-  const handleHistoryEntryOpen = useCallback(async (event: WatchHistoryEvent) => {
-    try {
-      const media = await resolveWatchHistoryMedia(event)
-      await handleItemClick(media)
-    } catch (error) {
-      console.warn('[History] Failed to open history item:', error)
-      toast({
-        title: 'Unavailable',
-        description: 'This watch entry is still saved, but the media item is no longer in your library.',
-        variant: 'destructive',
-      })
-    }
-  }, [handleItemClick, toast])
-
-  const handleRemoveHistoryEntry = useCallback(async (event: WatchHistoryEvent) => {
-    try {
-      await removeWatchHistoryEntry(event.event_id)
-      if (event.media_id) {
-        await removeFromWatchHistory(event.media_id)
-      }
-      toast({
-        title: "Removed",
-        description: `"${event.parent_title || event.title}" removed from watch history.`,
-      })
-      await Promise.all([loadHistoryEvents(), loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
-    } catch {
-      toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
-    }
-  }, [toast, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync])
-
-  const handleClearHistory = useCallback(async () => {
-    if (historyEvents.length === 0 || isClearingHistory) return
-
-    setIsClearingHistory(true)
-    try {
-      await clearAllWatchHistory()
-      toast({
-        title: "History cleared",
-        description: `Removed ${historyEvents.length} watch history ${historyEvents.length === 1 ? 'entry' : 'entries'}.`,
-      })
-      await Promise.all([loadHistoryEvents(), loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
-    } catch {
-      toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
-    } finally {
-      setIsClearingHistory(false)
-    }
-  }, [historyEvents.length, isClearingHistory, loadContinueWatching, loadRecentlyAdded, toast, loadHistoryEvents, runWatchHistorySync])
 
   const handleDelete = useCallback(async (item: MediaItem) => {
     if (item.media_type === 'tvshow') {
@@ -2510,7 +2469,7 @@ function App() {
 
 
 
-                    {/* History View (includes Analytics as sub-view) */}
+                    {/* History & Analytics View */}
                     {(view === 'history' || view === 'analytics') && (
                       <motion.div
                         key="history"
@@ -2519,15 +2478,8 @@ function App() {
                         exit={{ opacity: 0 }}
                       >
                         <FullHistoryView
-                          events={historyEvents}
-                          isHistorySyncing={isHistorySyncing}
-                          isClearingHistory={isClearingHistory}
-                          onClearHistory={handleClearHistory}
-                          onOpenEvent={handleHistoryEntryOpen}
-                          onRemoveEvent={handleRemoveHistoryEntry}
                           analyticsData={analyticsData}
                           onAnalyticsTabActive={loadAnalytics}
-                          initialSubView={view === 'analytics' ? 'stats' : 'activity'}
                         />
                       </motion.div>
                     )}
@@ -2784,6 +2736,7 @@ function App() {
             downloadActionLabel="Download"
             onEpisodeSecondaryAction={handleDetailsMarkWatched}
             episodeSecondaryActionLabel="Mark as watched"
+            onEpisodeUnwatchAction={handleDetailsUnwatch}
             onMetadataRefresh={handleContentDetailsMetadataRefresh}
           />
 

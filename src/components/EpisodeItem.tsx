@@ -6,6 +6,7 @@ import {
   getTmdbImageUrl,
 } from "@/services/api"
 import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
+import { KebabMenu } from "@/components/KebabMenu"
 import { getZipCompressionLabel } from "@/utils/zip"
 import { m as motion, LazyMotion, domAnimation } from "framer-motion"
 import { cn } from "@/lib/utils"
@@ -25,6 +26,7 @@ export interface EpisodeItemProps {
   onEpisodeClick: (episode: MediaItem) => void
   onToggleExpand: (episodeId: number) => void
   onMarkWatched: (episode: MediaItem) => void
+  onUnwatch?: (episode: MediaItem) => void
   onToggleSpoiler?: (episode: MediaItem) => void
   onDownload?: (episode: MediaItem) => void | Promise<void>
 }
@@ -40,6 +42,7 @@ function EpisodeItemBase({
   onEpisodeClick,
   onToggleExpand,
   onMarkWatched,
+  onUnwatch,
   onToggleSpoiler,
   onDownload,
 }: EpisodeItemProps) {
@@ -118,20 +121,17 @@ function EpisodeItemBase({
     onEpisodeClick(episode)
   }
 
-  const handleMarkWatchedClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onMarkWatched(episode)
-  }
-
-  const handleDownloadClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onDownload?.(episode)
-  }
-
   const handleToggleExpandClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onToggleExpand(episode.id)
   }
+
+  const menuItems = [
+    ...(isFinished && onUnwatch ? [{ icon: Check, label: "Unmark Watched", onClick: () => onUnwatch(episode) }] : []),
+    ...(!isFinished ? [{ icon: Check, label: "Mark Watched", onClick: () => onMarkWatched(episode) }] : []),
+    ...(onDownload ? [{ icon: Download, label: "Download", onClick: () => onDownload(episode) }] : []),
+    { icon: Share2, label: "Share", onClick: () => {} },
+  ]
 
   return (
     <LazyMotion features={domAnimation}>
@@ -290,32 +290,9 @@ function EpisodeItemBase({
             </button>
           )}
 
-          {/* Action pills */}
-          <div className="flex items-center gap-2 pt-1 flex-wrap">
-            {!isFinished && (
-              <button
-                type="button"
-                onClick={handleMarkWatchedClick}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[9px] font-bold uppercase tracking-wider text-white/60 hover:text-white transition-all duration-200"
-              >
-                <Check className="size-3" />
-                Watched
-              </button>
-            )}
-            {onDownload && (
-              <button
-                type="button"
-                onClick={handleDownloadClick}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-[9px] font-bold uppercase tracking-wider text-amber-400/80 hover:text-amber-400 transition-all duration-200"
-              >
-                <Download className="size-3" />
-                Download
-              </button>
-            )}
-            <button type="button" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-[9px] font-bold uppercase tracking-wider text-violet-400/80 hover:text-violet-400 transition-all duration-200">
-              <Share2 className="size-3" />
-              Share
-            </button>
+          {/* Actions row */}
+          <div className="flex items-center gap-2 pt-1">
+            <KebabMenu items={menuItems} />
             {displayRuntime && (
               <span className="flex items-center gap-1 text-[10px] font-bold text-white/40 ml-auto">
                 <Timer className="size-3 opacity-60" />
@@ -344,6 +321,7 @@ const areEpisodeItemPropsEqual = (
   prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
   prevProps.onToggleExpand === nextProps.onToggleExpand &&
   prevProps.onMarkWatched === nextProps.onMarkWatched &&
+  prevProps.onUnwatch === nextProps.onUnwatch &&
   prevProps.onToggleSpoiler === nextProps.onToggleSpoiler &&
   prevProps.onDownload === nextProps.onDownload
 

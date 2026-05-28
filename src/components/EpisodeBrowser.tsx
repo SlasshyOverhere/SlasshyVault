@@ -8,7 +8,7 @@ import {
   MediaItem, getEpisodes, playMedia, getResumeInfo,
   ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
   ImdbEpisodeRating, getEpisodeImdbRatings,
-  markAsComplete, refreshSeriesMetadata, updateEpisodeDuration,
+  markAsComplete, clearProgress, refreshSeriesMetadata, updateEpisodeDuration,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
   getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
@@ -256,15 +256,32 @@ export function EpisodeBrowser({
   }, [])
 
   const handleMarkWatched = useCallback(async (ep: MediaItem) => {
+    // Optimistic: reload episodes immediately to reflect the change
+    void loadEpisodes()
+    toast({
+      title: "Watched",
+      description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} marked`,
+    })
+    // Fire server call in background
     try {
       await Promise.all([markAsComplete(ep.id), emit("media-marked-complete", { media_id: ep.id })])
-      await loadEpisodes()
-      toast({
-        title: "Watched",
-        description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} marked`,
-      })
     } catch {
       toast({ title: "Error", description: "Failed to mark watched", variant: "destructive" })
+    }
+  }, [toast, loadEpisodes])
+
+  const handleUnwatch = useCallback(async (ep: MediaItem) => {
+    // Optimistic: reload episodes immediately
+    void loadEpisodes()
+    toast({
+      title: "Removed from watched",
+      description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} unmarked`,
+    })
+    // Fire server call in background
+    try {
+      await clearProgress(ep.id)
+    } catch {
+      toast({ title: "Error", description: "Failed to remove watched status", variant: "destructive" })
     }
   }, [toast, loadEpisodes])
 
@@ -488,6 +505,7 @@ export function EpisodeBrowser({
                         onEpisodeClick={handleEpisodeClick}
                         onToggleExpand={handleToggleExpand}
                         onMarkWatched={handleMarkWatched}
+                        onUnwatch={handleUnwatch}
                         onToggleSpoiler={handleToggleSpoiler}
                         onDownload={onDownload}
                       />
