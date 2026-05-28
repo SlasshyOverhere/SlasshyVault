@@ -28,11 +28,11 @@ export function ParticipantList({ participants, currentUserId, syncStates }: Par
                     }`}
                 >
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center">
+                        <div className="size-8 rounded-full bg-zinc-700 flex items-center justify-center">
                             {participant.is_host ? (
-                                <Crown className="w-4 h-4 text-yellow-500" />
+                                <Crown className="size-4 text-yellow-500" />
                             ) : (
-                                <User className="w-4 h-4 text-zinc-400" />
+                                <User className="size-4 text-zinc-400" />
                             )}
                         </div>
                         <div>
@@ -52,12 +52,12 @@ export function ParticipantList({ participants, currentUserId, syncStates }: Par
                     <div className="flex items-center gap-2">
                         {participant.is_ready ? (
                             <div className="flex items-center gap-1 text-green-500">
-                                <Check className="w-4 h-4" />
+                                <Check className="size-4" />
                                 <span className="text-xs">Ready</span>
                             </div>
                         ) : (
                             <div className="flex items-center gap-1 text-zinc-500">
-                                <Clock className="w-4 h-4" />
+                                <Clock className="size-4" />
                                 <span className="text-xs">Waiting</span>
                             </div>
                         )}
@@ -71,7 +71,7 @@ export function ParticipantList({ participants, currentUserId, syncStates }: Par
                             <span className="text-xs text-amber-400">syncing</span>
                         )}
                         {(!syncStates?.get(participant.id) || syncStates.get(participant.id) === 'playing') && (
-                            <span className="w-2 h-2 rounded-full bg-green-500" />
+                            <span className="size-2 rounded-full bg-green-500" />
                         )}
                     </div>
                 </div>
