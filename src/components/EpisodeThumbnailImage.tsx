@@ -1,24 +1,7 @@
 import { useEffect, useState, memo } from "react"
 import { getCachedImageUrl } from "@/services/api"
 import { Loader2 } from "lucide-react"
-
-export const getZipCompressionLabel = (method?: number): string | null => {
-  switch (method) {
-    case 0:
-      return "Store"
-    case 8:
-      return "Deflate"
-    default:
-      return null
-  }
-}
-
-export interface EpisodeThumbnailImageProps {
-  localStillPath?: string
-  tmdbStillUrl: string | null
-  episodeTitle: string
-  episodeNumber: number
-}
+import type { EpisodeThumbnailImageProps } from "./EpisodeThumbnailImage.types"
 
 function EpisodeThumbnailImageBase({
   localStillPath,
