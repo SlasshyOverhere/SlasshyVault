@@ -80,34 +80,6 @@ export function EpisodeBrowser({
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
   const isInitialLoadRef = useRef(true)
 
-  useEffect(() => {
-    loadEpisodes()
-    setTmdbEpisodesBySeason(new Map())
-
-    let unlistenMpvEnded: UnlistenFn | undefined
-    let unlistenMarkedComplete: UnlistenFn | undefined
-    let unlistenLibraryUpdated: UnlistenFn | undefined
-
-    const setup = async () => {
-      unlistenMpvEnded = await listen("mpv-playback-ended", loadEpisodes)
-      unlistenMarkedComplete = await listen("media-marked-complete", loadEpisodes)
-      unlistenLibraryUpdated = await listen("library-updated", () => {
-        loadEpisodes()
-      })
-    }
-    setup()
-    return () => {
-      unlistenMpvEnded?.()
-      unlistenMarkedComplete?.()
-      unlistenLibraryUpdated?.()
-    }
-  }, [show.id, loadEpisodes])
-
-  useEffect(() => {
-    loadTmdb(selectedSeason)
-    setVisibleEpisodeCount(20)
-    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
-  }, [selectedSeason, loadTmdb])
 
   const loadTmdb = useCallback(async (season: number) => {
     if (!show.tmdb_id) return
@@ -181,6 +153,35 @@ export function EpisodeBrowser({
       setLoading(false)
     }
   }, [show.id, toast])
+
+  useEffect(() => {
+    loadEpisodes()
+    setTmdbEpisodesBySeason(new Map())
+
+    let unlistenMpvEnded: UnlistenFn | undefined
+    let unlistenMarkedComplete: UnlistenFn | undefined
+    let unlistenLibraryUpdated: UnlistenFn | undefined
+
+    const setup = async () => {
+      unlistenMpvEnded = await listen("mpv-playback-ended", loadEpisodes)
+      unlistenMarkedComplete = await listen("media-marked-complete", loadEpisodes)
+      unlistenLibraryUpdated = await listen("library-updated", () => {
+        loadEpisodes()
+      })
+    }
+    setup()
+    return () => {
+      unlistenMpvEnded?.()
+      unlistenMarkedComplete?.()
+      unlistenLibraryUpdated?.()
+    }
+  }, [show.id, loadEpisodes])
+
+  useEffect(() => {
+    loadTmdb(selectedSeason)
+    setVisibleEpisodeCount(20)
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+  }, [selectedSeason, loadTmdb])
 
   const handleRefreshMetadata = async () => {
     if (!show.tmdb_id || isRefreshing) return

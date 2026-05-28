@@ -113,8 +113,8 @@ function EpisodeItemBase({
   const descriptionText = episode.overview || tmdbData?.overview || null
   const showExpandToggle = (descriptionText?.length || 0) > 120
 
-  const handlePlayClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handlePlayClick = (e?: React.MouseEvent) => {
+    e?.stopPropagation()
     onEpisodeClick(episode)
   }
 
