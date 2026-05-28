@@ -79,9 +79,11 @@ async function deleteRoomState(roomCode) {
   if (!redis) return false;
 
   try {
-    await redis.del(`wt:room:${roomCode}`);
-    await redis.del(`wt:room:${roomCode}:events`);
-    await redis.del(`wt:room:${roomCode}:participants`);
+    await Promise.all([
+      redis.del(`wt:room:${roomCode}`),
+      redis.del(`wt:room:${roomCode}:events`),
+      redis.del(`wt:room:${roomCode}:participants`)
+    ]);
     return true;
   } catch (error) {
     console.error('[Redis] deleteRoomState failed:', error.message);
@@ -125,9 +127,10 @@ async function getSyncEvents(roomCode, limit = 50) {
   try {
     const events = await redis.lrange(`wt:room:${roomCode}:events`, 0, Math.max(limit - 1, 0));
     if (!Array.isArray(events)) return [];
-    return events
-      .map((event) => safeParseJson(event, null))
-      .filter(Boolean);
+    return events.flatMap((event) => {
+      const parsed = safeParseJson(event, null);
+      return parsed ? [parsed] : [];
+    });
   } catch (error) {
     console.error('[Redis] getSyncEvents failed:', error.message);
     return [];
@@ -198,9 +201,10 @@ async function getRoomParticipants(roomCode) {
     const entries = await redis.hgetall(`wt:room:${roomCode}:participants`);
     if (!entries || typeof entries !== 'object') return [];
 
-    return Object.entries(entries)
-      .map(([participantId, value]) => safeParseJson(value, { id: participantId }))
-      .filter(Boolean);
+    return Object.entries(entries).flatMap(([participantId, value]) => {
+      const parsed = safeParseJson(value, { id: participantId });
+      return parsed ? [parsed] : [];
+    });
   } catch (error) {
     console.error('[Redis] getRoomParticipants failed:', error.message);
     return [];
@@ -215,9 +219,9 @@ async function electNewHost(roomCode, currentHostId) {
 
   const onlineParticipants = await getRoomParticipants(roomCode);
   const onlineIds = new Set(
-    onlineParticipants
-      .filter((participant) => participant?.online !== false)
-      .map((participant) => participant.id)
+    onlineParticipants.flatMap((participant) =>
+      participant?.online !== false ? [participant.id] : []
+    )
   );
 
   let nextHost = null;
@@ -244,9 +248,11 @@ async function listRoomCodes() {
     const keys = await redis.keys('wt:room:*');
     if (!Array.isArray(keys)) return [];
 
-    return keys
-      .filter((key) => !key.includes(':events') && !key.includes(':participants'))
-      .map((key) => key.replace('wt:room:', ''));
+    return keys.flatMap((key) =>
+      !key.includes(':events') && !key.includes(':participants')
+        ? [key.replace('wt:room:', '')]
+        : []
+    );
   } catch (error) {
     console.error('[Redis] listRoomCodes failed:', error.message);
     return [];

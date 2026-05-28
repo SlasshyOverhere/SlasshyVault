@@ -49,9 +49,10 @@ function syncFriendshipsForUser(googleId, friends) {
 
   const friendIds = Array.isArray(friends)
     ? Array.from(new Set(
-      friends
-        .map((friend) => normalizeSocialId(friend?.id))
-        .filter(Boolean)
+      friends.flatMap((friend) => {
+        const id = normalizeSocialId(friend?.id);
+        return id ? [id] : [];
+      })
     ))
     : [];
 
@@ -589,11 +590,13 @@ async function getFriends(googleId, accessToken) {
   syncFriendshipsForUser(googleId, friends);
 
   if (database.isConnected() && friends.length > 0) {
-    for (const friend of friends) {
-      const friendId = normalizeSocialId(friend?.id);
-      if (!friendId) continue;
-      await database.addFriendship(googleId, friendId, Number(friend?.since) || Date.now());
-    }
+    await Promise.all(
+      friends.flatMap((friend) => {
+        const friendId = normalizeSocialId(friend?.id);
+        if (!friendId) return [];
+        return [database.addFriendship(googleId, friendId, Number(friend?.since) || Date.now())];
+      })
+    );
   }
 
   return friends;
@@ -803,13 +806,15 @@ async function getPendingRequests(googleId, accessToken) {
   const requests = friendsData?.requests || [];
 
   if (database.isConnected() && requests.length > 0) {
-    for (const request of requests) {
-      const fromId = normalizeSocialId(request?.fromId);
-      if (!fromId) continue;
-      await database.createFriendRequest(fromId, googleId, {
-        createdAt: Number(request?.sentAt) || Date.now()
-      });
-    }
+    await Promise.all(
+      requests.flatMap((request) => {
+        const fromId = normalizeSocialId(request?.fromId);
+        if (!fromId) return [];
+        return [database.createFriendRequest(fromId, googleId, {
+          createdAt: Number(request?.sentAt) || Date.now()
+        })];
+      })
+    );
   }
 
   return requests;
@@ -888,13 +893,15 @@ async function getActivity(googleId, accessToken) {
   const activities = activityData?.activities || [];
 
   if (database.isConnected() && activities.length > 0) {
-    for (const driveActivity of activities) {
-      await database.logActivity({
-        ...driveActivity,
-        userId: googleId,
-        createdAt: driveActivity.timestamp
-      });
-    }
+    await Promise.all(
+      activities.map((driveActivity) =>
+        database.logActivity({
+          ...driveActivity,
+          userId: googleId,
+          createdAt: driveActivity.timestamp
+        })
+      )
+    );
   }
 
   return activities;
@@ -1096,16 +1103,18 @@ async function loadChatHistory(googleId, accessToken, friendId) {
   const driveMessages = chatData?.messages || [];
 
   if (database.isConnected() && driveMessages.length > 0) {
-    for (const driveMessage of driveMessages) {
-      await database.saveMessage({
-        id: driveMessage.id,
-        senderId: driveMessage.senderId,
-        receiverId: driveMessage.senderId === googleId ? normalizedFriendId : googleId,
-        text: driveMessage.text,
-        read: true,
-        createdAt: driveMessage.timestamp
-      });
-    }
+    await Promise.all(
+      driveMessages.map((driveMessage) =>
+        database.saveMessage({
+          id: driveMessage.id,
+          senderId: driveMessage.senderId,
+          receiverId: driveMessage.senderId === googleId ? normalizedFriendId : googleId,
+          text: driveMessage.text,
+          read: true,
+          createdAt: driveMessage.timestamp
+        })
+      )
+    );
   }
 
   return driveMessages;
@@ -1222,9 +1231,11 @@ async function deliverPendingMessages(googleId) {
       },
       fromUserId: pending.message.senderId
     }));
-    await database.markQueuedMessageDelivered(pending.queueId);
     delivered.push(pending.message);
   }
+  await Promise.all(
+    pendingMessages.map((pending) => database.markQueuedMessageDelivered(pending.queueId))
+  );
 
   return delivered;
 }
