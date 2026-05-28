@@ -215,10 +215,7 @@ function EpisodeItemBase({
 
         {/* Info */}
         <div className="p-4 space-y-2.5">
-          <h3 className={cn(
-            "text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300",
-            spoilerActive && "blur-sm",
-          )}>
+          <h3 className="text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300">
             {episodeTitle}
           </h3>
 

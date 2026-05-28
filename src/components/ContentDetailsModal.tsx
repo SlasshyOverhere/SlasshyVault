@@ -1375,7 +1375,7 @@ export function ContentDetailsModal({
                                         </span>
                                       )}
                                     </div>
-                                    <h4 className={cn("text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight", isSpoiler && "blur-sm")}>{tmdbData?.name || ep.title}</h4>
+                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
                                     {isWatched ? (
