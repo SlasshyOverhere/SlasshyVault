@@ -16,11 +16,13 @@ interface HistoryEventCardProps {
   onRemove: (event: WatchHistoryEvent) => void;
 }
 
+const eventTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 const formatEventTime = (value: string) =>
-  new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value.replace(" ", "T") + "Z"));
+  eventTimeFormatter.format(new Date(value.replace(" ", "T") + "Z"));
 
 const formatDuration = (seconds: number) => {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0m";

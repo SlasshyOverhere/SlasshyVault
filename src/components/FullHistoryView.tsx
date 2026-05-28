@@ -1,5 +1,7 @@
 import { useMemo, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, m, AnimatePresence } from "framer-motion";
+
+const loadFeatures = () => import("framer-motion").then((mod) => mod.domAnimation);
 import {
   Cloud,
   Film,
@@ -80,6 +82,13 @@ const formatDateKey = (value: string) => {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toISOString().slice(0, 10);
 };
 
+const watchDateFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+});
+
 const formatWatchDateLabel = (dateKey: string) => {
   if (dateKey === "Unknown") return "Unknown date";
 
@@ -91,12 +100,7 @@ const formatWatchDateLabel = (dateKey: string) => {
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Yesterday";
 
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
+  return watchDateFormatter.format(date);
 };
 
 const formatDuration = (seconds: number) => {
@@ -302,6 +306,7 @@ export function FullHistoryView({
   }, [onClearHistory]);
 
   return (
+    <LazyMotion features={loadFeatures}>
     <div className="pt-16">
       {/* Sub-view tabs */}
       <div className="mb-1 flex items-center justify-end">
@@ -311,6 +316,7 @@ export function FullHistoryView({
             { id: "stats" as SubView, label: "Stats", icon: BarChart3 },
           ].map((tab) => (
             <button
+              type="button"
               key={tab.id}
               onClick={() => handleSubViewChange(tab.id)}
               className={cn(
@@ -319,7 +325,7 @@ export function FullHistoryView({
               )}
             >
               {subView === tab.id && (
-                <motion.div
+                <m.div
                   layoutId="HistorySubTab"
                   className="absolute inset-0 bg-white rounded-full shadow-md"
                   transition={{ type: "spring", stiffness: 400, damping: 30 }}
@@ -345,7 +351,7 @@ export function FullHistoryView({
 
       <AnimatePresence mode="wait">
         {subView === "stats" ? (
-          <motion.div
+          <m.div
             key="stats"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -360,13 +366,13 @@ export function FullHistoryView({
                   <div className="mx-auto mb-4 rounded-2xl border border-white/10 bg-white/[0.05] p-4 w-fit">
                     <BarChart3 className="size-8 text-white/40" />
                   </div>
-                  <h3 className="text-lg font-semibold text-white mb-1">Loading analytics...</h3>
+                  <h3 className="text-lg font-semibold text-white mb-1">Loading analytics…</h3>
                 </div>
               </div>
             )}
-          </motion.div>
+          </m.div>
         ) : (
-          <motion.div
+          <m.div
             key="activity"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -430,10 +436,11 @@ export function FullHistoryView({
                   </button>
                   {showSortMenu && (
                     <>
-                      <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)} />
+                      <div className="fixed inset-0 z-40" role="button" tabIndex={-1} onClick={() => setShowSortMenu(false)} onKeyDown={(e) => { if (e.key === 'Escape') setShowSortMenu(false); }} />
                       <div className="absolute right-0 top-full mt-1 z-50 w-36 rounded-xl border border-white/[0.08] bg-[#1a1a1a] py-1 shadow-2xl">
                         {SORT_OPTIONS.map((option) => (
                           <button
+                            type="button"
                             key={option.key}
                             onClick={() => {
                               setSortMode(option.key);
@@ -459,6 +466,7 @@ export function FullHistoryView({
               <div className="flex flex-wrap gap-1.5 mb-4">
                 {QUICK_FILTERS.map((option) => (
                   <button
+                    type="button"
                     key={option.key}
                     onClick={() => setFilter(option.key)}
                     className={cn(
@@ -476,6 +484,7 @@ export function FullHistoryView({
 
                 {DATE_RANGES.map((option) => (
                   <button
+                    type="button"
                     key={option.key}
                     onClick={() => setDateRange(option.key)}
                     className={cn(
@@ -491,6 +500,7 @@ export function FullHistoryView({
 
                 {hasFilters && (
                   <button
+                    type="button"
                     onClick={() => {
                       setFilter("all");
                       setDateRange("all");
@@ -536,7 +546,7 @@ export function FullHistoryView({
 
                     <AnimatePresence initial={false}>
                       {!isCollapsed && (
-                        <motion.div
+                        <m.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: "auto", opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
@@ -553,7 +563,7 @@ export function FullHistoryView({
                               />
                             ))}
                           </div>
-                        </motion.div>
+                        </m.div>
                       )}
                     </AnimatePresence>
                   </section>
@@ -590,7 +600,7 @@ export function FullHistoryView({
                 </div>
               )}
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
 
@@ -606,12 +616,14 @@ export function FullHistoryView({
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-2">
             <button
+              type="button"
               onClick={() => setShowClearDialog(false)}
               className="inline-flex h-10 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] px-5 text-sm font-medium text-white/60 transition-all hover:bg-white/[0.08] hover:text-white"
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleClearConfirm}
               disabled={isClearingHistory}
               className="inline-flex h-10 items-center justify-center rounded-full bg-white px-5 text-sm font-medium text-black transition-all hover:bg-white/90 disabled:opacity-50"
@@ -623,5 +635,6 @@ export function FullHistoryView({
         </DialogContent>
       </Dialog>
     </div>
+    </LazyMotion>
   );
 }
