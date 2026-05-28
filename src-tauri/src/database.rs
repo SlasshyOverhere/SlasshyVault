@@ -1405,7 +1405,9 @@ impl Database {
             )?;
         }
 
-        if current_time > 0.0 || duration > 0.0 {
+        // Only record history events for plays >= 10 seconds to filter out
+        // accidental clicks and brief previews.
+        if current_time >= 10.0 {
             self.record_watch_event(media_id, current_time, duration)?;
         }
 
@@ -4442,39 +4444,11 @@ impl Database {
                     progress_percent as progress
                 FROM watch_history_events
                 UNION ALL
-                -- media table: completed watches (resume_position = 0 means completed)
-                SELECT
-                    'media-' || id,
-                    media_type,
-                    duration_seconds,
-                    CASE WHEN resume_position_seconds = 0 AND last_watched IS NOT NULL AND duration_seconds > 0 THEN 1 ELSE 0 END,
-                    last_watched,
-                    last_watched,
-                    COALESCE(is_cloud, 0),
-                    CASE WHEN media_type = 'tvepisode'
-                        THEN (SELECT COALESCE(p.title, '') FROM media p WHERE p.id = media.parent_id)
-                        ELSE title END,
-                    CASE WHEN media_type = 'tvepisode'
-                        THEN (SELECT p.title FROM media p WHERE p.id = media.parent_id)
-                        ELSE NULL END,
-                    poster_path,
-                    COALESCE(
-                        CASE WHEN media_type = 'tvepisode'
-                            THEN (SELECT p.tmdb_id FROM media p WHERE p.id = media.parent_id)
-                            ELSE tmdb_id END,
-                        tmdb_id
-                    ),
-                    CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
-                         WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
-                         ELSE 0 END
-                FROM media
-                WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
                 -- streaming_history: online streaming watches
                 SELECT
                     'stream-' || id,
                     media_type,
-                    duration_seconds,
+                    CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END,
                     CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0
                          OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93 THEN 1 ELSE 0 END,
                     last_watched,
@@ -4492,27 +4466,19 @@ impl Database {
             )
             SELECT
                 COUNT(*),
-                COALESCE(SUM(is_completed), 0),
+                (SELECT COUNT(DISTINCT media_id) FROM watch_history_events WHERE completed = 1),
                 COALESCE(SUM(watched_sec), 0)
             FROM all_activity",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
+        // Count unique completed movies and episodes (deduplicated by media_id)
         let (movies_completed, episodes_completed): (i64, i64) = self.conn.query_row(
-            "WITH all_activity AS (
-                SELECT media_type, CASE WHEN completed = 1 THEN 1 ELSE 0 END as is_completed FROM watch_history_events
-                UNION ALL
-                SELECT media_type, CASE WHEN resume_position_seconds = 0 AND last_watched IS NOT NULL AND duration_seconds > 0 THEN 1 ELSE 0 END
-                FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT media_type, CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 OR (resume_position_seconds * 1.0 / duration_seconds) > 0.93 THEN 1 ELSE 0 END
-                FROM streaming_history WHERE duration_seconds > 0
-            )
-            SELECT
-                COALESCE(SUM(CASE WHEN media_type = 'movie' AND is_completed = 1 THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN media_type IN ('tvepisode', 'tv') AND is_completed = 1 THEN 1 ELSE 0 END), 0)
-            FROM all_activity",
+            "SELECT
+                COALESCE(COUNT(DISTINCT CASE WHEN media_type = 'movie' AND completed = 1 THEN media_id END), 0),
+                COALESCE(COUNT(DISTINCT CASE WHEN media_type IN ('tvepisode', 'tv') AND completed = 1 THEN media_id END), 0)
+            FROM watch_history_events",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -4526,14 +4492,12 @@ impl Database {
         // 2. Current streak: consecutive days from all sources
         let streak_days = self.compute_watch_streak_unified()?;
 
-        // 3. Heatmap: daily activity for last 365 days from all sources
+        // 3. Heatmap: daily activity for last 365 days from watch_history_events + streaming_history
         let mut heatmap_stmt = self.conn.prepare(
             "WITH all_days AS (
                 SELECT date(ended_at) as day, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events WHERE ended_at >= date('now', '-365 days')
                 UNION ALL
-                SELECT date(last_watched), duration_seconds FROM media WHERE last_watched >= date('now', '-365 days') AND duration_seconds > 0 AND last_watched IS NOT NULL
-                UNION ALL
-                SELECT date(last_watched), duration_seconds FROM streaming_history WHERE last_watched >= date('now', '-365 days') AND duration_seconds > 0
+                SELECT date(last_watched), CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END FROM streaming_history WHERE last_watched >= date('now', '-365 days') AND duration_seconds > 0
             )
             SELECT day, COALESCE(SUM(sec), 0), COUNT(*) FROM all_days GROUP BY day ORDER BY day"
         )?;
@@ -4545,14 +4509,12 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 4. Daily trend: last 90 days with media_type split from all sources
+        // 4. Daily trend: last 90 days with media_type split
         let mut trend_stmt = self.conn.prepare(
             "WITH all_trend AS (
                 SELECT date(ended_at) as day, duration_seconds * (progress_percent / 100.0) as sec, media_type FROM watch_history_events WHERE ended_at >= date('now', '-90 days')
                 UNION ALL
-                SELECT date(last_watched), duration_seconds, media_type FROM media WHERE last_watched >= date('now', '-90 days') AND duration_seconds > 0 AND last_watched IS NOT NULL
-                UNION ALL
-                SELECT date(last_watched), duration_seconds, CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END FROM streaming_history WHERE last_watched >= date('now', '-90 days') AND duration_seconds > 0
+                SELECT date(last_watched), CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END, CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END FROM streaming_history WHERE last_watched >= date('now', '-90 days') AND duration_seconds > 0
             )
             SELECT day,
                 COALESCE(SUM(sec), 0),
@@ -4569,14 +4531,12 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 5. Content breakdown by type from all sources
+        // 5. Content breakdown by type
         let mut type_stmt = self.conn.prepare(
             "WITH all_types AS (
                 SELECT media_type, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
                 UNION ALL
-                SELECT media_type, duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END, duration_seconds FROM streaming_history WHERE duration_seconds > 0
+                SELECT CASE WHEN media_type = 'tv' THEN 'tvepisode' ELSE media_type END, CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END FROM streaming_history WHERE duration_seconds > 0
             )
             SELECT media_type, COUNT(*), COALESCE(SUM(sec), 0) FROM all_types GROUP BY media_type"
         )?;
@@ -4588,14 +4548,12 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 6. Source breakdown: cloud vs local from all sources
+        // 6. Source breakdown: cloud vs local
         let mut source_stmt = self.conn.prepare(
             "WITH all_sources AS (
                 SELECT CASE WHEN is_cloud = 1 THEN 'cloud' ELSE 'local' END as src, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
                 UNION ALL
-                SELECT CASE WHEN COALESCE(is_cloud, 0) = 1 THEN 'cloud' ELSE 'local' END, duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT 'cloud', duration_seconds FROM streaming_history WHERE duration_seconds > 0
+                SELECT 'cloud', CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END FROM streaming_history WHERE duration_seconds > 0
             )
             SELECT src, COUNT(*), COALESCE(SUM(sec), 0) FROM all_sources GROUP BY src"
         )?;
@@ -4608,6 +4566,7 @@ impl Database {
         })?.filter_map(|r| r.ok()).collect();
 
         // 7. Top watched content from all sources (grouped by show/movie title)
+        // Uses COUNT(DISTINCT media_id) to count unique episodes, not play sessions.
         let mut top_stmt = self.conn.prepare(
             "WITH all_titles AS (
                 SELECT
@@ -4616,42 +4575,32 @@ impl Database {
                     CASE WHEN media_type = 'tvepisode' THEN 'tvshow' ELSE media_type END as type,
                     duration_seconds * (progress_percent / 100.0) as sec,
                     poster_path,
-                    COALESCE(parent_tmdb_id, tmdb_id) as tid
+                    COALESCE(parent_tmdb_id, tmdb_id) as tid,
+                    media_id,
+                    COALESCE(parent_tmdb_id, tmdb_id, '') || '-S' || COALESCE(CAST(season_number AS TEXT), '') || 'E' || COALESCE(CAST(episode_number AS TEXT), '') as ep_key
                 FROM watch_history_events
                 UNION ALL
                 SELECT
-                    CASE WHEN m.media_type = 'tvepisode'
-                        THEN (SELECT COALESCE(p.title, '') FROM media p WHERE p.id = m.parent_id)
-                        ELSE m.title END,
-                    CASE WHEN m.media_type = 'tvepisode'
-                        THEN (SELECT p.title FROM media p WHERE p.id = m.parent_id)
-                        ELSE NULL END,
-                    CASE WHEN m.media_type = 'tvepisode' THEN 'tvshow' ELSE m.media_type END,
-                    m.duration_seconds,
-                    m.poster_path,
-                    COALESCE(
-                        CASE WHEN m.media_type = 'tvepisode'
-                            THEN (SELECT p.tmdb_id FROM media p WHERE p.id = m.parent_id)
-                            ELSE m.tmdb_id END,
-                        m.tmdb_id
-                    )
-                FROM media m
-                WHERE m.last_watched IS NOT NULL AND m.duration_seconds > 0
-                UNION ALL
-                SELECT
-                    s.title, NULL, 'tvshow', s.duration_seconds, s.poster_path, s.tmdb_id
+                    s.title, NULL, 'tvshow',
+                    CASE WHEN s.resume_position_seconds = 0 THEN s.duration_seconds ELSE s.resume_position_seconds END,
+                    s.poster_path, s.tmdb_id, NULL,
+                    COALESCE(s.tmdb_id, '') || '-S' || COALESCE(CAST(s.season AS TEXT), '') || 'E' || COALESCE(CAST(s.episode AS TEXT), '')
                 FROM streaming_history s
                 WHERE s.duration_seconds > 0 AND s.media_type = 'tv'
                 UNION ALL
                 SELECT
-                    s.title, NULL, s.media_type, s.duration_seconds, s.poster_path, s.tmdb_id
+                    s.title, NULL, s.media_type,
+                    CASE WHEN s.resume_position_seconds = 0 THEN s.duration_seconds ELSE s.resume_position_seconds END,
+                    s.poster_path, s.tmdb_id, s.id, NULL
                 FROM streaming_history s
                 WHERE s.duration_seconds > 0 AND s.media_type = 'movie'
             )
-            SELECT display_title, parent_title, type, COUNT(*) as cnt, COALESCE(SUM(sec), 0), MAX(poster_path), MAX(tid)
+            SELECT display_title, parent_title, type,
+                COUNT(DISTINCT COALESCE(media_id, ep_key)),
+                COALESCE(SUM(sec), 0), MAX(poster_path), MAX(tid)
             FROM all_titles
             GROUP BY display_title
-            ORDER BY cnt DESC
+            ORDER BY COUNT(DISTINCT COALESCE(media_id, ep_key)) DESC
             LIMIT 10"
         )?;
         let top_watched: Vec<TopWatchedItem> = top_stmt.query_map([], |row| {
@@ -4666,14 +4615,12 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 8. Hour distribution (0-23) from all sources
+        // 8. Hour distribution (0-23)
         let mut hour_stmt = self.conn.prepare(
             "WITH all_hours AS (
                 SELECT CAST(strftime('%H', started_at) AS INTEGER) as hr, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
                 UNION ALL
-                SELECT CAST(strftime('%H', last_watched) AS INTEGER), duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT CAST(strftime('%H', last_watched) AS INTEGER), duration_seconds FROM streaming_history WHERE duration_seconds > 0
+                SELECT CAST(strftime('%H', last_watched) AS INTEGER), CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END FROM streaming_history WHERE duration_seconds > 0
             )
             SELECT hr, COUNT(*), COALESCE(SUM(sec), 0) FROM all_hours GROUP BY hr ORDER BY hr"
         )?;
@@ -4685,14 +4632,12 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 9. Day of week distribution (0=Sun, 6=Sat) from all sources
+        // 9. Day of week distribution (0=Sun, 6=Sat)
         let mut dow_stmt = self.conn.prepare(
             "WITH all_dows AS (
                 SELECT CAST(strftime('%w', started_at) AS INTEGER) as dow, duration_seconds * (progress_percent / 100.0) as sec FROM watch_history_events
                 UNION ALL
-                SELECT CAST(strftime('%w', last_watched) AS INTEGER), duration_seconds FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT CAST(strftime('%w', last_watched) AS INTEGER), duration_seconds FROM streaming_history WHERE duration_seconds > 0
+                SELECT CAST(strftime('%w', last_watched) AS INTEGER), CASE WHEN resume_position_seconds = 0 THEN duration_seconds ELSE resume_position_seconds END FROM streaming_history WHERE duration_seconds > 0
             )
             SELECT dow, COUNT(*), COALESCE(SUM(sec), 0) FROM all_dows GROUP BY dow ORDER BY dow"
         )?;
@@ -4704,25 +4649,22 @@ impl Database {
             })
         })?.filter_map(|r| r.ok()).collect();
 
-        // 10. Completion funnel from all sources
+        // 10. Completion funnel (unique content items, not play sessions)
         let (started, in_progress, mostly_done, completed): (i64, i64, i64, i64) = self.conn.query_row(
             "WITH all_progress AS (
-                SELECT progress_percent as pct FROM watch_history_events
+                SELECT media_id, progress_percent as pct FROM watch_history_events
                 UNION ALL
-                SELECT CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
-                     WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
-                     ELSE 0 END FROM media WHERE last_watched IS NOT NULL AND duration_seconds > 0
-                UNION ALL
-                SELECT CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
+                SELECT NULL, CASE WHEN resume_position_seconds = 0 AND duration_seconds > 0 THEN 100.0
                      WHEN duration_seconds > 0 THEN (resume_position_seconds / duration_seconds) * 100.0
                      ELSE 0 END FROM streaming_history WHERE duration_seconds > 0
             )
             SELECT
-                COUNT(*),
+                COUNT(DISTINCT media_id),
                 COALESCE(SUM(CASE WHEN pct >= 25 AND pct < 75 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN pct >= 75 AND pct < 93 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN pct >= 93 THEN 1 ELSE 0 END), 0)
-            FROM all_progress",
+            FROM all_progress
+            WHERE media_id IS NOT NULL",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
