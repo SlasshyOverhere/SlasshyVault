@@ -210,7 +210,7 @@ export function ContentDetailsModal({
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
-  const lastItemIdRef = useRef<string | null>(null)
+  const lastItemIdRef = useRef<number | null>(null)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(true)
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
@@ -307,7 +307,7 @@ export function ContentDetailsModal({
     return null
   }, [item])
 
-  const lastSpoilerSeriesRef = useRef<string | null>(null)
+  const lastSpoilerSeriesRef = useRef<number | null>(null)
   if (seriesPreferenceId !== lastSpoilerSeriesRef.current) {
     lastSpoilerSeriesRef.current = seriesPreferenceId
     if (seriesPreferenceId) {
@@ -639,12 +639,12 @@ export function ContentDetailsModal({
 
   // Memoize seasons calculation to prevent redundant set creation and sorting on every render
   const seasons = useMemo(() => {
-    return Array.from(new Set(episodes.map(ep => ep.season_number || 1))).toSorted((a, b) => a - b)
+    return Array.from(new Set(episodes.map(ep => ep.season_number || 1))).sort((a, b) => a - b)
   }, [episodes])
 
   // Memoize episodes filtering and sorting to prevent redundant array operations on every render
   const filteredEpisodes = useMemo(() => {
-    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).toSorted((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
   }, [episodes, selectedSeason])
 
   const selectedSeasonHasZipEpisodes = useMemo(() => (
@@ -767,7 +767,7 @@ export function ContentDetailsModal({
       const tracks = await getAudioTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = tracks.toSorted((left, right) =>
+      const nextTracks = [...tracks].sort((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -832,7 +832,7 @@ export function ContentDetailsModal({
       const tracks = await getSubtitleTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = tracks.toSorted((left, right) =>
+      const nextTracks = [...tracks].sort((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -1547,7 +1547,7 @@ export function ContentDetailsModal({
             <div className="flex flex-col gap-2 py-2">
               {filteredEpisodes
                 .filter(ep => ep.file_path || ep.zip_entry_path)
-                .toSorted((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+                .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
                 .map(ep => {
                   const episodeLabel = `S${String(ep.season_number || selectedSeason).padStart(2, '0')}E${String(ep.episode_number || 0).padStart(2, '0')} — ${ep.episode_title || ep.title}`
                   const fileName = (() => {
