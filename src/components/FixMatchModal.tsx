@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -35,44 +35,81 @@ const extractTmdbId = (input: string): string | null => {
   return match ? match[1] : null
 }
 
+interface State {
+  query: string
+  results: HybridSearchResult[]
+  selectedImdb: string | null
+  selectedTmdb: number | null
+  isSearching: boolean
+  isUpdating: boolean
+}
+
+type Action =
+  | { type: "RESET" }
+  | { type: "INIT_SEARCH"; query: string }
+  | { type: "CLEAR_RESULTS" }
+  | { type: "SET_QUERY"; query: string }
+  | { type: "SET_RESULTS"; results: HybridSearchResult[] }
+  | { type: "SELECT_RESULT"; imdb: string | null; tmdb: number | null }
+  | { type: "SET_SEARCHING"; value: boolean }
+  | { type: "SET_UPDATING"; value: boolean }
+
+const initialState: State = {
+  query: "",
+  results: [],
+  selectedImdb: null,
+  selectedTmdb: null,
+  isSearching: false,
+  isUpdating: false,
+}
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "RESET":
+      return initialState
+    case "INIT_SEARCH":
+      return { ...initialState, query: action.query }
+    case "CLEAR_RESULTS":
+      return { ...state, results: [], selectedImdb: null, selectedTmdb: null }
+    case "SET_QUERY":
+      return { ...state, query: action.query }
+    case "SET_RESULTS": {
+      const first = action.results[0]
+      return { ...state, results: action.results, selectedImdb: first?.imdb_id || null, selectedTmdb: first?.tmdb_id || null, isSearching: false }
+    }
+    case "SELECT_RESULT":
+      return { ...state, selectedImdb: action.imdb, selectedTmdb: action.tmdb }
+    case "SET_SEARCHING":
+      return { ...state, isSearching: action.value }
+    case "SET_UPDATING":
+      return { ...state, isUpdating: action.value }
+    default:
+      return state
+  }
+}
+
 export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchModalProps) {
-  const [query, setQuery] = useState("")
-  const [results, setResults] = useState<HybridSearchResult[]>([])
-  const [selectedImdb, setSelectedImdb] = useState<string | null>(null)
-  const [selectedTmdb, setSelectedTmdb] = useState<number | null>(null)
-  const [isSearching, setIsSearching] = useState(false)
-  const [isUpdating, setIsUpdating] = useState(false)
+  const [state, dispatch] = useReducer(reducer, initialState)
+  const { query, results, selectedImdb, selectedTmdb, isSearching, isUpdating } = state
   const searchTokenRef = useRef(0)
   const { toast } = useToast()
   const isDirectMatchInput = useMemo(() => DIRECT_MATCH_INPUT_RE.test(query.trim()), [query])
 
   const runSearch = useCallback(async (searchQuery: string, mediaType: "movie" | "tv") => {
     const trimmedQuery = searchQuery.trim()
-    if (!trimmedQuery) {
-      setResults([])
-      setSelectedImdb(null)
-      setSelectedTmdb(null)
-      return
-    }
-
-    if (DIRECT_MATCH_INPUT_RE.test(trimmedQuery)) {
-      setResults([])
-      setSelectedImdb(null)
-      setSelectedTmdb(null)
+    if (!trimmedQuery || DIRECT_MATCH_INPUT_RE.test(trimmedQuery)) {
+      dispatch({ type: "CLEAR_RESULTS" })
       return
     }
 
     const currentToken = ++searchTokenRef.current
-    setIsSearching(true)
+    dispatch({ type: "SET_SEARCHING", value: true })
 
     try {
       const hybridResults = await searchContent(trimmedQuery, undefined, mediaType)
       if (currentToken !== searchTokenRef.current) return
 
-      setResults(hybridResults)
-      const first = hybridResults[0]
-      setSelectedImdb(first?.imdb_id || null)
-      setSelectedTmdb(first?.tmdb_id || null)
+      dispatch({ type: "SET_RESULTS", results: hybridResults })
     } catch (error) {
       if (currentToken !== searchTokenRef.current) return
 
@@ -85,33 +122,21 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
           : `Search error: ${errorMessage}`,
         variant: "destructive"
       })
-    } finally {
-      if (currentToken === searchTokenRef.current) {
-        setIsSearching(false)
-      }
+      dispatch({ type: "SET_SEARCHING", value: false })
     }
   }, [toast])
 
   useEffect(() => {
     if (!open || !item) {
       searchTokenRef.current += 1
-      setQuery("")
-      setResults([])
-      setSelectedImdb(null)
-      setSelectedTmdb(null)
-      setIsSearching(false)
-      setIsUpdating(false)
+      dispatch({ type: "RESET" })
       return
     }
 
     const initialQuery = item.title.trim()
     const mediaType = item.media_type === "movie" ? "movie" : "tv"
 
-    setQuery(initialQuery)
-    setResults([])
-    setSelectedImdb(null)
-    setSelectedTmdb(null)
-
+    dispatch({ type: "INIT_SEARCH", query: initialQuery })
     void runSearch(initialQuery, mediaType)
   }, [open, item, runSearch])
 
@@ -127,12 +152,10 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
     const type = item.media_type === "movie" ? "movie" : "tv"
     const trimmedQuery = query.trim()
 
-    // Determine what to pass for fixMatch
     let tmdbId: string
     let imdbId: string | undefined
 
     if (selectedTmdb !== null) {
-      // User selected a hybrid result
       tmdbId = selectedTmdb.toString()
       imdbId = selectedImdb || undefined
     } else if (isDirectMatchInput) {
@@ -140,7 +163,6 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
       const extractedTmdb = extractTmdbId(trimmedQuery)
 
       if (extractedImdb) {
-        // Direct IMDb ID/URL — pass it as imdbId
         imdbId = extractedImdb
         tmdbId = extractedTmdb || ""
       } else if (extractedTmdb) {
@@ -158,7 +180,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
       return
     }
 
-    setIsUpdating(true)
+    dispatch({ type: "SET_UPDATING", value: true })
     try {
       await fixMatch(item.id, tmdbId, type, imdbId)
 
@@ -178,7 +200,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
 
       toast({ title: "Error", description: errorMessage, variant: "destructive" })
     } finally {
-      setIsUpdating(false)
+      dispatch({ type: "SET_UPDATING", value: false })
     }
   }
 
@@ -206,7 +228,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
           <div className="flex gap-2">
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => dispatch({ type: "SET_QUERY", query: e.target.value })}
               onKeyDown={handleKeyDown}
               placeholder="Search by title, or paste TMDB/IMDb URL or ID..."
               disabled={isSearching || isUpdating}
@@ -223,7 +245,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
             )}
             <p className="text-muted-foreground">
             {isSearching
-              ? "Searching..."
+              ? "Searching\u2026"
               : isDirectMatchInput
                 ? "Direct match input detected. Click Update Match to fetch metadata from that TMDB/IMDb link or ID."
               : `Found ${results.length} ${results.length === 1 ? "result" : "results"} for ${expectedTypeLabel}s`}
@@ -250,8 +272,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                   key={`${result.media_type}-${result.tmdb_id || result.imdb_id}`}
                   type="button"
                   onClick={() => {
-                    setSelectedTmdb(result.tmdb_id)
-                    setSelectedImdb(result.imdb_id || null)
+                    dispatch({ type: "SELECT_RESULT", imdb: result.imdb_id || null, tmdb: result.tmdb_id })
                   }}
                   className={cn(
                     "w-full rounded-lg border p-3 text-left transition-colors",
@@ -277,7 +298,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                           <div className="font-medium line-clamp-1">{title}</div>
                           <div className="text-xs text-muted-foreground">
                             {result.media_type === "movie" ? "Movie" : "TV Show"}
-                            {year ? ` • ${year}` : ""}
+                            {year ? ` \u2022 ${year}` : ""}
                           </div>
                         </div>
 
@@ -310,7 +331,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                       {result.imdb_id && (
                         <p className="text-[10px] text-muted-foreground/50">
                           IMDb: {result.imdb_id}
-                          {result.tmdb_id ? ` • TMDB: ${result.tmdb_id}` : ""}
+                          {result.tmdb_id ? ` \u2022 TMDB: ${result.tmdb_id}` : ""}
                         </p>
                       )}
                     </div>
@@ -330,7 +351,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={isUpdating || !canSave}>
-            {isUpdating ? "Updating..." : "Update Match"}
+            {isSearching ? "Searching\u2026" : isUpdating ? "Updating\u2026" : "Update Match"}
           </Button>
         </DialogFooter>
       </DialogContent>

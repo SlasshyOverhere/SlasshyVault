@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Trash2, Check, X, AlertTriangle, Loader2, FolderX } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import {
     Dialog,
     DialogContent,
@@ -79,25 +79,30 @@ export function DeleteEpisodesModal({
 
     // Load episodes when modal opens
     useEffect(() => {
-        if (isOpen && seriesId) {
-            loadEpisodes();
-        }
-    }, [isOpen, seriesId]);
+        if (!isOpen || !seriesId) return;
 
-    const loadEpisodes = async () => {
+        let cancelled = false;
         setIsLoading(true);
         setError(null);
-        try {
-            const eps = await getEpisodesForDelete(seriesId);
-            setEpisodes(eps);
-            setSelectedIds(new Set()); // Reset selection
-        } catch (err) {
-            setError("Failed to load episodes");
-            console.error(err);
-        } finally {
-            setIsLoading(false);
-        }
-    };
+
+        getEpisodesForDelete(seriesId)
+            .then((eps) => {
+                if (cancelled) return;
+                setEpisodes(eps);
+                setSelectedIds(new Set());
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                setError("Failed to load episodes");
+                console.error(err);
+            })
+            .finally(() => {
+                if (cancelled) return;
+                setIsLoading(false);
+            });
+
+        return () => { cancelled = true; };
+    }, [isOpen, seriesId]);
 
     const toggleEpisode = (id: number) => {
         setSelectedIds((prev) => {
@@ -188,6 +193,7 @@ export function DeleteEpisodesModal({
     }, [episodesBySeason]);
 
     return (
+        <LazyMotion features={domAnimation}>
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
             <DialogContent className="max-w-2xl bg-background/95 backdrop-blur-xl border-white/10 flex h-[min(90vh,720px)] flex-col p-0 gap-0">
                 <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
@@ -267,7 +273,7 @@ export function DeleteEpisodesModal({
                         {isLoading ? (
                             <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3">
                                 <Loader2 className="size-8 animate-spin text-white" />
-                                <span className="text-sm text-muted-foreground">Loading episodes...</span>
+                                <span className="text-sm text-muted-foreground">Loading episodes…</span>
                             </div>
                         ) : error && episodes.length === 0 ? (
                             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center">
@@ -282,7 +288,7 @@ export function DeleteEpisodesModal({
                             <div className="space-y-3">
                                 <AnimatePresence>
                                     {episodes.map((ep) => (
-                                        <motion.div
+                                        <m.div
                                             key={ep.id}
                                             initial={{ opacity: 0, x: -10 }}
                                             animate={{ opacity: 1, x: 0 }}
@@ -335,15 +341,15 @@ export function DeleteEpisodesModal({
                                                 )}
                                             </div>
                                             {selectedIds.has(ep.id) && (
-                                                <motion.div
-                                                    initial={{ scale: 0 }}
+                                                <m.div
+                                                    initial={{ scale: 0.95 }}
                                                     animate={{ scale: 1 }}
                                                     className="text-red-500"
                                                 >
                                                     <Trash2 className="size-4" />
-                                                </motion.div>
+                                                </m.div>
                                             )}
-                                        </motion.div>
+                                        </m.div>
                                     ))}
                                 </AnimatePresence>
                             </div>
@@ -356,7 +362,7 @@ export function DeleteEpisodesModal({
                                         </h3>
                                         <AnimatePresence>
                                             {sortedEpisodesBySeason[season].map((ep) => (
-                                                <motion.div
+                                                <m.div
                                                     key={ep.id}
                                                     initial={{ opacity: 0, x: -10 }}
                                                     animate={{ opacity: 1, x: 0 }}
@@ -386,15 +392,15 @@ export function DeleteEpisodesModal({
                                                         </div>
                                                     </div>
                                                     {selectedIds.has(ep.id) && (
-                                                        <motion.div
-                                                            initial={{ scale: 0 }}
+                                                        <m.div
+                                                            initial={{ scale: 0.95 }}
                                                             animate={{ scale: 1 }}
                                                             className="text-red-500"
                                                         >
                                                             <Trash2 className="size-4" />
-                                                        </motion.div>
+                                                        </m.div>
                                                     )}
-                                                </motion.div>
+                                                </m.div>
                                             ))}
                                         </AnimatePresence>
                                     </div>
@@ -429,7 +435,7 @@ export function DeleteEpisodesModal({
                         {isDeleting ? (
                             <>
                                 <Loader2 className="size-4 mr-2 animate-spin" />
-                                Deleting...
+                                Deleting…
                             </>
                         ) : (
                             <>
@@ -455,5 +461,6 @@ export function DeleteEpisodesModal({
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+        </LazyMotion>
     );
 }
