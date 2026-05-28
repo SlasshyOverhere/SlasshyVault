@@ -19,7 +19,8 @@ import { isMediaMarkedWatched } from "@/utils/playbackProgress"
 import { useToast } from "@/components/ui/use-toast"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ShareDialog } from "@/components/ShareDialog"
-import { EpisodeThumbnailImage, getZipCompressionLabel } from "@/components/EpisodeThumbnailImage"
+import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
+import { getZipCompressionLabel } from "@/utils/zip"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -957,10 +958,10 @@ export function ContentDetailsModal({
           <button
             type="button"
             onClick={() => setPlaybackSettingsOpen(false)}
-            className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/8 text-white/58 transition-colors hover:bg-white/14 hover:text-white"
+            className="grid size-7 place-items-center rounded-md border border-white/10 bg-white/8 text-white/58 transition-colors hover:bg-white/14 hover:text-white"
             aria-label="Close playback settings"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="size-3.5" />
           </button>
         </div>
       </div>
@@ -968,7 +969,7 @@ export function ContentDetailsModal({
       <div className="divide-y divide-white/10">
         <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
-            <AudioLines className="h-4 w-4 text-white/58" />
+            <AudioLines className="size-4 text-white/58" />
             Audio
           </div>
           <div className="min-w-0 space-y-2">
@@ -993,7 +994,7 @@ export function ContentDetailsModal({
                 ))}
                 <option value={MANUAL_AUDIO_OPTION.value} className="bg-[#101114] text-white">Manual</option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
             </div>
 
             {selectedAudioPreference === CUSTOM_AUDIO_VALUE && (
@@ -1009,7 +1010,7 @@ export function ContentDetailsModal({
 
         <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
-            <Captions className="h-4 w-4 text-white/58" />
+            <Captions className="size-4 text-white/58" />
             Subtitles
           </div>
           <div className="min-w-0 space-y-2">
@@ -1035,7 +1036,7 @@ export function ContentDetailsModal({
                 ))}
                 <option value={CUSTOM_SUBTITLE_VALUE} className="bg-[#101114] text-white">Manual</option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
             </div>
 
             {selectedSubtitlePreference === CUSTOM_SUBTITLE_VALUE && (
@@ -1104,7 +1105,7 @@ export function ContentDetailsModal({
                     </span>
                     {mediaFormatParts.length > 0 && !isShow && (
                       <span className="text-[9px] font-medium text-white/20 uppercase tracking-widest flex items-center gap-1.5">
-                        <div className="w-0.5 h-0.5 rounded-full bg-white/10" />
+                        <div className="size-0.5 rounded-full bg-white/10" />
                         {mediaFormatParts.join(" · ")}
                       </span>
                     )}
@@ -1120,24 +1121,24 @@ export function ContentDetailsModal({
                     isShow ? "mb-6" : "mb-8"
                   )}>
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-3.5 h-3.5 text-white/25" />
+                      <Calendar className="size-3.5 text-white/25" />
                       <span className="text-white/80">{displayItem.year || "N/A"}</span>
                     </div>
                     {!isShow && (
                       <div className="flex items-center gap-2">
-                        <Clock className="w-3.5 h-3.5 text-white/25" />
+                        <Clock className="size-3.5 text-white/25" />
                         <span className="text-white/80">{runtimeLabel}</span>
                       </div>
                     )}
                     {isShow && (
                       <div className="flex items-center gap-2">
-                        <Tv className="w-3.5 h-3.5 text-white/25" />
+                        <Tv className="size-3.5 text-white/25" />
                         <span className="text-white/80">{seasons.length} Seasons</span>
                       </div>
                     )}
                     {(director || creator) && (
                       <div className="flex items-center gap-2">
-                        <User className="w-3.5 h-3.5 text-white/25" />
+                        <User className="size-3.5 text-white/25" />
                         <span className="text-white/80">{isShow ? creator : director}</span>
                         <span className="text-[9px] uppercase tracking-widest opacity-25">{isShow ? "Creator" : "Director"}</span>
                       </div>
@@ -1168,7 +1169,7 @@ export function ContentDetailsModal({
                         onClick={() => onPrimaryAction(displayItem)} 
                         className="h-14 px-10 rounded-full text-base font-bold tracking-tight shadow-[0_15px_40px_rgba(255,255,255,0.1)] hover:shadow-[0_20px_50px_rgba(255,255,255,0.15)] hover:scale-[1.02] active:scale-95 transition-all duration-500 bg-white text-black hover:bg-white"
                       >
-                        <Play className="w-4 h-4 mr-2.5 fill-current" /> Play Now
+                        <Play className="size-4 mr-2.5 fill-current" /> Play Now
                       </Button>
 
                       <div className="flex items-center gap-2 p-1 rounded-full bg-white/5 border border-white/10 shadow-sm">
@@ -1178,30 +1179,30 @@ export function ContentDetailsModal({
                               setShareFileId(displayItem.cloud_file_id || null)
                               setShareFileName(displayItem.title)
                             }}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title="Share"
                           >
-                            <Share2 className="w-4 h-4" />
+                            <Share2 className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Share</span>
                           </button>
                         )}
                         {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
                           <button
                             onClick={() => onDownloadAction(displayItem)}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title="Download"
                           >
-                            <Download className="w-4 h-4" />
+                            <Download className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Download</span>
                           </button>
                         )}
                         {onSecondaryAction && secondaryActionLabel && (
                           <button
                             onClick={() => onSecondaryAction(displayItem)}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title={secondaryActionLabel}
                           >
-                            <Check className="w-4 h-4" />
+                            <Check className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">{secondaryActionLabel}</span>
                           </button>
                         )}
@@ -1239,10 +1240,10 @@ export function ContentDetailsModal({
                         type="button"
                         onClick={() => void handleRefreshMetadata()}
                         disabled={isRefreshingMetadata}
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative disabled:cursor-not-allowed disabled:opacity-45"
+                        className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative disabled:cursor-not-allowed disabled:opacity-45"
                         title="Refresh Metadata"
                       >
-                        <RefreshCw className={cn("w-3.5 h-3.5", isRefreshingMetadata && "animate-spin")} />
+                        <RefreshCw className={cn("size-3.5", isRefreshingMetadata && "animate-spin")} />
                         <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Refresh</span>
                       </button>
                     )}
@@ -1250,34 +1251,34 @@ export function ContentDetailsModal({
                       <button
                         type="button"
                         onClick={() => setShowEpisodeUrls(true)}
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                        className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                         title="Show Episode Files"
                       >
-                        <FileText className="w-3.5 h-3.5" />
+                        <FileText className="size-3.5" />
                         <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Files</span>
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={() => setPlaybackSettingsOpen(true)}
-                      className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                      className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                       title="Audio & Subtitles"
                     >
-                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <SlidersHorizontal className="size-3.5" />
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Audio</span>
                     </button>
                     <button
                       type="button"
                       onClick={toggleSpoiler}
                       className={cn(
-                        "w-8 h-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
+                        "size-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
                         spoilerEnabled
                           ? "bg-white/15 hover:bg-white/25 text-white"
                           : "bg-white/5 hover:bg-white/10 text-white/50 hover:text-white",
                       )}
                       title={`Spoiler ${spoilerEnabled ? "On" : "Off"}`}
                     >
-                      {spoilerEnabled ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {spoilerEnabled ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Spoiler {spoilerEnabled ? "On" : "Off"}</span>
                     </button>
                   </div>
@@ -1287,7 +1288,7 @@ export function ContentDetailsModal({
                   <div className="h-full w-full overflow-y-auto no-scrollbar">
                     {loadingEpisodes ? (
                       <div className="py-20 flex flex-col items-center text-white/30">
-                        <Loader2 className="w-12 h-12 animate-spin mb-4" />
+                        <Loader2 className="size-12 animate-spin mb-4" />
                         <p className="font-medium tracking-wide">Loading episodes...</p>
                       </div>
                     ) : filteredEpisodes.length === 0 ? (
@@ -1330,8 +1331,8 @@ export function ContentDetailsModal({
                                   />
                                 </div>
                                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
-                                  <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
-                                    <Play className="w-6 h-6 text-black fill-black ml-1" />
+                                  <div className="size-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
+                                    <Play className="size-6 text-black fill-black ml-1" />
                                   </div>
                                 </div>
                                 {ep.progress_percent ? (
@@ -1344,7 +1345,7 @@ export function ContentDetailsModal({
                                 ) : null}
                                 {isWatched ? (
                                   <div className="absolute top-3 right-3 p-1.5 rounded-xl bg-black/60 backdrop-blur-md text-white border border-white/10 shadow-lg">
-                                    <Check className="w-4 h-4" />
+                                    <Check className="size-4" />
                                   </div>
                                 ) : null}
                               </div>
@@ -1364,7 +1365,7 @@ export function ContentDetailsModal({
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
                                     {isWatched ? (
                                       <div className="inline-flex items-center gap-1.5 rounded-full border border-green-500/35 bg-green-500/18 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-green-300">
-                                        <Check className="w-3.5 h-3.5" />
+                                        <Check className="size-3.5" />
                                         Watched
                                       </div>
                                     ) : onEpisodeSecondaryAction && episodeSecondaryActionLabel ? (
@@ -1375,7 +1376,7 @@ export function ContentDetailsModal({
                                         }}
                                         className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/6 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/78 transition-colors hover:bg-white/12 hover:text-white"
                                       >
-                                        <Check className="w-3.5 h-3.5" />
+                                        <Check className="size-3.5" />
                                         {episodeSecondaryActionLabel}
                                       </button>
                                     ) : null}
@@ -1387,7 +1388,7 @@ export function ContentDetailsModal({
                                         }}
                                         className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-100 transition-colors hover:bg-amber-400/16 hover:border-amber-300/35"
                                       >
-                                        <Download className="w-3.5 h-3.5" />
+                                        <Download className="size-3.5" />
                                         Download
                                       </button>
                                     ) : null}
@@ -1400,19 +1401,19 @@ export function ContentDetailsModal({
                                         }}
                                         className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/18 bg-violet-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-violet-100 transition-colors hover:bg-violet-400/16 hover:border-violet-300/35"
                                       >
-                                        <Share2 className="w-3.5 h-3.5" />
+                                        <Share2 className="size-3.5" />
                                         Share
                                       </button>
                                     ) : null}
                                     {rating && rating > 0 && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
-                                        <Star className="w-3 h-3 fill-current text-yellow-500" />
+                                        <Star className="size-3 fill-current text-yellow-500" />
                                         {rating.toFixed(1)}
                                       </div>
                                     )}
                                     {(ep.duration_seconds || runtime) && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/60">
-                                        <Timer className="w-3.5 h-3.5 opacity-70" />
+                                        <Timer className="size-3.5 opacity-70" />
                                         {Math.round((ep.duration_seconds || (runtime ? runtime * 60 : 0)) / 60)}m
                                       </div>
                                     )}
@@ -1423,7 +1424,7 @@ export function ContentDetailsModal({
                                   <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/30">
                                     {airDate && (
                                       <span className="inline-flex items-center gap-2">
-                                        <Calendar className="w-3 h-3 opacity-50" />
+                                        <Calendar className="size-3 opacity-50" />
                                         {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                                       </span>
                                     )}
@@ -1457,12 +1458,12 @@ export function ContentDetailsModal({
                                   >
                                     {revealedEpisodes.has(ep.id) ? (
                                       <>
-                                        <Eye className="w-3 h-3" />
+                                        <Eye className="size-3" />
                                         Hide Spoilers
                                       </>
                                     ) : (
                                       <>
-                                        <EyeOff className="w-3 h-3" />
+                                        <EyeOff className="size-3" />
                                         Show Spoilers
                                       </>
                                     )}
@@ -1547,7 +1548,7 @@ export function ContentDetailsModal({
                         className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
                         title="Copy file name"
                       >
-                        <Copy className="w-3.5 h-3.5" />
+                        <Copy className="size-3.5" />
                       </button>
                     </div>
                   )

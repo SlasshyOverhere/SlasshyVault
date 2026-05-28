@@ -5,7 +5,8 @@ import {
   TmdbEpisodeInfo,
   getTmdbImageUrl,
 } from "@/services/api"
-import { EpisodeThumbnailImage, getZipCompressionLabel } from "@/components/EpisodeThumbnailImage"
+import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
+import { getZipCompressionLabel } from "@/utils/zip"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import {
@@ -164,8 +165,8 @@ function EpisodeItemBase({
           {/* Gradient overlay + Play button (on hover) */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shadow-2xl shadow-black/50 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
-                <Play className="w-6 h-6 text-black fill-black ml-0.5" />
+              <div className="size-14 rounded-xl bg-white flex items-center justify-center shadow-2xl shadow-black/50 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
+                <Play className="size-6 text-black fill-black ml-0.5" />
               </div>
             </div>
           </div>
@@ -178,7 +179,7 @@ function EpisodeItemBase({
           {/* Rating badge */}
           {rating && (
             <div className="absolute top-3 right-3 px-2 py-1 rounded-lg bg-amber-500/20 backdrop-blur-sm text-[10px] font-extrabold text-amber-400 flex items-center gap-1">
-              <Star className="w-3 h-3 fill-amber-400" />
+              <Star className="size-3 fill-amber-400" />
               {rating}
             </div>
           )}
@@ -221,7 +222,7 @@ function EpisodeItemBase({
           <div className="flex items-center gap-2 text-[10px] font-semibold text-white/30 uppercase tracking-wider flex-wrap">
             {airDateLabel && (
               <span className="flex items-center gap-1">
-                <Calendar className="w-3 h-3 opacity-60" />
+                <Calendar className="size-3 opacity-60" />
                 {airDateLabel}
               </span>
             )}
@@ -255,12 +256,12 @@ function EpisodeItemBase({
             >
               {isRevealed ? (
                 <>
-                  <Eye className="w-3 h-3" />
+                  <Eye className="size-3" />
                   Hide Spoilers
                 </>
               ) : (
                 <>
-                  <EyeOff className="w-3 h-3" />
+                  <EyeOff className="size-3" />
                   Show Spoilers
                 </>
               )}
@@ -293,7 +294,7 @@ function EpisodeItemBase({
                 onClick={handleMarkWatchedClick}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[9px] font-bold uppercase tracking-wider text-white/60 hover:text-white transition-all duration-200"
               >
-                <Check className="w-3 h-3" />
+                <Check className="size-3" />
                 Watched
               </button>
             )}
@@ -302,17 +303,17 @@ function EpisodeItemBase({
                 onClick={handleDownloadClick}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-[9px] font-bold uppercase tracking-wider text-amber-400/80 hover:text-amber-400 transition-all duration-200"
               >
-                <Download className="w-3 h-3" />
+                <Download className="size-3" />
                 Download
               </button>
             )}
             <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-[9px] font-bold uppercase tracking-wider text-violet-400/80 hover:text-violet-400 transition-all duration-200">
-              <Share2 className="w-3 h-3" />
+              <Share2 className="size-3" />
               Share
             </button>
             {displayRuntime && (
               <span className="flex items-center gap-1 text-[10px] font-bold text-white/40 ml-auto">
-                <Timer className="w-3 h-3 opacity-60" />
+                <Timer className="size-3 opacity-60" />
                 {displayRuntime}
               </span>
             )}
