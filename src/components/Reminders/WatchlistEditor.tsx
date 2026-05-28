@@ -134,8 +134,8 @@ export function WatchlistEditor({
       <DialogContent className="sm:max-w-[520px] bg-background/95 backdrop-blur-[32px] border border-white/10 text-white p-0 overflow-hidden rounded-[2rem]">
         <DialogHeader className="p-8 pb-4">
           <DialogTitle className="text-2xl font-black tracking-tight flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-              <Bell className="w-5 h-5 text-white/60" />
+            <div className="size-10 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <Bell className="size-5 text-white/60" />
             </div>
             <div>
               <div>{isEdit ? 'Edit Watchlist Item' : 'Add To Watchlist'}</div>
@@ -166,7 +166,7 @@ export function WatchlistEditor({
           <div className="space-y-3">
             <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 ml-1">Notes</Label>
             <div className="relative">
-              <StickyNote className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
+              <StickyNote className="absolute left-5 top-1/2 -translate-y-1/2 size-4 text-white/20" />
               <Input
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -195,7 +195,7 @@ export function WatchlistEditor({
               <div className="space-y-3">
                 <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 ml-1">Timer</Label>
                 <div className="relative">
-                  <Clock3 className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
+                  <Clock3 className="absolute left-5 top-1/2 -translate-y-1/2 size-4 text-white/20" />
                   <Input
                     id="watchlist-notify-at"
                     type="datetime-local"
@@ -282,7 +282,7 @@ export function WatchlistEditor({
             disabled={loading || !title || (notificationEnabled && !notifyAt)}
             className="bg-white text-black hover:bg-neutral-200 font-black uppercase tracking-[0.2em] text-[11px] rounded-2xl h-14 px-10"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : isEdit ? 'Save Watchlist' : 'Add To Watchlist'}
+            {loading ? <Loader2 className="size-4 animate-spin" /> : isEdit ? 'Save Watchlist' : 'Add To Watchlist'}
           </Button>
         </DialogFooter>
       </DialogContent>

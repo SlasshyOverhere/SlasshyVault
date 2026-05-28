@@ -219,7 +219,7 @@ const VIEW_MODE_STORAGE_KEY = 'slasshyvault.view_mode'
 
 const LoadingFallback = () => (
   <div className="flex h-full w-full items-center justify-center min-h-[50vh]">
-    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    <Loader2 className="size-8 animate-spin text-muted-foreground" />
   </div>
 )
 
@@ -1813,7 +1813,7 @@ function App() {
               >
                 {isIndexing ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="size-4 animate-spin" />
                     Indexing...
                   </>
                 ) : (
@@ -1830,7 +1830,7 @@ function App() {
           <div className="w-full max-w-lg mx-4 rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2.5 rounded-xl bg-white/10">
-                <Download className="w-5 h-5 text-neutral-200" />
+                <Download className="size-5 text-neutral-200" />
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-white">Updating SlasshyVault</h2>
@@ -1858,7 +1858,7 @@ function App() {
 
             {updateGateStatus === 'installing' && (
               <div className="flex items-center gap-2 text-xs text-neutral-500">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Loader2 className="size-3.5 animate-spin" />
                 Installing and restarting...
               </div>
             )}
@@ -1869,7 +1869,7 @@ function App() {
         <div className="fixed top-12 right-4 z-[260] w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-white/10 bg-[#121212]/95 shadow-2xl shadow-black/50 p-4 backdrop-blur-xl">
           <div className="flex items-start gap-3">
             <div className={`mt-0.5 p-2 rounded-xl ${updateGateStatus === 'error' ? 'bg-red-500/15' : 'bg-white/10'}`}>
-              <Download className={`w-4 h-4 ${updateGateStatus === 'error' ? 'text-red-300' : 'text-neutral-200'}`} />
+              <Download className={`size-4 ${updateGateStatus === 'error' ? 'text-red-300' : 'text-neutral-200'}`} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-3">
@@ -1886,7 +1886,7 @@ function App() {
                   className="rounded-md p-1 text-neutral-400 hover:bg-white/10 hover:text-white transition-colors"
                   aria-label="Close update notification"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="size-4" />
                 </button>
               </div>
 
@@ -1930,7 +1930,7 @@ function App() {
       {isAuthLoading && (
         <div className="fixed inset-0 bg-[#0a0a0a] flex items-center justify-center z-[300]">
           <div className="flex flex-col items-center gap-4">
-            <Loader2 className="w-8 h-8 animate-spin text-white" />
+            <Loader2 className="size-8 animate-spin text-white" />
             <span className="text-neutral-400 text-sm">Loading...</span>
           </div>
         </div>
@@ -1959,7 +1959,7 @@ function App() {
                   src={slasshyvaultIcon}
                   alt=""
                   draggable={false}
-                  className="pointer-events-none h-4 w-4 object-contain"
+                  className="pointer-events-none size-4 object-contain"
                 />
                 <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
                   SlasshyVault{import.meta.env.DEV ? ' dev' : ''}
@@ -1973,7 +1973,7 @@ function App() {
                   title="Minimize"
                   aria-label="Minimize window"
                 >
-                  <Minus className="mx-auto h-3.5 w-3.5" />
+                  <Minus className="mx-auto size-3.5" />
                 </button>
                 <button
                   onClick={async () => {
@@ -1985,7 +1985,7 @@ function App() {
                   title={isMaximized ? "Restore" : "Maximize"}
                   aria-label={isMaximized ? "Restore window" : "Maximize window"}
                 >
-                  {isMaximized ? <Minimize2 className="mx-auto h-3.5 w-3.5" /> : <Maximize2 className="mx-auto h-3.5 w-3.5" />}
+                  {isMaximized ? <Minimize2 className="mx-auto size-3.5" /> : <Maximize2 className="mx-auto size-3.5" />}
                 </button>
                 <button
                   onClick={async () => {
@@ -1996,7 +1996,7 @@ function App() {
                   title="Close"
                   aria-label="Hide window"
                 >
-                  <X className="mx-auto h-3.5 w-3.5" />
+                  <X className="mx-auto size-3.5" />
                 </button>
               </div>
             </div>
@@ -2026,7 +2026,7 @@ function App() {
                     transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
                     className="flex"
                   >
-                    <Archive className="h-3 w-3 text-white/50" />
+                    <Archive className="size-3 text-white/50" />
                   </motion.div>
                 )}
                 <span className="text-[11px] font-medium text-white/70">
@@ -2085,7 +2085,7 @@ function App() {
                   className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-full bg-card/90 backdrop-blur-xl border border-white/30 shadow-lg"
                 >
                   <div className="relative">
-                    <Loader2 className="h-4 w-4 animate-spin text-white" />
+                    <Loader2 className="size-4 animate-spin text-white" />
                     <div className="absolute inset-0 rounded-full bg-white/40 blur-md animate-pulse" />
                   </div>
                   <span className="text-white text-sm font-semibold">
@@ -2115,7 +2115,7 @@ function App() {
                         : 'text-muted-foreground hover:text-foreground'
                         }`}
                     >
-                      <Film className="w-3.5 h-3.5" />
+                      <Film className="size-3.5" />
                       <span>Movies</span>
                     </motion.button>
                     <motion.button
@@ -2126,14 +2126,14 @@ function App() {
                         : 'text-muted-foreground hover:text-foreground'
                         }`}
                     >
-                      <Tv className="w-3.5 h-3.5" />
+                      <Tv className="size-3.5" />
                       <span>TV Shows</span>
                     </motion.button>
                   </div>
 
                   {/* Search Input */}
                   <div className="relative flex items-center bg-card/90 backdrop-blur-xl border border-white/10 rounded-lg shadow-md overflow-hidden">
-                    <Search className="w-3.5 h-3.5 text-muted-foreground ml-2.5" />
+                    <Search className="size-3.5 text-muted-foreground ml-2.5" />
                     <input
                       type="text"
                       placeholder={`Search ${cloudSubTab === 'movies' ? 'movies' : 'TV shows'}...`}
@@ -2146,7 +2146,7 @@ function App() {
                         onClick={() => setSearchQuery('')}
                         className="p-1 hover:bg-white/10 rounded-full transition-colors mr-1.5"
                       >
-                        <X className="w-3 h-3 text-muted-foreground" />
+                        <X className="size-3 text-muted-foreground" />
                       </button>
                     )}
                   </div>
@@ -2170,7 +2170,7 @@ function App() {
                         : 'text-muted-foreground hover:text-foreground'
                         }`}
                     >
-                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <LayoutGrid className="size-3.5" />
                       <span>Grid</span>
                     </motion.button>
                     <motion.button
@@ -2181,7 +2181,7 @@ function App() {
                         : 'text-muted-foreground hover:text-foreground'
                         }`}
                     >
-                      <List className="w-3.5 h-3.5" />
+                      <List className="size-3.5" />
                       <span>List</span>
                     </motion.button>
                   </div>
@@ -2252,14 +2252,14 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setNotificationCenterOpen(true)}
-                            className="group relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white/10 to-transparent border border-white/10 backdrop-blur-xl shadow-2xl transition-all duration-500 hover:scale-105 active:scale-95"
+                            className="group relative flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white/10 to-transparent border border-white/10 backdrop-blur-xl shadow-2xl transition-all duration-500 hover:scale-105 active:scale-95"
                           >
                             <div className="absolute inset-0 rounded-2xl bg-white/0 group-hover:bg-white/5 transition-colors duration-500" />
-                            <Bell className="relative z-10 w-5 h-5 text-white/40 group-hover:text-white transition-colors duration-300" />
+                            <Bell className="relative z-10 size-5 text-white/40 group-hover:text-white transition-colors duration-300" />
                             {unreadNotificationCount > 0 && (
-                              <span className="absolute -top-0.5 -right-0.5 z-20 flex h-4 w-4">
+                              <span className="absolute -top-0.5 -right-0.5 z-20 flex size-4">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/40 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-4 w-4 bg-white items-center justify-center text-[8px] font-black text-black">
+                                <span className="relative inline-flex rounded-full size-4 bg-white items-center justify-center text-[8px] font-black text-black">
                                   {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                                 </span>
                               </span>
@@ -2288,7 +2288,7 @@ function App() {
                           <div className="flex justify-center px-6 pb-12 flex-shrink-0 w-full">
                             <div className="relative group w-full max-w-xl">
                               <div className="relative flex items-center bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 rounded-full transition-all duration-500 group-focus-within:border-white/40 group-focus-within:bg-white/[0.08] group-focus-within:shadow-glow-sm overflow-hidden">
-                                <Search className="w-5 h-5 text-white/30 ml-6 group-focus-within:text-white/60 transition-colors" />
+                                <Search className="size-5 text-white/30 ml-6 group-focus-within:text-white/60 transition-colors" />
                                 <input
                                   ref={searchInputRef}
                                   type="text"
@@ -2302,7 +2302,7 @@ function App() {
                                     onClick={() => setHomeSearchQuery('')}
                                     className="p-2 hover:bg-white/10 rounded-full transition-colors mr-3"
                                   >
-                                    <X className="w-4 h-4 text-white/40" />
+                                    <X className="size-4 text-white/40" />
                                   </button>
                                 )}
                                 {!homeSearchQuery && (
@@ -2320,7 +2320,7 @@ function App() {
                               <section className="flex-1 min-h-0 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
                                 <div className="flex items-center gap-3 mb-4">
                                   <div className="p-2 rounded-xl bg-white/10">
-                                    <Search className="w-5 h-5 text-white" />
+                                    <Search className="size-5 text-white" />
                                   </div>
                                   <div>
                                     <h3 className="text-xl font-bold text-white tracking-tight">
@@ -2348,7 +2348,7 @@ function App() {
                                 ) : !isHomeSearching && (
                                   <div className="text-center py-12 glass-light rounded-3xl border border-white/5 shadow-2xl">
                                     <div className="mb-4 inline-flex p-4 rounded-full bg-white/5">
-                                      <Search className="w-8 h-8 text-muted-foreground/40" />
+                                      <Search className="size-8 text-muted-foreground/40" />
                                     </div>
                                     <h4 className="text-lg font-bold text-white mb-2">No matches found</h4>
                                     <p className="text-sm text-muted-foreground max-w-xs mx-auto">We couldn't find anything matching "{homeSearchQuery}" in your collection.</p>
@@ -2375,7 +2375,7 @@ function App() {
                                         className="text-[10px] font-bold text-white/20 hover:text-white uppercase tracking-widest transition-colors flex items-center gap-2 group"
                                       >
                                         View All
-                                        <ChevronRight className="w-3 h-3 opacity-50 group-hover:translate-x-1 transition-transform" />
+                                        <ChevronRight className="size-3 opacity-50 group-hover:translate-x-1 transition-transform" />
                                       </button>
                                     </div>
                                     <div className="flex gap-4 pb-1 overflow-x-auto no-scrollbar">
@@ -2444,7 +2444,7 @@ function App() {
                                       onClick={() => { setView('cloud'); setCloudSubTab('movies'); }}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <Film className="w-4 h-4" />
+                                      <Film className="size-4" />
                                       <span className="font-bold tabular-nums">{libraryStats.movies}</span>
                                       <span className="text-white/25">Movies</span>
                                     </button>
@@ -2453,7 +2453,7 @@ function App() {
                                       onClick={() => { setView('cloud'); setCloudSubTab('tv'); }}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <Tv className="w-4 h-4" />
+                                      <Tv className="size-4" />
                                       <span className="font-bold tabular-nums">{libraryStats.shows}</span>
                                       <span className="text-white/25">Shows</span>
                                     </button>
@@ -2462,7 +2462,7 @@ function App() {
                                       onClick={() => setView('history')}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
-                                      <TrendingUp className="w-4 h-4" />
+                                      <TrendingUp className="size-4" />
                                       <span className="font-bold tabular-nums">{continueWatching.length}</span>
                                       <span className="text-white/25">Watching</span>
                                     </button>
@@ -2491,7 +2491,7 @@ function App() {
                                         style={{ width: 100, height: 100 }}
                                       />
                                       <div className="p-8 rounded-[32px] bg-white/5 border border-white/10 backdrop-blur-3xl relative z-10">
-                                        <Film className="w-16 h-16 text-white/40" />
+                                        <Film className="size-16 text-white/40" />
                                       </div>
                                     </div>
                                     <h3 className="text-3xl font-black text-white tracking-tighter mb-3">Your library is waiting</h3>
@@ -2503,7 +2503,7 @@ function App() {
                                         onClick={() => setSettingsOpen(true)}
                                         className="btn-primary-compact py-4 px-10 rounded-2xl inline-flex items-center gap-3 text-base font-bold shadow-glow-sm hover:shadow-glow transition-all"
                                       >
-                                        <Sparkles className="w-5 h-5 text-black" />
+                                        <Sparkles className="size-5 text-black" />
                                         <span>Start Your Collection</span>
                                       </button>
                                     </div>
@@ -2644,12 +2644,12 @@ function App() {
                                           style={{ width: 96, height: 96 }}
                                         />
                                         {/* Center icon */}
-                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gray-500/20 to-gray-400/20 border border-gray-500/30 flex items-center justify-center">
+                                        <div className="size-24 rounded-full bg-gradient-to-br from-gray-500/20 to-gray-400/20 border border-gray-500/30 flex items-center justify-center">
                                           <motion.div
                                             animate={cloudIndexingStatus.includes('complete') ? {} : { rotate: 360 }}
                                             transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                                           >
-                                            <Cloud className={`w-12 h-12 ${cloudIndexingStatus.includes('complete') ? 'text-white' : 'text-gray-400'}`} />
+                                            <Cloud className={`size-12 ${cloudIndexingStatus.includes('complete') ? 'text-white' : 'text-gray-400'}`} />
                                           </motion.div>
                                         </div>
                                       </div>
@@ -2705,8 +2705,8 @@ function App() {
                                 ) : (
                                   <>
                                     <div className="mb-8">
-                                      <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gray-500/10 to-gray-400/10 border border-gray-500/20 flex items-center justify-center mx-auto">
-                                        <Cloud className="w-12 h-12 text-muted-foreground/60" />
+                                      <div className="size-24 rounded-full bg-gradient-to-br from-gray-500/10 to-gray-400/10 border border-gray-500/20 flex items-center justify-center mx-auto">
+                                        <Cloud className="size-12 text-muted-foreground/60" />
                                       </div>
                                     </div>
                                     <h3 className="text-2xl font-semibold text-foreground mb-3 text-center">
@@ -2725,7 +2725,7 @@ function App() {
                                           disabled={isScanning || isCloudIndexing}
                                           className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
-                                          <RefreshCw className={`w-5 h-5 ${isCloudIndexing ? 'animate-spin' : ''}`} />
+                                          <RefreshCw className={`size-5 ${isCloudIndexing ? 'animate-spin' : ''}`} />
                                           {isCloudIndexing ? 'Updating...' : 'Update Library'}
                                         </button>
                                       ) : (
@@ -2736,7 +2736,7 @@ function App() {
                                           }}
                                           className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
-                                          <Sparkles className="w-5 h-5" />
+                                          <Sparkles className="size-5" />
                                           {view === 'cloud' ? 'Setup Google Drive' : 'Add Media Folders'}
                                         </button>
                                       )}
@@ -2828,7 +2828,7 @@ function App() {
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
-                  <RefreshCw className="w-5 h-5" />
+                  <RefreshCw className="size-5" />
                   Link Expired
                 </DialogTitle>
                 <DialogDescription>
@@ -2838,7 +2838,7 @@ function App() {
 
               <div className="space-y-4">
                 <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-500/5 border border-amber-500/20">
-                  <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <AlertCircle className="size-5 text-amber-400 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     The previous link has expired. Please provide a fresh URL for the <span className="text-foreground font-medium">exact same archive</span>.
                   </p>
@@ -2877,7 +2877,7 @@ function App() {
                   disabled={!ddlExpiredNewUrl.trim() || ddlExpiredRefreshing}
                   className="min-w-[160px]"
                 >
-                  {ddlExpiredRefreshing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {ddlExpiredRefreshing && <Loader2 className="size-4 mr-2 animate-spin" />}
                   Refresh & Retry
                 </Button>
               </DialogFooter>

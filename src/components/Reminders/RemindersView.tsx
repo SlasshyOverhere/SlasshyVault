@@ -261,8 +261,8 @@ export function RemindersView() {
             <motion.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex items-center gap-4">
               <div className="relative">
                 <div className="absolute -inset-2 bg-white/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-                <div className="w-12 h-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
-                  <Clapperboard className="w-6 h-6 text-white/70" />
+                <div className="size-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
+                  <Clapperboard className="size-6 text-white/70" />
                 </div>
               </div>
               <div className="space-y-0.5">
@@ -270,7 +270,7 @@ export function RemindersView() {
                   Watchlist
                 </h1>
                 <div className="flex items-center gap-2">
-                  <div className="w-1 h-1 rounded-full bg-emerald-500/50 animate-pulse" />
+                  <div className="size-1 rounded-full bg-emerald-500/50 animate-pulse" />
                   <p className="text-white/20 text-[9px] font-black uppercase tracking-[0.3em]">
                     Discover, queue, remind
                   </p>
@@ -299,7 +299,7 @@ export function RemindersView() {
                   <motion.div layoutId="RemindersTab" className="absolute inset-0 bg-white rounded-full shadow-md" />
                 )}
                 <span className="relative z-10 flex items-center gap-1.5">
-                  <tab.icon className="w-3.5 h-3.5" />
+                  <tab.icon className="size-3.5" />
                   {tab.label}
                 </span>
               </button>
@@ -312,7 +312,7 @@ export function RemindersView() {
             <div className="flex flex-col items-end">
               <span className="text-[8px] font-black uppercase tracking-[0.2em] text-white/20 leading-none mb-1">Engine</span>
               <div className="flex items-center gap-1.5">
-                <div className={cn('w-1 h-1 rounded-full transition-all duration-500', config?.notifications_enabled ? 'bg-white shadow-glow-sm animate-pulse' : 'bg-white/10')} />
+                <div className={cn('size-1 rounded-full transition-all duration-500', config?.notifications_enabled ? 'bg-white shadow-glow-sm animate-pulse' : 'bg-white/10')} />
                 <span className={cn('text-[9px] font-black uppercase tracking-widest leading-none transition-colors duration-500', config?.notifications_enabled ? 'text-white/80' : 'text-white/30')}>
                   {config?.notifications_enabled ? 'Active' : 'Muted'}
                 </span>
@@ -335,7 +335,7 @@ export function RemindersView() {
                       <div className="space-y-6">
                         <div className="flex flex-col gap-4">
                           <div className="relative group/input">
-                            <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20 group-focus-within/search:text-white/60 group-hover/input:text-white/40 transition-all duration-500" />
+                            <Search className="absolute left-6 top-1/2 -translate-y-1/2 size-5 text-white/20 group-focus-within/search:text-white/60 group-hover/input:text-white/40 transition-all duration-500" />
                             <Input
                               value={searchQuery}
                               onChange={e => handleSearchInputChange(e.target.value)}
@@ -343,7 +343,7 @@ export function RemindersView() {
                               placeholder="Search global motion picture database..."
                               className="h-16 pl-16 pr-8 rounded-[1.5rem] bg-white/[0.02] border-white/[0.05] focus:bg-white/[0.04] focus:border-white/20 text-lg font-bold placeholder:text-white/10 transition-all duration-500 shadow-elevation-1 focus:shadow-glow-sm"
                             />
-                            {isSearching && <div className="absolute right-6 top-1/2 -translate-y-1/2"><Loader2 className="w-6 h-6 animate-spin text-white/40" /></div>}
+                            {isSearching && <div className="absolute right-6 top-1/2 -translate-y-1/2"><Loader2 className="size-6 animate-spin text-white/40" /></div>}
                           </div>
                           <Button onClick={() => handleSearch()} disabled={isSearching || !searchQuery.trim()} className="h-16 px-12 rounded-[1.5rem] bg-white text-black hover:bg-white/90 font-black uppercase tracking-[0.25em] text-[11px] shadow-glow-sm active:scale-95 transition-all duration-500 w-full">
                             Search
@@ -369,8 +369,8 @@ export function RemindersView() {
                       <div className="w-full space-y-10 animate-fade-in-up">
                         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between px-2">
                           <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
-                              <TrendingUp className="w-5 h-5 text-white/60" />
+                            <div className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
+                              <TrendingUp className="size-5 text-white/60" />
                             </div>
                             <div className="flex flex-col">
                               <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/80 leading-none">Discovery System</h2>
@@ -403,14 +403,14 @@ export function RemindersView() {
                                     <img src={getTmdbImageUrl(result.poster_path, 'w500') || ''} alt={result.title || result.name} className="aspect-[2/3] w-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
                                   ) : (
                                     <div className="aspect-[2/3] w-full flex items-center justify-center bg-white/[0.02] text-white/5">
-                                      {result.media_type === 'movie' ? <Film className="w-16 h-16" /> : <Tv className="w-16 h-16" />}
+                                      {result.media_type === 'movie' ? <Film className="size-16" /> : <Tv className="size-16" />}
                                     </div>
                                   )}
                                   <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-80 transition-opacity duration-500 group-hover:opacity-100" />
 
                                   <div className="absolute top-4 left-4 z-20">
                                     <div className="h-7 px-3 flex items-center gap-2 rounded-full border border-white/10 bg-black/35 backdrop-blur-xl">
-                                      {result.media_type === 'movie' ? <Film className="w-3 h-3 opacity-60" /> : <Tv className="w-3 h-3 opacity-60" />}
+                                      {result.media_type === 'movie' ? <Film className="size-3 opacity-60" /> : <Tv className="size-3 opacity-60" />}
                                       <span className="text-[8px] font-black uppercase tracking-widest">{result.media_type}</span>
                                     </div>
                                   </div>
@@ -429,7 +429,7 @@ export function RemindersView() {
                                   </span>
                                   {(result.vote_average ?? 0) > 0 && (
                                     <>
-                                      <div className="w-1 h-1 rounded-full bg-white/10" />
+                                      <div className="size-1 rounded-full bg-white/10" />
                                       <span className="text-white/40">{(result.vote_average ?? 0).toFixed(1)} Score</span>
                                     </>
                                   )}

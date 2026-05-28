@@ -34,9 +34,9 @@ export function Toaster() {
             {!isExpanded && toasts.length > 1 && index === 0 && (
               <button
                 onClick={() => setIsExpanded(true)}
-                className="absolute -left-3 -top-3 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#090909] shadow-lg transition-transform hover:scale-110"
+                className="absolute -left-3 -top-3 flex size-6 items-center justify-center rounded-full border border-white/10 bg-[#090909] shadow-lg transition-transform hover:scale-110"
               >
-                <Layers className="h-3 w-3 text-white/70" />
+                <Layers className="size-3 text-white/70" />
               </button>
             )}
 
