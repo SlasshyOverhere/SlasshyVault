@@ -413,7 +413,7 @@ function App() {
   const [wtSessionMedia, setWtSessionMedia] = useState<MediaItem | null>(null) // Media for the session
 
   // Tab visibility state - cloud-only mode
-  const [tabVisibility, setTabVisibilityState] = useState<TabVisibility>({ showLocal: false, showCloud: true })
+  const [tabVisibility, setTabVisibilityState] = useState<TabVisibility>(getTabVisibility)
 
   // Cloud connection state for contextual empty states
   const [isGDriveConnected, setIsGDriveConnected] = useState(false)
@@ -511,16 +511,15 @@ function App() {
     }
   }, [notifications])
 
-  useEffect(() => {
-    if (!notificationCenterOpen) return
-
+  const handleOpenNotificationCenter = useCallback(() => {
+    setNotificationCenterOpen(true)
     setNotifications((current) => current.map((item) => (
       item.read ? item : { ...item, read: true }
     )))
   }, [notificationCenterOpen])
 
   // Beta features state
-  const [betaEnabled, setBetaEnabledState] = useState(false)
+  const [betaEnabled, setBetaEnabledState] = useState(isBetaEnabled)
 
   // Update notification state
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -529,15 +528,7 @@ function App() {
   const [updateGateError, setUpdateGateError] = useState<string | null>(null)
   const [updateProgress, setUpdateProgress] = useState(0)
   const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
-  // Load tab visibility on mount
-  useEffect(() => {
-    setTabVisibilityState(getTabVisibility())
-  }, [])
-
   // Initialize beta features
-  useEffect(() => {
-    setBetaEnabledState(isBetaEnabled())
-  }, [])
 
   const formatUpdateError = (error: unknown) => {
     if (error instanceof Error) return error.message
@@ -1009,9 +1000,7 @@ function App() {
         } else if (view === 'history') {
           await loadHistoryEvents()
         }
-        await loadLibraryStats()
-        await loadContinueWatching()
-        await loadRecentlyAdded()
+        await Promise.all([loadLibraryStats(), loadContinueWatching(), loadRecentlyAdded()])
 
         toast({ title: "Scan Complete", description: "Library has been updated." })
       })
@@ -1064,9 +1053,7 @@ function App() {
         } else if (view === 'history') {
           await loadHistoryEvents()
         }
-        await loadContinueWatching()
-        await loadRecentlyAdded()
-        await runWatchHistorySync()
+        await Promise.all([loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
       })
 
       unlistenMpvAudioTracks = await listen<MpvAudioTracksDetectedPayload>('mpv-audio-tracks-detected', (event) => {
@@ -1121,9 +1108,7 @@ function App() {
             console.warn('[App] Failed to refresh selected show after library update:', error)
           }
         }
-        await loadLibraryStats()
-        await loadContinueWatching()
-        await loadRecentlyAdded()
+        await Promise.all([loadLibraryStats(), loadContinueWatching(), loadRecentlyAdded()])
       })
 
       unlistenNotification = await listen<{ type: string; title: string; message: string }>('notification', (event) => {
@@ -1636,10 +1621,7 @@ function App() {
         title: "Removed",
         description: `"${event.parent_title || event.title}" removed from watch history.`,
       })
-      await loadHistoryEvents()
-      await loadContinueWatching()
-      await loadRecentlyAdded()
-      await runWatchHistorySync()
+      await Promise.all([loadHistoryEvents(), loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
     } catch {
       toast({ title: "Error", description: "Failed to remove from history", variant: "destructive" })
     }
@@ -1655,10 +1637,7 @@ function App() {
         title: "History cleared",
         description: `Removed ${historyEvents.length} watch history ${historyEvents.length === 1 ? 'entry' : 'entries'}.`,
       })
-      await loadHistoryEvents()
-      await loadContinueWatching()
-      await loadRecentlyAdded()
-      await runWatchHistorySync()
+      await Promise.all([loadHistoryEvents(), loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
     } catch {
       toast({ title: "Error", description: "Failed to clear watch history", variant: "destructive" })
     } finally {
@@ -1734,10 +1713,7 @@ function App() {
       toast({ title: "Marked Complete", description: `${markCompleteData.title} marked as watched` })
       // Emit event so EpisodeBrowser and other components can refresh
       await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
-      await loadContinueWatching()
-      await loadRecentlyAdded()
-      await loadHistoryEvents()
-      await runWatchHistorySync()
+      await Promise.all([loadContinueWatching(), loadRecentlyAdded(), loadHistoryEvents(), runWatchHistorySync()])
       // Refresh library items to update progress display on cards
       await fetchData()
     } catch {
@@ -1814,7 +1790,7 @@ function App() {
                 {isIndexing ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Indexing...
+                    Indexing…
                   </>
                 ) : (
                   "Yes, Index My Drive"
@@ -1859,7 +1835,7 @@ function App() {
             {updateGateStatus === 'installing' && (
               <div className="flex items-center gap-2 text-xs text-neutral-500">
                 <Loader2 className="size-3.5 animate-spin" />
-                Installing and restarting...
+                Installing and restarting…
               </div>
             )}
           </div>
@@ -1882,6 +1858,7 @@ function App() {
                   </p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setIsUpdateNoticeVisible(false)}
                   className="rounded-md p-1 text-neutral-400 hover:bg-white/10 hover:text-white transition-colors"
                   aria-label="Close update notification"
@@ -1904,6 +1881,7 @@ function App() {
 
               <div className="mt-4 flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={() => void startUpdateInstall()}
                   disabled={!updateInfo?.download_url}
                   className="rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-100 text-sm font-medium transition-colors border border-white/10 px-4 py-2"
@@ -1911,6 +1889,7 @@ function App() {
                   {updateGateStatus === 'error' ? 'Retry Update' : 'Update Now'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => setIsUpdateNoticeVisible(false)}
                   className="rounded-lg text-neutral-400 hover:text-white hover:bg-white/5 text-sm transition-colors px-3 py-2"
                 >
@@ -1931,7 +1910,7 @@ function App() {
         <div className="fixed inset-0 bg-[#0a0a0a] flex items-center justify-center z-[300]">
           <div className="flex flex-col items-center gap-4">
             <Loader2 className="size-8 animate-spin text-white" />
-            <span className="text-neutral-400 text-sm">Loading...</span>
+            <span className="text-neutral-400 text-sm">Loading…</span>
           </div>
         </div>
       )}
@@ -1942,7 +1921,7 @@ function App() {
           <ZipPlaybackLoadingOverlay loadingState={zipPlaybackLoading} />
 
           {/* Custom Title Bar */}
-          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-black">
+          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-gray-950">
             <div className="relative h-full w-full flex items-center justify-between">
               <div className="absolute top-0 left-0 right-0 h-1.5" />
               <div
@@ -1967,6 +1946,7 @@ function App() {
               </div>
               <div className="flex items-center gap-1 pr-1.5">
                 <button
+                  type="button"
                   onClick={() => appWindow.minimize()}
                   onDoubleClick={(event) => event.stopPropagation()}
                   className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
@@ -1976,6 +1956,7 @@ function App() {
                   <Minus className="mx-auto size-3.5" />
                 </button>
                 <button
+                  type="button"
                   onClick={async () => {
                     await appWindow.toggleMaximize()
                     await refreshWindowState()
@@ -1988,6 +1969,7 @@ function App() {
                   {isMaximized ? <Minimize2 className="mx-auto size-3.5" /> : <Maximize2 className="mx-auto size-3.5" />}
                 </button>
                 <button
+                  type="button"
                   onClick={async () => {
                     await appWindow.hide()
                   }}
@@ -2136,6 +2118,7 @@ function App() {
                     <Search className="size-3.5 text-muted-foreground ml-2.5" />
                     <input
                       type="text"
+                      aria-label={`Search ${cloudSubTab === 'movies' ? 'movies' : 'TV shows'}`}
                       placeholder={`Search ${cloudSubTab === 'movies' ? 'movies' : 'TV shows'}...`}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -2143,6 +2126,7 @@ function App() {
                     />
                     {searchQuery && (
                       <button
+                        type="button"
                         onClick={() => setSearchQuery('')}
                         className="p-1 hover:bg-white/10 rounded-full transition-colors mr-1.5"
                       >
@@ -2251,7 +2235,7 @@ function App() {
                         <div className="absolute right-6 top-16 z-20">
                           <button
                             type="button"
-                            onClick={() => setNotificationCenterOpen(true)}
+                            onClick={handleOpenNotificationCenter}
                             className="group relative flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white/10 to-transparent border border-white/10 backdrop-blur-xl shadow-2xl transition-all duration-500 hover:scale-105 active:scale-95"
                           >
                             <div className="absolute inset-0 rounded-2xl bg-white/0 group-hover:bg-white/5 transition-colors duration-500" />
@@ -2292,13 +2276,15 @@ function App() {
                                 <input
                                   ref={searchInputRef}
                                   type="text"
-                                  className="flex-1 bg-transparent border-none text-base px-4 py-4 focus:outline-none text-white placeholder:text-white/20 font-medium tracking-tight"
+                                  aria-label="Search in your library"
+                                  className="flex-1 bg-transparent border-none text-base p-4 focus:outline-none text-white placeholder:text-white/20 font-medium tracking-tight"
                                   placeholder="Search in your library..."
                                   value={homeSearchQuery}
                                   onChange={(e) => setHomeSearchQuery(e.target.value)}
                                 />
                                 {homeSearchQuery && (
                                   <button
+                                    type="button"
                                     onClick={() => setHomeSearchQuery('')}
                                     className="p-2 hover:bg-white/10 rounded-full transition-colors mr-3"
                                   >
@@ -2371,6 +2357,7 @@ function App() {
                                         <h3 className="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">Continue Watching</h3>
                                       </div>
                                       <button
+                                        type="button"
                                         onClick={() => setView('history')}
                                         className="text-[10px] font-bold text-white/20 hover:text-white uppercase tracking-widest transition-colors flex items-center gap-2 group"
                                       >
@@ -2441,6 +2428,7 @@ function App() {
                                     className="flex items-center justify-center gap-5 py-3 flex-shrink-0"
                                   >
                                     <button
+                                      type="button"
                                       onClick={() => { setView('cloud'); setCloudSubTab('movies'); }}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
@@ -2450,6 +2438,7 @@ function App() {
                                     </button>
                                     <span className="w-px h-5 bg-white/10" />
                                     <button
+                                      type="button"
                                       onClick={() => { setView('cloud'); setCloudSubTab('tv'); }}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
@@ -2459,6 +2448,7 @@ function App() {
                                     </button>
                                     <span className="w-px h-5 bg-white/10" />
                                     <button
+                                      type="button"
                                       onClick={() => setView('history')}
                                       className="flex items-center gap-2 text-[15px] text-white/40 hover:text-white transition-colors"
                                     >
@@ -2500,6 +2490,7 @@ function App() {
                                     </p>
                                     <div className="flex justify-center">
                                       <button
+                                        type="button"
                                         onClick={() => setSettingsOpen(true)}
                                         className="btn-primary-compact py-4 px-10 rounded-2xl inline-flex items-center gap-3 text-base font-bold shadow-glow-sm hover:shadow-glow transition-all"
                                       >
@@ -2612,7 +2603,7 @@ function App() {
                                 ? 'col-span-full h-16 flex items-center justify-center text-xs text-muted-foreground/70'
                                 : 'h-16 flex items-center justify-center text-xs text-muted-foreground/70'}
                             >
-                              Loading more...
+                              Loading more…
                             </div>
                           )}
                           {sortedItems.length === 0 && (
@@ -2721,6 +2712,7 @@ function App() {
                                     <div className="flex items-center gap-3">
                                       {isGDriveConnected ? (
                                         <button
+                                          type="button"
                                           onClick={handleCloudScan}
                                           disabled={isScanning || isCloudIndexing}
                                           className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
@@ -2730,6 +2722,7 @@ function App() {
                                         </button>
                                       ) : (
                                         <button
+                                          type="button"
                                           onClick={() => {
                                             setSettingsInitialTab('cloud')
                                             setSettingsOpen(true)
@@ -2845,8 +2838,9 @@ function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-muted-foreground">New Session URL</label>
+                  <label htmlFor="ddl-expired-url" className="text-xs font-medium text-muted-foreground">New Session URL</label>
                   <Input
+                    id="ddl-expired-url"
                     type="url"
                     placeholder="https://server.com/new_session_url.zip"
                     value={ddlExpiredNewUrl}
@@ -2900,7 +2894,7 @@ function App() {
           )}
 
           {/* Watch Together Modal */}
-          <Suspense fallback={<div className="flex items-center justify-center h-full"><span className="text-zinc-400">Loading...</span></div>}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><span className="text-zinc-400">Loading…</span></div>}>
             <WatchTogetherModal
               isOpen={watchTogetherOpen}
               onClose={() => {
