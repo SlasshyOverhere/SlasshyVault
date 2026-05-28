@@ -1298,11 +1298,12 @@ function mergeCachedSeriesTracks<T extends AudioTrackOption>(
     merged.push(incomingTrack);
   }
 
-  const deduped = merged.filter((track, index, items) => {
+  const seenIdentities = new Set<string>();
+  const deduped = merged.filter((track) => {
     const identity = audioTrackCacheIdentity(track);
-    return items.findIndex((candidate) =>
-      audioTrackCacheIdentity(candidate) === identity,
-    ) === index;
+    if (seenIdentities.has(identity)) return false;
+    seenIdentities.add(identity);
+    return true;
   });
 
   deduped.sort((left, right) => left.label.localeCompare(right.label));
@@ -1334,8 +1335,10 @@ const matchesAudioTrackPreference = (
 
   const preferenceParts = normalizedPreference
     .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+    .flatMap((part) => {
+      const trimmed = part.trim();
+      return trimmed ? [trimmed] : [];
+    });
 
   const languageCode = track.language_code?.trim().toLowerCase();
   const label = track.label.trim().toLowerCase();
