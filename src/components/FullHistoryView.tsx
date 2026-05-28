@@ -198,7 +198,7 @@ function StatCard({ icon: Icon, label, value, sub }: { icon: typeof Clock; label
   return (
     <div className="flex-1 min-w-[120px] rounded-[18px] border border-white/[0.06] bg-white/[0.03] px-4 py-3 backdrop-blur-xl">
       <div className="flex items-center gap-2 mb-1.5">
-        <Icon className="h-3.5 w-3.5 text-white/35" />
+        <Icon className="size-3.5 text-white/35" />
         <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/30">{label}</span>
       </div>
       <div className="text-lg font-semibold tracking-tight text-white">{value}</div>
@@ -326,7 +326,7 @@ export function FullHistoryView({
                 />
               )}
               <span className="relative z-10 flex items-center gap-1.5">
-                <tab.icon className="w-3.5 h-3.5" />
+                <tab.icon className="size-3.5" />
                 {tab.label}
               </span>
             </button>
@@ -336,7 +336,7 @@ export function FullHistoryView({
         {subView === "activity" && (
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs text-white/35">
-              {isHistorySyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Cloud className="h-3 w-3" />}
+              {isHistorySyncing ? <Loader2 className="size-3 animate-spin" /> : <Cloud className="size-3" />}
               {isHistorySyncing ? "Syncing" : "Synced"}
             </span>
           </div>
@@ -358,7 +358,7 @@ export function FullHistoryView({
               <div className="flex min-h-[60vh] items-center justify-center rounded-[32px] border border-dashed border-white/10 bg-white/[0.02] p-8">
                 <div className="text-center">
                   <div className="mx-auto mb-4 rounded-2xl border border-white/10 bg-white/[0.05] p-4 w-fit">
-                    <BarChart3 className="h-8 w-8 text-white/40" />
+                    <BarChart3 className="size-8 text-white/40" />
                   </div>
                   <h3 className="text-lg font-semibold text-white mb-1">Loading analytics...</h3>
                 </div>
@@ -400,7 +400,7 @@ export function FullHistoryView({
                   disabled={events.length === 0 || isClearingHistory}
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-4 text-xs font-medium text-white/50 transition-all duration-200 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  {isClearingHistory ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                  {isClearingHistory ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
                   Clear All
                 </button>
               </div>
@@ -408,7 +408,7 @@ export function FullHistoryView({
               {/* Search + Sort */}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center mb-4">
                 <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/25" />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/25" />
                   <Input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -424,9 +424,9 @@ export function FullHistoryView({
                     onClick={() => setShowSortMenu(!showSortMenu)}
                     className="inline-flex h-10 items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-4 text-xs font-medium text-white/50 transition-all hover:bg-white/[0.08] hover:text-white"
                   >
-                    <ArrowUpDown className="h-3.5 w-3.5" />
+                    <ArrowUpDown className="size-3.5" />
                     {SORT_OPTIONS.find((s) => s.key === sortMode)?.label}
-                    <ChevronDown className="h-3 w-3" />
+                    <ChevronDown className="size-3" />
                   </button>
                   {showSortMenu && (
                     <>
@@ -528,9 +528,9 @@ export function FullHistoryView({
                         <span className="text-xs text-white/20">{formatDuration(group.totalWatchSeconds)}</span>
                       </div>
                       {isCollapsed ? (
-                        <ChevronDown className="h-4 w-4 text-white/30" />
+                        <ChevronDown className="size-4 text-white/30" />
                       ) : (
-                        <ChevronUp className="h-4 w-4 text-white/30" />
+                        <ChevronUp className="size-4 text-white/30" />
                       )}
                     </button>
 
@@ -564,8 +564,8 @@ export function FullHistoryView({
               {events.length === 0 && (
                 <div className="flex min-h-[50vh] items-center justify-center rounded-[32px] border border-dashed border-white/[0.08] bg-white/[0.02] p-8">
                   <div className="max-w-md text-center">
-                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]">
-                      <Film className="h-7 w-7 text-white/35" />
+                    <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]">
+                      <Film className="size-7 text-white/35" />
                     </div>
                     <h3 className="text-lg font-semibold text-white">No watch history yet</h3>
                     <p className="mt-2 text-sm leading-6 text-white/40">
@@ -579,8 +579,8 @@ export function FullHistoryView({
               {events.length > 0 && groupedEvents.length === 0 && (
                 <div className="flex min-h-[40vh] items-center justify-center rounded-[32px] border border-dashed border-white/[0.08] bg-white/[0.02] p-8">
                   <div className="max-w-md text-center">
-                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]">
-                      <Search className="h-7 w-7 text-white/35" />
+                    <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]">
+                      <Search className="size-7 text-white/35" />
                     </div>
                     <h3 className="text-lg font-semibold text-white">No entries match</h3>
                     <p className="mt-2 text-sm leading-6 text-white/40">
@@ -616,7 +616,7 @@ export function FullHistoryView({
               disabled={isClearingHistory}
               className="inline-flex h-10 items-center justify-center rounded-full bg-white px-5 text-sm font-medium text-black transition-all hover:bg-white/90 disabled:opacity-50"
             >
-              {isClearingHistory ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {isClearingHistory ? <Loader2 className="size-4 animate-spin mr-2" /> : null}
               Clear History
             </button>
           </DialogFooter>
