@@ -1,8 +1,11 @@
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 
+const timezoneFormatter = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+const fallbackTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+
 export const getLocalTimezoneLabel = (): string => {
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date())
-  return parts.find(part => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone
+  const parts = timezoneFormatter.formatToParts(new Date())
+  return parts.find(part => part.type === 'timeZoneName')?.value || fallbackTimezone
 }
 
 export const parseReleaseTarget = (value?: string | null): Date | null => {

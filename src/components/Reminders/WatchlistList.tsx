@@ -135,6 +135,7 @@ export function WatchlistList({ items, onEdit, onRefresh, loading = false }: Wat
       <div className="shrink-0 flex items-center gap-1.5 pb-6 overflow-x-auto no-scrollbar">
         {FILTERS.map(f => (
           <button
+            type="button"
             key={f.key}
             data-active={filter === f.key}
             onClick={() => { setFilter(f.key); setSelected(null) }}
@@ -289,7 +290,7 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
         {item.notes ? (
           <p className="text-[11px] text-white/25 font-medium truncate">{item.notes}</p>
         ) : (
-          <p className="text-[11px] text-white/10 font-medium truncate">—</p>
+          <p className="text-[11px] text-white/10 font-medium truncate">&mdash;</p>
         )}
       </div>
     </motion.button>
@@ -323,7 +324,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
       className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8"
     >
       {/* backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-xl" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-xl" role="button" tabIndex={-1} onClick={onClose} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose() }} />
 
       {/* card */}
       <motion.div
@@ -348,17 +349,17 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
         <div className="relative z-20 flex items-center justify-between p-5 pb-0">
           <div className="flex items-center gap-2">
             {hasPrev && (
-              <button onClick={onPrev} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+              <button type="button" onClick={onPrev} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
                 <ChevronLeft className="size-4" />
               </button>
             )}
             {hasNext && (
-              <button onClick={onNext} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+              <button type="button" onClick={onNext} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
                 <ChevronRight className="size-4" />
               </button>
             )}
           </div>
-          <button onClick={onClose} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+          <button type="button" onClick={onClose} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
             <X className="size-4" />
           </button>
         </div>

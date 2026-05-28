@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Play, RotateCcw, Clock, Film, Tv2, Sparkles } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { LazyMotion, m, domAnimation } from 'framer-motion'
 
 interface ResumeDialogProps {
     open: boolean
@@ -97,9 +97,10 @@ export function ResumeDialog({
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [open])
+    }, [open, handleResume, handleStartOver])
 
     return (
+        <LazyMotion features={domAnimation}>
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-lg bg-[#0c0a1a]/95 backdrop-blur-2xl border border-white/10 shadow-[0_0_80px_rgba(255,255,255,0.1)] rounded-2xl overflow-hidden">
                 {/* Background glow effects */}
@@ -132,7 +133,7 @@ export function ResumeDialog({
                     <DialogDescription className="text-base space-y-5">
                         {/* Progress visualization - only show with real progress data */}
                         {hasProgressData && !isStreaming ? (
-                            <motion.div
+                            <m.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/10 p-5"
@@ -164,7 +165,7 @@ export function ResumeDialog({
 
                                     {/* Progress bar - 3D style */}
                                     <div className="relative h-3 bg-white/10 rounded-full overflow-hidden">
-                                        <motion.div
+                                        <m.div
                                             initial={{ width: 0 }}
                                             animate={{ width: `${Math.min(progressPercent, 100)}%` }}
                                             transition={{ duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
@@ -174,9 +175,9 @@ export function ResumeDialog({
                                             <div className="absolute inset-0 bg-gradient-to-r from-gray-500 via-gray-400 to-gray-300 blur-sm opacity-60" />
                                             {/* Shine */}
                                             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
-                                        </motion.div>
+                                        </m.div>
                                         {/* Progress dot */}
-                                        <motion.div
+                                        <m.div
                                             initial={{ left: 0 }}
                                             animate={{ left: `${Math.min(progressPercent, 100)}%` }}
                                             transition={{ duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
@@ -195,10 +196,10 @@ export function ResumeDialog({
                                         </span>
                                     </div>
                                 </div>
-                            </motion.div>
+                            </m.div>
                         ) : (
                             // Streaming or no progress data - show simpler UI
-                            <motion.div
+                            <m.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/10 p-8"
@@ -223,7 +224,7 @@ export function ResumeDialog({
                                         </p>
                                     )}
                                 </div>
-                            </motion.div>
+                            </m.div>
                         )}
 
                         <p className="text-center text-white/50">
@@ -259,6 +260,7 @@ export function ResumeDialog({
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+        </LazyMotion>
     )
 }
 

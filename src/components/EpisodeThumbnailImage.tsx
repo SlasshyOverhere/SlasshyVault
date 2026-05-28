@@ -55,7 +55,7 @@ function EpisodeThumbnailImageBase({
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-muted to-muted/50">
-        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground/50" />
+        <Loader2 className="size-6 animate-spin text-muted-foreground/50" />
       </div>
     )
   }

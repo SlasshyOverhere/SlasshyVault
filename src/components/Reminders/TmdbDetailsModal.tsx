@@ -84,6 +84,16 @@ export function TmdbDetailsModal({
               data.last_episode_to_air?.season_number ??
               data.seasons.reduce((max, season) => Math.max(max, season.season_number), 1)
             setSelectedSeason(preferredSeasonNumber)
+
+            setLoadingSeason(true)
+            try {
+              const seasonData = await getTvSeasonEpisodes(tmdbId, preferredSeasonNumber)
+              setSeasonDetails(seasonData)
+            } catch (error) {
+              console.error('Failed to load season details:', error)
+            } finally {
+              setLoadingSeason(false)
+            }
           }
         }
       } catch (error) {
@@ -97,7 +107,7 @@ export function TmdbDetailsModal({
   }, [open, tmdbId, mediaType])
 
   useEffect(() => {
-    if (mediaType !== 'tv' || selectedSeason === null || !tmdbId) return
+    if (mediaType !== 'tv' || selectedSeason === null || !tmdbId || !open) return
 
     const loadSeason = async () => {
       setLoadingSeason(true)
@@ -112,7 +122,7 @@ export function TmdbDetailsModal({
     }
 
     loadSeason()
-  }, [selectedSeason, tmdbId, mediaType])
+  }, [selectedSeason, tmdbId, mediaType, open])
 
   const title = mediaType === 'movie' ? movieDetails?.title : tvDetails?.name
   const overview = mediaType === 'movie' ? movieDetails?.overview : tvDetails?.overview
@@ -352,6 +362,7 @@ export function TmdbDetailsModal({
                         <div className="flex gap-2 overflow-x-auto pb-2 max-w-full scrollbar-hide">
                           {tvDetails.seasons.map(season => (
                             <button
+                              type="button"
                               key={season.season_number}
                               onClick={() => setSelectedSeason(season.season_number)}
                               className={cn(
@@ -387,77 +398,14 @@ export function TmdbDetailsModal({
                               className="grid gap-4"
                             >
                               {seasonDetails?.episodes.map((episode) => (
-                                <div 
+                                <EpisodeCard
                                   key={episode.episode_number}
-                                  className="group flex flex-col sm:flex-row gap-6 p-5 rounded-[2rem] bg-white/[0.05] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300"
-                                >
-                                  <div className="shrink-0 w-full sm:w-48 aspect-video rounded-2xl overflow-hidden bg-neutral-950 border border-white/5 relative">
-                                    {episode.still_path ? (
-                                      <img 
-                                        src={getTmdbImageUrl(episode.still_path, 'w500') || ''} 
-                                        alt={episode.name}
-                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                      />
-                                    ) : (
-                                      <div className="w-full h-full flex items-center justify-center text-white/5">
-                                        <PlayCircle className="size-10" />
-                                      </div>
-                                    )}
-                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                  </div>
-                                  
-                                  <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
-                                    <div>
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div className="min-w-0">
-                                          <h4 className="text-base font-black text-white tracking-tight truncate">
-                                            {episode.episode_number}. {episode.name}
-                                          </h4>
-                                          <div className="flex items-center gap-3 mt-1.5">
-                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-                                              <Calendar className="size-3" />
-                                              {episode.air_date ? new Date(episode.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
-                                            </div>
-                                          </div>
-                                        </div>
-                                        <Button 
-                                          variant="ghost" 
-                                          size="icon"
-                                          className="size-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
-                                          onClick={(e) => {
-                                            e.stopPropagation()
-                                            onSetReminder({
-                                              tmdbId: String(tmdbId),
-                                              mediaType: 'tv',
-                                              title: `${tvDetails.name} - ${episode.name}`,
-                                              posterPath: episode.still_path || tvDetails.poster_path,
-                                              seasonNumber: selectedSeason,
-                                              episodeNumber: episode.episode_number,
-                                              releaseDate: episode.air_date,
-                                              trackingMode: 'single',
-                                              trackingSeasonNumber: selectedSeason,
-                                            })
-                                          }}
-                                        >
-                                          <Bell className="size-4" />
-                                        </Button>
-                                      </div>
-                                      <p className="text-[13px] text-white/40 line-clamp-2 mt-3 leading-relaxed font-medium italic">
-                                        {episode.overview || 'No plot details provided for this episode.'}
-                                      </p>
-                                    </div>
-
-                                    {isFutureReleaseTarget(episode.air_date) && (
-                                      <div className="mt-4 pt-4 border-t border-white/5">
-                                        <CountdownTimer
-                                          target={episode.air_date}
-                                          compact
-                                          className="bg-white/5 border-white/5"
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                                  episode={episode}
+                                  tvDetails={tvDetails}
+                                  tmdbId={tmdbId}
+                                  selectedSeason={selectedSeason}
+                                  onSetReminder={onSetReminder}
+                                />
                               ))}
                             </motion.div>
                           )}
@@ -536,6 +484,87 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div className="flex flex-col gap-1">
       <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/20">{label}</span>
       <span className="text-sm font-bold text-white/80">{value}</span>
+    </div>
+  )
+}
+
+function EpisodeCard({ episode, tvDetails, tmdbId, selectedSeason, onSetReminder }: {
+  episode: TmdbSeasonDetails['episodes'][number]
+  tvDetails: TmdbShowDetails
+  tmdbId: number
+  selectedSeason: number | null
+  onSetReminder: TmdbDetailsModalProps['onSetReminder']
+}) {
+  return (
+    <div
+      className="group flex flex-col sm:flex-row gap-6 p-5 rounded-[2rem] bg-white/[0.05] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300"
+    >
+      <div className="shrink-0 w-full sm:w-48 aspect-video rounded-2xl overflow-hidden bg-neutral-950 border border-white/5 relative">
+        {episode.still_path ? (
+          <img
+            src={getTmdbImageUrl(episode.still_path, 'w500') || ''}
+            alt={episode.name}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-white/5">
+            <PlayCircle className="size-10" />
+          </div>
+        )}
+        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
+
+      <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
+        <div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h4 className="text-base font-black text-white tracking-tight truncate">
+                {episode.episode_number}. {episode.name}
+              </h4>
+              <div className="flex items-center gap-3 mt-1.5">
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/30 uppercase tracking-widest">
+                  <Calendar className="size-3" />
+                  {episode.air_date ? new Date(episode.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSetReminder({
+                  tmdbId: String(tmdbId),
+                  mediaType: 'tv',
+                  title: `${tvDetails.name} - ${episode.name}`,
+                  posterPath: episode.still_path || tvDetails.poster_path,
+                  seasonNumber: selectedSeason,
+                  episodeNumber: episode.episode_number,
+                  releaseDate: episode.air_date,
+                  trackingMode: 'single',
+                  trackingSeasonNumber: selectedSeason,
+                })
+              }}
+            >
+              <Bell className="size-4" />
+            </Button>
+          </div>
+          <p className="text-[13px] text-white/40 line-clamp-2 mt-3 leading-relaxed font-medium italic">
+            {episode.overview || 'No plot details provided for this episode.'}
+          </p>
+        </div>
+
+        {isFutureReleaseTarget(episode.air_date) && (
+          <div className="mt-4 pt-4 border-t border-white/5">
+            <CountdownTimer
+              target={episode.air_date}
+              compact
+              className="bg-white/5 border-white/5"
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

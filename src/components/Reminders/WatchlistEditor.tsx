@@ -223,6 +223,7 @@ export function WatchlistEditor({
                     { id: 'spam', label: 'Spam Reminder' },
                   ].map((option) => (
                     <button
+                      type="button"
                       key={option.id}
                       onClick={() => setNotificationMode(option.id as 'single' | 'spam')}
                       className={`h-12 rounded-2xl border text-xs font-black uppercase tracking-[0.18em] transition-all ${
@@ -248,7 +249,7 @@ export function WatchlistEditor({
                       className="h-14 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-bold text-white outline-none"
                     >
                       {intervalOptions.map((option) => (
-                        <option key={option.value} value={option.value} className="bg-black">
+                        <option key={option.value} value={option.value} className="bg-gray-950">
                           {option.label}
                         </option>
                       ))}
