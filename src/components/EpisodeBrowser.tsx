@@ -78,6 +78,7 @@ export function EpisodeBrowser({
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(() => getSeriesSpoilerEnabled(show.id))
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
+  const isInitialLoadRef = useRef(true)
 
   useEffect(() => {
     loadEpisodes()
@@ -100,19 +101,21 @@ export function EpisodeBrowser({
       unlistenMarkedComplete?.()
       unlistenLibraryUpdated?.()
     }
-  }, [show.id])
+  }, [show.id, loadEpisodes])
 
   useEffect(() => {
-    loadEpisodes()
     loadTmdb(selectedSeason)
-  }, [selectedSeason])
+    setVisibleEpisodeCount(20)
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+  }, [selectedSeason, loadTmdb])
 
-  const loadTmdb = async (season: number) => {
+  const loadTmdb = useCallback(async (season: number) => {
     if (!show.tmdb_id) return
     const tmdbId = parseInt(show.tmdb_id)
 
     // Load TMDB episodes
-    if (!tmdbEpisodesBySeason.has(season)) {
+    const cached = tmdbEpisodesBySeason.has(season)
+    if (!cached) {
       try {
         const sd = await getTvSeasonEpisodes(tmdbId, season)
         if (sd) {
@@ -121,11 +124,15 @@ export function EpisodeBrowser({
           setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
 
           // Write TMDB runtime back to DB for episodes missing duration
+          const localEpisodesByNumber = new Map<number, MediaItem>()
+          for (const e of episodes) {
+            if ((e.season_number || 1) === season && e.episode_number) {
+              localEpisodesByNumber.set(e.episode_number, e)
+            }
+          }
           for (const tmdbEp of sd.episodes) {
             if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
-            const localEp = episodes.find(
-              e => (e.season_number || 1) === season && e.episode_number === tmdbEp.episode_number
-            )
+            const localEp = localEpisodesByNumber.get(tmdbEp.episode_number)
             if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
               updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
             }
@@ -138,10 +145,13 @@ export function EpisodeBrowser({
 
     // Fetch IMDb ratings for episodes in this season
     try {
-      const epNums = episodes
-        .filter(e => (e.season_number || 1) === season)
-        .map(e => e.episode_number || 0)
-        .filter(n => n > 0)
+      const epNums = episodes.reduce<number[]>((acc, e) => {
+        if ((e.season_number || 1) === season) {
+          const num = e.episode_number || 0
+          if (num > 0) acc.push(num)
+        }
+        return acc
+      }, [])
       if (epNums.length > 0) {
         const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums)
         if (Object.keys(ratings).length > 0) {
@@ -151,13 +161,14 @@ export function EpisodeBrowser({
     } catch {
       /* imdb ratings unavailable */
     }
-  }
+  }, [show.tmdb_id, tmdbEpisodesBySeason, episodes])
 
-  const loadEpisodes = async () => {
+  const loadEpisodes = useCallback(async () => {
     try {
       const data = await getEpisodes(show.id)
       setEpisodes(data)
-      if (data.length > 0 && episodes.length === 0) {
+      if (data.length > 0 && isInitialLoadRef.current) {
+        isInitialLoadRef.current = false
         const first = data.reduce((min, ep) =>
           ep.season_number && ep.season_number < min ? ep.season_number : min,
           data[0].season_number || 1,
@@ -169,7 +180,7 @@ export function EpisodeBrowser({
     } finally {
       setLoading(false)
     }
-  }
+  }, [show.id, toast])
 
   const handleRefreshMetadata = async () => {
     if (!show.tmdb_id || isRefreshing) return
@@ -219,11 +230,6 @@ export function EpisodeBrowser({
   }, [])
 
   useEffect(() => {
-    setVisibleEpisodeCount(20)
-    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
-  }, [selectedSeason])
-
-  useEffect(() => {
     const s = loadMoreRef.current
     if (!s || filteredEpisodes.length <= visibleEpisodeCount) return
     const obs = new IntersectionObserver(
@@ -250,8 +256,7 @@ export function EpisodeBrowser({
 
   const handleMarkWatched = useCallback(async (ep: MediaItem) => {
     try {
-      await markAsComplete(ep.id)
-      await emit("media-marked-complete", { media_id: ep.id })
+      await Promise.all([markAsComplete(ep.id), emit("media-marked-complete", { media_id: ep.id })])
       await loadEpisodes()
       toast({
         title: "Watched",
@@ -260,7 +265,7 @@ export function EpisodeBrowser({
     } catch {
       toast({ title: "Error", description: "Failed to mark watched", variant: "destructive" })
     }
-  }, [toast])
+  }, [toast, loadEpisodes])
 
   const handleDetailsPrimaryAction = (ep: MediaItem) => {
     setContentDetailsOpen(false)
@@ -333,6 +338,7 @@ export function EpisodeBrowser({
         <div className="shrink-0 px-6 pt-5 pb-3 sm:px-10 sm:pt-6 sm:pb-4">
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
             <button
+              type="button"
               onClick={onBack}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-wider uppercase text-zinc-500 hover:text-zinc-300 bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition-all duration-200 shrink-0"
             >
@@ -347,6 +353,7 @@ export function EpisodeBrowser({
             <div className="flex items-center gap-2">
               {seasons.map(s => (
                 <button
+                  type="button"
                   key={s}
                   onClick={() => setSelectedSeason(s)}
                   className={cn(
@@ -364,6 +371,7 @@ export function EpisodeBrowser({
             {/* Action Bar */}
             <div className="hidden sm:flex items-center gap-1.5 ml-auto">
               <button
+                type="button"
                 onClick={handleRefreshMetadata}
                 disabled={isRefreshing}
                 className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 disabled:opacity-30 group relative shadow-sm"
@@ -376,6 +384,7 @@ export function EpisodeBrowser({
 
               {filteredEpisodes.some(e => e.file_path || e.zip_entry_path) && (
                 <button
+                  type="button"
                   onClick={() => setShowEpisodeUrls(true)}
                   className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm"
                 >
@@ -386,7 +395,7 @@ export function EpisodeBrowser({
                 </button>
               )}
 
-              <button className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm">
+              <button type="button" className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm">
                 <SlidersHorizontal className="size-3.5" />
                 <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
                   Audio
@@ -394,6 +403,7 @@ export function EpisodeBrowser({
               </button>
 
               <button
+                type="button"
                 onClick={toggleSpoiler}
                 className={cn(
                   "size-9 flex items-center justify-center rounded-xl border transition-all duration-200 group relative shadow-sm",
@@ -529,7 +539,7 @@ export function EpisodeBrowser({
       <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
         <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col bg-[#0c0d10] border-white/8">
           <DialogTitle className="text-sm font-bold tracking-tight text-white/90 px-1 shrink-0">
-            Episode Files — {show.title}
+            Episode Files: {show.title}
           </DialogTitle>
           <DialogDescription className="sr-only">
             File names for each episode in season {selectedSeason}
@@ -540,7 +550,7 @@ export function EpisodeBrowser({
                 .filter(ep => ep.file_path || ep.zip_entry_path)
                 .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
                 .map(ep => {
-                  const label = `S${String(ep.season_number || selectedSeason).padStart(2, "0")}E${String(ep.episode_number || 0).padStart(2, "0")} — ${ep.episode_title || ep.title}`
+                  const label = `S${String(ep.season_number || selectedSeason).padStart(2, "0")}E${String(ep.episode_number || 0).padStart(2, "0")}: ${ep.episode_title || ep.title}`
                   const name = (() => {
                     const p = ep.file_path || ep.zip_entry_path
                     if (!p) return ""
@@ -558,8 +568,9 @@ export function EpisodeBrowser({
                         <p className="text-[11px] text-white/30 break-all mt-0.5 select-all">{name}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={() => navigator.clipboard.writeText(name)}
-                        className="shrink-0 h-7 w-7 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
+                        className="shrink-0 size-7 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
                       >
                         <FileText className="size-3" />
                       </button>

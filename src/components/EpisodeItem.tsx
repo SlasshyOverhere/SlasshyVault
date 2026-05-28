@@ -7,7 +7,7 @@ import {
 } from "@/services/api"
 import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
 import { getZipCompressionLabel } from "@/utils/zip"
-import { motion } from "framer-motion"
+import { m as motion, LazyMotion, domAnimation } from "framer-motion"
 import { cn } from "@/lib/utils"
 import {
   getMediaProgressPercent,
@@ -134,13 +134,17 @@ function EpisodeItemBase({
   }
 
   return (
+    <LazyMotion features={domAnimation}>
     <motion.div
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.45, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <div
+        role="button"
+        tabIndex={0}
         onClick={handlePlayClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePlayClick() } }}
         className={cn(
           "group relative bg-zinc-900/80 border border-zinc-800/80",
           "hover:border-zinc-700/80 rounded-xl overflow-hidden",
@@ -243,6 +247,7 @@ function EpisodeItemBase({
           {/* Spoiler toggle pill */}
           {spoilerProtected && (
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 onToggleSpoiler?.(episode)
@@ -280,6 +285,7 @@ function EpisodeItemBase({
           )}
           {showExpandToggle && !spoilerActive && (
             <button
+              type="button"
               onClick={handleToggleExpandClick}
               className="text-[10px] font-bold uppercase tracking-wider text-amber-400/60 hover:text-amber-400 transition-colors"
             >
@@ -291,6 +297,7 @@ function EpisodeItemBase({
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             {!isFinished && (
               <button
+                type="button"
                 onClick={handleMarkWatchedClick}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[9px] font-bold uppercase tracking-wider text-white/60 hover:text-white transition-all duration-200"
               >
@@ -300,6 +307,7 @@ function EpisodeItemBase({
             )}
             {onDownload && (
               <button
+                type="button"
                 onClick={handleDownloadClick}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-[9px] font-bold uppercase tracking-wider text-amber-400/80 hover:text-amber-400 transition-all duration-200"
               >
@@ -307,7 +315,7 @@ function EpisodeItemBase({
                 Download
               </button>
             )}
-            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-[9px] font-bold uppercase tracking-wider text-violet-400/80 hover:text-violet-400 transition-all duration-200">
+            <button type="button" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-[9px] font-bold uppercase tracking-wider text-violet-400/80 hover:text-violet-400 transition-all duration-200">
               <Share2 className="size-3" />
               Share
             </button>
@@ -321,6 +329,7 @@ function EpisodeItemBase({
         </div>
       </div>
     </motion.div>
+    </LazyMotion>
   )
 }
 
