@@ -7432,7 +7432,7 @@ async fn get_tv_season_episodes(
                             still_path: verified_still_path,
                             air_date: e.air_date,
                             runtime: None,
-                            vote_average: None,
+                            vote_average: e.vote_average,
                         }
                     })
                     .collect();
@@ -7532,6 +7532,7 @@ async fn get_episode_imdb_ratings(
     tv_id: i64,
     season_number: i32,
     episode_numbers: Vec<i32>,
+    show_imdb_id: Option<String>,
 ) -> Result<std::collections::HashMap<i32, ImdbEpisodeRating>, String> {
     let omdb_credential = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
@@ -7543,68 +7544,403 @@ async fn get_episode_imdb_ratings(
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
 
-    let mut results = std::collections::HashMap::new();
+    // All blocking HTTP work must happen off the tokio async runtime thread
+    let results = tokio::task::spawn_blocking(move || {
+        let mut results: std::collections::HashMap<i32, ImdbEpisodeRating> = std::collections::HashMap::new();
+        let mut missing_from_imdbapi: Vec<i32> = Vec::new();
 
-    for ep_num in episode_numbers {
-        // Step 1: Get IMDb ID from TMDB external_ids
-        let ext_url = build_tmdb_api_url(
-            &format!("/tv/{}/season/{}/episode/{}/external_ids", tv_id, season_number, ep_num),
-            &tmdb_credential,
-            "",
-        );
+        // Resolve show IMDb ID from TMDB if not provided
+        let show_imdb_id = match show_imdb_id {
+            Some(id) => Some(id),
+            None => {
+                let ext_url = build_tmdb_api_url(
+                    &format!("/tv/{}/external_ids", tv_id),
+                    &tmdb_credential,
+                    "",
+                );
+                #[derive(serde::Deserialize)]
+                struct ShowExternalIds { imdb_id: Option<String> }
+                let client = http_client::shared_client();
+                let use_bearer = crate::is_access_token(&tmdb_credential)
+                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let req = if use_bearer {
+                    client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
+                } else {
+                    client.get(&ext_url)
+                };
+                match req.send() {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<ShowExternalIds>().ok()
+                            .and_then(|ids| ids.imdb_id)
+                            .filter(|id| !id.trim().is_empty())
+                    }
+                    _ => None,
+                }
+            }
+        };
 
-        #[derive(serde::Deserialize)]
-        struct EpisodeExternalIds {
-            #[serde(default)]
-            imdb_id: Option<String>,
+        // Step 1: Try imdbapi.dev batch fetch if we have the show's IMDb ID
+        if let Some(ref show_id) = show_imdb_id {
+            let url = format!("https://api.imdbapi.dev/titles/{}/episodes?season={}", show_id, season_number);
+            let client = http_client::shared_client();
+            let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send();
+
+            #[derive(serde::Deserialize)]
+            struct ImdbApiEpisode {
+                #[serde(default)]
+                id: Option<String>,
+                #[serde(default)]
+                episodeNumber: Option<i32>,
+                #[serde(default)]
+                rating: Option<ImdbApiEpisodeRating>,
+            }
+            #[derive(serde::Deserialize)]
+            struct ImdbApiEpisodeRating {
+                #[serde(default)]
+                aggregateRating: Option<f64>,
+                #[serde(default)]
+                voteCount: Option<i64>,
+            }
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    #[derive(serde::Deserialize)]
+                    struct EpisodesResponse {
+                        #[serde(default)]
+                        episodes: Vec<ImdbApiEpisode>,
+                    }
+                    if let Ok(data) = r.json::<EpisodesResponse>() {
+                        let episode_set: std::collections::HashSet<i32> = episode_numbers.iter().copied().collect();
+                        for ep in data.episodes {
+                            let ep_num = match ep.episodeNumber {
+                                Some(n) if episode_set.contains(&n) => n,
+                                _ => continue,
+                            };
+                            if let (Some(imdb_id), Some(rating)) = (ep.id, ep.rating) {
+                                if rating.aggregateRating.is_some() {
+                                    results.insert(ep_num, ImdbEpisodeRating {
+                                        imdb_id,
+                                        imdb_rating: rating.aggregateRating,
+                                        imdb_votes: rating.voteCount,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            // Track which episodes we still need
+            for &ep_num in &episode_numbers {
+                if !results.contains_key(&ep_num) {
+                    missing_from_imdbapi.push(ep_num);
+                }
+            }
+        } else {
+            missing_from_imdbapi = episode_numbers.clone();
         }
 
-        let imdb_id: Option<String> = {
-            let client = http_client::shared_client();
+        // Step 2: For missing episodes, resolve IMDb ID via TMDB and try OMDb
+        for ep_num in &missing_from_imdbapi {
+            let ext_url = build_tmdb_api_url(
+                &format!("/tv/{}/season/{}/episode/{}/external_ids", tv_id, season_number, ep_num),
+                &tmdb_credential,
+                "",
+            );
 
+            #[derive(serde::Deserialize)]
+            struct EpisodeExternalIds {
+                #[serde(default)]
+                imdb_id: Option<String>,
+            }
+
+            let imdb_id: Option<String> = {
+                let client = http_client::shared_client();
+                let use_bearer = crate::is_access_token(&tmdb_credential)
+                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let req = if use_bearer {
+                    client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
+                } else {
+                    client.get(&ext_url)
+                };
+                match req.send() {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<EpisodeExternalIds>().ok()
+                            .and_then(|ids| ids.imdb_id)
+                            .filter(|id| !id.trim().is_empty())
+                    }
+                    _ => None,
+                }
+            };
+
+            let Some(imdb_id) = imdb_id else { continue };
+
+            // Try OMDb
+            let rating = fetch_imdb_rating_for_id(&omdb_credential, &imdb_id);
+            let parsed_rating = rating.as_ref().and_then(|r| {
+                r.imdbRating.as_deref().and_then(|v| v.parse::<f64>().ok())
+            });
+            let parsed_votes = rating.as_ref().and_then(|r| {
+                r.imdbVotes.as_deref().and_then(|v| {
+                    v.replace(',', "").parse::<i64>().ok()
+                })
+            });
+
+            results.insert(*ep_num, ImdbEpisodeRating {
+                imdb_id,
+                imdb_rating: parsed_rating,
+                imdb_votes: parsed_votes,
+            });
+        }
+
+        results
+    }).await.map_err(|e| e.to_string())?;
+
+    Ok(results)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct ImdbAward {
+    event: String,
+    year: Option<i32>,
+    category: String,
+    is_winner: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct ImdbDetails {
+    imdb_id: String,
+    title: Option<String>,
+    aggregate_rating: Option<f64>,
+    vote_count: Option<i64>,
+    metacritic_score: Option<i32>,
+    metacritic_url: Option<String>,
+    metacritic_review_count: Option<i32>,
+    plot: Option<String>,
+    genres: Option<Vec<String>>,
+    directors: Option<Vec<String>>,
+    writers: Option<Vec<String>>,
+    stars: Option<Vec<String>>,
+    runtime_seconds: Option<i32>,
+    origin_countries: Option<Vec<String>>,
+    interests: Option<Vec<String>>,
+    start_year: Option<i32>,
+    end_year: Option<i32>,
+    mpaa_rating: Option<String>,
+    domestic_gross: Option<String>,
+    worldwide_gross: Option<String>,
+    opening_weekend_gross: Option<String>,
+    production_budget: Option<String>,
+    total_nominations: Option<i32>,
+    total_wins: Option<i32>,
+    awards: Option<Vec<ImdbAward>>,
+}
+
+#[tauri::command]
+async fn get_imdb_details(
+    state: State<'_, AppState>,
+    imdb_id: Option<String>,
+    tmdb_id: Option<i64>,
+    media_type: Option<String>,
+) -> Result<ImdbDetails, String> {
+    // Extract credentials from state before spawn_blocking
+    let tmdb_credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    // All blocking HTTP work must happen off the tokio async runtime thread
+    let details = tokio::task::spawn_blocking(move || {
+        // Resolve IMDb ID
+        let resolved_imdb_id = if let Some(id) = imdb_id {
+            id
+        } else if let Some(tid) = tmdb_id {
+            let mtype = media_type.unwrap_or_else(|| "movie".to_string());
+            let ext_path = if mtype == "tv" {
+                format!("/tv/{}/external_ids", tid)
+            } else {
+                format!("/movie/{}/external_ids", tid)
+            };
+            let ext_url = build_tmdb_api_url(&ext_path, &tmdb_credential, "");
+
+            #[derive(serde::Deserialize)]
+            struct ExternalIds { imdb_id: Option<String> }
+
+            let client = http_client::shared_client();
             let use_bearer = crate::is_access_token(&tmdb_credential)
                 && !tmdb::is_backend_proxy_credential(&tmdb_credential);
-
             let req = if use_bearer {
                 client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
             } else {
                 client.get(&ext_url)
             };
-
-            match req.send() {
-                Ok(resp) if resp.status().is_success() => {
-                    let ids: EpisodeExternalIds = resp.json().map_err(|e| e.to_string())?;
-                    ids.imdb_id.filter(|id| !id.trim().is_empty())
-                }
-                _ => None,
+            let resp = req.send().map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("TMDB external_ids error: {}", resp.status()));
             }
+            let ids: ExternalIds = resp.json().map_err(|e| e.to_string())?;
+            ids.imdb_id.ok_or_else(|| "No IMDb ID found for this TMDB entry".to_string())?
+        } else {
+            return Err("Either imdb_id or tmdb_id must be provided".to_string());
         };
 
-        let Some(imdb_id) = imdb_id else {
-            continue;
+        let mut details = ImdbDetails {
+            imdb_id: resolved_imdb_id.clone(),
+            ..Default::default()
         };
 
-        // Step 2: Fetch OMDb rating
-        let rating = fetch_imdb_rating_for_id(&omdb_credential, &imdb_id);
+        #[derive(serde::Deserialize, Clone)]
+        struct MoneyAmount {
+            amount: Option<f64>,
+            currency: Option<String>,
+        }
 
-        let parsed_rating = rating.as_ref().and_then(|r| {
-            r.imdbRating.as_deref().and_then(|v| v.parse::<f64>().ok())
-        });
+        // 1. Title details
+        let title_url = format!("https://api.imdbapi.dev/titles/{}", resolved_imdb_id);
+        let client = http_client::shared_client();
+        if let Ok(resp) = client.get(&title_url).timeout(std::time::Duration::from_secs(10)).send() {
+            if resp.status().is_success() {
+                #[derive(serde::Deserialize)]
+                struct TitleResponse {
+                    primaryTitle: Option<String>,
+                    startYear: Option<i32>,
+                    endYear: Option<i32>,
+                    runtimeSeconds: Option<i32>,
+                    genres: Option<Vec<String>>,
+                    interests: Option<Vec<String>>,
+                    plot: Option<String>,
+                    originCountries: Option<Vec<String>>,
+                    rating: Option<TitleRating>,
+                    metacritic: Option<MetacriticInfo>,
+                    directors: Option<Vec<PersonName>>,
+                    writers: Option<Vec<PersonName>>,
+                    stars: Option<Vec<PersonName>>,
+                }
+                #[derive(serde::Deserialize)]
+                struct TitleRating { aggregateRating: Option<f64>, voteCount: Option<i64> }
+                #[derive(serde::Deserialize)]
+                struct MetacriticInfo { url: Option<String>, score: Option<i32>, reviewCount: Option<i32> }
+                #[derive(serde::Deserialize)]
+                struct PersonName { name: Option<String> }
 
-        let parsed_votes = rating.as_ref().and_then(|r| {
-            r.imdbVotes.as_deref().and_then(|v| {
-                v.replace(',', "").parse::<i64>().ok()
-            })
-        });
+                if let Ok(title) = resp.json::<TitleResponse>() {
+                    details.title = title.primaryTitle;
+                    details.start_year = title.startYear;
+                    details.end_year = title.endYear;
+                    details.runtime_seconds = title.runtimeSeconds;
+                    details.genres = title.genres;
+                    details.interests = title.interests;
+                    details.plot = title.plot;
+                    details.origin_countries = title.originCountries;
+                    details.directors = title.directors.map(|v| v.into_iter().filter_map(|p| p.name).collect());
+                    details.writers = title.writers.map(|v| v.into_iter().filter_map(|p| p.name).collect());
+                    details.stars = title.stars.map(|v| v.into_iter().filter_map(|p| p.name).collect());
+                    if let Some(r) = title.rating {
+                        details.aggregate_rating = r.aggregateRating;
+                        details.vote_count = r.voteCount;
+                    }
+                    if let Some(m) = title.metacritic {
+                        details.metacritic_score = m.score;
+                        details.metacritic_url = m.url;
+                        details.metacritic_review_count = m.reviewCount;
+                    }
+                }
+            }
+        }
 
-        results.insert(ep_num, ImdbEpisodeRating {
-            imdb_id,
-            imdb_rating: parsed_rating,
-            imdb_votes: parsed_votes,
-        });
-    }
+        // 2. Certificates (MPAA rating)
+        let certs_url = format!("https://api.imdbapi.dev/titles/{}/certificates", resolved_imdb_id);
+        if let Ok(resp) = client.get(&certs_url).timeout(std::time::Duration::from_secs(10)).send() {
+            if resp.status().is_success() {
+                #[derive(serde::Deserialize)]
+                struct CertificatesResponse { certificates: Option<Vec<CertificateEntry>> }
+                #[derive(serde::Deserialize)]
+                struct CertificateEntry { country: Option<String>, rating: Option<String> }
 
-    Ok(results)
+                if let Ok(data) = resp.json::<CertificatesResponse>() {
+                    if let Some(cert_list) = data.certificates {
+                        details.mpaa_rating = cert_list.iter()
+                            .find(|c| c.country.as_deref() == Some("US"))
+                            .and_then(|c| c.rating.clone())
+                            .or_else(|| cert_list.first().and_then(|c| c.rating.clone()));
+                    }
+                }
+            }
+        }
+
+        // 3. Box office
+        let box_url = format!("https://api.imdbapi.dev/titles/{}/boxOffice", resolved_imdb_id);
+        if let Ok(resp) = client.get(&box_url).timeout(std::time::Duration::from_secs(10)).send() {
+            if resp.status().is_success() {
+                #[derive(serde::Deserialize)]
+                struct BoxOfficeResponse {
+                    domesticGross: Option<MoneyAmount>,
+                    worldwideGross: Option<MoneyAmount>,
+                    openingWeekendGross: Option<MoneyAmount>,
+                    productionBudget: Option<MoneyAmount>,
+                }
+                if let Ok(data) = resp.json::<BoxOfficeResponse>() {
+                    let format_money = |m: &Option<MoneyAmount>| -> Option<String> {
+                        m.as_ref().and_then(|a| {
+                            a.amount.map(|amt| {
+                                let currency = a.currency.as_deref().unwrap_or("USD");
+                                if amt >= 1_000_000_000.0 { format!("{} {:.1}B", currency, amt / 1_000_000_000.0) }
+                                else if amt >= 1_000_000.0 { format!("{} {:.1}M", currency, amt / 1_000_000.0) }
+                                else { format!("{} {:.0}", currency, amt) }
+                            })
+                        })
+                    };
+                    details.domestic_gross = format_money(&data.domesticGross);
+                    details.worldwide_gross = format_money(&data.worldwideGross);
+                    details.opening_weekend_gross = format_money(&data.openingWeekendGross);
+                    details.production_budget = format_money(&data.productionBudget);
+                }
+            }
+        }
+
+        // 4. Awards
+        let awards_url = format!("https://api.imdbapi.dev/titles/{}/awardNominations", resolved_imdb_id);
+        if let Ok(resp) = client.get(&awards_url).timeout(std::time::Duration::from_secs(10)).send() {
+            if resp.status().is_success() {
+                #[derive(serde::Deserialize)]
+                struct AwardsResponse {
+                    stats: Option<AwardStats>,
+                    nominations: Option<Vec<AwardNomination>>,
+                }
+                #[derive(serde::Deserialize)]
+                struct AwardStats { nominationCount: Option<i32>, winCount: Option<i32> }
+                #[derive(serde::Deserialize)]
+                struct AwardNomination { event: Option<String>, year: Option<i32>, category: Option<String>, isWinner: Option<bool> }
+
+                if let Ok(data) = resp.json::<AwardsResponse>() {
+                    if let Some(stats) = data.stats {
+                        details.total_nominations = stats.nominationCount;
+                        details.total_wins = stats.winCount;
+                    }
+                    if let Some(noms) = data.nominations {
+                        let award_list: Vec<ImdbAward> = noms.into_iter()
+                            .filter(|n| n.isWinner == Some(true))
+                            .take(20)
+                            .map(|n| ImdbAward {
+                                event: n.event.unwrap_or_default(),
+                                year: n.year,
+                                category: n.category.unwrap_or_default(),
+                                is_winner: n.isWinner.unwrap_or(false),
+                            })
+                            .collect();
+                        if !award_list.is_empty() {
+                            details.awards = Some(award_list);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(details)
+    }).await.map_err(|e| e.to_string())?;
+
+    details
 }
 
 // Force refresh episode metadata for a TV series (re-downloads images ONLY for owned episodes)
@@ -7716,6 +8052,7 @@ async fn refresh_series_metadata(
                 ep.overview.as_deref(),
                 ep.still_path.as_deref(),
                 ep.air_date.as_deref(),
+                ep.vote_average,
             ) {
                 println!(
                     "[REFRESH] Warning: Failed to save cached metadata S{:02}E{:02}: {}",
@@ -13314,6 +13651,7 @@ async fn ddl_index_archive(
                                 ep.overview.as_deref(),
                                 ep.still_path.as_deref(),
                                 ep.air_date.as_deref(),
+                                ep.vote_average,
                             );
                         }
                         emit_ddl_progress(
@@ -14143,6 +14481,7 @@ fn main() {
             get_tv_details,
             get_tv_season_episodes,
             get_episode_imdb_ratings,
+            get_imdb_details,
             refresh_series_metadata,
             get_tmdb_release_schedule,
             create_movie_reminder,

@@ -140,6 +140,7 @@ pub struct CachedEpisodeMetadata {
     pub overview: Option<String>,
     pub still_path: Option<String>,
     pub air_date: Option<String>,
+    pub vote_average: Option<f64>,
 }
 
 /// Full cached episode metadata (includes season/episode numbers)
@@ -151,6 +152,7 @@ pub struct CachedEpisodeMetadataFull {
     pub air_date: Option<String>,
     pub season_number: i32,
     pub episode_number: i32,
+    pub vote_average: Option<f64>,
 }
 
 /// Streaming history item for online content (Videasy, etc.)
@@ -598,6 +600,12 @@ impl Database {
             [],
         )?;
 
+        // Add vote_average column if missing
+        let _ = self.conn.execute(
+            "ALTER TABLE cached_episode_metadata ADD COLUMN vote_average REAL DEFAULT NULL",
+            [],
+        );
+
         // Create streaming history table for online content (Videasy, etc.)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS streaming_history (
@@ -978,7 +986,7 @@ impl Database {
         let mut sql = String::from(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
@@ -1020,7 +1028,7 @@ impl Database {
         let mut sql = String::from(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
@@ -1139,7 +1147,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
                     is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
@@ -3611,12 +3619,13 @@ impl Database {
         overview: Option<&str>,
         still_path: Option<&str>,
         air_date: Option<&str>,
+        vote_average: Option<f64>,
     ) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO cached_episode_metadata
-             (series_tmdb_id, season_number, episode_number, episode_title, overview, still_path, air_date, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            params![series_tmdb_id, season_number, episode_number, episode_title, overview, still_path, air_date],
+             (series_tmdb_id, season_number, episode_number, episode_title, overview, still_path, air_date, vote_average, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            params![series_tmdb_id, season_number, episode_number, episode_title, overview, still_path, air_date, vote_average],
         )?;
         Ok(())
     }
@@ -3629,7 +3638,7 @@ impl Database {
         episode_number: i32,
     ) -> Result<Option<CachedEpisodeMetadata>> {
         let mut stmt = self.conn.prepare(
-            "SELECT episode_title, overview, still_path, air_date
+            "SELECT episode_title, overview, still_path, air_date, vote_average
              FROM cached_episode_metadata
              WHERE series_tmdb_id = ? AND season_number = ? AND episode_number = ?",
         )?;
@@ -3642,6 +3651,7 @@ impl Database {
                     overview: row.get(1)?,
                     still_path: row.get(2)?,
                     air_date: row.get(3)?,
+                    vote_average: row.get(4)?,
                 })
             },
         ) {
@@ -3676,7 +3686,7 @@ impl Database {
         series_tmdb_id: &str,
     ) -> Result<Vec<CachedEpisodeMetadata>> {
         let mut stmt = self.conn.prepare(
-            "SELECT episode_title, overview, still_path, air_date, season_number, episode_number
+            "SELECT episode_title, overview, still_path, air_date, season_number, episode_number, vote_average
              FROM cached_episode_metadata
              WHERE series_tmdb_id = ?
              ORDER BY season_number, episode_number",
@@ -3690,6 +3700,7 @@ impl Database {
                 air_date: row.get(3)?,
                 season_number: row.get(4)?,
                 episode_number: row.get(5)?,
+                vote_average: row.get(6)?,
             })
         })?;
 
@@ -3700,6 +3711,7 @@ impl Database {
                     overview: f.overview,
                     still_path: f.still_path,
                     air_date: f.air_date,
+                    vote_average: f.vote_average,
                 })
             })
             .collect::<Vec<_>>()
@@ -3715,7 +3727,7 @@ impl Database {
         season_number: i32,
     ) -> Result<Vec<CachedEpisodeMetadataFull>> {
         let mut stmt = self.conn.prepare(
-            "SELECT episode_title, overview, still_path, air_date, season_number, episode_number
+            "SELECT episode_title, overview, still_path, air_date, season_number, episode_number, vote_average
              FROM cached_episode_metadata
              WHERE series_tmdb_id = ? AND season_number = ?
              ORDER BY episode_number",
@@ -3729,6 +3741,7 @@ impl Database {
                 air_date: row.get(3)?,
                 season_number: row.get(4)?,
                 episode_number: row.get(5)?,
+                vote_average: row.get(6)?,
             })
         })?;
 

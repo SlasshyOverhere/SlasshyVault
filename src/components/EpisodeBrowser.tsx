@@ -125,7 +125,7 @@ export function EpisodeBrowser({
         return acc
       }, [])
       if (epNums.length > 0) {
-        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums)
+        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums, show.imdb_id)
         if (Object.keys(ratings).length > 0) {
           setImdbRatings(p => ({ ...p, ...ratings }))
         }

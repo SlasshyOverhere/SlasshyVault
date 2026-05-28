@@ -131,6 +131,7 @@ pub struct TmdbEpisodeInfo {
     pub overview: Option<String>,
     pub still_path: Option<String>,
     pub air_date: Option<String>,
+    pub vote_average: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1699,6 +1700,7 @@ pub fn fetch_season_episodes(
         episode_number: i32,
         season_number: i32,
         air_date: Option<String>,
+        vote_average: Option<f64>,
     }
 
     let season_data: SeasonResponse = response.json()?;
@@ -1760,6 +1762,7 @@ pub fn fetch_season_episodes(
                 overview: ep.overview,
                 still_path,
                 air_date: ep.air_date,
+                vote_average: ep.vote_average,
             }
         })
         .collect();
@@ -1902,6 +1905,7 @@ pub fn fetch_owned_episodes_only(
             episode_number: i32,
             season_number: i32,
             air_date: Option<String>,
+            vote_average: Option<f64>,
         }
 
         let season_data: SeasonResponse = match response.json() {
@@ -1976,6 +1980,7 @@ pub fn fetch_owned_episodes_only(
                 overview: ep.overview,
                 still_path,
                 air_date: ep.air_date,
+                vote_average: ep.vote_average,
             });
         }
 

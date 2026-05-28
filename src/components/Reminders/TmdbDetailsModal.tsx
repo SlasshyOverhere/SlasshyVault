@@ -16,6 +16,7 @@ import {
   TmdbSeasonDetails
 } from '@/services/api'
 import { cn } from '@/lib/utils'
+import { ImdbDetailsPanel } from '@/components/ImdbDetailsPanel'
 import { CountdownTimer } from './CountdownTimer'
 import { isFutureReleaseTarget, parseReleaseTarget } from './CountdownTimer.utils'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -59,6 +60,7 @@ export function TmdbDetailsModal({
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
   const [seasonDetails, setSeasonDetails] = useState<TmdbSeasonDetails | null>(null)
   const [loadingSeason, setLoadingSeason] = useState(false)
+  const [imdbPanelOpen, setImdbPanelOpen] = useState(false)
 
   useEffect(() => {
     if (!open) {
@@ -199,6 +201,7 @@ export function TmdbDetailsModal({
   })
   
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent className="max-w-6xl p-0 overflow-hidden bg-background border border-white/10 shadow-[0_0_120px_rgba(0,0,0,0.8)] rounded-[2.5rem]">
         <div className="relative h-full flex flex-col max-h-[80vh]">
@@ -253,10 +256,14 @@ export function TmdbDetailsModal({
                       {mediaType === 'movie' ? 'Reminderstic Feature' : 'TV Series'}
                     </span>
                     {rating && (
-                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-black text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => setImdbPanelOpen(true)}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-black text-[10px] cursor-pointer hover:bg-amber-500/20 transition-colors"
+                      >
                         <Star className="size-3 fill-current" />
                         {rating.toFixed(1)}
-                      </div>
+                      </button>
                     )}
                   </div>
                   <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tighter drop-shadow-2xl">
@@ -466,6 +473,13 @@ export function TmdbDetailsModal({
         </div>
       </DialogContent>
     </Dialog>
+    <ImdbDetailsPanel
+      open={imdbPanelOpen}
+      onOpenChange={setImdbPanelOpen}
+      tmdbId={tmdbId}
+      mediaType={mediaType}
+    />
+    </>
   )
 }
 

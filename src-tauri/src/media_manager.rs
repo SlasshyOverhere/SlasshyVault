@@ -515,6 +515,7 @@ pub fn process_tv_episode(
                             ep_info.overview.as_deref(),
                             ep_info.still_path.as_deref(),
                             ep_info.air_date.as_deref(),
+                            ep_info.vote_average,
                         );
                         (Some(ep_info.name), ep_info.overview, ep_info.still_path)
                     }

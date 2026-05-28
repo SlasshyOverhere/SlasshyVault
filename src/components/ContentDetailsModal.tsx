@@ -22,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ShareDialog } from "@/components/ShareDialog"
 import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
 import { getZipCompressionLabel } from "@/utils/zip"
+import { ImdbDetailsPanel } from "@/components/ImdbDetailsPanel"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -211,6 +212,8 @@ export function ContentDetailsModal({
   const [shareFileId, setShareFileId] = useState<string | null>(null)
   const [shareFileName, setShareFileName] = useState<string>("")
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
+  const [imdbPanelImdbId, setImdbPanelImdbId] = useState<string | null>(null)
+  const [refreshCounter, setRefreshCounter] = useState(0)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
   const lastItemIdRef = useRef<number | null>(null)
@@ -307,6 +310,8 @@ export function ContentDetailsModal({
     setIsRefreshingMetadata(true)
     heroArtworkCache.delete(item.id)
     tvDetailsCache.delete(tmdbId)
+    tvSeasonEpisodesCache.delete(tmdbId)
+    tvSeasonEpisodesCache.delete(tmdbId)
 
     try {
       const result = await refreshSeriesMetadata(tmdbId, item.title)
@@ -318,6 +323,8 @@ export function ContentDetailsModal({
       setActiveItem(refreshedItem)
       setEpisodes(refreshedEpisodes)
       setTmdbEpisodesBySeason(new Map())
+      setImdbEpisodeRatings({})
+      setRefreshCounter(c => c + 1)
 
       toast({
         title: "Metadata refreshed",
@@ -549,7 +556,7 @@ export function ContentDetailsModal({
             .map(e => e.episode_number)
             .filter(n => n > 0)
           if (epNums.length > 0) {
-            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums)
+            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums, item?.imdb_id)
             if (Object.keys(ratings).length > 0) {
               setImdbEpisodeRatings(p => ({ ...p, ...ratings }))
             }
@@ -561,7 +568,7 @@ export function ContentDetailsModal({
     }
 
     void loadTmdbMetadata()
-  }, [open, item?.id, selectedSeason])
+  }, [open, item?.id, selectedSeason, refreshCounter])
 
   // Instant artwork reset and load
   useEffect(() => {
@@ -1425,12 +1432,25 @@ export function ContentDetailsModal({
                                       ...(onDownloadAction && ep.is_cloud ? [{ icon: Download, label: "Download", onClick: () => void onDownloadAction(ep) }] : []),
                                       ...(ep.is_cloud && ep.cloud_file_id ? [{ icon: Share2, label: "Share", onClick: () => { setShareFileId(ep.cloud_file_id || null); setShareFileName(ep.episode_title || ep.title) } }] : []),
                                     ]} />
-                                    {rating && rating > 0 && (
-                                      <div className="flex items-center gap-1.5 text-xs font-bold text-white bg-white/10 px-2 py-1 rounded-lg">
-                                        <Star className="size-3 fill-current text-yellow-500" />
-                                        {rating.toFixed(1)}
-                                      </div>
-                                    )}
+                                    {rating && rating > 0 && (() => {
+                                      const clickableId = imdbRatingData?.imdb_id || item?.imdb_id
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            if (clickableId) setImdbPanelImdbId(clickableId)
+                                          }}
+                                          className={cn(
+                                            "flex items-center gap-1.5 text-xs font-bold text-white bg-white/10 px-2 py-1 rounded-lg transition-colors",
+                                            clickableId && "cursor-pointer hover:bg-white/20"
+                                          )}
+                                        >
+                                          <Star className="size-3 fill-current text-yellow-500" />
+                                          {rating.toFixed(1)}
+                                        </button>
+                                      )
+                                    })()}
                                     {(ep.duration_seconds || runtime) && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/60">
                                         <Timer className="size-3.5 opacity-70" />
@@ -1586,6 +1606,13 @@ export function ContentDetailsModal({
         </DialogContent>
       </Dialog>
     </Dialog>
+    {imdbPanelImdbId && (
+      <ImdbDetailsPanel
+        open={true}
+        onOpenChange={() => setImdbPanelImdbId(null)}
+        imdbId={imdbPanelImdbId}
+      />
+    )}
     </>
   )
 }
