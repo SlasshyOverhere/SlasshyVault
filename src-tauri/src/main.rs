@@ -13689,6 +13689,16 @@ fn migrate_app_data() {
 }
 
 fn main() {
+    // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+        let app_id: Vec<u16> = "com.slasshyvault.app\0".encode_utf16().collect();
+        unsafe {
+            SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+        }
+    }
+
     // Initialize single-instance plugin as early as possible for production builds.
     // This catches second instances BEFORE they attempt to open the database (which would cause a crash/panic).
     // We skip this in dev mode to allow production and dev instances to run independently without conflict.
