@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react"
-import { Star, Loader2, Trophy, Film, Globe, Clock, Calendar, Users, ExternalLink } from "lucide-react"
+import { Star, Loader2, Trophy, Film, Globe, Clock, Calendar, Users, ExternalLink, MessageSquare } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { getImdbDetails, type ImdbDetails } from "@/services/api"
+import { getImdbDetails, getTmdbReviews, type ImdbDetails, type TmdbReview } from "@/services/api"
 
 interface ImdbDetailsPanelProps {
   open: boolean
@@ -14,12 +14,14 @@ interface ImdbDetailsPanelProps {
 
 export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType }: ImdbDetailsPanelProps) {
   const [data, setData] = useState<ImdbDetails | null>(null)
+  const [reviews, setReviews] = useState<TmdbReview[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!open) {
       setData(null)
+      setReviews([])
       setError(false)
       return
     }
@@ -34,6 +36,11 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
         setError(true)
       }
     }).finally(() => setLoading(false))
+
+    // Fetch TMDB reviews in parallel
+    if (tmdbId && mediaType) {
+      getTmdbReviews(tmdbId, mediaType).then(setReviews)
+    }
   }, [open, imdbId, tmdbId, mediaType])
 
   const formatVotes = (votes: number | null) => {
@@ -288,6 +295,47 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                           {award.year && <span className="text-white/30 text-[10px]">{award.year}</span>}
                           <span className="text-white/50 text-[10px]">&mdash;</span>
                           <span className="text-white/60 text-[10px]">{award.category}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* TMDB Reviews */}
+                {reviews.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20 flex items-center gap-1.5">
+                      <MessageSquare className="size-3" />
+                      Reviews
+                    </h3>
+                    <div className="space-y-3">
+                      {reviews.map((review, i) => (
+                        <div key={i} className="px-3 py-2.5 rounded-lg bg-white/[0.03] border border-white/5 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white/70 text-xs font-bold">{review.author}</span>
+                            {review.rating != null && (
+                              <span className="flex items-center gap-0.5 text-amber-400 text-[10px] font-bold">
+                                <Star className="size-2.5 fill-amber-400" />
+                                {review.rating}
+                              </span>
+                            )}
+                            {review.created_at && (
+                              <span className="text-white/20 text-[10px]">
+                                {new Date(review.created_at).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-white/50 text-[11px] leading-relaxed line-clamp-4">{review.content}</p>
+                          {review.url && (
+                            <a
+                              href={review.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                            >
+                              Read full review <ExternalLink className="size-2.5" />
+                            </a>
+                          )}
                         </div>
                       ))}
                     </div>

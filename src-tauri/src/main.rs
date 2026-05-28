@@ -7808,9 +7808,9 @@ async fn get_imdb_details(
                     endYear: Option<i32>,
                     runtimeSeconds: Option<i32>,
                     genres: Option<Vec<String>>,
-                    interests: Option<Vec<String>>,
+                    interests: Option<Vec<InterestItem>>,
                     plot: Option<String>,
-                    originCountries: Option<Vec<String>>,
+                    originCountries: Option<Vec<CountryItem>>,
                     rating: Option<TitleRating>,
                     metacritic: Option<MetacriticInfo>,
                     directors: Option<Vec<PersonName>>,
@@ -7822,7 +7822,11 @@ async fn get_imdb_details(
                 #[derive(serde::Deserialize)]
                 struct MetacriticInfo { url: Option<String>, score: Option<i32>, reviewCount: Option<i32> }
                 #[derive(serde::Deserialize)]
-                struct PersonName { name: Option<String> }
+                struct PersonName { displayName: Option<String> }
+                #[derive(serde::Deserialize)]
+                struct CountryItem { name: Option<String> }
+                #[derive(serde::Deserialize)]
+                struct InterestItem { name: Option<String> }
 
                 if let Ok(title) = resp.json::<TitleResponse>() {
                     details.title = title.primaryTitle;
@@ -7830,12 +7834,12 @@ async fn get_imdb_details(
                     details.end_year = title.endYear;
                     details.runtime_seconds = title.runtimeSeconds;
                     details.genres = title.genres;
-                    details.interests = title.interests;
+                    details.interests = title.interests.map(|v| v.into_iter().filter_map(|i| i.name).collect());
                     details.plot = title.plot;
-                    details.origin_countries = title.originCountries;
-                    details.directors = title.directors.map(|v| v.into_iter().filter_map(|p| p.name).collect());
-                    details.writers = title.writers.map(|v| v.into_iter().filter_map(|p| p.name).collect());
-                    details.stars = title.stars.map(|v| v.into_iter().filter_map(|p| p.name).collect());
+                    details.origin_countries = title.originCountries.map(|v| v.into_iter().filter_map(|c| c.name).collect());
+                    details.directors = title.directors.map(|v| v.into_iter().filter_map(|p| p.displayName).collect());
+                    details.writers = title.writers.map(|v| v.into_iter().filter_map(|p| p.displayName).collect());
+                    details.stars = title.stars.map(|v| v.into_iter().filter_map(|p| p.displayName).collect());
                     if let Some(r) = title.rating {
                         details.aggregate_rating = r.aggregateRating;
                         details.vote_count = r.voteCount;
@@ -7856,12 +7860,14 @@ async fn get_imdb_details(
                 #[derive(serde::Deserialize)]
                 struct CertificatesResponse { certificates: Option<Vec<CertificateEntry>> }
                 #[derive(serde::Deserialize)]
-                struct CertificateEntry { country: Option<String>, rating: Option<String> }
+                struct CertificateEntry { country: Option<CountryCode>, rating: Option<String> }
+                #[derive(serde::Deserialize)]
+                struct CountryCode { code: Option<String> }
 
                 if let Ok(data) = resp.json::<CertificatesResponse>() {
                     if let Some(cert_list) = data.certificates {
                         details.mpaa_rating = cert_list.iter()
-                            .find(|c| c.country.as_deref() == Some("US"))
+                            .find(|c| c.country.as_ref().and_then(|co| co.code.as_deref()) == Some("US"))
                             .and_then(|c| c.rating.clone())
                             .or_else(|| cert_list.first().and_then(|c| c.rating.clone()));
                     }
@@ -7941,6 +7947,84 @@ async fn get_imdb_details(
     }).await.map_err(|e| e.to_string())?;
 
     details
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct TmdbReview {
+    author: String,
+    content: String,
+    rating: Option<f64>,
+    created_at: Option<String>,
+    url: Option<String>,
+}
+
+#[tauri::command]
+async fn get_tmdb_reviews(
+    state: State<'_, AppState>,
+    tmdb_id: i64,
+    media_type: String,
+) -> Result<Vec<TmdbReview>, String> {
+    let credential = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
+    };
+
+    let path = if media_type == "tv" {
+        format!("/tv/{}/reviews", tmdb_id)
+    } else {
+        format!("/movie/{}/reviews", tmdb_id)
+    };
+    let url = build_tmdb_api_url(&path, &credential, "");
+
+    let reviews = tokio::task::spawn_blocking(move || {
+        let client = http_client::shared_client();
+        let use_bearer = crate::is_access_token(&credential)
+            && !tmdb::is_backend_proxy_credential(&credential);
+        let req = if use_bearer {
+            client.get(&url).header("Authorization", format!("Bearer {}", &credential))
+        } else {
+            client.get(&url)
+        };
+
+        #[derive(serde::Deserialize)]
+        struct ReviewsResponse { results: Option<Vec<ReviewEntry>> }
+        #[derive(serde::Deserialize)]
+        struct ReviewEntry {
+            author: Option<String>,
+            content: Option<String>,
+            created_at: Option<String>,
+            url: Option<String>,
+            author_details: Option<AuthorDetails>,
+        }
+        #[derive(serde::Deserialize)]
+        struct AuthorDetails { rating: Option<f64> }
+
+        match req.send() {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(data) = resp.json::<ReviewsResponse>() {
+                    data.results.unwrap_or_default().into_iter()
+                        .filter_map(|r| {
+                            let content = r.content?;
+                            if content.trim().is_empty() { return None }
+                            Some(TmdbReview {
+                                author: r.author.unwrap_or_else(|| "Anonymous".to_string()),
+                                content,
+                                rating: r.author_details.and_then(|a| a.rating),
+                                created_at: r.created_at,
+                                url: r.url,
+                            })
+                        })
+                        .take(10)
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }).await.map_err(|e| e.to_string())?;
+
+    Ok(reviews)
 }
 
 // Force refresh episode metadata for a TV series (re-downloads images ONLY for owned episodes)
@@ -14482,6 +14566,7 @@ fn main() {
             get_tv_season_episodes,
             get_episode_imdb_ratings,
             get_imdb_details,
+            get_tmdb_reviews,
             refresh_series_metadata,
             get_tmdb_release_schedule,
             create_movie_reminder,

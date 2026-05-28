@@ -1611,6 +1611,8 @@ export function ContentDetailsModal({
         open={true}
         onOpenChange={() => setImdbPanelImdbId(null)}
         imdbId={imdbPanelImdbId}
+        tmdbId={item?.tmdb_id ? Number(item.tmdb_id) : undefined}
+        mediaType={item?.media_type === "tvshow" ? "tv" : "movie"}
       />
     )}
     </>

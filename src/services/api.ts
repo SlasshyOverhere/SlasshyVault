@@ -1833,6 +1833,26 @@ export const getImdbDetails = async (params: {
   }
 };
 
+export interface TmdbReview {
+  author: string;
+  content: string;
+  rating: number | null;
+  created_at: string | null;
+  url: string | null;
+}
+
+export const getTmdbReviews = async (
+  tmdbId: number,
+  mediaType: string,
+): Promise<TmdbReview[]> => {
+  try {
+    return await invoke<TmdbReview[]>("get_tmdb_reviews", { tmdbId, mediaType });
+  } catch (error) {
+    console.error("Failed to fetch TMDB reviews:", error);
+    return [];
+  }
+};
+
 // Force refresh episode metadata for a TV series (re-downloads images)
 export const refreshSeriesMetadata = async (
   tvId: number,
