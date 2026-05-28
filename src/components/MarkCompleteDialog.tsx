@@ -54,9 +54,9 @@ export function MarkCompleteDialog({
                 <div className="flex items-center gap-3">
                   <div className={`p-2 rounded-xl bg-gradient-to-br ${isCompletionConfirmation ? 'from-blue-500/20 to-blue-500/5' : 'from-green-500/20 to-green-500/5'}`}>
                     {isCompletionConfirmation ? (
-                      <HelpCircle className="w-5 h-5 text-blue-400" />
+                      <HelpCircle className="size-5 text-blue-400" />
                     ) : (
-                      <CheckCircle className="w-5 h-5 text-green-400" />
+                      <CheckCircle className="size-5 text-green-400" />
                     )}
                   </div>
                   <div>
@@ -72,7 +72,7 @@ export function MarkCompleteDialog({
                   onClick={handleClose}
                   className="p-2 rounded-lg hover:bg-white/10 transition-colors"
                 >
-                  <X className="w-4 h-4 text-muted-foreground" />
+                  <X className="size-4 text-muted-foreground" />
                 </button>
               </div>
 
@@ -102,14 +102,14 @@ export function MarkCompleteDialog({
                     }}
                     className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-2"
                   >
-                    <CheckCircle className="w-4 h-4" />
+                    <CheckCircle className="size-4" />
                     {isCompletionConfirmation ? 'Yes, Mark Complete' : 'Mark as Complete'}
                   </button>
                   <button
                     onClick={handleClose}
                     className="w-full py-2.5 px-4 rounded-xl bg-white/10 text-white font-medium text-sm hover:bg-white/20 transition-colors flex items-center justify-center gap-2"
                   >
-                    <RotateCcw className="w-4 h-4" />
+                    <RotateCcw className="size-4" />
                     {isCompletionConfirmation ? 'No, Keep Progress' : `Keep Progress (${Math.round(progressPercent)}%)`}
                   </button>
                 </div>

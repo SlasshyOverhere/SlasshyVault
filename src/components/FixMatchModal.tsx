@@ -212,7 +212,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
               disabled={isSearching || isUpdating}
             />
             <Button onClick={handleSearch} disabled={!query.trim() || isSearching || isUpdating}>
-              {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              {isSearching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
               Search
             </Button>
           </div>
@@ -265,9 +265,9 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                       {posterUrl ? (
                         <img src={posterUrl} alt={title} className="w-full h-full object-cover" />
                       ) : result.media_type === "movie" ? (
-                        <Film className="w-5 h-5 text-muted-foreground" />
+                        <Film className="size-5 text-muted-foreground" />
                       ) : (
-                        <Tv className="w-5 h-5 text-muted-foreground" />
+                        <Tv className="size-5 text-muted-foreground" />
                       )}
                     </div>
 
@@ -284,13 +284,13 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                         <div className="flex items-center gap-1.5 shrink-0">
                           {typeof result.imdb_rating === "number" && result.imdb_rating > 0 && (
                             <div className="flex items-center gap-1 text-xs text-yellow-400" title="IMDb Rating">
-                              <Globe className="w-3 h-3" />
+                              <Globe className="size-3" />
                               {result.imdb_rating.toFixed(1)}
                             </div>
                           )}
                           {typeof result.tmdb_vote_average === "number" && result.tmdb_vote_average > 0 && (
                             <div className="flex items-center gap-1 text-xs text-blue-400" title="TMDB Rating">
-                              <Star className="w-3 h-3 fill-blue-400 text-blue-400" />
+                              <Star className="size-3 fill-blue-400 text-blue-400" />
                               {result.tmdb_vote_average.toFixed(1)}
                             </div>
                           )}
@@ -316,7 +316,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
                     </div>
 
                     {isSelected && (
-                      <Check className="w-4 h-4 text-primary shrink-0 mt-1" />
+                      <Check className="size-4 text-primary shrink-0 mt-1" />
                     )}
                   </div>
                 </button>

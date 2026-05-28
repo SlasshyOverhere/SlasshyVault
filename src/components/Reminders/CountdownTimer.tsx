@@ -2,45 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
-
-const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
-
-export const getLocalTimezoneLabel = (): string => {
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date())
-  return parts.find(part => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone
-}
-
-export const parseReleaseTarget = (value?: string | null): Date | null => {
-  if (!value) return null
-
-  if (DATE_ONLY_RE.test(value)) {
-    const [year, month, day] = value.split('-').map(Number)
-    return new Date(year, month - 1, day, 9, 0, 0, 0)
-  }
-
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-export const formatLocalReleaseTime = (value?: string | null): string => {
-  const target = parseReleaseTarget(value)
-  if (!target) return 'Time not set'
-
-  return `${target.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })} at ${target.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  })} ${getLocalTimezoneLabel()}`
-}
-
-export const isFutureReleaseTarget = (value?: string | null): boolean => {
-  const target = parseReleaseTarget(value)
-  return !!target && target.getTime() > Date.now()
-}
+import { getLocalTimezoneLabel, parseReleaseTarget, formatLocalReleaseTime } from './CountdownTimer.utils'
 
 const getParts = (target: Date, now: Date) => {
   const totalMs = target.getTime() - now.getTime()
@@ -103,10 +65,10 @@ export function CountdownTimer({
   if (compact) {
     return (
       <div className={cn(
-        "inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-md transition-all duration-300", 
-        isExpired 
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
-          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10", 
+        "inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-md transition-all duration-300",
+        isExpired
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10",
         className
       )}>
         {isExpired ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5 opacity-50" />}
@@ -134,12 +96,12 @@ export function CountdownTimer({
 
   return (
     <div className={cn(
-      "rounded-3xl border border-white/10 bg-black/40 p-4 shadow-2xl backdrop-blur-3xl overflow-hidden relative group", 
+      "rounded-3xl border border-white/10 bg-black/40 p-4 shadow-2xl backdrop-blur-3xl overflow-hidden relative group",
       className
     )}>
       {/* Subtle Glow Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
-      
+
       <div className="mb-3 flex items-center justify-between gap-2 relative z-10">
         <div className="flex items-center gap-2">
           <div className={cn(
@@ -158,7 +120,7 @@ export function CountdownTimer({
       </div>
 
       {isExpired ? (
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-4 flex items-center gap-3 relative z-10"

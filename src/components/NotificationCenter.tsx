@@ -56,7 +56,7 @@ const NotificationItem = React.memo(function NotificationItem({ item }: { item: 
       )}
     >
       <div className="flex items-start gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/30">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/30">
           <NotificationIcon category={item.category} />
         </div>
         <div className="min-w-0 flex-1">
@@ -77,15 +77,15 @@ const NotificationItem = React.memo(function NotificationItem({ item }: { item: 
 
 function NotificationIcon({ category }: { category: NotificationCenterItem["category"] }) {
   if (category === "reminder") {
-    return <Clapperboard className="w-4 h-4 text-white/80" />
+    return <Clapperboard className="size-4 text-white/80" />
   }
   if (category === "movie_add") {
-    return <Film className="w-4 h-4 text-white/70" />
+    return <Film className="size-4 text-white/70" />
   }
   if (category === "show_add") {
-    return <Tv className="w-4 h-4 text-white/70" />
+    return <Tv className="size-4 text-white/70" />
   }
-  return <Bell className="w-4 h-4 text-white/60" />
+  return <Bell className="size-4 text-white/60" />
 }
 
 export function NotificationCenter({
@@ -105,8 +105,8 @@ export function NotificationCenter({
         <DialogHeader className="border-b border-white/5 px-6 py-5">
           <div className="flex items-center justify-between gap-4 pr-12">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] shadow-inner">
-                <Inbox className="w-5 h-5 text-white/70" />
+              <div className="flex size-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] shadow-inner">
+                <Inbox className="size-5 text-white/70" />
               </div>
               <div>
                 <DialogTitle className="text-xl font-black tracking-tight">Notifications</DialogTitle>
@@ -151,8 +151,8 @@ export function NotificationCenter({
           <div className="space-y-3">
             {filteredItems.length === 0 ? (
               <div className="flex min-h-[280px] flex-col items-center justify-center rounded-[2rem] border border-white/5 bg-white/[0.02] px-6 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/[0.04]">
-                  <Bell className="w-7 h-7 text-white/20" />
+                <div className="flex size-16 items-center justify-center rounded-full bg-white/[0.04]">
+                  <Bell className="size-7 text-white/20" />
                 </div>
                 <h3 className="mt-5 text-lg font-black tracking-tight text-white">No notifications yet</h3>
                 <p className="mt-2 max-w-sm text-sm text-white/30">

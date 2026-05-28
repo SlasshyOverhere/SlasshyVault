@@ -29,18 +29,18 @@ export function ZipPlaybackLoadingOverlay({
           >
             <div className="flex flex-col items-center text-center">
               {/* Play Icon container - Black & White theme */}
-              <div className="relative mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/[0.03]">
+              <div className="relative mb-5 flex size-16 items-center justify-center rounded-full border border-white/15 bg-white/[0.03]">
                 <motion.div
                   className="absolute inset-0 rounded-full border border-white/10"
                   animate={{ scale: [1, 1.25, 1], opacity: [0.15, 0.4, 0.15] }}
                   transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
-                <Play className="h-6 w-6 text-white fill-white/10 ml-0.5" />
+                <Play className="size-6 text-white fill-white/10 ml-0.5" />
               </div>
 
               {/* Status Header */}
               <div className="mb-2.5 flex items-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" />
+                <Loader2 className="size-3.5 animate-spin text-white/50" />
                 <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-white/40">
                   Preparing Playback
                 </span>
@@ -68,7 +68,7 @@ export function ZipPlaybackLoadingOverlay({
 
               {/* Info container - Black & White styling */}
               <div className="flex items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4 text-left w-full">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-white/65" />
+                <Info className="mt-0.5 size-4 shrink-0 text-white/65" />
                 <div className="text-xs leading-relaxed text-white/70">
                   <span className="font-semibold text-white">Note:</span> If the media player window does not open or nothing happens, please restart the application.
                 </div>

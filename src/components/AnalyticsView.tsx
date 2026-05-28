@@ -216,7 +216,7 @@ function DistributionGrid({ items, maxVal }: { items: { label: string; value: nu
         const level = maxVal > 0 ? getHeatmapIntensity(item.value, maxVal) : 0
         return (
           <div key={i} className="group relative">
-            <div className={`h-7 w-7 rounded-[6px] flex items-center justify-center text-[10px] font-medium ${getIntensityClass(level)} ${level >= 3 ? "text-black" : "text-white/40"}`}>
+            <div className={`size-7 rounded-[6px] flex items-center justify-center text-[10px] font-medium ${getIntensityClass(level)} ${level >= 3 ? "text-black" : "text-white/40"}`}>
               {item.label}
             </div>
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 rounded-md border border-white/10 bg-[#1a1a1a] px-2 py-1 text-[10px] text-white whitespace-nowrap shadow-lg">
@@ -293,7 +293,7 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
     return (
       <div className="px-6 py-16 text-center">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <Activity className="h-8 w-8 text-white/20 mx-auto mb-3" />
+          <Activity className="size-8 text-white/20 mx-auto mb-3" />
           <h3 className="text-base font-medium text-white/60 mb-1">No activity yet</h3>
           <p className="text-sm text-white/30">Start watching something to see your analytics</p>
         </motion.div>

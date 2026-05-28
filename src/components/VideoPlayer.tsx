@@ -294,15 +294,17 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
     }, [togglePlay, toggleFullscreen, toggleMute, skip, isFullscreen, onClose])
 
     // Report progress periodically
+    const onProgressRef = useRef(onProgress)
+    onProgressRef.current = onProgress
     useEffect(() => {
-        if (onProgress && currentTime > 0) {
+        if (onProgressRef.current && currentTime > 0) {
             const now = Date.now()
             if (now - progressReportRef.current > 5000) { // Report every 5 seconds
                 progressReportRef.current = now
-                onProgress(currentTime, duration)
+                onProgressRef.current(currentTime, duration)
             }
         }
-    }, [currentTime, duration, onProgress])
+    }, [currentTime, duration])
 
     // Fullscreen change listener
     useEffect(() => {
@@ -353,7 +355,9 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                 onError={handleVideoError}
                 onEnded={onClose}
                 autoPlay
-            />
+            >
+                <track kind="captions" label="English" srcLang="en" />
+            </video>
 
             {/* Loading spinner */}
             {(isLoading || isTranscoding) && (

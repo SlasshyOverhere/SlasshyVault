@@ -192,23 +192,23 @@ export function DeleteEpisodesModal({
             <DialogContent className="max-w-2xl bg-background/95 backdrop-blur-xl border-white/10 flex h-[min(90vh,720px)] flex-col p-0 gap-0">
                 <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
                     <DialogTitle className="flex items-center gap-2 text-xl">
-                        <Trash2 className="w-5 h-5 text-red-500" />
+                        <Trash2 className="size-5 text-red-500" />
                         {allZipArchiveTargets ? "Delete ZIP Archives" : allDdlTargets ? "Delete Direct-Link Items" : hasZipArchiveTargets || hasDdlTargets ? "Delete Items" : "Delete Episodes"} - {seriesTitle}
                     </DialogTitle>
                     <DialogDescription className="text-muted-foreground">
                         {hasDdlTargets ? (
                             <span className="flex items-center gap-2 text-amber-500">
-                                <AlertTriangle className="w-4 h-4" />
+                                <AlertTriangle className="size-4" />
                                 Direct-link items are indexed from remote archives. Deleting removes them from your library (no cloud file to delete).
                             </span>
                         ) : hasZipArchiveTargets ? (
                             <span className="flex items-center gap-2 text-amber-500">
-                                <AlertTriangle className="w-4 h-4" />
+                                <AlertTriangle className="size-4" />
                                 ZIP-backed episodes are indexed from archive files. Deleting a ZIP item removes the archive from Google Drive and all indexed episodes from it.
                             </span>
                         ) : (
                             <span className="flex items-center gap-2 text-amber-500">
-                                <AlertTriangle className="w-4 h-4" />
+                                <AlertTriangle className="size-4" />
                                 Warning: Files will be permanently deleted from your drive and cannot be recovered!
                             </span>
                         )}
@@ -227,7 +227,7 @@ export function DeleteEpisodesModal({
                                 onClick={selectAll}
                                 className="border-red-500/50 hover:bg-red-500/20 hover:text-red-400"
                             >
-                                <Check className="w-4 h-4 mr-1" />
+                                <Check className="size-4 mr-1" />
                                 Select All
                             </Button>
                         )}
@@ -241,9 +241,9 @@ export function DeleteEpisodesModal({
                                 title="Delete the cloud folder from Google Drive (use if folder wasn't deleted automatically)"
                             >
                                 {isDeletingFolder ? (
-                                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                    <Loader2 className="size-4 mr-1 animate-spin" />
                                 ) : (
-                                    <FolderX className="w-4 h-4 mr-1" />
+                                    <FolderX className="size-4 mr-1" />
                                 )}
                                 Delete Folder
                             </Button>
@@ -255,7 +255,7 @@ export function DeleteEpisodesModal({
                                 onClick={deselectAll}
                                 className="border-white/20 hover:bg-white/10"
                             >
-                                <X className="w-4 h-4 mr-1" />
+                                <X className="size-4 mr-1" />
                                 Clear
                             </Button>
                         )}
@@ -266,12 +266,12 @@ export function DeleteEpisodesModal({
                     <ScrollArea className="h-full min-h-0 pr-4">
                         {isLoading ? (
                             <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3">
-                                <Loader2 className="w-8 h-8 animate-spin text-white" />
+                                <Loader2 className="size-8 animate-spin text-white" />
                                 <span className="text-sm text-muted-foreground">Loading episodes...</span>
                             </div>
                         ) : error && episodes.length === 0 ? (
                             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center">
-                                <AlertTriangle className="w-12 h-12 text-red-500 mb-2" />
+                                <AlertTriangle className="size-12 text-red-500 mb-2" />
                                 <p className="text-red-400">{error}</p>
                             </div>
                         ) : episodes.length === 0 ? (
@@ -340,7 +340,7 @@ export function DeleteEpisodesModal({
                                                     animate={{ scale: 1 }}
                                                     className="text-red-500"
                                                 >
-                                                    <Trash2 className="w-4 h-4" />
+                                                    <Trash2 className="size-4" />
                                                 </motion.div>
                                             )}
                                         </motion.div>
@@ -391,7 +391,7 @@ export function DeleteEpisodesModal({
                                                             animate={{ scale: 1 }}
                                                             className="text-red-500"
                                                         >
-                                                            <Trash2 className="w-4 h-4" />
+                                                            <Trash2 className="size-4" />
                                                         </motion.div>
                                                     )}
                                                 </motion.div>
@@ -406,7 +406,7 @@ export function DeleteEpisodesModal({
 
                 {error && episodes.length > 0 && (
                     <div className="flex shrink-0 items-center gap-2 px-6 pb-3 text-sm text-red-400">
-                        <AlertTriangle className="w-4 h-4" />
+                        <AlertTriangle className="size-4" />
                         {error}
                     </div>
                 )}
@@ -428,12 +428,12 @@ export function DeleteEpisodesModal({
                     >
                         {isDeleting ? (
                             <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                <Loader2 className="size-4 mr-2 animate-spin" />
                                 Deleting...
                             </>
                         ) : (
                             <>
-                                <Trash2 className="w-4 h-4 mr-2" />
+                                <Trash2 className="size-4 mr-2" />
                                 {allDdlTargets
                                     ? `Delete ${selectedIds.size} Direct-Link Item${selectedIds.size !== 1 ? "s" : ""}`
                                     : allZipArchiveTargets

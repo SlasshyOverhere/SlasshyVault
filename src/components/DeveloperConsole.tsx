@@ -168,9 +168,9 @@ export function DeveloperConsole() {
         )}
         aria-label="Toggle developer console"
       >
-        <Terminal className="w-3.5 h-3.5" />
+        <Terminal className="size-3.5" />
         Console
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+        {open ? <ChevronDown className="size-3" /> : <ChevronUp className="size-3" />}
       </button>
 
       <AnimatePresence>
@@ -185,7 +185,7 @@ export function DeveloperConsole() {
             {/* Header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-zinc-400" />
+                <Terminal className="size-4 text-zinc-400" />
                 <span className="text-xs font-medium text-zinc-200">Developer Console</span>
                 <span className="text-[10px] text-zinc-500">({totalCount} entries)</span>
               </div>
@@ -220,7 +220,7 @@ export function DeveloperConsole() {
                   className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
                   title="Clear logs"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="size-3.5" />
                 </button>
               </div>
             </div>
