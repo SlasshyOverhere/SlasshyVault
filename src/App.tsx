@@ -7,6 +7,7 @@ import {
   MovieCard,
   ContinueCard,
   ResumeDialog,
+  PlayConfirmDialog,
   DeleteEpisodesModal,
 
   MarkCompleteDialog,
@@ -387,6 +388,8 @@ function App() {
   } | null>(null)
   const [contentDetailsOpen, setContentDetailsOpen] = useState(false)
   const [contentDetailsItem, setContentDetailsItem] = useState<MediaItem | null>(null)
+  const [playConfirmOpen, setPlayConfirmOpen] = useState(false)
+  const [playConfirmData, setPlayConfirmData] = useState<MediaItem | null>(null)
 
   // Delete modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
@@ -1361,8 +1364,16 @@ function App() {
       return
     }
 
-    await startPlaybackFlow(item)
-  }, [startPlaybackFlow])
+    // Show confirmation dialog before playing
+    setPlayConfirmData(item)
+    setPlayConfirmOpen(true)
+  }, [])
+
+  const handlePlayConfirm = useCallback(async () => {
+    if (!playConfirmData) return
+    await startPlaybackFlow(playConfirmData)
+    setPlayConfirmData(null)
+  }, [playConfirmData, startPlaybackFlow])
 
   const handleDetailsMarkWatched = useCallback(async (item: MediaItem) => {
     try {
@@ -2756,6 +2767,21 @@ function App() {
               posterUrl={resumeDialogData.posterUrl}
               onResume={() => handleResumeChoice(true)}
               onStartOver={() => handleResumeChoice(false)}
+            />
+          )}
+
+          {playConfirmData && (
+            <PlayConfirmDialog
+              open={playConfirmOpen}
+              onOpenChange={setPlayConfirmOpen}
+              title={playConfirmData.title}
+              mediaType={playConfirmData.media_type}
+              seasonEpisode={
+                playConfirmData.season_number !== undefined && playConfirmData.episode_number !== undefined
+                  ? `S${String(playConfirmData.season_number).padStart(2, '0')}E${String(playConfirmData.episode_number).padStart(2, '0')}`
+                  : undefined
+              }
+              onConfirm={handlePlayConfirm}
             />
           )}
 

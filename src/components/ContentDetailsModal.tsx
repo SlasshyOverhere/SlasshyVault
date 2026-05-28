@@ -1426,7 +1426,7 @@ export function ContentDetailsModal({
                                       ...(ep.is_cloud && ep.cloud_file_id ? [{ icon: Share2, label: "Share", onClick: () => { setShareFileId(ep.cloud_file_id || null); setShareFileName(ep.episode_title || ep.title) } }] : []),
                                     ]} />
                                     {rating && rating > 0 && (
-                                      <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
+                                      <div className="flex items-center gap-1.5 text-xs font-bold text-white bg-white/10 px-2 py-1 rounded-lg">
                                         <Star className="size-3 fill-current text-yellow-500" />
                                         {rating.toFixed(1)}
                                       </div>

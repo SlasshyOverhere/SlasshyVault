@@ -53,7 +53,7 @@ export function KebabMenu({ items }: KebabMenuProps) {
         ref={btnRef}
         type="button"
         onClick={handleToggle}
-        className="flex items-center justify-center size-8 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-200"
+        className="flex items-center justify-center size-8 rounded-lg bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all duration-200"
       >
         <MoreHorizontal className="size-4" />
       </button>
