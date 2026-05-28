@@ -33,6 +33,7 @@ export function Toaster() {
             {/* Stack indicator */}
             {!isExpanded && toasts.length > 1 && index === 0 && (
               <button
+                type="button"
                 onClick={() => setIsExpanded(true)}
                 className="absolute -left-3 -top-3 flex size-6 items-center justify-center rounded-full border border-white/10 bg-[#090909] shadow-lg transition-transform hover:scale-110"
               >
@@ -48,6 +49,7 @@ export function Toaster() {
       {/* Collapse button when expanded */}
       {isExpanded && toasts.length > 1 && (
         <button
+          type="button"
           onClick={() => setIsExpanded(false)}
           className="fixed bottom-6 right-6 z-[101] rounded-2xl border border-white/10 bg-[#090909] px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/50 shadow-2xl backdrop-blur-xl hover:text-white"
         >
