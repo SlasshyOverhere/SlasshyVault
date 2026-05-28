@@ -105,7 +105,7 @@ export function GoogleDriveSettings() {
     if (isLoading) {
         return (
             <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
         )
     }
@@ -130,9 +130,9 @@ export function GoogleDriveSettings() {
                     {/* Icon */}
                     <div className={`p-3 rounded-xl ${isConnected ? 'bg-white/10' : 'bg-white/10'}`}>
                         {isConnected ? (
-                            <CheckCircle2 className="w-6 h-6 text-white" />
+                            <CheckCircle2 className="size-6 text-white" />
                         ) : (
-                            <Cloud className="w-6 h-6 text-white" />
+                            <Cloud className="size-6 text-white" />
                         )}
                     </div>
 
@@ -151,7 +151,7 @@ export function GoogleDriveSettings() {
                             <div className="space-y-3">
                                 {/* Account Info */}
                                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                    <User className="w-4 h-4" />
+                                    <User className="size-4" />
                                     <span>{accountInfo.email}</span>
                                 </div>
 
@@ -159,7 +159,7 @@ export function GoogleDriveSettings() {
                                 {accountInfo.storage_used !== undefined && accountInfo.storage_limit !== undefined && (
                                     <div className="space-y-2">
                                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                            <HardDrive className="w-4 h-4" />
+                                            <HardDrive className="size-4" />
                                             <span>
                                                 {formatStorageSize(accountInfo.storage_used)} of{' '}
                                                 {formatStorageSize(accountInfo.storage_limit)} used
@@ -185,9 +185,9 @@ export function GoogleDriveSettings() {
                                     className="mt-2"
                                 >
                                     {isDisconnecting ? (
-                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        <Loader2 className="size-4 mr-2 animate-spin" />
                                     ) : (
-                                        <LogOut className="w-4 h-4 mr-2" />
+                                        <LogOut className="size-4 mr-2" />
                                     )}
                                     Disconnect
                                 </Button>
@@ -206,12 +206,12 @@ export function GoogleDriveSettings() {
                                 >
                                     {isConnecting ? (
                                         <>
-                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <Loader2 className="size-4 animate-spin" />
                                             Opening browser...
                                         </>
                                     ) : (
                                         <>
-                                            <LogIn className="w-4 h-4" />
+                                            <LogIn className="size-4" />
                                             Connect Google Drive
                                         </>
                                     )}
