@@ -1467,25 +1467,23 @@ async function recoverRoomsFromRedis() {
 
   let recoveredCount = 0;
 
-  for (const roomCode of roomCodes) {
-    try {
-      if (rooms.has(roomCode)) {
-        continue;
+  const results = await Promise.all(
+    roomCodes.map(async (roomCode) => {
+      try {
+        if (rooms.has(roomCode)) return null;
+        const roomData = await redis.getRoomState(roomCode);
+        if (!roomData) return null;
+        const room = hydrateRecoveredRoom(roomData);
+        rooms.set(roomCode, room);
+        startRoomSyncTimers(room);
+        return room;
+      } catch (error) {
+        console.error(`[WT] Failed to recover room ${roomCode}:`, error);
+        return null;
       }
-
-      const roomData = await redis.getRoomState(roomCode);
-      if (!roomData) {
-        continue;
-      }
-
-      const room = hydrateRecoveredRoom(roomData);
-      rooms.set(roomCode, room);
-      startRoomSyncTimers(room);
-      recoveredCount += 1;
-    } catch (error) {
-      console.error(`[WT] Failed to recover room ${roomCode}:`, error);
-    }
-  }
+    })
+  );
+  recoveredCount = results.filter(Boolean).length;
 
   console.log(`[WT] Recovered ${recoveredCount} room(s) from Redis`);
 }
@@ -1493,20 +1491,23 @@ async function recoverRoomsFromRedis() {
 // Clean up inactive rooms
 setInterval(async () => {
   const now = Date.now();
+  const expiredEntries = [];
   for (const [code, room] of rooms.entries()) {
     if (now - room.lastActivity > ROOM_TIMEOUT) {
-      wtDebugLog(`[WT] Cleaning up inactive room: ${code}`);
-      stopRoomSyncTimers(room);
-      // Close all connections in the room
-      for (const participant of room.participants.values()) {
-        if (participant.ws && participant.ws.readyState === 1) {
-          participant.ws.close(1000, 'Room expired');
-        }
-      }
-      rooms.delete(code);
-      await deletePersistedRoom(code);
+      expiredEntries.push([code, room]);
     }
   }
+  await Promise.all(expiredEntries.map(([code, room]) => {
+    wtDebugLog(`[WT] Cleaning up inactive room: ${code}`);
+    stopRoomSyncTimers(room);
+    for (const participant of room.participants.values()) {
+      if (participant.ws && participant.ws.readyState === 1) {
+        participant.ws.close(1000, 'Room expired');
+      }
+    }
+    rooms.delete(code);
+    return deletePersistedRoom(code);
+  }));
 }, ROOM_CLEANUP_INTERVAL);
 
 // ============================================
@@ -2202,14 +2203,16 @@ app.post('/api/watchtogether/rooms', socialAuth, async (req, res) => {
     });
 
     rooms.set(code, room);
-    await persistRoomState(room);
-    await syncRoomParticipantsInRedis(room);
-    await logRoomEvent(code, {
-      type: 'room_created',
-      host_id: hostId,
-      host_nickname,
-      media_title
-    });
+    await Promise.all([
+      persistRoomState(room),
+      syncRoomParticipantsInRedis(room),
+      logRoomEvent(code, {
+        type: 'room_created',
+        host_id: hostId,
+        host_nickname,
+        media_title
+      })
+    ]);
 
     wtDebugLog(`[WT] Room created: ${code} by ${host_nickname}`);
 
@@ -2652,14 +2655,16 @@ wss.on('connection', (ws, req) => {
         currentRoom = room;
         participantId = hostId;
 
-        await persistRoomState(room);
-        await syncRoomParticipantsInRedis(room);
-        await logRoomEvent(newCode, {
-          type: 'room_created',
-          host_id: hostId,
-          nickname,
-          media_title
-        });
+        await Promise.all([
+          persistRoomState(room),
+          syncRoomParticipantsInRedis(room),
+          logRoomEvent(newCode, {
+            type: 'room_created',
+            host_id: hostId,
+            nickname,
+            media_title
+          })
+        ]);
 
         wtDebugLog(`[WT] Room created via WebSocket: ${newCode} by ${nickname}`);
 
@@ -2838,13 +2843,15 @@ wss.on('connection', (ws, req) => {
             }, participantId);
           }
 
-          await persistRoomState(room);
-          await syncRoomParticipantsInRedis(room);
-          await logRoomEvent(room.code, {
-            type: isReconnect ? 'participant_reconnected' : 'participant_joined',
-            participant_id: participantId,
-            nickname: participant.nickname
-          });
+          await Promise.all([
+            persistRoomState(room),
+            syncRoomParticipantsInRedis(room),
+            logRoomEvent(room.code, {
+              type: isReconnect ? 'participant_reconnected' : 'participant_joined',
+              participant_id: participantId,
+              nickname: participant.nickname
+            })
+          ]);
           break;
         }
 
@@ -3415,11 +3422,13 @@ async function handleParticipantLeave(room, participantId) {
   if (room.participants.size === 0) {
     stopRoomSyncTimers(room);
     rooms.delete(room.code);
-    await logRoomEvent(room.code, {
-      type: 'room_deleted',
-      reason: 'empty'
-    });
-    await deletePersistedRoom(room.code);
+    await Promise.all([
+      logRoomEvent(room.code, {
+        type: 'room_deleted',
+        reason: 'empty'
+      }),
+      deletePersistedRoom(room.code)
+    ]);
     wtDebugLog(`[WT] Room ${room.code} deleted (empty)`);
     return;
   }
