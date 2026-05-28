@@ -16,7 +16,8 @@ import {
   TmdbSeasonDetails
 } from '@/services/api'
 import { cn } from '@/lib/utils'
-import { CountdownTimer, isFutureReleaseTarget, parseReleaseTarget } from './CountdownTimer'
+import { CountdownTimer } from './CountdownTimer'
+import { isFutureReleaseTarget, parseReleaseTarget } from './CountdownTimer.utils'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface TmdbDetailsModalProps {
@@ -243,7 +244,7 @@ export function TmdbDetailsModal({
                     </span>
                     {rating && (
                       <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-black text-[10px]">
-                        <Star className="w-3 h-3 fill-current" />
+                        <Star className="size-3 fill-current" />
                         {rating.toFixed(1)}
                       </div>
                     )}
@@ -261,19 +262,19 @@ export function TmdbDetailsModal({
                 >
                   {firstReleaseDate && (
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-4 h-4 opacity-40" />
+                      <Calendar className="size-4 opacity-40" />
                       <span>{new Date(firstReleaseDate).getFullYear()}</span>
                     </div>
                   )}
                   {mediaType === 'movie' && movieDetails?.runtime && (
                     <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 opacity-40" />
+                      <Clock className="size-4 opacity-40" />
                       <span>{Math.floor(movieDetails.runtime / 60)}h {movieDetails.runtime % 60}m</span>
                     </div>
                   )}
                   {tvStatus && (
                     <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <div className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       <span className="uppercase tracking-widest text-[9px] font-black">{tvStatus}</span>
                     </div>
                   )}
@@ -290,7 +291,7 @@ export function TmdbDetailsModal({
                     variant="outline"
                     className="border-white/15 bg-black/30 text-white hover:bg-white hover:text-black font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8"
                   >
-                    <LayoutGrid className="w-4 h-4 mr-2" />
+                    <LayoutGrid className="size-4 mr-2" />
                     Add To Watchlist
                   </Button>
 
@@ -298,7 +299,7 @@ export function TmdbDetailsModal({
                     onClick={() => title && onSetReminder(reminderPayload())}
                     className="bg-white text-black hover:bg-neutral-200 font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8 shadow-[0_20px_50px_rgba(255,255,255,0.1)] active:scale-95 transition-all"
                   >
-                    <Bell className="w-4 h-4 mr-2" />
+                    <Bell className="size-4 mr-2" />
                     Add to Reminder
                   </Button>
                   
@@ -376,7 +377,7 @@ export function TmdbDetailsModal({
                               exit={{ opacity: 0 }}
                               className="flex items-center justify-center py-20"
                             >
-                              <Loader2 className="w-8 h-8 animate-spin text-white/10" />
+                              <Loader2 className="size-8 animate-spin text-white/10" />
                             </motion.div>
                           ) : (
                             <motion.div 
@@ -399,7 +400,7 @@ export function TmdbDetailsModal({
                                       />
                                     ) : (
                                       <div className="w-full h-full flex items-center justify-center text-white/5">
-                                        <PlayCircle className="w-10 h-10" />
+                                        <PlayCircle className="size-10" />
                                       </div>
                                     )}
                                     <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -414,7 +415,7 @@ export function TmdbDetailsModal({
                                           </h4>
                                           <div className="flex items-center gap-3 mt-1.5">
                                             <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-                                              <Calendar className="w-3 h-3" />
+                                              <Calendar className="size-3" />
                                               {episode.air_date ? new Date(episode.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
                                             </div>
                                           </div>
@@ -422,7 +423,7 @@ export function TmdbDetailsModal({
                                         <Button 
                                           variant="ghost" 
                                           size="icon"
-                                          className="h-10 w-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
+                                          className="size-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
                                           onClick={(e) => {
                                             e.stopPropagation()
                                             onSetReminder({
@@ -438,7 +439,7 @@ export function TmdbDetailsModal({
                                             })
                                           }}
                                         >
-                                          <Bell className="w-4 h-4" />
+                                          <Bell className="size-4" />
                                         </Button>
                                       </div>
                                       <p className="text-[13px] text-white/40 line-clamp-2 mt-3 leading-relaxed font-medium italic">
@@ -496,8 +497,8 @@ export function TmdbDetailsModal({
 
                 <div className="p-8 rounded-[2rem] bg-white/[0.06] border border-white/10 shadow-inner">
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
-                      <LayoutGrid className="w-4 h-4 text-white/60" />
+                    <div className="size-8 rounded-xl bg-white/10 flex items-center justify-center">
+                      <LayoutGrid className="size-4 text-white/60" />
                     </div>
                     <span className="text-[10px] font-black uppercase tracking-widest text-white/30">Quick Action</span>
                   </div>

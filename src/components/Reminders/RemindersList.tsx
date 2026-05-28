@@ -12,7 +12,8 @@ import {
 } from '@/services/api'
 import { cn } from '@/lib/utils'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CountdownTimer, formatLocalReleaseTime } from './CountdownTimer'
+import { CountdownTimer } from './CountdownTimer'
+import { formatLocalReleaseTime } from './CountdownTimer.utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 interface RemindersListProps {

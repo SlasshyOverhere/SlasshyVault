@@ -13,7 +13,8 @@ import {
   MovieReminder,
   TmdbReleaseSchedule
 } from '@/services/api'
-import { CountdownTimer, formatLocalReleaseTime, getLocalTimezoneLabel } from './CountdownTimer'
+import { CountdownTimer } from './CountdownTimer'
+import { formatLocalReleaseTime, getLocalTimezoneLabel } from './CountdownTimer.utils'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface ReminderEditorProps {
@@ -208,8 +209,8 @@ export function ReminderEditor({
         
         <DialogHeader className="p-8 pb-4 relative z-10">
           <DialogTitle className="text-2xl font-black tracking-tight flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
-              <Bell className="w-5 h-5 text-white/60" />
+            <div className="size-10 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
+              <Bell className="size-5 text-white/60" />
             </div>
             <div className="flex flex-col items-start">
               <span>{isEdit ? 'Update Details' : 'Set Reminder'}</span>
@@ -242,7 +243,7 @@ export function ReminderEditor({
             <div className="space-y-3">
               <Label htmlFor="reminderAt" className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 ml-1">Scheduled Time</Label>
               <div className="relative group">
-                <CalendarIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-white/60 transition-colors" />
+                <CalendarIcon className="absolute left-5 top-1/2 -translate-y-1/2 size-4 text-white/20 group-focus-within:text-white/60 transition-colors" />
                 <Input 
                   id="reminderAt" 
                   type="datetime-local"
@@ -268,7 +269,7 @@ export function ReminderEditor({
                       exit={{ opacity: 0 }}
                       className="absolute right-5 top-1/2 -translate-y-1/2"
                     >
-                      <Loader2 className="w-5 h-5 animate-spin text-white/20" />
+                      <Loader2 className="size-5 animate-spin text-white/20" />
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -281,7 +282,7 @@ export function ReminderEditor({
                     animate={{ opacity: 1, y: 0 }}
                     className="flex items-start gap-3 p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10"
                   >
-                    <Info className="w-4 h-4 text-emerald-400/60 shrink-0 mt-0.5" />
+                    <Info className="size-4 text-emerald-400/60 shrink-0 mt-0.5" />
                     <div className="text-[11px] text-emerald-400/60 leading-relaxed font-medium">
                       Smart suggestion from <span className="text-emerald-400 font-black">{schedule.source === 'tvmaze' ? 'TVmaze' : 'TMDB'}</span>: 
                       <span className="text-emerald-300 font-bold ml-1">
@@ -303,7 +304,7 @@ export function ReminderEditor({
                     className="bg-white/[0.02] border-white/10 shadow-inner"
                   />
                   <div className="flex items-center gap-2 px-1">
-                     <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                     <div className="size-1.5 rounded-full bg-white/20" />
                      <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">
                        Targeting {getLocalTimezoneLabel()} system clock
                      </p>
@@ -315,7 +316,7 @@ export function ReminderEditor({
             <div className="space-y-3">
               <Label htmlFor="notes" className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 ml-1">Personal Notes</Label>
               <div className="relative group">
-                <StickyNote className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-white/60 transition-colors" />
+                <StickyNote className="absolute left-5 top-1/2 -translate-y-1/2 size-4 text-white/20 group-focus-within:text-white/60 transition-colors" />
                 <Input 
                   id="notes" 
                   value={notes} 
@@ -355,7 +356,7 @@ export function ReminderEditor({
             disabled={loading || !title || !reminderAt}
             className="bg-white text-black hover:bg-neutral-200 font-black uppercase tracking-[0.2em] text-[11px] rounded-2xl h-14 px-10 shadow-[0_20px_50px_rgba(255,255,255,0.1)] transition-all active:scale-95"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : (isEdit ? 'Save Changes' : 'Confirm Reminder')}
+            {loading ? <Loader2 className="size-4 animate-spin" /> : (isEdit ? 'Save Changes' : 'Confirm Reminder')}
           </Button>
         </DialogFooter>
       </DialogContent>
