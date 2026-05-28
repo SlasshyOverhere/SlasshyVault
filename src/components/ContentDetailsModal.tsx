@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy, EyeOff, Eye } from "lucide-react"
 import {
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl,
@@ -210,6 +210,7 @@ export function ContentDetailsModal({
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
+  const lastItemIdRef = useRef<string | null>(null)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(true)
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
@@ -247,11 +248,13 @@ export function ContentDetailsModal({
     )
   }
 
-  useEffect(() => {
-    if (item) {
-      setActiveItem(item)
-    }
-  }, [item])
+  if (!item && lastItemIdRef.current !== null) {
+    lastItemIdRef.current = null
+    setActiveItem(null)
+  } else if (item && item.id !== lastItemIdRef.current) {
+    lastItemIdRef.current = item.id
+    setActiveItem(item)
+  }
 
   const handleRefreshMetadata = useCallback(async () => {
     if (!item || item.media_type !== "tvshow" || !item.tmdb_id || isRefreshingMetadata) return
@@ -304,12 +307,14 @@ export function ContentDetailsModal({
     return null
   }, [item])
 
-  useEffect(() => {
+  const lastSpoilerSeriesRef = useRef<string | null>(null)
+  if (seriesPreferenceId !== lastSpoilerSeriesRef.current) {
+    lastSpoilerSeriesRef.current = seriesPreferenceId
     if (seriesPreferenceId) {
       setSpoilerEnabled(getSeriesSpoilerEnabled(seriesPreferenceId))
       setRevealedEpisodes(new Set())
     }
-  }, [seriesPreferenceId])
+  }
 
   const toggleSpoiler = useCallback(() => {
     if (!seriesPreferenceId) return
@@ -634,12 +639,12 @@ export function ContentDetailsModal({
 
   // Memoize seasons calculation to prevent redundant set creation and sorting on every render
   const seasons = useMemo(() => {
-    return [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+    return Array.from(new Set(episodes.map(ep => ep.season_number || 1))).toSorted((a, b) => a - b)
   }, [episodes])
 
   // Memoize episodes filtering and sorting to prevent redundant array operations on every render
   const filteredEpisodes = useMemo(() => {
-    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+    return episodes.filter(ep => (ep.season_number || 1) === selectedSeason).toSorted((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
   }, [episodes, selectedSeason])
 
   const selectedSeasonHasZipEpisodes = useMemo(() => (
@@ -762,7 +767,7 @@ export function ContentDetailsModal({
       const tracks = await getAudioTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = [...tracks].sort((left, right) =>
+      const nextTracks = tracks.toSorted((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -827,7 +832,7 @@ export function ContentDetailsModal({
       const tracks = await getSubtitleTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = [...tracks].sort((left, right) =>
+      const nextTracks = tracks.toSorted((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -1058,8 +1063,11 @@ export function ContentDetailsModal({
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogPortal>
         <div
+          role="button"
+          tabIndex={-1}
           className="fixed inset-x-0 bottom-0 top-9 z-40 bg-black/52 backdrop-blur-md"
           onClick={() => onOpenChange(false)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpenChange(false) }}
         />
       </DialogPortal>
       <DialogContent
@@ -1175,6 +1183,7 @@ export function ContentDetailsModal({
                       <div className="flex items-center gap-2 p-1 rounded-full bg-white/5 border border-white/10 shadow-sm">
                         {displayItem.is_cloud && displayItem.cloud_file_id && (
                           <button
+                            type="button"
                             onClick={() => {
                               setShareFileId(displayItem.cloud_file_id || null)
                               setShareFileName(displayItem.title)
@@ -1188,6 +1197,7 @@ export function ContentDetailsModal({
                         )}
                         {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
                           <button
+                            type="button"
                             onClick={() => onDownloadAction(displayItem)}
                             className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title="Download"
@@ -1198,6 +1208,7 @@ export function ContentDetailsModal({
                         )}
                         {onSecondaryAction && secondaryActionLabel && (
                           <button
+                            type="button"
                             onClick={() => onSecondaryAction(displayItem)}
                             className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title={secondaryActionLabel}
@@ -1218,9 +1229,10 @@ export function ContentDetailsModal({
                 <div className="flex items-center gap-3 mb-4 shrink-0">
                   <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
-                      <button 
-                        key={s} 
-                        onClick={() => setSelectedSeason(s)} 
+                      <button
+                        type="button"
+                        key={s}
+                        onClick={() => setSelectedSeason(s)}
                         className={cn(
                           "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-[999px] px-4 text-[9px] leading-none font-bold uppercase tracking-[0.16em] border backdrop-blur-xl transition-all duration-300 shrink-0",
                           selectedSeason === s
@@ -1289,7 +1301,7 @@ export function ContentDetailsModal({
                     {loadingEpisodes ? (
                       <div className="py-20 flex flex-col items-center text-white/30">
                         <Loader2 className="size-12 animate-spin mb-4" />
-                        <p className="font-medium tracking-wide">Loading episodes...</p>
+                        <p className="font-medium tracking-wide">Loading episodes…</p>
                       </div>
                     ) : filteredEpisodes.length === 0 ? (
                       <div className="py-20 text-center text-white/30">
@@ -1318,7 +1330,10 @@ export function ContentDetailsModal({
                           return (
                             <div
                               key={ep.id}
+                              role="button"
+                              tabIndex={0}
                               onClick={() => onPrimaryAction(ep)}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onPrimaryAction(ep) }}
                               className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
@@ -1370,6 +1385,7 @@ export function ContentDetailsModal({
                                       </div>
                                     ) : onEpisodeSecondaryAction && episodeSecondaryActionLabel ? (
                                       <button
+                                        type="button"
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           void handleEpisodeMarkWatched(ep)
@@ -1382,6 +1398,7 @@ export function ContentDetailsModal({
                                     ) : null}
                                     {onDownloadAction && ep.is_cloud ? (
                                       <button
+                                        type="button"
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           void onDownloadAction(ep)
@@ -1394,6 +1411,7 @@ export function ContentDetailsModal({
                                     ) : null}
                                     {ep.is_cloud && ep.cloud_file_id ? (
                                       <button
+                                        type="button"
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           setShareFileId(ep.cloud_file_id || null)
@@ -1445,6 +1463,7 @@ export function ContentDetailsModal({
 
                                 {spoilerEnabled && !isWatched && (
                                   <button
+                                    type="button"
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       handleToggleSpoiler(ep)
@@ -1490,8 +1509,11 @@ export function ContentDetailsModal({
 
           {audioControls && playbackSettingsOpen && (
             <div
+              role="button"
+              tabIndex={-1}
               className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 px-4 backdrop-blur-[3px]"
               onClick={() => setPlaybackSettingsOpen(false)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPlaybackSettingsOpen(false) }}
             >
               <div
                 className="w-full max-w-[430px]"
@@ -1516,7 +1538,7 @@ export function ContentDetailsModal({
       <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
         <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col">
           <DialogTitle className="text-lg font-bold text-white px-1 shrink-0">
-            Episode Files — {item?.title} (Season {selectedSeason})
+            Episode Files: {item?.title} (Season {selectedSeason})
           </DialogTitle>
           <DialogDescription className="sr-only">
             File names for each episode in season {selectedSeason}
@@ -1525,7 +1547,7 @@ export function ContentDetailsModal({
             <div className="flex flex-col gap-2 py-2">
               {filteredEpisodes
                 .filter(ep => ep.file_path || ep.zip_entry_path)
-                .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
+                .toSorted((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
                 .map(ep => {
                   const episodeLabel = `S${String(ep.season_number || selectedSeason).padStart(2, '0')}E${String(ep.episode_number || 0).padStart(2, '0')} — ${ep.episode_title || ep.title}`
                   const fileName = (() => {
@@ -1542,6 +1564,7 @@ export function ContentDetailsModal({
                         <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={() => {
                           navigator.clipboard.writeText(fileName)
                         }}
