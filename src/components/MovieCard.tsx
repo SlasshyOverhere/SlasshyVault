@@ -21,8 +21,6 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MovieCardProps, areMovieCardPropsEqual, ContinueCardProps, areContinueCardPropsEqual } from "./MovieCard.types"
 
-export type { MovieCardProps, ContinueCardProps }
-export { areMovieCardPropsEqual, areContinueCardPropsEqual }
 
 const getFileName = (path?: string | null): string | null => {
   if (!path) return null
@@ -196,8 +194,8 @@ function MovieCardBase({
                     )}
                   />
                   {isPinned && (
-                    <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-md bg-black/70 backdrop-blur-md border-2 border-white/80 flex items-center justify-center shadow-lg">
-                      <Pin className="w-3 h-3 text-white" />
+                    <div className="absolute top-1.5 right-1.5 size-5 rounded-md bg-black/70 backdrop-blur-md border-2 border-white/80 flex items-center justify-center shadow-lg">
+                      <Pin className="size-3 text-white" />
                     </div>
                   )}
                 </div>
@@ -251,14 +249,14 @@ function MovieCardBase({
           {/* Context Menu */}
           <ContextMenuContent>
             <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
-              <Play className="w-4 h-4 text-foreground/70" />
+              <Play className="size-4 text-foreground/70" />
               <span>Open Details</span>
             </ContextMenuItem>
 
             <ContextMenuSeparator />
 
             <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
-              <Edit className="w-4 h-4 text-foreground/40" />
+              <Edit className="size-4 text-foreground/40" />
               <span>Fix Match</span>
             </ContextMenuItem>
 
@@ -278,7 +276,7 @@ function MovieCardBase({
                   }
                   setShowFileInfo(true)
                 }} aria-label="Show file name">
-                  <FileText className="w-4 h-4 text-foreground/70" />
+                  <FileText className="size-4 text-foreground/70" />
                   <span>Show File Name</span>
                 </ContextMenuItem>
               </>
@@ -286,7 +284,7 @@ function MovieCardBase({
 
             {onDownload && item.is_cloud && (
               <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
-                <Download className="w-4 h-4 text-foreground/70" />
+                <Download className="size-4 text-foreground/70" />
                 <span>Download</span>
               </ContextMenuItem>
             )}
@@ -295,7 +293,7 @@ function MovieCardBase({
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
-                  <Users className="w-4 h-4 text-foreground/70" />
+                  <Users className="size-4 text-foreground/70" />
                   <span>Watch Together</span>
                 </ContextMenuItem>
               </>
@@ -305,7 +303,7 @@ function MovieCardBase({
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
-                  <X className="w-4 h-4 text-foreground/40" />
+                  <X className="size-4 text-foreground/40" />
                   <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
                 </ContextMenuItem>
               </>
@@ -315,9 +313,9 @@ function MovieCardBase({
 
             <ContextMenuItem onClick={togglePin}>
               {isPinned ? (
-                <PinOff className="w-4 h-4 text-foreground/70" />
+                <PinOff className="size-4 text-foreground/70" />
               ) : (
-                <Pin className="w-4 h-4 text-foreground/70" />
+                <Pin className="size-4 text-foreground/70" />
               )}
               <span>{isPinned ? 'Unpin' : 'Pin'}</span>
             </ContextMenuItem>
@@ -326,7 +324,7 @@ function MovieCardBase({
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label={item.ddl_source_id ? "Delete content" : "Delete from drive"}>
-                  <Trash2 className="w-4 h-4 text-red-400/70" />
+                  <Trash2 className="size-4 text-red-400/70" />
                   <span>{item.ddl_source_id ? 'Delete content' : 'Delete from Drive'}</span>
                 </ContextMenuItem>
               </>
@@ -444,7 +442,7 @@ function MovieCardBase({
                       exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
                       className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/25 backdrop-blur-xl border border-white/40 text-xs font-bold text-amber-300 shadow-xl"
                     >
-                      <Sparkles className="w-3 h-3" />
+                      <Sparkles className="size-3" />
                       <span>NEW</span>
                     </motion.div>
                   )}
@@ -456,7 +454,7 @@ function MovieCardBase({
                       exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur-xl border border-white/10 text-xs font-bold text-white shadow-xl"
                     >
-                      <Clock className="w-3 h-3 text-white" />
+                      <Clock className="size-3 text-white" />
                       <span>{Math.round(progress)}%</span>
                     </motion.div>
                   )}
@@ -467,7 +465,7 @@ function MovieCardBase({
                       exit={enableMotionEffects ? { opacity: 0, scale: 0.8 } : undefined}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-500/20 backdrop-blur-xl border border-gray-500/30 text-gray-400 text-xs font-bold shadow-xl"
                     >
-                      <Check className="w-3 h-3" />
+                      <Check className="size-3" />
                       <span>Watched</span>
                     </motion.div>
                   )}
@@ -494,7 +492,7 @@ function MovieCardBase({
                           : "bg-white/90 border-black/40"
                     )}>
                       <Pin className={cn(
-                        "w-3.5 h-3.5 transition-colors duration-300",
+                        "size-3.5 transition-colors duration-300",
                         isLightArea === null
                           ? "text-white/80"
                           : isLightArea
@@ -561,13 +559,13 @@ function MovieCardBase({
               )}
               {item.media_type === 'tvshow' && (
                 <>
-                  <span className="w-1 h-1 rounded-full bg-white/50" />
+                  <span className="size-1 rounded-full bg-white/50" />
                   <span className="text-white/70 font-semibold">Series</span>
                 </>
               )}
               {isGroupedHistorySeries && (
                 <>
-                  <span className="w-1 h-1 rounded-full bg-white/50" />
+                  <span className="size-1 rounded-full bg-white/50" />
                   <span className="text-white/70 font-semibold">{item.history_group_count} episodes</span>
                 </>
               )}
@@ -580,14 +578,14 @@ function MovieCardBase({
       {/* Context Menu */}
         <ContextMenuContent>
         <ContextMenuItem onClick={() => onClick(item)} aria-label="Open details">
-          <Play className="w-4 h-4 text-foreground/70" />
+          <Play className="size-4 text-foreground/70" />
           <span>Open Details</span>
         </ContextMenuItem>
 
         <ContextMenuSeparator />
 
         <ContextMenuItem onClick={() => onFixMatch(item)} aria-label="Fix match">
-          <Edit className="w-4 h-4 text-foreground/40" />
+          <Edit className="size-4 text-foreground/40" />
           <span>Fix Match</span>
         </ContextMenuItem>
 
@@ -607,7 +605,7 @@ function MovieCardBase({
               }
               setShowFileInfo(true)
             }} aria-label="Show file name">
-              <FileText className="w-4 h-4 text-foreground/70" />
+              <FileText className="size-4 text-foreground/70" />
               <span>Show File Name</span>
             </ContextMenuItem>
           </>
@@ -615,7 +613,7 @@ function MovieCardBase({
 
         {onDownload && item.is_cloud && (
           <ContextMenuItem onClick={() => onDownload(item)} aria-label="Download">
-            <Download className="w-4 h-4 text-foreground/70" />
+            <Download className="size-4 text-foreground/70" />
             <span>Download</span>
           </ContextMenuItem>
         )}
@@ -624,7 +622,7 @@ function MovieCardBase({
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onWatchTogether(item)} aria-label="Watch together">
-              <Users className="w-4 h-4 text-foreground/70" />
+              <Users className="size-4 text-foreground/70" />
               <span>Watch Together</span>
             </ContextMenuItem>
           </>
@@ -634,7 +632,7 @@ function MovieCardBase({
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onRemoveFromHistory(item)} aria-label={isGroupedHistorySeries ? "Remove recent episodes from history" : "Remove from history"}>
-              <X className="w-4 h-4 text-foreground/40" />
+              <X className="size-4 text-foreground/40" />
               <span>{isGroupedHistorySeries ? 'Remove Recent Episodes' : 'Remove from History'}</span>
             </ContextMenuItem>
           </>
@@ -644,7 +642,7 @@ function MovieCardBase({
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onDelete(item)} className="text-red-400/70 focus:text-red-400" aria-label={item.ddl_source_id ? "Delete content" : "Delete from drive"}>
-              <Trash2 className="w-4 h-4 text-red-400/70" />
+              <Trash2 className="size-4 text-red-400/70" />
               <span>{item.ddl_source_id ? 'Delete content' : 'Delete from Drive'}</span>
             </ContextMenuItem>
           </>
@@ -654,9 +652,9 @@ function MovieCardBase({
 
         <ContextMenuItem onClick={togglePin}>
           {isPinned ? (
-            <PinOff className="w-4 h-4 text-foreground/70" />
+            <PinOff className="size-4 text-foreground/70" />
           ) : (
-            <Pin className="w-4 h-4 text-foreground/70" />
+            <Pin className="size-4 text-foreground/70" />
           )}
           <span>{isPinned ? 'Unpin' : 'Pin'}</span>
         </ContextMenuItem>
@@ -670,7 +668,7 @@ function MovieCardBase({
         )}>
           <DialogHeader className="shrink-0">
             <DialogTitle>
-              {item.media_type === "tvshow" ? "Episode Files" : "File Name"} — {item.title}
+              {item.media_type === "tvshow" ? "Episode Files" : "File Name"}: {item.title}
             </DialogTitle>
           </DialogHeader>
 
@@ -678,7 +676,7 @@ function MovieCardBase({
             <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
               <div className="flex flex-col gap-2 py-2">
                 {tvShowLoading ? (
-                  <p className="text-sm text-white/40 text-center py-8">Loading episodes...</p>
+                  <p className="text-sm text-white/40 text-center py-8">Loading episodes…</p>
                 ) : tvShowEpisodes && tvShowEpisodes.length > 0 ? (
                   tvShowEpisodes
                     .filter(ep => ep.file_path || ep.zip_entry_path)
@@ -693,6 +691,7 @@ function MovieCardBase({
                             <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
                           </div>
                           <button
+                            type="button"
                             onClick={() => {
                               navigator.clipboard.writeText(fileName)
                               setFileInfoCopied(true)
@@ -701,7 +700,7 @@ function MovieCardBase({
                             className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
                             title="Copy file name"
                           >
-                            <Copy className="w-3.5 h-3.5" />
+                            <Copy className="size-3.5" />
                           </button>
                         </div>
                       )
@@ -714,12 +713,13 @@ function MovieCardBase({
           ) : (
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
-                <FileText className="w-4 h-4 text-white/40 shrink-0" />
+                <FileText className="size-4 text-white/40 shrink-0" />
                 <span className="text-sm text-white/90 break-all select-all">
                   {getFileName(item.file_path || item.zip_entry_path) || item.file_path || item.zip_entry_path || '(no file path)'}
                 </span>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   const text = getFileName(item.file_path || item.zip_entry_path) || item.file_path || item.zip_entry_path || ''
                   if (text) {
@@ -730,7 +730,7 @@ function MovieCardBase({
                 }}
                 className="flex items-center justify-center gap-2 w-full h-10 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-colors"
               >
-                <Copy className="w-4 h-4" />
+                <Copy className="size-4" />
                 <span>{fileInfoCopied ? 'Copied!' : 'Copy File Name'}</span>
               </button>
             </div>
@@ -841,7 +841,7 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
               ) : null}
               {item.episode_title && (
                 <>
-                  <span className="text-white/30">—</span>
+                  <span className="text-white/30">·</span>
                   <span className="italic text-white/50 truncate min-w-0">{item.episode_title}</span>
                 </>
               )}
@@ -851,7 +851,7 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
           <div className="flex items-center justify-between mt-1.5">
             {remainingMinutes && (
               <div className="flex items-center gap-1 text-[11px] text-white/35 font-medium">
-                <Clock className="w-3 h-3" />
+                <Clock className="size-3" />
                 <span>{formatRemaining(remainingMinutes)}</span>
               </div>
             )}
