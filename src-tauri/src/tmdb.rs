@@ -90,6 +90,7 @@ pub struct TmdbMetadata {
     pub tmdb_id: Option<String>,
     pub imdb_id: Option<String>,
     pub runtime_seconds: Option<f64>,
+    pub imdb_image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +132,7 @@ pub struct TmdbEpisodeInfo {
     pub overview: Option<String>,
     pub still_path: Option<String>,
     pub air_date: Option<String>,
+    pub vote_average: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +158,10 @@ struct TmdbItem {
     vote_count: Option<i64>,
     runtime: Option<i32>,
     credits: Option<TmdbCredits>,
+    // Movie detail responses include imdb_id directly
+    imdb_id: Option<String>,
+    // TV detail responses include external_ids when appended
+    external_ids: Option<TmdbExternalIds>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -173,6 +179,11 @@ struct TmdbCastMember {
 struct TmdbCrewMember {
     job: Option<String>,
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TmdbExternalIds {
+    imdb_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,6 +530,10 @@ pub fn search_metadata(
 ) -> Result<Option<TmdbMetadata>, Box<dyn std::error::Error + Send + Sync>> {
     println!("\n[TMDB] ========================================");
     println!(
+        "[TMDB] search_metadata: query=\"{}\", type={}, year={:?}",
+        title, media_type, year
+    );
+    println!(
         "[TMDB] Searching for: '{}' (type: {}, year: {:?})",
         title, media_type, year
     );
@@ -614,6 +629,7 @@ pub fn search_metadata(
         }
     }
 
+    println!("[TMDB] No match found for \"{}\"", title);
     println!(
         "[TMDB] All strategies exhausted, no results found for '{}'",
         title
@@ -1035,6 +1051,8 @@ fn do_multi_search(
             vote_count: item.vote_count,
             runtime: None,
             credits: None,
+            imdb_id: None,
+            external_ids: None,
         };
         return create_metadata_from_item(&tmdb_item, image_cache_dir, actual_type);
     }
@@ -1165,6 +1183,12 @@ fn find_best_match<'a>(
         }
     }
 
+    if let Some((item, score)) = scored.first() {
+        let matched_title = item.title.as_deref().unwrap_or("?");
+        let tmdb_id = item.id;
+        println!("[TMDB] Best match: \"{}\" (score: {:.1}, tmdb_id: {})", matched_title, score, tmdb_id);
+    }
+
     scored.first().map(|(item, _)| *item)
 }
 
@@ -1196,16 +1220,21 @@ fn create_metadata_from_item(
     };
 
     // Try to get poster first, then backdrop - use organized caching
-    let poster_path = if let Some(ref poster) = item.poster_path {
+    let mut poster_path = if let Some(ref poster) = item.poster_path {
         println!("[TMDB]   -> Has poster: {}", poster);
-        cache_image_organized(poster, image_cache_dir, &found_title, image_type.clone())
-            .or_else(|| cache_image_with_fallback(poster, image_cache_dir))
+        let result = cache_image_organized(poster, image_cache_dir, &found_title, image_type.clone())
+            .or_else(|| cache_image_with_fallback(poster, image_cache_dir));
+        println!("[TMDB] Poster download for \"{}\": {:?}", found_title, result);
+        result
     } else if let Some(ref backdrop) = item.backdrop_path {
         println!("[TMDB]   -> No poster, using backdrop: {}", backdrop);
-        cache_image_organized(backdrop, image_cache_dir, &found_title, image_type)
-            .or_else(|| cache_image_with_fallback(backdrop, image_cache_dir))
+        let result = cache_image_organized(backdrop, image_cache_dir, &found_title, image_type.clone())
+            .or_else(|| cache_image_with_fallback(backdrop, image_cache_dir));
+        println!("[TMDB] Poster download for \"{}\": {:?}", found_title, result);
+        result
     } else {
         println!("[TMDB]   -> No poster or backdrop available");
+        println!("[TMDB] Poster download for \"{}\": None", found_title);
         None
     };
 
@@ -1242,6 +1271,40 @@ fn create_metadata_from_item(
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty());
 
+    // Extract IMDB ID: movie responses have it directly, TV responses have it in external_ids
+    let imdb_id = item
+        .imdb_id
+        .clone()
+        .or_else(|| item.external_ids.as_ref().and_then(|ids| ids.imdb_id.clone()));
+
+    let mut imdb_image_url: Option<String> = None;
+
+    // Always try imdbapi.dev for poster if imdb_id is available — prefer over TMDB poster
+    if let Some(ref id) = imdb_id {
+        let had_tmdb_poster = poster_path.is_some();
+        println!("[IMDBAPI] Poster lookup for \"{}\" (imdb_id: {}, had_tmdb_poster: {})", found_title, id, had_tmdb_poster);
+        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", id);
+        println!("[TMDB]   -> Trying imdbapi.dev for poster: {}", imdb_url);
+        if let Ok(resp) = crate::http_client::shared_client().get(&imdb_url).send() {
+            if let Ok(json) = resp.json::<serde_json::Value>() {
+                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                    println!("[TMDB]   -> Got imdbapi.dev image: {}", img_url);
+                    let imdb_poster = cache_imdb_image(img_url, std::path::Path::new(image_cache_dir), &image_type);
+                    println!("[IMDBAPI] Poster result: {:?}", imdb_poster);
+                    if imdb_poster.is_some() {
+                        if had_tmdb_poster {
+                            println!("[IMDBAPI] Overriding TMDB poster with imdbapi.dev poster for \"{}\"", found_title);
+                        }
+                        poster_path = imdb_poster;
+                    }
+                    imdb_image_url = Some(img_url.to_string());
+                } else {
+                    println!("[TMDB]   -> imdbapi.dev returned no primaryImage for \"{}\"", found_title);
+                }
+            }
+        }
+    }
+
     Ok(Some(TmdbMetadata {
         title: found_title,
         year: found_year,
@@ -1250,11 +1313,12 @@ fn create_metadata_from_item(
         director,
         poster_path,
         tmdb_id: Some(item.id.to_string()),
-        imdb_id: None,
+        imdb_id,
         runtime_seconds: item
             .runtime
             .filter(|minutes| *minutes > 0)
             .map(|minutes| (minutes as f64) * 60.0),
+        imdb_image_url,
     }))
 }
 
@@ -1286,6 +1350,7 @@ pub fn fetch_metadata_by_id(
 ) -> Result<TmdbMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let (tmdb_id, source) = extract_id_from_input(id_or_url);
 
+    println!("[TMDB] fetch_metadata_by_id: type={}, id={}", media_type, tmdb_id);
     println!("[TMDB] Fetching by ID: {} (source: {})", tmdb_id, source);
 
     // Keep Fix Match responsive: use shorter request timeout and fewer retries.
@@ -1320,7 +1385,7 @@ pub fn fetch_metadata_by_id(
     let url = build_tmdb_url(
         &format!("/{}/{}", media_type, final_id),
         api_key,
-        "language=en-US&append_to_response=credits",
+        "language=en-US&append_to_response=credits,external_ids",
     );
 
     let response = tmdb_request_with_retry(&client, &url, api_key, request_retries)?;
@@ -1331,18 +1396,22 @@ pub fn fetch_metadata_by_id(
         let alt_url = build_tmdb_url(
             &format!("/{}/{}", alt_type, final_id),
             api_key,
-            "language=en-US&append_to_response=credits",
+            "language=en-US&append_to_response=credits,external_ids",
         );
         let alt_response = tmdb_request_with_retry(&client, &alt_url, api_key, request_retries)?;
         if !alt_response.status().is_success() {
             return Err(format!("Failed to fetch metadata for ID {}", final_id).into());
         }
         let item: TmdbItem = alt_response.json()?;
-        return create_metadata_from_item_required(&item, image_cache_dir, alt_type);
+        let metadata = create_metadata_from_item_required(&item, image_cache_dir, alt_type)?;
+        println!("[TMDB] Got metadata: title=\"{}\", poster={:?}, imdb_id={:?}", metadata.title, metadata.poster_path, metadata.imdb_id);
+        return Ok(metadata);
     }
 
     let item: TmdbItem = response.json()?;
-    create_metadata_from_item_required(&item, image_cache_dir, media_type)
+    let metadata = create_metadata_from_item_required(&item, image_cache_dir, media_type)?;
+    println!("[TMDB] Got metadata: title=\"{}\", poster={:?}, imdb_id={:?}", metadata.title, metadata.poster_path, metadata.imdb_id);
+    Ok(metadata)
 }
 
 fn create_metadata_from_item_required(
@@ -1442,6 +1511,69 @@ fn cache_image(
     Ok(format!("image_cache/{}", filename))
 }
 
+/// Download and cache an image from an imdbapi.dev primaryImage URL
+pub fn cache_imdb_image(
+    url: &str,
+    image_cache_dir: &std::path::Path,
+    image_type: &ImageType,
+) -> Option<String> {
+    use std::io::Write;
+
+    println!("[IMDBAPI] Downloading image: {}", url);
+
+    let client = build_quick_client(8, true).ok()?;
+
+    // Try different size replacements for m.media-amazon.com URLs
+    // Original URL might be like: https://m.media-amazon.com/images/M/MV5B...jpg
+    // We can try adding size parameters or use as-is
+    let sizes_to_try = vec![
+        url.to_string(),
+        // Amazon image URLs can sometimes be resized by appending._UX500_.jpg etc.
+    ];
+
+    for download_url in sizes_to_try {
+        let response = match client.get(&download_url).send() {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+
+        let bytes = match response.bytes() {
+            Ok(b) if b.len() > 100 => b,
+            _ => continue,
+        };
+
+        // Generate filename based on image type
+        // Extract a unique hash from the URL to avoid filename collisions
+        let url_hash = {
+            let hash = url.split('/').last().unwrap_or("unknown");
+            let safe: String = hash.chars().filter(|c| c.is_alphanumeric()).take(20).collect();
+            if safe.is_empty() { "unknown".to_string() } else { safe }
+        };
+        let filename = match image_type {
+            ImageType::SeriesBanner => {
+                format!("imdb_series_{}_banner.jpg", url_hash)
+            }
+            ImageType::EpisodeBanner { season, episode } => {
+                format!("imdb_s{:02}e{:02}_{}_banner.jpg", season, episode, url_hash)
+            }
+            ImageType::MovieBanner => {
+                format!("imdb_movie_{}_banner.jpg", url_hash)
+            }
+        };
+
+        let file_path = image_cache_dir.join(&filename);
+        if let Ok(mut file) = std::fs::File::create(&file_path) {
+            let _ = file.write_all(&bytes);
+            let path = format!("image_cache/{}", filename);
+            println!("[IMDBAPI] Cached image: {}", path);
+            return Some(path);
+        }
+    }
+
+    println!("[IMDBAPI] Image download failed: {}", url);
+    None
+}
+
 /// Create a slug from a title (for folder/file naming)
 fn create_slug(title: &str) -> String {
     title
@@ -1478,6 +1610,8 @@ pub fn cache_image_organized(
     title: &str,
     image_type: ImageType,
 ) -> Option<String> {
+    println!("[TMDB] Caching image: {} (type: {:?})", image_path, image_type);
+
     let slug = create_slug(title);
     let source_tag = image_cache_tag(image_path);
 
@@ -1546,11 +1680,13 @@ pub fn cache_image_organized(
                                 if bytes.len() > 100 {
                                     if let Ok(mut file) = fs::File::create(&local_path) {
                                         if file.write_all(&bytes).is_ok() {
+                                            let result_path = format_image_path(&subfolder, &filename);
                                             println!(
                                                 "[TMDB] Cached image: {:?} (size: {})",
                                                 local_path, size
                                             );
-                                            return Some(format_image_path(&subfolder, &filename));
+                                            println!("[TMDB] Cached: {}", result_path);
+                                            return Some(result_path);
                                         }
                                     }
                                 }
@@ -1699,6 +1835,7 @@ pub fn fetch_season_episodes(
         episode_number: i32,
         season_number: i32,
         air_date: Option<String>,
+        vote_average: Option<f64>,
     }
 
     let season_data: SeasonResponse = response.json()?;
@@ -1760,6 +1897,7 @@ pub fn fetch_season_episodes(
                 overview: ep.overview,
                 still_path,
                 air_date: ep.air_date,
+                vote_average: ep.vote_average,
             }
         })
         .collect();
@@ -1902,6 +2040,7 @@ pub fn fetch_owned_episodes_only(
             episode_number: i32,
             season_number: i32,
             air_date: Option<String>,
+            vote_average: Option<f64>,
         }
 
         let season_data: SeasonResponse = match response.json() {
@@ -1976,6 +2115,7 @@ pub fn fetch_owned_episodes_only(
                 overview: ep.overview,
                 still_path,
                 air_date: ep.air_date,
+                vote_average: ep.vote_average,
             });
         }
 

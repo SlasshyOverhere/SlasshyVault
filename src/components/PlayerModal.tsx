@@ -34,7 +34,7 @@ export function PlayerModal({ open, onOpenChange, onSelectPlayer, title }: Playe
                     >
                         <div className="flex items-center gap-3 w-full">
                             <div className="p-2 rounded-lg bg-gradient-to-br from-gray-400 to-gray-600 text-white shadow-lg shadow-gray-500/20 group-hover:scale-110 transition-transform">
-                                <ExternalLink className="h-5 w-5" />
+                                <ExternalLink className="size-5" />
                             </div>
                             <div className="flex-1 text-left">
                                 <div className="font-semibold text-foreground group-hover:text-white transition-colors">

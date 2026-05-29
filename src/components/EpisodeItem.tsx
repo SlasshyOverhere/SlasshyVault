@@ -5,8 +5,10 @@ import {
   TmdbEpisodeInfo,
   getTmdbImageUrl,
 } from "@/services/api"
-import { EpisodeThumbnailImage, getZipCompressionLabel } from "@/components/EpisodeThumbnailImage"
-import { motion } from "framer-motion"
+import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
+import { KebabMenu } from "@/components/KebabMenu"
+import { getZipCompressionLabel } from "@/utils/zip"
+import { m as motion, LazyMotion, domAnimation } from "framer-motion"
 import { cn } from "@/lib/utils"
 import {
   getMediaProgressPercent,
@@ -18,12 +20,16 @@ export interface EpisodeItemProps {
   index: number
   tmdbData?: TmdbEpisodeInfo
   imdbRating?: { rating: number | null; votes: number | null } | null
+  imdbTitle?: string | null
+  imdbPlot?: string | null
+  imdbStillUrl?: string | null
   isExpanded: boolean
   spoilerProtected: boolean
   isRevealed: boolean
   onEpisodeClick: (episode: MediaItem) => void
   onToggleExpand: (episodeId: number) => void
   onMarkWatched: (episode: MediaItem) => void
+  onUnwatch?: (episode: MediaItem) => void
   onToggleSpoiler?: (episode: MediaItem) => void
   onDownload?: (episode: MediaItem) => void | Promise<void>
 }
@@ -33,12 +39,16 @@ function EpisodeItemBase({
   index,
   tmdbData,
   imdbRating,
+  imdbTitle,
+  imdbPlot,
+  imdbStillUrl,
   isExpanded,
   spoilerProtected,
   isRevealed,
   onEpisodeClick,
   onToggleExpand,
   onMarkWatched,
+  onUnwatch,
   onToggleSpoiler,
   onDownload,
 }: EpisodeItemProps) {
@@ -47,7 +57,7 @@ function EpisodeItemBase({
   const isFinished = isMediaMarkedWatched(episode)
   const hasProgress = progress > 0 && !isFinished
 
-  const localStillPath = episode.still_path
+  const localStillPath = episode.still_path || imdbStillUrl || undefined
   const stillUrl = localStillPath
     ? null
     : getTmdbImageUrl(tmdbData?.still_path, "w300")
@@ -55,6 +65,7 @@ function EpisodeItemBase({
   const episodeTitle =
     episode.episode_title ||
     tmdbData?.name ||
+    imdbTitle ||
     episode.title ||
     `Episode ${episode.episode_number}`
 
@@ -109,22 +120,12 @@ function EpisodeItemBase({
       })()
     : null
 
-  const descriptionText = episode.overview || tmdbData?.overview || null
+  const descriptionText = episode.overview || tmdbData?.overview || imdbPlot || null
   const showExpandToggle = (descriptionText?.length || 0) > 120
 
-  const handlePlayClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handlePlayClick = (e?: React.MouseEvent) => {
+    e?.stopPropagation()
     onEpisodeClick(episode)
-  }
-
-  const handleMarkWatchedClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onMarkWatched(episode)
-  }
-
-  const handleDownloadClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onDownload?.(episode)
   }
 
   const handleToggleExpandClick = (e: React.MouseEvent) => {
@@ -132,14 +133,25 @@ function EpisodeItemBase({
     onToggleExpand(episode.id)
   }
 
+  const menuItems = [
+    ...(isFinished && onUnwatch ? [{ icon: Check, label: "Unmark Watched", onClick: () => onUnwatch(episode) }] : []),
+    ...(!isFinished ? [{ icon: Check, label: "Mark Watched", onClick: () => onMarkWatched(episode) }] : []),
+    ...(onDownload ? [{ icon: Download, label: "Download", onClick: () => onDownload(episode) }] : []),
+    { icon: Share2, label: "Share", onClick: () => {} },
+  ]
+
   return (
+    <LazyMotion features={domAnimation}>
     <motion.div
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.45, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <div
+        role="button"
+        tabIndex={0}
         onClick={handlePlayClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePlayClick() } }}
         className={cn(
           "group relative bg-zinc-900/80 border border-zinc-800/80",
           "hover:border-zinc-700/80 rounded-xl overflow-hidden",
@@ -164,8 +176,8 @@ function EpisodeItemBase({
           {/* Gradient overlay + Play button (on hover) */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shadow-2xl shadow-black/50 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
-                <Play className="w-6 h-6 text-black fill-black ml-0.5" />
+              <div className="size-14 rounded-xl bg-white flex items-center justify-center shadow-2xl shadow-black/50 scale-90 group-hover:scale-100 transition-transform duration-300 ease-out">
+                <Play className="size-6 text-black fill-black ml-0.5" />
               </div>
             </div>
           </div>
@@ -178,7 +190,7 @@ function EpisodeItemBase({
           {/* Rating badge */}
           {rating && (
             <div className="absolute top-3 right-3 px-2 py-1 rounded-lg bg-amber-500/20 backdrop-blur-sm text-[10px] font-extrabold text-amber-400 flex items-center gap-1">
-              <Star className="w-3 h-3 fill-amber-400" />
+              <Star className="size-3 fill-amber-400" />
               {rating}
             </div>
           )}
@@ -210,10 +222,7 @@ function EpisodeItemBase({
 
         {/* Info */}
         <div className="p-4 space-y-2.5">
-          <h3 className={cn(
-            "text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300",
-            spoilerActive && "blur-sm",
-          )}>
+          <h3 className="text-sm font-bold text-white/90 line-clamp-1 group-hover:text-amber-400 transition-colors duration-300">
             {episodeTitle}
           </h3>
 
@@ -221,7 +230,7 @@ function EpisodeItemBase({
           <div className="flex items-center gap-2 text-[10px] font-semibold text-white/30 uppercase tracking-wider flex-wrap">
             {airDateLabel && (
               <span className="flex items-center gap-1">
-                <Calendar className="w-3 h-3 opacity-60" />
+                <Calendar className="size-3 opacity-60" />
                 {airDateLabel}
               </span>
             )}
@@ -242,6 +251,7 @@ function EpisodeItemBase({
           {/* Spoiler toggle pill */}
           {spoilerProtected && (
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 onToggleSpoiler?.(episode)
@@ -255,12 +265,12 @@ function EpisodeItemBase({
             >
               {isRevealed ? (
                 <>
-                  <Eye className="w-3 h-3" />
+                  <Eye className="size-3" />
                   Hide Spoilers
                 </>
               ) : (
                 <>
-                  <EyeOff className="w-3 h-3" />
+                  <EyeOff className="size-3" />
                   Show Spoilers
                 </>
               )}
@@ -279,6 +289,7 @@ function EpisodeItemBase({
           )}
           {showExpandToggle && !spoilerActive && (
             <button
+              type="button"
               onClick={handleToggleExpandClick}
               className="text-[10px] font-bold uppercase tracking-wider text-amber-400/60 hover:text-amber-400 transition-colors"
             >
@@ -286,33 +297,12 @@ function EpisodeItemBase({
             </button>
           )}
 
-          {/* Action pills */}
-          <div className="flex items-center gap-2 pt-1 flex-wrap">
-            {!isFinished && (
-              <button
-                onClick={handleMarkWatchedClick}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[9px] font-bold uppercase tracking-wider text-white/60 hover:text-white transition-all duration-200"
-              >
-                <Check className="w-3 h-3" />
-                Watched
-              </button>
-            )}
-            {onDownload && (
-              <button
-                onClick={handleDownloadClick}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-[9px] font-bold uppercase tracking-wider text-amber-400/80 hover:text-amber-400 transition-all duration-200"
-              >
-                <Download className="w-3 h-3" />
-                Download
-              </button>
-            )}
-            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-[9px] font-bold uppercase tracking-wider text-violet-400/80 hover:text-violet-400 transition-all duration-200">
-              <Share2 className="w-3 h-3" />
-              Share
-            </button>
+          {/* Actions row */}
+          <div className="flex items-center gap-2 pt-1">
+            <KebabMenu items={menuItems} />
             {displayRuntime && (
               <span className="flex items-center gap-1 text-[10px] font-bold text-white/40 ml-auto">
-                <Timer className="w-3 h-3 opacity-60" />
+                <Timer className="size-3 opacity-60" />
                 {displayRuntime}
               </span>
             )}
@@ -320,6 +310,7 @@ function EpisodeItemBase({
         </div>
       </div>
     </motion.div>
+    </LazyMotion>
   )
 }
 
@@ -337,6 +328,7 @@ const areEpisodeItemPropsEqual = (
   prevProps.onEpisodeClick === nextProps.onEpisodeClick &&
   prevProps.onToggleExpand === nextProps.onToggleExpand &&
   prevProps.onMarkWatched === nextProps.onMarkWatched &&
+  prevProps.onUnwatch === nextProps.onUnwatch &&
   prevProps.onToggleSpoiler === nextProps.onToggleSpoiler &&
   prevProps.onDownload === nextProps.onDownload
 

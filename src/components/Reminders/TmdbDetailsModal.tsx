@@ -16,7 +16,9 @@ import {
   TmdbSeasonDetails
 } from '@/services/api'
 import { cn } from '@/lib/utils'
-import { CountdownTimer, isFutureReleaseTarget, parseReleaseTarget } from './CountdownTimer'
+import { ImdbDetailsPanel } from '@/components/ImdbDetailsPanel'
+import { CountdownTimer } from './CountdownTimer'
+import { isFutureReleaseTarget, parseReleaseTarget } from './CountdownTimer.utils'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface TmdbDetailsModalProps {
@@ -58,6 +60,7 @@ export function TmdbDetailsModal({
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
   const [seasonDetails, setSeasonDetails] = useState<TmdbSeasonDetails | null>(null)
   const [loadingSeason, setLoadingSeason] = useState(false)
+  const [imdbPanelOpen, setImdbPanelOpen] = useState(false)
 
   useEffect(() => {
     if (!open) {
@@ -83,6 +86,16 @@ export function TmdbDetailsModal({
               data.last_episode_to_air?.season_number ??
               data.seasons.reduce((max, season) => Math.max(max, season.season_number), 1)
             setSelectedSeason(preferredSeasonNumber)
+
+            setLoadingSeason(true)
+            try {
+              const seasonData = await getTvSeasonEpisodes(tmdbId, preferredSeasonNumber)
+              setSeasonDetails(seasonData)
+            } catch (error) {
+              console.error('Failed to load season details:', error)
+            } finally {
+              setLoadingSeason(false)
+            }
           }
         }
       } catch (error) {
@@ -96,7 +109,7 @@ export function TmdbDetailsModal({
   }, [open, tmdbId, mediaType])
 
   useEffect(() => {
-    if (mediaType !== 'tv' || selectedSeason === null || !tmdbId) return
+    if (mediaType !== 'tv' || selectedSeason === null || !tmdbId || !open) return
 
     const loadSeason = async () => {
       setLoadingSeason(true)
@@ -111,7 +124,7 @@ export function TmdbDetailsModal({
     }
 
     loadSeason()
-  }, [selectedSeason, tmdbId, mediaType])
+  }, [selectedSeason, tmdbId, mediaType, open])
 
   const title = mediaType === 'movie' ? movieDetails?.title : tvDetails?.name
   const overview = mediaType === 'movie' ? movieDetails?.overview : tvDetails?.overview
@@ -188,6 +201,7 @@ export function TmdbDetailsModal({
   })
   
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent className="max-w-6xl p-0 overflow-hidden bg-background border border-white/10 shadow-[0_0_120px_rgba(0,0,0,0.8)] rounded-[2.5rem]">
         <div className="relative h-full flex flex-col max-h-[80vh]">
@@ -242,10 +256,14 @@ export function TmdbDetailsModal({
                       {mediaType === 'movie' ? 'Reminderstic Feature' : 'TV Series'}
                     </span>
                     {rating && (
-                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-black text-[10px]">
-                        <Star className="w-3 h-3 fill-current" />
+                      <button
+                        type="button"
+                        onClick={() => setImdbPanelOpen(true)}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-black text-[10px] cursor-pointer hover:bg-amber-500/20 transition-colors"
+                      >
+                        <Star className="size-3 fill-current" />
                         {rating.toFixed(1)}
-                      </div>
+                      </button>
                     )}
                   </div>
                   <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tighter drop-shadow-2xl">
@@ -261,19 +279,19 @@ export function TmdbDetailsModal({
                 >
                   {firstReleaseDate && (
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-4 h-4 opacity-40" />
+                      <Calendar className="size-4 opacity-40" />
                       <span>{new Date(firstReleaseDate).getFullYear()}</span>
                     </div>
                   )}
                   {mediaType === 'movie' && movieDetails?.runtime && (
                     <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 opacity-40" />
+                      <Clock className="size-4 opacity-40" />
                       <span>{Math.floor(movieDetails.runtime / 60)}h {movieDetails.runtime % 60}m</span>
                     </div>
                   )}
                   {tvStatus && (
                     <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <div className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       <span className="uppercase tracking-widest text-[9px] font-black">{tvStatus}</span>
                     </div>
                   )}
@@ -290,7 +308,7 @@ export function TmdbDetailsModal({
                     variant="outline"
                     className="border-white/15 bg-black/30 text-white hover:bg-white hover:text-black font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8"
                   >
-                    <LayoutGrid className="w-4 h-4 mr-2" />
+                    <LayoutGrid className="size-4 mr-2" />
                     Add To Watchlist
                   </Button>
 
@@ -298,7 +316,7 @@ export function TmdbDetailsModal({
                     onClick={() => title && onSetReminder(reminderPayload())}
                     className="bg-white text-black hover:bg-neutral-200 font-black uppercase tracking-widest text-[11px] rounded-[1.25rem] h-12 px-8 shadow-[0_20px_50px_rgba(255,255,255,0.1)] active:scale-95 transition-all"
                   >
-                    <Bell className="w-4 h-4 mr-2" />
+                    <Bell className="size-4 mr-2" />
                     Add to Reminder
                   </Button>
                   
@@ -351,6 +369,7 @@ export function TmdbDetailsModal({
                         <div className="flex gap-2 overflow-x-auto pb-2 max-w-full scrollbar-hide">
                           {tvDetails.seasons.map(season => (
                             <button
+                              type="button"
                               key={season.season_number}
                               onClick={() => setSelectedSeason(season.season_number)}
                               className={cn(
@@ -376,7 +395,7 @@ export function TmdbDetailsModal({
                               exit={{ opacity: 0 }}
                               className="flex items-center justify-center py-20"
                             >
-                              <Loader2 className="w-8 h-8 animate-spin text-white/10" />
+                              <Loader2 className="size-8 animate-spin text-white/10" />
                             </motion.div>
                           ) : (
                             <motion.div 
@@ -386,77 +405,14 @@ export function TmdbDetailsModal({
                               className="grid gap-4"
                             >
                               {seasonDetails?.episodes.map((episode) => (
-                                <div 
+                                <EpisodeCard
                                   key={episode.episode_number}
-                                  className="group flex flex-col sm:flex-row gap-6 p-5 rounded-[2rem] bg-white/[0.05] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300"
-                                >
-                                  <div className="shrink-0 w-full sm:w-48 aspect-video rounded-2xl overflow-hidden bg-neutral-950 border border-white/5 relative">
-                                    {episode.still_path ? (
-                                      <img 
-                                        src={getTmdbImageUrl(episode.still_path, 'w500') || ''} 
-                                        alt={episode.name}
-                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                      />
-                                    ) : (
-                                      <div className="w-full h-full flex items-center justify-center text-white/5">
-                                        <PlayCircle className="w-10 h-10" />
-                                      </div>
-                                    )}
-                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                  </div>
-                                  
-                                  <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
-                                    <div>
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div className="min-w-0">
-                                          <h4 className="text-base font-black text-white tracking-tight truncate">
-                                            {episode.episode_number}. {episode.name}
-                                          </h4>
-                                          <div className="flex items-center gap-3 mt-1.5">
-                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-                                              <Calendar className="w-3 h-3" />
-                                              {episode.air_date ? new Date(episode.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
-                                            </div>
-                                          </div>
-                                        </div>
-                                        <Button 
-                                          variant="ghost" 
-                                          size="icon"
-                                          className="h-10 w-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
-                                          onClick={(e) => {
-                                            e.stopPropagation()
-                                            onSetReminder({
-                                              tmdbId: String(tmdbId),
-                                              mediaType: 'tv',
-                                              title: `${tvDetails.name} - ${episode.name}`,
-                                              posterPath: episode.still_path || tvDetails.poster_path,
-                                              seasonNumber: selectedSeason,
-                                              episodeNumber: episode.episode_number,
-                                              releaseDate: episode.air_date,
-                                              trackingMode: 'single',
-                                              trackingSeasonNumber: selectedSeason,
-                                            })
-                                          }}
-                                        >
-                                          <Bell className="w-4 h-4" />
-                                        </Button>
-                                      </div>
-                                      <p className="text-[13px] text-white/40 line-clamp-2 mt-3 leading-relaxed font-medium italic">
-                                        {episode.overview || 'No plot details provided for this episode.'}
-                                      </p>
-                                    </div>
-
-                                    {isFutureReleaseTarget(episode.air_date) && (
-                                      <div className="mt-4 pt-4 border-t border-white/5">
-                                        <CountdownTimer
-                                          target={episode.air_date}
-                                          compact
-                                          className="bg-white/5 border-white/5"
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                                  episode={episode}
+                                  tvDetails={tvDetails}
+                                  tmdbId={tmdbId}
+                                  selectedSeason={selectedSeason}
+                                  onSetReminder={onSetReminder}
+                                />
                               ))}
                             </motion.div>
                           )}
@@ -496,8 +452,8 @@ export function TmdbDetailsModal({
 
                 <div className="p-8 rounded-[2rem] bg-white/[0.06] border border-white/10 shadow-inner">
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
-                      <LayoutGrid className="w-4 h-4 text-white/60" />
+                    <div className="size-8 rounded-xl bg-white/10 flex items-center justify-center">
+                      <LayoutGrid className="size-4 text-white/60" />
                     </div>
                     <span className="text-[10px] font-black uppercase tracking-widest text-white/30">Quick Action</span>
                   </div>
@@ -517,6 +473,13 @@ export function TmdbDetailsModal({
         </div>
       </DialogContent>
     </Dialog>
+    <ImdbDetailsPanel
+      open={imdbPanelOpen}
+      onOpenChange={setImdbPanelOpen}
+      tmdbId={tmdbId}
+      mediaType={mediaType}
+    />
+    </>
   )
 }
 
@@ -535,6 +498,87 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div className="flex flex-col gap-1">
       <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/20">{label}</span>
       <span className="text-sm font-bold text-white/80">{value}</span>
+    </div>
+  )
+}
+
+function EpisodeCard({ episode, tvDetails, tmdbId, selectedSeason, onSetReminder }: {
+  episode: TmdbSeasonDetails['episodes'][number]
+  tvDetails: TmdbShowDetails
+  tmdbId: number
+  selectedSeason: number | null
+  onSetReminder: TmdbDetailsModalProps['onSetReminder']
+}) {
+  return (
+    <div
+      className="group flex flex-col sm:flex-row gap-6 p-5 rounded-[2rem] bg-white/[0.05] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300"
+    >
+      <div className="shrink-0 w-full sm:w-48 aspect-video rounded-2xl overflow-hidden bg-neutral-950 border border-white/5 relative">
+        {episode.still_path ? (
+          <img
+            src={getTmdbImageUrl(episode.still_path, 'w500') || ''}
+            alt={episode.name}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-white/5">
+            <PlayCircle className="size-10" />
+          </div>
+        )}
+        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
+
+      <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
+        <div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h4 className="text-base font-black text-white tracking-tight truncate">
+                {episode.episode_number}. {episode.name}
+              </h4>
+              <div className="flex items-center gap-3 mt-1.5">
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-white/30 uppercase tracking-widest">
+                  <Calendar className="size-3" />
+                  {episode.air_date ? new Date(episode.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 rounded-2xl opacity-0 group-hover:opacity-100 transition-all bg-white/5 hover:bg-white text-white hover:text-black shadow-xl"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSetReminder({
+                  tmdbId: String(tmdbId),
+                  mediaType: 'tv',
+                  title: `${tvDetails.name} - ${episode.name}`,
+                  posterPath: episode.still_path || tvDetails.poster_path,
+                  seasonNumber: selectedSeason,
+                  episodeNumber: episode.episode_number,
+                  releaseDate: episode.air_date,
+                  trackingMode: 'single',
+                  trackingSeasonNumber: selectedSeason,
+                })
+              }}
+            >
+              <Bell className="size-4" />
+            </Button>
+          </div>
+          <p className="text-[13px] text-white/40 line-clamp-2 mt-3 leading-relaxed font-medium italic">
+            {episode.overview || 'No plot details provided for this episode.'}
+          </p>
+        </div>
+
+        {isFutureReleaseTarget(episode.air_date) && (
+          <div className="mt-4 pt-4 border-t border-white/5">
+            <CountdownTimer
+              target={episode.air_date}
+              compact
+              className="bg-white/5 border-white/5"
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

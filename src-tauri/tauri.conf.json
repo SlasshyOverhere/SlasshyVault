@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "SlasshyVault",
-    "version": "3.0.49"
+    "version": "3.0.50"
   },
   "tauri": {
     "allowlist": {

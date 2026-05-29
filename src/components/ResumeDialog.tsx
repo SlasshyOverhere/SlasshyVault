@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Play, RotateCcw, Clock, Film, Tv2, Sparkles } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { LazyMotion, m, domAnimation } from 'framer-motion'
 
 interface ResumeDialogProps {
     open: boolean
@@ -97,24 +97,25 @@ export function ResumeDialog({
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [open])
+    }, [open, handleResume, handleStartOver])
 
     return (
+        <LazyMotion features={domAnimation}>
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-lg bg-[#0c0a1a]/95 backdrop-blur-2xl border border-white/10 shadow-[0_0_80px_rgba(255,255,255,0.1)] rounded-2xl overflow-hidden">
                 {/* Background glow effects */}
                 <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                    <div className="absolute -top-20 -right-20 w-40 h-40 bg-gray-500/20 rounded-full blur-[80px]" />
-                    <div className="absolute -bottom-20 -left-20 w-40 h-40 bg-gray-500/10 rounded-full blur-[80px]" />
+                    <div className="absolute -top-20 -right-20 size-40 bg-gray-500/20 rounded-full blur-[80px]" />
+                    <div className="absolute -bottom-20 -left-20 size-40 bg-gray-500/10 rounded-full blur-[80px]" />
                 </div>
 
                 <DialogHeader className="space-y-4 relative z-10">
                     <div className="flex items-center gap-3">
                         <div className="p-2.5 rounded-xl bg-gradient-to-br from-gray-500/20 to-gray-500/20 border border-gray-500/30">
                             {mediaType === 'movie' ? (
-                                <Film className="h-5 w-5 text-gray-400" />
+                                <Film className="size-5 text-gray-400" />
                             ) : (
-                                <Tv2 className="h-5 w-5 text-gray-400" />
+                                <Tv2 className="size-5 text-gray-400" />
                             )}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -132,7 +133,7 @@ export function ResumeDialog({
                     <DialogDescription className="text-base space-y-5">
                         {/* Progress visualization - only show with real progress data */}
                         {hasProgressData && !isStreaming ? (
-                            <motion.div
+                            <m.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/10 p-5"
@@ -149,7 +150,7 @@ export function ResumeDialog({
                                     {/* Time info */}
                                     <div className="flex items-center justify-center gap-3">
                                         <div className="p-2 rounded-lg bg-gray-500/20">
-                                            <Clock className="h-4 w-4 text-gray-400" />
+                                            <Clock className="size-4 text-gray-400" />
                                         </div>
                                         <div className="flex items-baseline gap-2">
                                             <span className="text-2xl font-bold text-white">
@@ -164,7 +165,7 @@ export function ResumeDialog({
 
                                     {/* Progress bar - 3D style */}
                                     <div className="relative h-3 bg-white/10 rounded-full overflow-hidden">
-                                        <motion.div
+                                        <m.div
                                             initial={{ width: 0 }}
                                             animate={{ width: `${Math.min(progressPercent, 100)}%` }}
                                             transition={{ duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
@@ -174,20 +175,20 @@ export function ResumeDialog({
                                             <div className="absolute inset-0 bg-gradient-to-r from-gray-500 via-gray-400 to-gray-300 blur-sm opacity-60" />
                                             {/* Shine */}
                                             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
-                                        </motion.div>
+                                        </m.div>
                                         {/* Progress dot */}
-                                        <motion.div
+                                        <m.div
                                             initial={{ left: 0 }}
                                             animate={{ left: `${Math.min(progressPercent, 100)}%` }}
                                             transition={{ duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
-                                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white shadow-lg shadow-gray-500/50"
+                                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full bg-white shadow-lg shadow-gray-500/50"
                                         />
                                     </div>
 
                                     {/* Stats */}
                                     <div className="flex justify-between text-sm">
                                         <span className="text-white/50 flex items-center gap-1.5">
-                                            <Sparkles className="w-3.5 h-3.5 text-gray-400" />
+                                            <Sparkles className="size-3.5 text-gray-400" />
                                             {progressPercent.toFixed(0)}% watched
                                         </span>
                                         <span className="text-white/50">
@@ -195,10 +196,10 @@ export function ResumeDialog({
                                         </span>
                                     </div>
                                 </div>
-                            </motion.div>
+                            </m.div>
                         ) : (
                             // Streaming or no progress data - show simpler UI
-                            <motion.div
+                            <m.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/10 p-8"
@@ -212,7 +213,7 @@ export function ResumeDialog({
                                 )}
                                 <div className="relative z-10 flex flex-col items-center gap-4">
                                     <div className="p-4 rounded-2xl bg-gradient-to-br from-gray-500/20 to-gray-500/20 border border-gray-500/30 shadow-lg shadow-gray-500/20">
-                                        <Play className="h-8 w-8 text-gray-400 fill-gray-400" />
+                                        <Play className="size-8 text-gray-400 fill-gray-400" />
                                     </div>
                                     <p className="text-center text-white font-medium text-lg">
                                         You've watched this before
@@ -223,7 +224,7 @@ export function ResumeDialog({
                                         </p>
                                     )}
                                 </div>
-                            </motion.div>
+                            </m.div>
                         )}
 
                         <p className="text-center text-white/50">
@@ -240,9 +241,9 @@ export function ResumeDialog({
                         onClick={handleStartOver}
                         className="w-full sm:w-auto gap-2 bg-white/[0.04] border-white/10 hover:bg-white/[0.08] hover:border-white/20 text-white/70 hover:text-white rounded-xl py-5 transition-all duration-300"
                     >
-                        <RotateCcw className="h-4 w-4" />
+                        <RotateCcw className="size-4" />
                         Start Over
-                        <kbd className="hidden sm:inline-flex ml-2 h-5 w-5 items-center justify-center rounded bg-white/10 text-[10px] font-medium text-white/50">
+                        <kbd className="hidden sm:inline-flex ml-2 size-5 items-center justify-center rounded bg-white/10 text-[10px] font-medium text-white/50">
                             S
                         </kbd>
                     </Button>
@@ -250,15 +251,16 @@ export function ResumeDialog({
                         onClick={handleResume}
                         className="w-full sm:w-auto gap-2 bg-gradient-to-r from-white via-gray-200 to-white hover:from-gray-100 hover:via-white hover:to-gray-100 text-black font-semibold rounded-xl py-5 shadow-lg shadow-white/20 transition-all duration-300 hover:shadow-white/30"
                     >
-                        <Play className="h-4 w-4 fill-current" />
+                        <Play className="size-4 fill-current" />
                         {hasProgressData && !isStreaming ? `Resume at ${formatTime(currentPosition)}` : 'Continue Watching'}
-                        <kbd className="hidden sm:inline-flex ml-2 h-5 w-5 items-center justify-center rounded bg-white/20 text-[10px] font-medium">
+                        <kbd className="hidden sm:inline-flex ml-2 size-5 items-center justify-center rounded bg-white/20 text-[10px] font-medium">
                             R
                         </kbd>
                     </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+        </LazyMotion>
     )
 }
 

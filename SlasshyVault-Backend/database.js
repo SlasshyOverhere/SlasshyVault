@@ -325,9 +325,11 @@ async function initDatabase() {
     `
     ]);
 
-    for (const [client, statements] of schemaStatementsByClient.entries()) {
-      await initializeSchema(client, statements);
-    }
+    await Promise.all(
+      Array.from(schemaStatementsByClient.entries()).map(([client, statements]) =>
+        initializeSchema(client, statements)
+      )
+    );
 
     await ensureColumn(getDb('users'), 'users', "bio TEXT DEFAULT ''");
     await ensureColumn(getDb('users'), 'users', "location TEXT DEFAULT ''");
@@ -814,7 +816,10 @@ async function getChatHistory(userId1, userId2, options = {}) {
     args.push(limit);
 
     const result = await chatClient.execute({ sql, args });
-    const rows = result.rows.map(mapMessageRow).filter(Boolean);
+    const rows = result.rows.flatMap((row) => {
+      const mapped = mapMessageRow(row);
+      return mapped ? [mapped] : [];
+    });
     return order === 'asc' ? rows.reverse() : rows;
   } catch (error) {
     console.error('[Database] getChatHistory failed:', error.message);
@@ -932,11 +937,11 @@ async function getPendingMessages(userId) {
       args: [userId]
     });
 
-    return result.rows.map((row) => ({
-      queueId: row.queue_id,
-      messageId: row.message_id,
-      message: mapMessageRow(row)
-    })).filter((item) => item.message);
+    return result.rows.flatMap((row) => {
+      const message = mapMessageRow(row);
+      if (!message) return [];
+      return [{ queueId: row.queue_id, messageId: row.message_id, message }];
+    });
   } catch (error) {
     console.error('[Database] getPendingMessages failed:', error.message);
     return [];
@@ -1064,7 +1069,10 @@ async function getUserActivities(userId, limit = 50, before = null) {
     args.push(Math.min(Math.max(parsePositiveInt(limit, 50), 1), 200));
 
     const result = await activityClient.execute({ sql, args });
-    return result.rows.map(mapActivityRow).filter(Boolean);
+    return result.rows.flatMap((row) => {
+      const mapped = mapActivityRow(row);
+      return mapped ? [mapped] : [];
+    });
   } catch (error) {
     console.error('[Database] getUserActivities failed:', error.message);
     return [];
@@ -1105,7 +1113,10 @@ async function getFriendsActivity(userId, friendIds, filters = {}, page = 1, pag
     args.push(safePageSize, offset);
 
     const result = await activityClient.execute({ sql, args });
-    return result.rows.map(mapActivityRow).filter(Boolean);
+    return result.rows.flatMap((row) => {
+      const mapped = mapActivityRow(row);
+      return mapped ? [mapped] : [];
+    });
   } catch (error) {
     console.error('[Database] getFriendsActivity failed:', error.message);
     return [];

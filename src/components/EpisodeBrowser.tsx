@@ -8,7 +8,7 @@ import {
   MediaItem, getEpisodes, playMedia, getResumeInfo,
   ResumeInfo, getTvSeasonEpisodes, TmdbEpisodeInfo,
   ImdbEpisodeRating, getEpisodeImdbRatings,
-  markAsComplete, refreshSeriesMetadata, updateEpisodeDuration,
+  markAsComplete, clearProgress, refreshSeriesMetadata, updateEpisodeDuration,
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
   getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
@@ -78,6 +78,81 @@ export function EpisodeBrowser({
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(() => getSeriesSpoilerEnabled(show.id))
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
+  const isInitialLoadRef = useRef(true)
+
+
+  const loadTmdb = useCallback(async (season: number) => {
+    if (!show.tmdb_id) return
+    const tmdbId = parseInt(show.tmdb_id)
+
+    // Load TMDB episodes
+    const cached = tmdbEpisodesBySeason.has(season)
+    if (!cached) {
+      try {
+        const sd = await getTvSeasonEpisodes(tmdbId, season)
+        if (sd) {
+          const m = new Map<number, TmdbEpisodeInfo>()
+          sd.episodes.forEach(e => m.set(e.episode_number, e))
+          setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
+
+          // Write TMDB runtime back to DB for episodes missing duration
+          const localEpisodesByNumber = new Map<number, MediaItem>()
+          for (const e of episodes) {
+            if ((e.season_number || 1) === season && e.episode_number) {
+              localEpisodesByNumber.set(e.episode_number, e)
+            }
+          }
+          for (const tmdbEp of sd.episodes) {
+            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
+            const localEp = localEpisodesByNumber.get(tmdbEp.episode_number)
+            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
+              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
+            }
+          }
+        }
+      } catch {
+        /* skip tmdb for this season */
+      }
+    }
+
+    // Fetch IMDb ratings for episodes in this season
+    try {
+      const epNums = episodes.reduce<number[]>((acc, e) => {
+        if ((e.season_number || 1) === season) {
+          const num = e.episode_number || 0
+          if (num > 0) acc.push(num)
+        }
+        return acc
+      }, [])
+      if (epNums.length > 0) {
+        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums, show.imdb_id)
+        if (Object.keys(ratings).length > 0) {
+          setImdbRatings(p => ({ ...p, ...ratings }))
+        }
+      }
+    } catch {
+      /* imdb ratings unavailable */
+    }
+  }, [show.tmdb_id, tmdbEpisodesBySeason, episodes])
+
+  const loadEpisodes = useCallback(async () => {
+    try {
+      const data = await getEpisodes(show.id)
+      setEpisodes(data)
+      if (data.length > 0 && isInitialLoadRef.current) {
+        isInitialLoadRef.current = false
+        const first = data.reduce((min, ep) =>
+          ep.season_number && ep.season_number < min ? ep.season_number : min,
+          data[0].season_number || 1,
+        )
+        setSelectedSeason(first)
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to load episodes", variant: "destructive" })
+    } finally {
+      setLoading(false)
+    }
+  }, [show.id, toast])
 
   useEffect(() => {
     loadEpisodes()
@@ -100,76 +175,13 @@ export function EpisodeBrowser({
       unlistenMarkedComplete?.()
       unlistenLibraryUpdated?.()
     }
-  }, [show.id])
+  }, [show.id, loadEpisodes])
 
   useEffect(() => {
-    loadEpisodes()
     loadTmdb(selectedSeason)
-  }, [selectedSeason])
-
-  const loadTmdb = async (season: number) => {
-    if (!show.tmdb_id) return
-    const tmdbId = parseInt(show.tmdb_id)
-
-    // Load TMDB episodes
-    if (!tmdbEpisodesBySeason.has(season)) {
-      try {
-        const sd = await getTvSeasonEpisodes(tmdbId, season)
-        if (sd) {
-          const m = new Map<number, TmdbEpisodeInfo>()
-          sd.episodes.forEach(e => m.set(e.episode_number, e))
-          setTmdbEpisodesBySeason(p => { const n = new Map(p); n.set(season, m); return n })
-
-          // Write TMDB runtime back to DB for episodes missing duration
-          for (const tmdbEp of sd.episodes) {
-            if (!tmdbEp.runtime || tmdbEp.runtime <= 0) continue
-            const localEp = episodes.find(
-              e => (e.season_number || 1) === season && e.episode_number === tmdbEp.episode_number
-            )
-            if (localEp && (!localEp.duration_seconds || localEp.duration_seconds <= 0)) {
-              updateEpisodeDuration(localEp.id, tmdbEp.runtime * 60)
-            }
-          }
-        }
-      } catch {
-        /* skip tmdb for this season */
-      }
-    }
-
-    // Fetch IMDb ratings for episodes in this season
-    try {
-      const epNums = episodes
-        .filter(e => (e.season_number || 1) === season)
-        .map(e => e.episode_number || 0)
-        .filter(n => n > 0)
-      if (epNums.length > 0) {
-        const ratings = await getEpisodeImdbRatings(tmdbId, season, epNums)
-        if (Object.keys(ratings).length > 0) {
-          setImdbRatings(p => ({ ...p, ...ratings }))
-        }
-      }
-    } catch {
-      /* imdb ratings unavailable */
-    }
-  }
-
-  const loadEpisodes = async () => {
-    try {
-      const data = await getEpisodes(show.id)
-      setEpisodes(data)
-      if (data.length > 0 && episodes.length === 0) {
-        const first = data.reduce((min, ep) =>
-          ep.season_number && ep.season_number < min ? ep.season_number : min,
-          data[0].season_number || 1,
-        )
-        setSelectedSeason(first)
-      }
-    } catch {
-      toast({ title: "Error", description: "Failed to load episodes", variant: "destructive" })
-    } finally {
-      setLoading(false)
-    }
-  }
+    setVisibleEpisodeCount(20)
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+  }, [selectedSeason, loadTmdb])
 
   const handleRefreshMetadata = async () => {
     if (!show.tmdb_id || isRefreshing) return
@@ -219,11 +231,6 @@ export function EpisodeBrowser({
   }, [])
 
   useEffect(() => {
-    setVisibleEpisodeCount(20)
-    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
-  }, [selectedSeason])
-
-  useEffect(() => {
     const s = loadMoreRef.current
     if (!s || filteredEpisodes.length <= visibleEpisodeCount) return
     const obs = new IntersectionObserver(
@@ -249,18 +256,34 @@ export function EpisodeBrowser({
   }, [])
 
   const handleMarkWatched = useCallback(async (ep: MediaItem) => {
+    // Optimistic: reload episodes immediately to reflect the change
+    void loadEpisodes()
+    toast({
+      title: "Watched",
+      description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} marked`,
+    })
+    // Fire server call in background
     try {
-      await markAsComplete(ep.id)
-      await emit("media-marked-complete", { media_id: ep.id })
-      await loadEpisodes()
-      toast({
-        title: "Watched",
-        description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} marked`,
-      })
+      await Promise.all([markAsComplete(ep.id), emit("media-marked-complete", { media_id: ep.id })])
     } catch {
       toast({ title: "Error", description: "Failed to mark watched", variant: "destructive" })
     }
-  }, [toast])
+  }, [toast, loadEpisodes])
+
+  const handleUnwatch = useCallback(async (ep: MediaItem) => {
+    // Optimistic: reload episodes immediately
+    void loadEpisodes()
+    toast({
+      title: "Removed from watched",
+      description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")} unmarked`,
+    })
+    // Fire server call in background
+    try {
+      await clearProgress(ep.id)
+    } catch {
+      toast({ title: "Error", description: "Failed to remove watched status", variant: "destructive" })
+    }
+  }, [toast, loadEpisodes])
 
   const handleDetailsPrimaryAction = (ep: MediaItem) => {
     setContentDetailsOpen(false)
@@ -333,10 +356,11 @@ export function EpisodeBrowser({
         <div className="shrink-0 px-6 pt-5 pb-3 sm:px-10 sm:pt-6 sm:pb-4">
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
             <button
+              type="button"
               onClick={onBack}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-wider uppercase text-zinc-500 hover:text-zinc-300 bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition-all duration-200 shrink-0"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
+              <ChevronLeft className="size-3.5" />
               Back
             </button>
 
@@ -347,6 +371,7 @@ export function EpisodeBrowser({
             <div className="flex items-center gap-2">
               {seasons.map(s => (
                 <button
+                  type="button"
                   key={s}
                   onClick={() => setSelectedSeason(s)}
                   className={cn(
@@ -364,11 +389,12 @@ export function EpisodeBrowser({
             {/* Action Bar */}
             <div className="hidden sm:flex items-center gap-1.5 ml-auto">
               <button
+                type="button"
                 onClick={handleRefreshMetadata}
                 disabled={isRefreshing}
-                className="w-9 h-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 disabled:opacity-30 group relative shadow-sm"
+                className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 disabled:opacity-30 group relative shadow-sm"
               >
-                <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
+                <RefreshCw className={cn("size-3.5", isRefreshing && "animate-spin")} />
                 <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
                   Refresh
                 </span>
@@ -376,33 +402,35 @@ export function EpisodeBrowser({
 
               {filteredEpisodes.some(e => e.file_path || e.zip_entry_path) && (
                 <button
+                  type="button"
                   onClick={() => setShowEpisodeUrls(true)}
-                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm"
+                  className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm"
                 >
-                  <FileText className="w-3.5 h-3.5" />
+                  <FileText className="size-3.5" />
                   <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
                     Files
                   </span>
                 </button>
               )}
 
-              <button className="w-9 h-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm">
-                <SlidersHorizontal className="w-3.5 h-3.5" />
+              <button type="button" className="size-9 flex items-center justify-center rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 group relative shadow-sm">
+                <SlidersHorizontal className="size-3.5" />
                 <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
                   Audio
                 </span>
               </button>
 
               <button
+                type="button"
                 onClick={toggleSpoiler}
                 className={cn(
-                  "w-9 h-9 flex items-center justify-center rounded-xl border transition-all duration-200 group relative shadow-sm",
+                  "size-9 flex items-center justify-center rounded-xl border transition-all duration-200 group relative shadow-sm",
                   spoilerEnabled
                     ? "bg-zinc-900/80 border-zinc-700 text-white hover:bg-zinc-800"
                     : "bg-zinc-900/80 border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800",
                 )}
               >
-                {spoilerEnabled ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                {spoilerEnabled ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                 <span className="absolute top-full mt-2.5 right-0 px-2.5 py-1 rounded-lg bg-zinc-900 text-[8px] font-bold tracking-widest uppercase text-zinc-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-800 shadow-xl z-[100]">
                   Spoiler {spoilerEnabled ? "On" : "Off"}
                 </span>
@@ -426,8 +454,8 @@ export function EpisodeBrowser({
                 className="py-32 flex flex-col items-center"
               >
                 <div className="relative">
-                  <Loader2 className="w-10 h-10 animate-spin text-zinc-600" />
-                  <div className="absolute inset-0 w-10 h-10 rounded-full bg-amber-500/5 blur-xl animate-pulse" />
+                  <Loader2 className="size-10 animate-spin text-zinc-600" />
+                  <div className="absolute inset-0 size-10 rounded-full bg-amber-500/5 blur-xl animate-pulse" />
                 </div>
                 <p className="mt-4 text-[10px] font-bold tracking-[0.3em] uppercase text-zinc-600">
                   Loading episodes
@@ -441,7 +469,7 @@ export function EpisodeBrowser({
                 exit={{ opacity: 0 }}
                 className="py-32 flex flex-col items-center text-zinc-600"
               >
-                <Info className="w-10 h-10 mb-4 opacity-40" />
+                <Info className="size-10 mb-4 opacity-40" />
                 <p className="text-[10px] font-bold tracking-[0.3em] uppercase">
                   No episodes found
                 </p>
@@ -471,12 +499,16 @@ export function EpisodeBrowser({
                         index={i}
                         tmdbData={tmdb}
                         imdbRating={imdbRatingProp}
+                        imdbTitle={imdb?.title}
+                        imdbPlot={imdb?.plot}
+                        imdbStillUrl={imdb?.still_url}
                         isExpanded={expandedEpisode === ep.id}
                         spoilerProtected={spoilerEnabled && !isMediaMarkedWatched(ep)}
                         isRevealed={revealedEpisodes.has(ep.id)}
                         onEpisodeClick={handleEpisodeClick}
                         onToggleExpand={handleToggleExpand}
                         onMarkWatched={handleMarkWatched}
+                        onUnwatch={handleUnwatch}
                         onToggleSpoiler={handleToggleSpoiler}
                         onDownload={onDownload}
                       />
@@ -488,7 +520,7 @@ export function EpisodeBrowser({
                       className="col-span-full h-14 flex items-center justify-center"
                     >
                       <div className="flex items-center gap-2 text-[9px] font-bold tracking-[0.25em] uppercase text-zinc-600">
-                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <Loader2 className="size-3 animate-spin" />
                         Loading more
                       </div>
                     </div>
@@ -529,7 +561,7 @@ export function EpisodeBrowser({
       <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
         <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col bg-[#0c0d10] border-white/8">
           <DialogTitle className="text-sm font-bold tracking-tight text-white/90 px-1 shrink-0">
-            Episode Files — {show.title}
+            Episode Files: {show.title}
           </DialogTitle>
           <DialogDescription className="sr-only">
             File names for each episode in season {selectedSeason}
@@ -540,7 +572,7 @@ export function EpisodeBrowser({
                 .filter(ep => ep.file_path || ep.zip_entry_path)
                 .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0))
                 .map(ep => {
-                  const label = `S${String(ep.season_number || selectedSeason).padStart(2, "0")}E${String(ep.episode_number || 0).padStart(2, "0")} — ${ep.episode_title || ep.title}`
+                  const label = `S${String(ep.season_number || selectedSeason).padStart(2, "0")}E${String(ep.episode_number || 0).padStart(2, "0")}: ${ep.episode_title || ep.title}`
                   const name = (() => {
                     const p = ep.file_path || ep.zip_entry_path
                     if (!p) return ""
@@ -558,10 +590,11 @@ export function EpisodeBrowser({
                         <p className="text-[11px] text-white/30 break-all mt-0.5 select-all">{name}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={() => navigator.clipboard.writeText(name)}
-                        className="shrink-0 h-7 w-7 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
+                        className="shrink-0 size-7 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
                       >
-                        <FileText className="w-3 h-3" />
+                        <FileText className="size-3" />
                       </button>
                     </div>
                   )

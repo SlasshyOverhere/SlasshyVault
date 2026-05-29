@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy, EyeOff, Eye } from "lucide-react"
 import {
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl,
@@ -16,10 +16,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { isMediaMarkedWatched } from "@/utils/playbackProgress"
+import { KebabMenu } from "@/components/KebabMenu"
 import { useToast } from "@/components/ui/use-toast"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ShareDialog } from "@/components/ShareDialog"
-import { EpisodeThumbnailImage, getZipCompressionLabel } from "@/components/EpisodeThumbnailImage"
+import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
+import { getZipCompressionLabel } from "@/utils/zip"
+import { ImdbDetailsPanel } from "@/components/ImdbDetailsPanel"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -32,6 +35,7 @@ interface ContentDetailsModalProps {
   secondaryActionLabel?: string
   onEpisodeSecondaryAction?: (item: MediaItem) => void | Promise<void>
   episodeSecondaryActionLabel?: string
+  onEpisodeUnwatchAction?: (item: MediaItem) => void | Promise<void>
   onMetadataRefresh?: (itemId: number) => Promise<MediaItem | null> | MediaItem | null
 }
 
@@ -178,6 +182,7 @@ export function ContentDetailsModal({
   secondaryActionLabel,
   onEpisodeSecondaryAction,
   episodeSecondaryActionLabel,
+  onEpisodeUnwatchAction,
   onMetadataRefresh,
 }: ContentDetailsModalProps) {
   const { toast } = useToast()
@@ -186,6 +191,7 @@ export function ContentDetailsModal({
   const [runtimeMinutesOverride, setRuntimeMinutesOverride] = useState<number | null>(null)
   const [director, setDirector] = useState<string | null>(null)
   const [creator, setCreator] = useState<string | null>(null)
+  const [movieVoteAverage, setMovieVoteAverage] = useState<number | null>(null)
   const [technicalDetails, setTechnicalDetails] = useState<MediaTechnicalDetails | null>(null)
 
   const [episodes, setEpisodes] = useState<MediaItem[]>([])
@@ -207,8 +213,12 @@ export function ContentDetailsModal({
   const [shareFileId, setShareFileId] = useState<string | null>(null)
   const [shareFileName, setShareFileName] = useState<string>("")
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
+  const [imdbPanelImdbId, setImdbPanelImdbId] = useState<string | null>(null)
+  const [refreshCounter, setRefreshCounter] = useState(0)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
+  const lastItemIdRef = useRef<number | null>(null)
+  const refreshGenerationRef = useRef(0)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(true)
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
@@ -216,8 +226,7 @@ export function ContentDetailsModal({
   const handleEpisodeMarkWatched = async (episode: MediaItem) => {
     if (!onEpisodeSecondaryAction) return
 
-    await onEpisodeSecondaryAction(episode)
-
+    // Optimistic update: update UI immediately
     const markedAt = new Date().toISOString()
     setEpisodes((currentEpisodes) =>
       currentEpisodes.map((currentEpisode) =>
@@ -244,13 +253,50 @@ export function ContentDetailsModal({
           }
         : currentActiveItem,
     )
+
+    // Fire server call in background
+    void onEpisodeSecondaryAction(episode)
   }
 
-  useEffect(() => {
-    if (item) {
-      setActiveItem(item)
-    }
-  }, [item])
+  const handleEpisodeUnwatched = (episode: MediaItem) => {
+    // Optimistic update: clear watch state immediately
+    setEpisodes((currentEpisodes) =>
+      currentEpisodes.map((currentEpisode) =>
+        currentEpisode.id === episode.id
+          ? {
+              ...currentEpisode,
+              progress_percent: 0,
+              resume_position_seconds: 0,
+              last_watched: undefined,
+            }
+          : currentEpisode,
+      ),
+    )
+
+    setActiveItem((currentActiveItem) =>
+      currentActiveItem?.id === episode.id
+        ? {
+            ...currentActiveItem,
+            progress_percent: 0,
+            resume_position_seconds: 0,
+            last_watched: undefined,
+          }
+        : currentActiveItem,
+    )
+
+    // Fire server call in background
+    void onEpisodeUnwatchAction?.(episode)
+  }
+
+  if (!item && lastItemIdRef.current !== null) {
+    lastItemIdRef.current = null
+    refreshGenerationRef.current += 1
+    setActiveItem(null)
+  } else if (item && item.id !== lastItemIdRef.current) {
+    lastItemIdRef.current = item.id
+    refreshGenerationRef.current += 1
+    setActiveItem(item)
+  }
 
   const handleRefreshMetadata = useCallback(async () => {
     if (!item || item.media_type !== "tvshow" || !item.tmdb_id || isRefreshingMetadata) return
@@ -265,26 +311,38 @@ export function ContentDetailsModal({
       return
     }
 
+    const generation = refreshGenerationRef.current
+    const itemId = item.id
+
     setIsRefreshingMetadata(true)
-    heroArtworkCache.delete(item.id)
+    heroArtworkCache.delete(itemId)
     tvDetailsCache.delete(tmdbId)
+    tvSeasonEpisodesCache.delete(tmdbId)
 
     try {
       const result = await refreshSeriesMetadata(tmdbId, item.title)
-      const refreshedItem =
-        (await Promise.resolve(onMetadataRefresh?.(item.id))) ||
-        (await getMediaInfo(item.id))
+      if (refreshGenerationRef.current !== generation) return
 
-      const refreshedEpisodes = await getEpisodes(item.id)
+      const refreshedItem =
+        (await Promise.resolve(onMetadataRefresh?.(itemId))) ||
+        (await getMediaInfo(itemId))
+      if (refreshGenerationRef.current !== generation) return
+
+      const refreshedEpisodes = await getEpisodes(itemId)
+      if (refreshGenerationRef.current !== generation) return
+
       setActiveItem(refreshedItem)
       setEpisodes(refreshedEpisodes)
       setTmdbEpisodesBySeason(new Map())
+      setImdbEpisodeRatings({})
+      setRefreshCounter(c => c + 1)
 
       toast({
         title: "Metadata refreshed",
         description: result,
       })
     } catch (error) {
+      if (refreshGenerationRef.current !== generation) return
       console.error("Failed to refresh metadata in content details modal:", error)
       toast({
         title: "Error",
@@ -292,7 +350,9 @@ export function ContentDetailsModal({
         variant: "destructive",
       })
     } finally {
-      setIsRefreshingMetadata(false)
+      if (refreshGenerationRef.current === generation) {
+        setIsRefreshingMetadata(false)
+      }
     }
   }, [isRefreshingMetadata, item, onMetadataRefresh, toast])
 
@@ -303,12 +363,14 @@ export function ContentDetailsModal({
     return null
   }, [item])
 
-  useEffect(() => {
+  const lastSpoilerSeriesRef = useRef<number | null>(null)
+  if (seriesPreferenceId !== lastSpoilerSeriesRef.current) {
+    lastSpoilerSeriesRef.current = seriesPreferenceId
     if (seriesPreferenceId) {
       setSpoilerEnabled(getSeriesSpoilerEnabled(seriesPreferenceId))
       setRevealedEpisodes(new Set())
     }
-  }, [seriesPreferenceId])
+  }
 
   const toggleSpoiler = useCallback(() => {
     if (!seriesPreferenceId) return
@@ -508,7 +570,7 @@ export function ContentDetailsModal({
             .map(e => e.episode_number)
             .filter(n => n > 0)
           if (epNums.length > 0) {
-            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums)
+            const ratings = await getEpisodeImdbRatings(tmdbId, selectedSeason, epNums, item?.imdb_id)
             if (Object.keys(ratings).length > 0) {
               setImdbEpisodeRatings(p => ({ ...p, ...ratings }))
             }
@@ -520,12 +582,16 @@ export function ContentDetailsModal({
     }
 
     void loadTmdbMetadata()
-  }, [open, item?.id, selectedSeason])
+  }, [open, item?.id, selectedSeason, refreshCounter])
 
-  // Instant artwork reset and load
-  useEffect(() => {
+  // Instant artwork reset and load (useLayoutEffect to prevent flash of stale image on reopen)
+  useLayoutEffect(() => {
     const target = activeItem ?? item
-    if (!target) return;
+    if (!target) {
+      setHeroImageUrl(null)
+      setPosterImageUrl(null)
+      return
+    }
 
     // Reset immediately
     setHeroImageUrl(null)
@@ -533,6 +599,7 @@ export function ContentDetailsModal({
     setRuntimeMinutesOverride(null)
     setDirector(null)
     setCreator(null)
+    setMovieVoteAverage(null)
     setTechnicalDetails(null)
 
     const cachedHero = heroArtworkCache.get(target.id)
@@ -585,6 +652,9 @@ export function ContentDetailsModal({
           if (movieDetails.director) {
             setDirector(movieDetails.director)
           }
+          if (movieDetails.vote_average != null) {
+            setMovieVoteAverage(movieDetails.vote_average)
+          }
           if (!nextHero && movieDetails.backdrop_path) {
             nextHero = await resolveLocalImage(movieDetails.backdrop_path)
           }
@@ -633,7 +703,7 @@ export function ContentDetailsModal({
 
   // Memoize seasons calculation to prevent redundant set creation and sorting on every render
   const seasons = useMemo(() => {
-    return [...new Set(episodes.map(ep => ep.season_number || 1))].sort((a, b) => a - b)
+    return Array.from(new Set(episodes.map(ep => ep.season_number || 1))).sort((a, b) => a - b)
   }, [episodes])
 
   // Memoize episodes filtering and sorting to prevent redundant array operations on every render
@@ -848,7 +918,7 @@ export function ContentDetailsModal({
   }, [filteredEpisodes, item, open, selectedSeason, selectedSeasonHasZipEpisodes])
 
   if (!activeItem && !item) return null
-  const displayItem = item || activeItem
+  const displayItem = activeItem ?? item
   if (!displayItem) return null
 
   const isShow = displayItem.media_type === "tvshow"
@@ -957,10 +1027,10 @@ export function ContentDetailsModal({
           <button
             type="button"
             onClick={() => setPlaybackSettingsOpen(false)}
-            className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/8 text-white/58 transition-colors hover:bg-white/14 hover:text-white"
+            className="grid size-7 place-items-center rounded-md border border-white/10 bg-white/8 text-white/58 transition-colors hover:bg-white/14 hover:text-white"
             aria-label="Close playback settings"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="size-3.5" />
           </button>
         </div>
       </div>
@@ -968,7 +1038,7 @@ export function ContentDetailsModal({
       <div className="divide-y divide-white/10">
         <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
-            <AudioLines className="h-4 w-4 text-white/58" />
+            <AudioLines className="size-4 text-white/58" />
             Audio
           </div>
           <div className="min-w-0 space-y-2">
@@ -993,7 +1063,7 @@ export function ContentDetailsModal({
                 ))}
                 <option value={MANUAL_AUDIO_OPTION.value} className="bg-[#101114] text-white">Manual</option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
             </div>
 
             {selectedAudioPreference === CUSTOM_AUDIO_VALUE && (
@@ -1009,7 +1079,7 @@ export function ContentDetailsModal({
 
         <div className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/58">
-            <Captions className="h-4 w-4 text-white/58" />
+            <Captions className="size-4 text-white/58" />
             Subtitles
           </div>
           <div className="min-w-0 space-y-2">
@@ -1035,7 +1105,7 @@ export function ContentDetailsModal({
                 ))}
                 <option value={CUSTOM_SUBTITLE_VALUE} className="bg-[#101114] text-white">Manual</option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" />
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-white/50" />
             </div>
 
             {selectedSubtitlePreference === CUSTOM_SUBTITLE_VALUE && (
@@ -1057,8 +1127,11 @@ export function ContentDetailsModal({
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogPortal>
         <div
+          role="button"
+          tabIndex={-1}
           className="fixed inset-x-0 bottom-0 top-9 z-40 bg-black/52 backdrop-blur-md"
           onClick={() => onOpenChange(false)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpenChange(false) }}
         />
       </DialogPortal>
       <DialogContent
@@ -1104,7 +1177,7 @@ export function ContentDetailsModal({
                     </span>
                     {mediaFormatParts.length > 0 && !isShow && (
                       <span className="text-[9px] font-medium text-white/20 uppercase tracking-widest flex items-center gap-1.5">
-                        <div className="w-0.5 h-0.5 rounded-full bg-white/10" />
+                        <div className="size-0.5 rounded-full bg-white/10" />
                         {mediaFormatParts.join(" · ")}
                       </span>
                     )}
@@ -1120,24 +1193,37 @@ export function ContentDetailsModal({
                     isShow ? "mb-6" : "mb-8"
                   )}>
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-3.5 h-3.5 text-white/25" />
+                      <Calendar className="size-3.5 text-white/25" />
                       <span className="text-white/80">{displayItem.year || "N/A"}</span>
                     </div>
+                    {!isShow && movieVoteAverage != null && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setImdbPanelImdbId(item?.imdb_id || `tmdb:${item?.tmdb_id}`)
+                        }}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 text-white text-xs font-bold cursor-pointer hover:bg-white/20 transition-colors"
+                      >
+                        <Star className="size-3 fill-current text-yellow-500" />
+                        {movieVoteAverage.toFixed(1)}
+                      </button>
+                    )}
                     {!isShow && (
                       <div className="flex items-center gap-2">
-                        <Clock className="w-3.5 h-3.5 text-white/25" />
+                        <Clock className="size-3.5 text-white/25" />
                         <span className="text-white/80">{runtimeLabel}</span>
                       </div>
                     )}
                     {isShow && (
                       <div className="flex items-center gap-2">
-                        <Tv className="w-3.5 h-3.5 text-white/25" />
+                        <Tv className="size-3.5 text-white/25" />
                         <span className="text-white/80">{seasons.length} Seasons</span>
                       </div>
                     )}
                     {(director || creator) && (
                       <div className="flex items-center gap-2">
-                        <User className="w-3.5 h-3.5 text-white/25" />
+                        <User className="size-3.5 text-white/25" />
                         <span className="text-white/80">{isShow ? creator : director}</span>
                         <span className="text-[9px] uppercase tracking-widest opacity-25">{isShow ? "Creator" : "Director"}</span>
                       </div>
@@ -1168,40 +1254,43 @@ export function ContentDetailsModal({
                         onClick={() => onPrimaryAction(displayItem)} 
                         className="h-14 px-10 rounded-full text-base font-bold tracking-tight shadow-[0_15px_40px_rgba(255,255,255,0.1)] hover:shadow-[0_20px_50px_rgba(255,255,255,0.15)] hover:scale-[1.02] active:scale-95 transition-all duration-500 bg-white text-black hover:bg-white"
                       >
-                        <Play className="w-4 h-4 mr-2.5 fill-current" /> Play Now
+                        <Play className="size-4 mr-2.5 fill-current" /> Play Now
                       </Button>
 
                       <div className="flex items-center gap-2 p-1 rounded-full bg-white/5 border border-white/10 shadow-sm">
                         {displayItem.is_cloud && displayItem.cloud_file_id && (
                           <button
+                            type="button"
                             onClick={() => {
                               setShareFileId(displayItem.cloud_file_id || null)
                               setShareFileName(displayItem.title)
                             }}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title="Share"
                           >
-                            <Share2 className="w-4 h-4" />
+                            <Share2 className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Share</span>
                           </button>
                         )}
                         {onDownloadAction && downloadActionLabel && displayItem.is_cloud && (
                           <button
+                            type="button"
                             onClick={() => onDownloadAction(displayItem)}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title="Download"
                           >
-                            <Download className="w-4 h-4" />
+                            <Download className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Download</span>
                           </button>
                         )}
                         {onSecondaryAction && secondaryActionLabel && (
                           <button
+                            type="button"
                             onClick={() => onSecondaryAction(displayItem)}
-                            className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                            className="size-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                             title={secondaryActionLabel}
                           >
-                            <Check className="w-4 h-4" />
+                            <Check className="size-4" />
                             <span className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">{secondaryActionLabel}</span>
                           </button>
                         )}
@@ -1217,9 +1306,10 @@ export function ContentDetailsModal({
                 <div className="flex items-center gap-3 mb-4 shrink-0">
                   <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto no-scrollbar">
                     {seasons.map(s => (
-                      <button 
-                        key={s} 
-                        onClick={() => setSelectedSeason(s)} 
+                      <button
+                        type="button"
+                        key={s}
+                        onClick={() => setSelectedSeason(s)}
                         className={cn(
                           "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-[999px] px-4 text-[9px] leading-none font-bold uppercase tracking-[0.16em] border backdrop-blur-xl transition-all duration-300 shrink-0",
                           selectedSeason === s
@@ -1239,10 +1329,10 @@ export function ContentDetailsModal({
                         type="button"
                         onClick={() => void handleRefreshMetadata()}
                         disabled={isRefreshingMetadata}
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative disabled:cursor-not-allowed disabled:opacity-45"
+                        className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative disabled:cursor-not-allowed disabled:opacity-45"
                         title="Refresh Metadata"
                       >
-                        <RefreshCw className={cn("w-3.5 h-3.5", isRefreshingMetadata && "animate-spin")} />
+                        <RefreshCw className={cn("size-3.5", isRefreshingMetadata && "animate-spin")} />
                         <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Refresh</span>
                       </button>
                     )}
@@ -1250,34 +1340,34 @@ export function ContentDetailsModal({
                       <button
                         type="button"
                         onClick={() => setShowEpisodeUrls(true)}
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                        className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                         title="Show Episode Files"
                       >
-                        <FileText className="w-3.5 h-3.5" />
+                        <FileText className="size-3.5" />
                         <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Files</span>
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={() => setPlaybackSettingsOpen(true)}
-                      className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
+                      className="size-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all duration-300 group relative"
                       title="Audio & Subtitles"
                     >
-                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <SlidersHorizontal className="size-3.5" />
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Audio</span>
                     </button>
                     <button
                       type="button"
                       onClick={toggleSpoiler}
                       className={cn(
-                        "w-8 h-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
+                        "size-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
                         spoilerEnabled
                           ? "bg-white/15 hover:bg-white/25 text-white"
                           : "bg-white/5 hover:bg-white/10 text-white/50 hover:text-white",
                       )}
                       title={`Spoiler ${spoilerEnabled ? "On" : "Off"}`}
                     >
-                      {spoilerEnabled ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {spoilerEnabled ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Spoiler {spoilerEnabled ? "On" : "Off"}</span>
                     </button>
                   </div>
@@ -1287,8 +1377,8 @@ export function ContentDetailsModal({
                   <div className="h-full w-full overflow-y-auto no-scrollbar">
                     {loadingEpisodes ? (
                       <div className="py-20 flex flex-col items-center text-white/30">
-                        <Loader2 className="w-12 h-12 animate-spin mb-4" />
-                        <p className="font-medium tracking-wide">Loading episodes...</p>
+                        <Loader2 className="size-12 animate-spin mb-4" />
+                        <p className="font-medium tracking-wide">Loading episodes…</p>
                       </div>
                     ) : filteredEpisodes.length === 0 ? (
                       <div className="py-20 text-center text-white/30">
@@ -1317,21 +1407,24 @@ export function ContentDetailsModal({
                           return (
                             <div
                               key={ep.id}
+                              role="button"
+                              tabIndex={0}
                               onClick={() => onPrimaryAction(ep)}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onPrimaryAction(ep) }}
                               className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
                                 <div className={cn("w-full h-full", isSpoiler && "blur-md")}>
                                   <EpisodeThumbnailImage
-                                    localStillPath={ep.still_path}
+                                    localStillPath={ep.still_path || imdbRatingData?.still_url || undefined}
                                     tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')}
-                                    episodeTitle={tmdbData?.name || ep.title}
+                                    episodeTitle={tmdbData?.name || imdbRatingData?.title || ep.title}
                                     episodeNumber={ep.episode_number || 0}
                                   />
                                 </div>
                                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
-                                  <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
-                                    <Play className="w-6 h-6 text-black fill-black ml-1" />
+                                  <div className="size-12 rounded-full bg-white flex items-center justify-center shadow-2xl scale-90 group-hover:scale-100 transition-transform duration-300">
+                                    <Play className="size-6 text-black fill-black ml-1" />
                                   </div>
                                 </div>
                                 {ep.progress_percent ? (
@@ -1344,7 +1437,7 @@ export function ContentDetailsModal({
                                 ) : null}
                                 {isWatched ? (
                                   <div className="absolute top-3 right-3 p-1.5 rounded-xl bg-black/60 backdrop-blur-md text-white border border-white/10 shadow-lg">
-                                    <Check className="w-4 h-4" />
+                                    <Check className="size-4" />
                                   </div>
                                 ) : null}
                               </div>
@@ -1359,60 +1452,43 @@ export function ContentDetailsModal({
                                         </span>
                                       )}
                                     </div>
-                                    <h4 className={cn("text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight", isSpoiler && "blur-sm")}>{tmdbData?.name || ep.title}</h4>
+                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || imdbRatingData?.title || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
-                                    {isWatched ? (
+                                    {isWatched && (
                                       <div className="inline-flex items-center gap-1.5 rounded-full border border-green-500/35 bg-green-500/18 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-green-300">
-                                        <Check className="w-3.5 h-3.5" />
+                                        <Check className="size-3.5" />
                                         Watched
                                       </div>
-                                    ) : onEpisodeSecondaryAction && episodeSecondaryActionLabel ? (
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          void handleEpisodeMarkWatched(ep)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/6 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/78 transition-colors hover:bg-white/12 hover:text-white"
-                                      >
-                                        <Check className="w-3.5 h-3.5" />
-                                        {episodeSecondaryActionLabel}
-                                      </button>
-                                    ) : null}
-                                    {onDownloadAction && ep.is_cloud ? (
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          void onDownloadAction(ep)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/18 bg-amber-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-100 transition-colors hover:bg-amber-400/16 hover:border-amber-300/35"
-                                      >
-                                        <Download className="w-3.5 h-3.5" />
-                                        Download
-                                      </button>
-                                    ) : null}
-                                    {ep.is_cloud && ep.cloud_file_id ? (
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setShareFileId(ep.cloud_file_id || null)
-                                          setShareFileName(ep.episode_title || ep.title)
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/18 bg-violet-400/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-violet-100 transition-colors hover:bg-violet-400/16 hover:border-violet-300/35"
-                                      >
-                                        <Share2 className="w-3.5 h-3.5" />
-                                        Share
-                                      </button>
-                                    ) : null}
-                                    {rating && rating > 0 && (
-                                      <div className="flex items-center gap-1.5 text-xs font-bold text-white/80 bg-white/5 px-2 py-1 rounded-lg">
-                                        <Star className="w-3 h-3 fill-current text-yellow-500" />
-                                        {rating.toFixed(1)}
-                                      </div>
                                     )}
+                                    <KebabMenu items={[
+                                      ...(isWatched && onEpisodeUnwatchAction ? [{ icon: Check, label: "Unmark Watched", onClick: () => handleEpisodeUnwatched(ep) }] : []),
+                                      ...(!isWatched && onEpisodeSecondaryAction ? [{ icon: Check, label: episodeSecondaryActionLabel || "Mark Watched", onClick: () => void handleEpisodeMarkWatched(ep) }] : []),
+                                      ...(onDownloadAction && ep.is_cloud ? [{ icon: Download, label: "Download", onClick: () => void onDownloadAction(ep) }] : []),
+                                      ...(ep.is_cloud && ep.cloud_file_id ? [{ icon: Share2, label: "Share", onClick: () => { setShareFileId(ep.cloud_file_id || null); setShareFileName(ep.episode_title || ep.title) } }] : []),
+                                    ]} />
+                                    {rating && rating > 0 && (() => {
+                                      const clickableId = imdbRatingData?.imdb_id || item?.imdb_id
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            if (clickableId) setImdbPanelImdbId(clickableId)
+                                          }}
+                                          className={cn(
+                                            "flex items-center gap-1.5 text-xs font-bold text-white bg-white/10 px-2 py-1 rounded-lg transition-colors",
+                                            clickableId && "cursor-pointer hover:bg-white/20"
+                                          )}
+                                        >
+                                          <Star className="size-3 fill-current text-yellow-500" />
+                                          {rating.toFixed(1)}
+                                        </button>
+                                      )
+                                    })()}
                                     {(ep.duration_seconds || runtime) && (
                                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/60">
-                                        <Timer className="w-3.5 h-3.5 opacity-70" />
+                                        <Timer className="size-3.5 opacity-70" />
                                         {Math.round((ep.duration_seconds || (runtime ? runtime * 60 : 0)) / 60)}m
                                       </div>
                                     )}
@@ -1423,7 +1499,7 @@ export function ContentDetailsModal({
                                   <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/30">
                                     {airDate && (
                                       <span className="inline-flex items-center gap-2">
-                                        <Calendar className="w-3 h-3 opacity-50" />
+                                        <Calendar className="size-3 opacity-50" />
                                         {new Date(airDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                                       </span>
                                     )}
@@ -1444,6 +1520,7 @@ export function ContentDetailsModal({
 
                                 {spoilerEnabled && !isWatched && (
                                   <button
+                                    type="button"
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       handleToggleSpoiler(ep)
@@ -1457,19 +1534,19 @@ export function ContentDetailsModal({
                                   >
                                     {revealedEpisodes.has(ep.id) ? (
                                       <>
-                                        <Eye className="w-3 h-3" />
+                                        <Eye className="size-3" />
                                         Hide Spoilers
                                       </>
                                     ) : (
                                       <>
-                                        <EyeOff className="w-3 h-3" />
+                                        <EyeOff className="size-3" />
                                         Show Spoilers
                                       </>
                                     )}
                                   </button>
                                 )}
 
-                                <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || "No description available."}</p>
+                                <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || imdbRatingData?.plot || "No description available."}</p>
                               </div>
                             </div>
                           )
@@ -1489,8 +1566,11 @@ export function ContentDetailsModal({
 
           {audioControls && playbackSettingsOpen && (
             <div
+              role="button"
+              tabIndex={-1}
               className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 px-4 backdrop-blur-[3px]"
               onClick={() => setPlaybackSettingsOpen(false)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPlaybackSettingsOpen(false) }}
             >
               <div
                 className="w-full max-w-[430px]"
@@ -1515,7 +1595,7 @@ export function ContentDetailsModal({
       <Dialog open={showEpisodeUrls} onOpenChange={setShowEpisodeUrls}>
         <DialogContent className="sm:max-w-2xl max-h-[80vh] !h-[80vh] flex flex-col">
           <DialogTitle className="text-lg font-bold text-white px-1 shrink-0">
-            Episode Files — {item?.title} (Season {selectedSeason})
+            Episode Files: {item?.title} (Season {selectedSeason})
           </DialogTitle>
           <DialogDescription className="sr-only">
             File names for each episode in season {selectedSeason}
@@ -1541,13 +1621,14 @@ export function ContentDetailsModal({
                         <p className="text-xs text-white/50 break-all mt-0.5 select-all">{fileName}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={() => {
                           navigator.clipboard.writeText(fileName)
                         }}
                         className="flex items-center gap-1 shrink-0 h-8 px-2.5 rounded-md bg-white/10 hover:bg-white/15 text-white/70 hover:text-white text-xs font-medium transition-colors"
                         title="Copy file name"
                       >
-                        <Copy className="w-3.5 h-3.5" />
+                        <Copy className="size-3.5" />
                       </button>
                     </div>
                   )
@@ -1560,6 +1641,15 @@ export function ContentDetailsModal({
         </DialogContent>
       </Dialog>
     </Dialog>
+    {imdbPanelImdbId && (
+      <ImdbDetailsPanel
+        open={true}
+        onOpenChange={() => setImdbPanelImdbId(null)}
+        imdbId={imdbPanelImdbId}
+        tmdbId={item?.tmdb_id ? Number(item.tmdb_id) : undefined}
+        mediaType={item?.media_type === "tvshow" ? "tv" : "movie"}
+      />
+    )}
     </>
   )
 }

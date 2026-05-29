@@ -113,9 +113,9 @@ export function RoomLobby({
                         aria-label="Copy room code"
                     >
                         {copied ? (
-                            <Check className="w-5 h-5 text-green-500" />
+                            <Check className="size-5 text-green-500" />
                         ) : (
-                            <Copy className="w-5 h-5" />
+                            <Copy className="size-5" />
                         )}
                     </Button>
                 </div>
@@ -154,7 +154,7 @@ export function RoomLobby({
                     className="w-full bg-green-600 hover:bg-green-700"
                     aria-label="Mark yourself as ready"
                 >
-                    <Check className="w-4 h-4 mr-2" />
+                    <Check className="size-4 mr-2" />
                     I'm Ready
                 </Button>
                 )}
@@ -167,9 +167,9 @@ export function RoomLobby({
                     aria-label="Start playback for all"
                 >
                     {isStarting ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                        <Play className="w-4 h-4 mr-2" />
+                        <Play className="size-4 mr-2" />
                     )}
                     {allReady ? 'Start Watching' : 'Waiting for everyone...'}
                 </Button>
@@ -177,7 +177,7 @@ export function RoomLobby({
 
                 {!isHost && isReady && (
                     <p className="text-center text-sm text-zinc-400">
-                        Waiting for host to start playback...
+                        Waiting for host to start playback…
                     </p>
                 )}
 
@@ -189,9 +189,9 @@ export function RoomLobby({
                     aria-label="Leave watch together room"
                 >
                     {isLeaving ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="size-4 mr-2 animate-spin" />
                     ) : (
-                        <LogOut className="w-4 h-4 mr-2" />
+                        <LogOut className="size-4 mr-2" />
                     )}
                     Leave Room
                 </Button>
@@ -199,8 +199,8 @@ export function RoomLobby({
         </div>
 
             {syncPhase === 'loading' && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center py-8 space-y-4">
-                    <div className="animate-spin rounded-full h-10 w-10 border-2 border-emerald-500 border-t-transparent" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center py-8 gap-y-4">
+                    <div className="animate-spin rounded-full size-10 border-2 border-emerald-500 border-t-transparent" />
                     <h3 className="text-lg font-semibold text-white">Preparing Watch Together</h3>
                     <p className="text-sm text-zinc-400 text-center max-w-md">
                         Pre-buffering 30 seconds of content for a smooth synchronized experience.

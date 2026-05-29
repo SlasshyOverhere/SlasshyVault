@@ -6,7 +6,8 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { WatchlistItem, deleteWatchlistItem, getTmdbImageUrl } from '@/services/api'
-import { CountdownTimer, formatLocalReleaseTime } from './CountdownTimer'
+import { CountdownTimer } from './CountdownTimer'
+import { formatLocalReleaseTime } from './CountdownTimer.utils'
 import { cn } from '@/lib/utils'
 
 interface WatchlistListProps {
@@ -91,7 +92,7 @@ export function WatchlistList({ items, onEdit, onRefresh, loading = false }: Wat
               <div className="w-full h-full skeleton-shimmer" />
             </div>
             <div className="space-y-2 px-1">
-              <div className="h-4 w-4/5 rounded-lg bg-white/10" />
+              <div className="size-4/5 rounded-lg bg-white/10" />
               <div className="h-3 w-1/2 rounded-lg bg-white/10" />
             </div>
           </div>
@@ -110,10 +111,10 @@ export function WatchlistList({ items, onEdit, onRefresh, loading = false }: Wat
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
           className="text-center space-y-6 max-w-xs"
         >
-          <div className="relative mx-auto w-28 h-28">
+          <div className="relative mx-auto size-28">
             <div className="absolute inset-0 rounded-[2rem] bg-gradient-to-br from-white/[0.06] to-transparent blur-3xl" />
-            <div className="relative w-28 h-28 rounded-[2rem] border border-white/[0.06] bg-white/[0.02] flex items-center justify-center">
-              <Film className="w-12 h-12 text-white/15" />
+            <div className="relative size-28 rounded-[2rem] border border-white/[0.06] bg-white/[0.02] flex items-center justify-center">
+              <Film className="size-12 text-white/15" />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -134,6 +135,7 @@ export function WatchlistList({ items, onEdit, onRefresh, loading = false }: Wat
       <div className="shrink-0 flex items-center gap-1.5 pb-6 overflow-x-auto no-scrollbar">
         {FILTERS.map(f => (
           <button
+            type="button"
             key={f.key}
             data-active={filter === f.key}
             onClick={() => { setFilter(f.key); setSelected(null) }}
@@ -237,8 +239,8 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             {item.media_type === 'movie'
-              ? <Film className="w-10 h-10 text-white/10" />
-              : <Tv className="w-10 h-10 text-white/10" />
+              ? <Film className="size-10 text-white/10" />
+              : <Tv className="size-10 text-white/10" />
             }
           </div>
         )}
@@ -246,7 +248,7 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
         {/* status indicator dot */}
         <div className="absolute top-3 right-3 z-10">
           <div className={cn(
-            'w-2.5 h-2.5 rounded-full border border-black/30 shadow-lg',
+            'size-2.5 rounded-full border border-black/30 shadow-lg',
             cat === 'upcoming' ? 'bg-sky-400' :
             cat === 'overdue' ? 'bg-amber-400' :
             'bg-white/20',
@@ -258,12 +260,12 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
           <div className="absolute bottom-0 left-0 right-0 p-4 space-y-2">
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 backdrop-blur-md text-[8px] font-black uppercase tracking-widest text-white/80">
-                {item.media_type === 'movie' ? <Film className="w-2.5 h-2.5" /> : <Tv className="w-2.5 h-2.5" />}
+                {item.media_type === 'movie' ? <Film className="size-2.5" /> : <Tv className="size-2.5" />}
                 {item.media_type}
               </span>
               {item.notification_enabled && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 backdrop-blur-md text-[8px] font-black uppercase tracking-widest text-white/80">
-                  <Bell className="w-2.5 h-2.5" />
+                  <Bell className="size-2.5" />
                   {item.notification_mode === 'spam' ? 'Spam' : 'Reminder'}
                 </span>
               )}
@@ -288,7 +290,7 @@ function PosterCard({ item, index, isDeleting, onSelect }: {
         {item.notes ? (
           <p className="text-[11px] text-white/25 font-medium truncate">{item.notes}</p>
         ) : (
-          <p className="text-[11px] text-white/10 font-medium truncate">—</p>
+          <p className="text-[11px] text-white/10 font-medium truncate">&mdash;</p>
         )}
       </div>
     </motion.button>
@@ -322,7 +324,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
       className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8"
     >
       {/* backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-xl" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-xl" role="button" tabIndex={-1} onClick={onClose} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose() }} />
 
       {/* card */}
       <motion.div
@@ -347,18 +349,18 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
         <div className="relative z-20 flex items-center justify-between p-5 pb-0">
           <div className="flex items-center gap-2">
             {hasPrev && (
-              <button onClick={onPrev} className="h-9 w-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
-                <ChevronLeft className="w-4 h-4" />
+              <button type="button" onClick={onPrev} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+                <ChevronLeft className="size-4" />
               </button>
             )}
             {hasNext && (
-              <button onClick={onNext} className="h-9 w-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
-                <ChevronRight className="w-4 h-4" />
+              <button type="button" onClick={onNext} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+                <ChevronRight className="size-4" />
               </button>
             )}
           </div>
-          <button onClick={onClose} className="h-9 w-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
-            <X className="w-4 h-4" />
+          <button type="button" onClick={onClose} className="size-9 rounded-xl border border-white/[0.06] bg-white/[0.03] flex items-center justify-center text-white/30 hover:text-white hover:bg-white/10 transition-all">
+            <X className="size-4" />
           </button>
         </div>
 
@@ -370,7 +372,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
               <img src={posterUrl} alt={item.title} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-white/10">
-                {item.media_type === 'movie' ? <Film className="w-12 h-12" /> : <Tv className="w-12 h-12" />}
+                {item.media_type === 'movie' ? <Film className="size-12" /> : <Tv className="size-12" />}
               </div>
             )}
           </div>
@@ -384,7 +386,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-white/40">
-                  {item.media_type === 'movie' ? <Film className="w-3 h-3" /> : <Tv className="w-3 h-3" />}
+                  {item.media_type === 'movie' ? <Film className="size-3" /> : <Tv className="size-3" />}
                   {item.media_type}
                 </span>
                 <span className={cn(
@@ -395,7 +397,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
                       ? 'border-sky-500/20 bg-sky-500/10 text-sky-400'
                       : 'border-white/[0.04] bg-white/[0.02] text-white/20',
                 )}>
-                  <Bell className="w-3 h-3" />
+                  <Bell className="size-3" />
                   {!item.notification_enabled ? 'No reminder' : isSpam ? 'Spam reminder' : 'Reminder set'}
                 </span>
               </div>
@@ -413,7 +415,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
               <div className="space-y-4 rounded-2xl border border-white/[0.06] bg-black/40 p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2.5 text-sm font-bold text-white/60">
-                    <Calendar className="w-4 h-4 opacity-40" />
+                    <Calendar className="size-4 opacity-40" />
                     <span className="truncate">{formatLocalReleaseTime(item.notify_at)}</span>
                   </div>
                   <CountdownTimer target={item.notify_at} compact />
@@ -438,7 +440,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
 
                 {overdue && (
                   <div className="flex items-center gap-2 text-[11px] font-bold text-amber-400/70">
-                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <AlertTriangle className="size-3.5" />
                     This reminder has passed. Edit to reschedule or disable.
                   </div>
                 )}
@@ -446,7 +448,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
             ) : (
               <div className="rounded-2xl border border-white/[0.04] bg-black/20 p-4">
                 <div className="flex items-center gap-2 text-sm text-white/20 font-bold">
-                  <Clock className="w-4 h-4" />
+                  <Clock className="size-4" />
                   No reminder scheduled
                 </div>
               </div>
@@ -458,7 +460,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
                 onClick={onEdit}
                 className="flex-1 h-12 rounded-2xl bg-white text-black hover:bg-white/90 font-black text-xs uppercase tracking-[0.2em]"
               >
-                <Edit2 className="w-4 h-4 mr-2" />
+                <Edit2 className="size-4 mr-2" />
                 Edit
               </Button>
               <Button
@@ -467,7 +469,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
                 variant="ghost"
                 className="flex-1 h-12 rounded-2xl border border-white/[0.08] text-white/40 hover:text-red-400 hover:border-red-400/30 hover:bg-red-400/10 font-black text-xs uppercase tracking-[0.2em]"
               >
-                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                {isDeleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4 mr-2" />}
                 {isDeleting ? 'Deleting' : 'Delete'}
               </Button>
             </div>

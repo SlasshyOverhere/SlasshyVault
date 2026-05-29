@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { areMovieCardPropsEqual, areContinueCardPropsEqual, MovieCardProps, ContinueCardProps } from './MovieCard'
+import { areMovieCardPropsEqual, areContinueCardPropsEqual, MovieCardProps, ContinueCardProps } from './MovieCard.types'
 import { MediaItem } from '@/services/api'
 
 // Mock MediaItem

@@ -14,7 +14,7 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
         <div className="space-y-6">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-white/10 p-2">
-              <Archive className="h-5 w-5 text-white" />
+              <Archive className="size-5 text-white" />
             </div>
             <div>
               <h2 className="text-lg font-semibold">
@@ -54,7 +54,7 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
 
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="flex items-start gap-2">
-                <ShieldAlert className="mt-0.5 h-4 w-4 text-white" />
+                <ShieldAlert className="mt-0.5 size-4 text-white" />
                 <div>
                   <p className="text-sm font-medium text-white">
                     Avoid these options
@@ -70,7 +70,7 @@ export function ZipGuideModal({ open, onOpenChange }: ZipGuideModalProps) {
 
             <div className="rounded-xl border border-white/10 p-4">
               <div className="flex items-start gap-2">
-                <Info className="mt-0.5 h-4 w-4 text-white" />
+                <Info className="mt-0.5 size-4 text-white" />
                 <p className="text-sm text-muted-foreground">
                   Larger Store ZIPs use more Google Drive space, but they start
                   fastest because SlasshyVault can stream them directly without

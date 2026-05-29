@@ -48,7 +48,7 @@ import { open as openDialog } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { Switch } from "@/components/ui/switch";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings";
 import { ZipGuideModal } from "@/components/ZipGuideModal";
@@ -223,7 +223,7 @@ export function SettingsModal({
 
       toast({
         title: "Download Complete",
-        description: "Installing update and restarting...",
+        description: "Installing update and restarting…",
       });
 
       // Small delay to show the toast
@@ -466,40 +466,40 @@ export function SettingsModal({
     label: string;
     icon: React.ReactNode;
   }[] = [
-    { id: "general", label: "General", icon: <Settings className="w-4 h-4" /> },
+    { id: "general", label: "General", icon: <Settings className="size-4" /> },
     {
       id: "account",
       label: "Account",
-      icon: <Power className="w-4 h-4" />,
+      icon: <Power className="size-4" />,
     },
     {
       id: "updates",
       label: "Updates",
-      icon: <Shield className="w-4 h-4" />,
+      icon: <Shield className="size-4" />,
     },
     {
       id: "cloud",
       label: "Cache & Storage",
-      icon: <Cloud className="w-4 h-4" />,
+      icon: <Cloud className="size-4" />,
     },
-    { id: "api", label: "API Keys", icon: <Key className="w-4 h-4" /> },
+    { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
     {
       id: "danger",
       label: "Factory Reset",
-      icon: <AlertTriangle className="w-4 h-4" />,
+      icon: <AlertTriangle className="size-4" />,
     },
-    { id: "beta", label: "Beta", icon: <FlaskConical className="w-4 h-4" /> },
+    { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
     ...(import.meta.env.DEV
-      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="w-4 h-4" /> }]
+      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
       : []),
     ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
-      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="w-4 h-4" /> }]
+      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
       : []),
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <>
+      <LazyMotion features={domAnimation}>
         <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
           <div className="flex flex-1 min-h-0">
             {/* Sidebar */}
@@ -509,17 +509,19 @@ export function SettingsModal({
                   Settings
                 </h2>
                 <button
+                  type="button"
                   onClick={() => onOpenChange(false)}
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                   aria-label="Close settings"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="size-4" />
                 </button>
               </div>
 
               <nav className="space-y-1">
                 {sections.map((section) => (
                   <button
+                    type="button"
                     key={section.id}
                     onClick={() => setActiveSection(section.id)}
                     className={cn(
@@ -547,7 +549,7 @@ export function SettingsModal({
                   {/* General Section */}
                   {/* ===== General Settings ===== */}
                   {activeSection === "general" && (
-                    <motion.div
+                    <m.div
                       key="general"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -568,7 +570,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-white/10">
-                              <Power className="w-5 h-5 text-white" />
+                              <Power className="size-5 text-white" />
                             </div>
                             <div>
                               <Label className="text-base font-medium">
@@ -590,7 +592,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-white/8">
-                            <MonitorPlay className="w-5 h-5 text-foreground" />
+                            <MonitorPlay className="size-5 text-foreground" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -617,7 +619,7 @@ export function SettingsModal({
                                   bundledMpvInfo?.exists ? "bg-white/10" : "bg-muted"
                                 )}>
                                   <Wifi className={cn(
-                                    "w-5 h-5",
+                                    "size-5",
                                     bundledMpvInfo?.exists ? "text-foreground" : "text-muted-foreground"
                                   )} />
                                 </div>
@@ -652,10 +654,10 @@ export function SettingsModal({
                               >
                                 {downloadingBundledMpv ? (
                                   <>
-                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <Loader2 className="size-3 animate-spin" />
                                     {bundledMpvProgress > 0
                                       ? `${Math.round(bundledMpvProgress)}%`
-                                      : "Installing..."}
+                                      : "Installing…"}
                                   </>
                                 ) : bundledMpvInfo?.exists ? (
                                   "Reinstall"
@@ -668,7 +670,7 @@ export function SettingsModal({
                             {/* Warning when bundled not actively used */}
                             {bundledMpvInfo?.exists && config.mpv_path && config.mpv_path !== bundledMpvInfo.path && (
                               <div className="flex items-start gap-2 mt-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                                <AlertTriangle className="size-4 text-amber-400 shrink-0 mt-0.5" />
                                 <p className="text-[11px] text-amber-300/90 leading-relaxed">
                                   You're using a different MPV build. Newer builds can cause
                                   playback errors. Switch back to the bundled player above.
@@ -691,7 +693,7 @@ export function SettingsModal({
                           {showCustomMpv && (
                             <div className="mt-3 p-3 rounded-xl bg-red-500/5 border border-red-500/20 space-y-3">
                               <div className="flex items-start gap-2">
-                                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                                <AlertTriangle className="size-4 text-red-400 shrink-0 mt-0.5" />
                                 <div>
                                   <p className="text-xs font-semibold text-red-300">
                                     Not recommended
@@ -728,7 +730,7 @@ export function SettingsModal({
                                   className="shrink-0"
                                   aria-label="Browse for MPV executable"
                                 >
-                                  <FolderOpen className="h-4 w-4" />
+                                  <FolderOpen className="size-4" />
                                 </Button>
                                 <Button
                                   variant="outline"
@@ -739,11 +741,11 @@ export function SettingsModal({
                                 >
                                   <RefreshCw
                                     className={cn(
-                                      "w-3 h-3",
+                                      "size-3",
                                       detectingMpv && "animate-spin",
                                     )}
                                   />
-                                  {detectingMpv ? "Detecting..." : "Detect"}
+                                  {detectingMpv ? "Detecting…" : "Detect"}
                                 </Button>
                               </div>
                             </div>
@@ -752,12 +754,12 @@ export function SettingsModal({
                       </div>
 
 
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (
-                    <motion.div
+                    <m.div
                       key="beta"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -783,7 +785,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-purple-500/20">
-                              <FlaskConical className="w-5 h-5 text-purple-400" />
+                              <FlaskConical className="size-5 text-purple-400" />
                             </div>
                             <div>
                               <div className="flex items-center gap-2">
@@ -834,7 +836,7 @@ export function SettingsModal({
                       {/* Warning Banner */}
                       <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                         <div className="flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <AlertTriangle className="size-4 text-yellow-500 mt-0.5 flex-shrink-0" />
                           <div className="space-y-1">
                             <p className="text-xs font-medium text-yellow-500">
                               Heads up
@@ -871,7 +873,7 @@ export function SettingsModal({
                             >
                               <Radio
                                 className={cn(
-                                  "w-5 h-5",
+                                  "size-5",
                                   betaEnabled
                                     ? "text-purple-400"
                                     : "text-muted-foreground",
@@ -897,12 +899,12 @@ export function SettingsModal({
 
                       </div>
 
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Account ===== */}
                   {activeSection === "account" && (
-                    <motion.div
+                    <m.div
                       key="account"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -925,7 +927,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-red-500/30 space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-red-500/20">
-                            <Power className="w-5 h-5 text-red-400" />
+                            <Power className="size-5 text-red-400" />
                           </div>
                           <div>
                             <p className="text-base font-medium">
@@ -948,7 +950,7 @@ export function SettingsModal({
                             onClick={() => setShowLogoutConfirm(true)}
                             className="w-full"
                           >
-                            <Power className="mr-2 h-4 w-4" />
+                            <Power className="mr-2 size-4" />
                             Sign Out
                           </Button>
                         ) : (
@@ -985,8 +987,8 @@ export function SettingsModal({
                               >
                                 {loggingOut ? (
                                   <>
-                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                    Signing Out...
+                                    <Loader2 className="size-4 mr-2 animate-spin" />
+                                    Signing Out…
                                   </>
                                 ) : (
                                   "Yes, Sign Out"
@@ -996,12 +998,12 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Updates & Security ===== */}
                   {activeSection === "updates" && (
-                    <motion.div
+                    <m.div
                       key="updates"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1021,14 +1023,14 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-center gap-3 mb-2">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Download className="w-5 h-5 text-white" />
+                            <Download className="size-5 text-white" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
                               About & Updates
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Version {appVersion || "..."}
+                              Version {appVersion || "…"}
                             </p>
                           </div>
                         </div>
@@ -1043,12 +1045,12 @@ export function SettingsModal({
                           >
                             <RefreshCw
                               className={cn(
-                                "w-4 h-4",
+                                "size-4",
                                 checkingUpdate && "animate-spin",
                               )}
                             />
                             {checkingUpdate
-                              ? "Checking..."
+                              ? "Checking…"
                               : "Check for Updates"}
                           </Button>
                         )}
@@ -1086,7 +1088,7 @@ export function SettingsModal({
                                   />
                                 </div>
                                 <p className="text-xs text-center text-muted-foreground">
-                                  Downloading... {downloadProgress.toFixed(0)}%
+                                  Downloading… {downloadProgress.toFixed(0)}%
                                 </p>
                               </div>
                             ) : (
@@ -1095,19 +1097,19 @@ export function SettingsModal({
                                 disabled={!updateInfo.download_url}
                                 className="w-full gap-2 bg-white text-black hover:bg-gray-200"
                               >
-                                <Download className="w-4 h-4" />
+                                <Download className="size-4" />
                                 Download & Install
                               </Button>
                             )}
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Cache and Storage ===== */}
                   {activeSection === "cloud" && (
-                    <motion.div
+                    <m.div
                       key="cloud"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1117,7 +1119,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Archive className="w-5 h-5 text-white" />
+                            <Archive className="size-5 text-white" />
                           </div>
                           <div className="flex-1">
                             <Label className="text-base font-medium">
@@ -1161,7 +1163,7 @@ export function SettingsModal({
                                 onClick={browseZipCacheDir}
                                 title="Browse"
                               >
-                                <FolderOpen className="h-4 w-4" />
+                                <FolderOpen className="size-4" />
                               </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
@@ -1217,12 +1219,12 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== API Configuration ===== */}
                   {activeSection === "api" && (
-                    <motion.div
+                    <m.div
                       key="api"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1242,7 +1244,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-border space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-white/10">
-                            <Zap className="w-5 h-5 text-white" />
+                            <Zap className="size-5 text-white" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -1271,14 +1273,14 @@ export function SettingsModal({
                           <div className="flex items-center gap-3">
                             <div
                               className={cn(
-                                "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
                                 !useOwnApiKey
                                   ? "border-white"
                                   : "border-muted-foreground",
                               )}
                             >
                               {!useOwnApiKey && (
-                                <div className="w-2 h-2 rounded-full bg-white" />
+                                <div className="size-2 rounded-full bg-white" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1312,14 +1314,14 @@ export function SettingsModal({
                           <div className="flex items-center gap-3">
                             <div
                               className={cn(
-                                "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
                                 useOwnApiKey
                                   ? "border-white"
                                   : "border-muted-foreground",
                               )}
                             >
                               {useOwnApiKey && (
-                                <div className="w-2 h-2 rounded-full bg-white" />
+                                <div className="size-2 rounded-full bg-white" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1341,7 +1343,7 @@ export function SettingsModal({
 
                         {/* Custom API Key Inputs - Only shown when "Use Your Own" is selected */}
                         {useOwnApiKey && (
-                          <motion.div
+                          <m.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
                             exit={{ opacity: 0, height: 0 }}
@@ -1349,10 +1351,11 @@ export function SettingsModal({
                           >
                             {/* TMDB Key */}
                             <div>
-                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                              <label htmlFor="tmdb-api-key" className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
                                 TMDB API Key
                               </label>
                               <Input
+                                id="tmdb-api-key"
                                 type="password"
                                 value={config.tmdb_api_key || ""}
                                 onChange={(e) =>
@@ -1378,10 +1381,11 @@ export function SettingsModal({
 
                             {/* OMDb Key */}
                             <div>
-                              <label className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
+                              <label htmlFor="omdb-api-key" className="text-xs font-bold text-white/60 uppercase tracking-wider mb-1.5 block">
                                 OMDb API Key (IMDb Ratings)
                               </label>
                               <Input
+                                id="omdb-api-key"
                                 type="password"
                                 value={config.omdb_api_key || ""}
                                 onChange={(e) =>
@@ -1404,15 +1408,15 @@ export function SettingsModal({
                                 </a>
                               </p>
                             </div>
-                          </motion.div>
+                          </m.div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Dev Panel (only shown in dev mode) ===== */}
                   {import.meta.env.DEV && activeSection === "dev" && (
-                    <motion.div
+                    <m.div
                       key="dev"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1438,7 +1442,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-yellow-500/20">
-                            <Code className="w-5 h-5 text-yellow-400" />
+                            <Code className="size-5 text-yellow-400" />
                           </div>
                           <div>
                             <Label className="text-base font-medium">
@@ -1553,12 +1557,12 @@ export function SettingsModal({
                           </Button>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Nightly Section (only shown in nightly builds) ===== */}
                   {import.meta.env.VITE_IS_NIGHTLY === 'true' && activeSection === "nightly" && (
-                    <motion.div
+                    <m.div
                       key="nightly"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1584,7 +1588,7 @@ export function SettingsModal({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="p-2 rounded-lg bg-white/10">
-                              <Bug className="w-5 h-5 text-white" />
+                              <Bug className="size-5 text-white" />
                             </div>
                             <div>
                               <Label className="text-base font-medium">
@@ -1614,7 +1618,7 @@ export function SettingsModal({
                       {/* Info card */}
                       <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                         <div className="flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <AlertTriangle className="size-4 text-yellow-500 mt-0.5 flex-shrink-0" />
                           <div className="space-y-1">
                             <p className="text-xs font-medium text-yellow-500">
                               Nightly Build
@@ -1626,12 +1630,12 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
                   {/* ===== Factory Reset (Danger Zone) ===== */}
                   {activeSection === "danger" && (
-                    <motion.div
+                    <m.div
                       key="danger"
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1652,7 +1656,7 @@ export function SettingsModal({
                       <div className="p-4 rounded-xl border border-destructive/30 bg-destructive/5 space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="p-2 rounded-lg bg-destructive/20">
-                            <AlertTriangle className="w-5 h-5 text-destructive" />
+                            <AlertTriangle className="size-5 text-destructive" />
                           </div>
                           <div>
                             <Label className="text-base font-medium text-destructive">
@@ -1675,7 +1679,7 @@ export function SettingsModal({
                             onClick={() => setShowResetConfirm(true)}
                             className="w-full"
                           >
-                            <Trash2 className="mr-2 h-4 w-4" />
+                            <Trash2 className="mr-2 size-4" />
                             Reset App to Factory State
                           </Button>
                         ) : (
@@ -1707,7 +1711,7 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
 
 
@@ -1732,14 +1736,14 @@ export function SettingsModal({
                 disabled={loading}
                 className="gap-2"
               >
-                <Save className="w-4 h-4" />
-                {loading ? "Saving..." : "Save"}
+                <Save className="size-4" />
+                {loading ? "Saving…" : "Save"}
               </Button>
             </div>
           </div>
         </DialogContent>
         <ZipGuideModal open={showZipGuide} onOpenChange={setShowZipGuide} />
-      </>
+      </LazyMotion>
     </Dialog>
   );
 }

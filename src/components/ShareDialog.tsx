@@ -62,8 +62,8 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
         <div className="px-6 pt-6 pb-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2.5 text-white text-base">
-              <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
-                <Shield className="w-4.5 h-4.5 text-white" style={{ width: 18, height: 18 }} />
+              <div className="size-8 rounded-xl bg-white/10 flex items-center justify-center">
+                <Shield className="size-4.5 text-white" style={{ width: 18, height: 18 }} />
               </div>
               <span>Share via Google Drive</span>
             </DialogTitle>
@@ -77,21 +77,21 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
         <div className="px-6 pb-6">
           {shared ? (
             <div className="flex flex-col items-center gap-5 py-8">
-              <div className="w-20 h-20 rounded-full bg-white/10 flex items-center justify-center ring-1 ring-white/10">
-                <CheckCircle2 className="w-10 h-10 text-white" />
+              <div className="size-20 rounded-full bg-white/10 flex items-center justify-center ring-1 ring-white/10">
+                <CheckCircle2 className="size-10 text-white" />
               </div>
               <p className="text-white/85 text-base font-medium">File shared successfully!</p>
               <Button
                 onClick={handleClose}
                 className="h-11 px-10 rounded-2xl bg-white/10 hover:bg-white/18 text-white/85 hover:text-white text-sm font-semibold border border-white/8 transition-all"
               >
-                Done
+                Close
               </Button>
             </div>
           ) : (
             <div className="flex flex-col gap-4">
               <div className="relative">
-                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25" />
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-white/25" />
                 <Input
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -120,9 +120,9 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
                 )}
               >
                 {isSharing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Send className="w-4 h-4" />
+                  <Send className="size-4" />
                 )}
                 {isSharing ? "Sharing..." : "Share"}
               </Button>

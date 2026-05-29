@@ -18,8 +18,10 @@ function extractMediaMatchKeys(value) {
   }
   return normalized
     .split('|')
-    .map((token) => token.trim())
-    .filter(Boolean);
+    .flatMap((token) => {
+      const trimmed = token.trim();
+      return trimmed ? [trimmed] : [];
+    });
 }
 
 function hasMatchingMediaKey(roomKeyValue, joinKeyValue) {

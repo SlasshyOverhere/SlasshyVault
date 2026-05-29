@@ -105,6 +105,7 @@ export function WatchTogetherModal({
     const mpvLaunchedRef = useRef(false); // Track if we already launched MPV
     const sessionCounterRef = useRef(0); // Increment on each room join to scope event listeners
     const handleCloseRef = useRef(false); // Prevent double invocation of handleClose
+    const wasOpenRef = useRef(false); // Track previous isOpen for initialization
 
     // Keep refs updated
     useEffect(() => {
@@ -119,28 +120,22 @@ export function WatchTogetherModal({
         activeRoomRef.current = activeRoom;
     }, [activeRoom]);
 
-    useEffect(() => {
-        if (!activeRoom) {
-            mpvLaunchedRef.current = false;
-            setCurrentUserId('');
-        }
-    }, [activeRoom]);
+    // Reset refs when room is cleared (inline during render)
+    if (!activeRoom && mpvLaunchedRef.current) {
+        mpvLaunchedRef.current = false;
+    }
+    if (!activeRoom && currentUserId) {
+        setCurrentUserId('');
+    }
 
-    // Sync view with session state when modal opens
-    useEffect(() => {
-        if (isOpen) {
-            if (isPlaying) {
-                setView('playing');
-                setSyncPhase('playing');
-            } else if (activeRoom) {
-                setView('lobby');
-                setSyncPhase('lobby');
-            } else {
-                setView('menu');
-                setSyncPhase('lobby');
-            }
-        }
-    }, [isOpen, activeRoom, isPlaying]);
+    // Initialize view/syncPhase when modal opens (instead of useEffect)
+    if (isOpen && !wasOpenRef.current) {
+        const desiredView = isPlaying ? 'playing' : activeRoom ? 'lobby' : 'menu';
+        const desiredPhase = isPlaying ? 'playing' : 'lobby';
+        if (view !== desiredView) setView(desiredView);
+        if (syncPhase !== desiredPhase) setSyncPhase(desiredPhase);
+    }
+    wasOpenRef.current = isOpen;
 
     // Load saved nickname
     useEffect(() => {
@@ -416,7 +411,7 @@ export function WatchTogetherModal({
                 <DialogContent className="sm:max-w-md bg-card border-border/50">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
-                            <Users className="w-5 h-5" />
+                            <Users className="size-5" />
                             Watch Together
                         </DialogTitle>
                     </DialogHeader>
@@ -458,9 +453,9 @@ export function WatchTogetherModal({
                                         aria-label="Create a watch together room"
                                     >
                                         {isLoading ? (
-                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            <Loader2 className="size-4 mr-2 animate-spin" />
                                         ) : (
-                                            <Plus className="w-4 h-4 mr-2" />
+                                            <Plus className="size-4 mr-2" />
                                         )}
                                         Create Room
                                     </Button>
@@ -481,9 +476,9 @@ export function WatchTogetherModal({
                                         aria-label="Join a watch together room"
                                     >
                                         {isLoading ? (
-                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            <Loader2 className="size-4 mr-2 animate-spin" />
                                         ) : (
-                                            <LogIn className="w-4 h-4 mr-2" />
+                                            <LogIn className="size-4 mr-2" />
                                         )}
                                         Join Room
                                     </Button>
@@ -515,8 +510,8 @@ export function WatchTogetherModal({
 
                     {view === 'playing' && (
                         <div className="text-center py-8">
-                            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
-                                <Users className="w-8 h-8" />
+                            <div className="size-16 mx-auto mb-6 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
+                                <Users className="size-8" />
                             </div>
                             <p className="text-lg font-bold mb-2">Watching Together</p>
                             <p className="text-sm text-muted-foreground mb-8">
@@ -534,7 +529,7 @@ export function WatchTogetherModal({
                                     className="btn-secondary"
                                     aria-label="Close modal but stay in room"
                                 >
-                                    <X className="w-4 h-4 mr-2" />
+                                    <X className="size-4 mr-2" />
                                     Close (Stay in Room)
                                 </Button>
                                 <Button

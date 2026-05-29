@@ -34,7 +34,7 @@ import { RemindersList } from './RemindersList'
 import { TmdbDetailsModal } from './TmdbDetailsModal'
 import { WatchlistEditor } from './WatchlistEditor'
 import { WatchlistList } from './WatchlistList'
-import { motion, AnimatePresence } from 'framer-motion'
+import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
 export function RemindersView() {
@@ -250,6 +250,7 @@ export function RemindersView() {
   }
 
   return (
+    <LazyMotion features={domAnimation}>
     <div className="h-full min-h-0 flex flex-col bg-transparent text-white relative overflow-hidden font-sans items-center">
       <div className="absolute inset-0 bg-gradient-mesh opacity-30 pointer-events-none" />
       <div className="absolute inset-0 bg-sheen opacity-20 pointer-events-none" />
@@ -258,25 +259,25 @@ export function RemindersView() {
       <header className="w-full max-w-5xl shrink-0 pt-12 pb-8 px-6 flex flex-col lg:flex-row lg:items-center justify-between gap-8 relative z-10 mt-8">
         <div className="flex items-center gap-8">
           <div className="relative group">
-            <motion.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex items-center gap-4">
+            <m.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex items-center gap-4">
               <div className="relative">
                 <div className="absolute -inset-2 bg-white/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-                <div className="w-12 h-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
-                  <Clapperboard className="w-6 h-6 text-white/70" />
+                <div className="size-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
+                  <Clapperboard className="size-6 text-white/70" />
                 </div>
               </div>
               <div className="space-y-0.5">
-                <h1 className="text-4xl font-black tracking-tighter leading-none bg-clip-text text-transparent bg-gradient-to-b from-white to-white/40">
+                <h1 className="text-4xl font-black tracking-tighter leading-none text-white/80">
                   Watchlist
                 </h1>
                 <div className="flex items-center gap-2">
-                  <div className="w-1 h-1 rounded-full bg-emerald-500/50 animate-pulse" />
+                  <div className="size-1 rounded-full bg-emerald-500/50 animate-pulse" />
                   <p className="text-white/20 text-[9px] font-black uppercase tracking-[0.3em]">
                     Discover, queue, remind
                   </p>
                 </div>
               </div>
-            </motion.div>
+            </m.div>
           </div>
 
           <div className="h-10 w-px bg-white/5 hidden lg:block" />
@@ -288,6 +289,7 @@ export function RemindersView() {
               { id: 'watchlist', label: 'Watchlist', icon: Bookmark },
             ].map((tab) => (
               <button
+                type="button"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as 'discover' | 'reminders' | 'watchlist')}
                 className={cn(
@@ -296,10 +298,10 @@ export function RemindersView() {
                 )}
               >
                 {activeTab === tab.id && (
-                  <motion.div layoutId="RemindersTab" className="absolute inset-0 bg-white rounded-full shadow-md" />
+                  <m.div layoutId="RemindersTab" className="absolute inset-0 bg-white rounded-full shadow-md" />
                 )}
                 <span className="relative z-10 flex items-center gap-1.5">
-                  <tab.icon className="w-3.5 h-3.5" />
+                  <tab.icon className="size-3.5" />
                   {tab.label}
                 </span>
               </button>
@@ -307,12 +309,12 @@ export function RemindersView() {
           </div>
         </div>
 
-        <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex items-center gap-4">
+        <m.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex items-center gap-4">
           <div className="flex items-center gap-4 px-4 py-2 bg-white/[0.02] border border-white/[0.05] rounded-xl backdrop-blur-sm">
             <div className="flex flex-col items-end">
               <span className="text-[8px] font-black uppercase tracking-[0.2em] text-white/20 leading-none mb-1">Engine</span>
               <div className="flex items-center gap-1.5">
-                <div className={cn('w-1 h-1 rounded-full transition-all duration-500', config?.notifications_enabled ? 'bg-white shadow-glow-sm animate-pulse' : 'bg-white/10')} />
+                <div className={cn('size-1 rounded-full transition-all duration-500', config?.notifications_enabled ? 'bg-white shadow-glow-sm animate-pulse' : 'bg-white/10')} />
                 <span className={cn('text-[9px] font-black uppercase tracking-widest leading-none transition-colors duration-500', config?.notifications_enabled ? 'text-white/80' : 'text-white/30')}>
                   {config?.notifications_enabled ? 'Active' : 'Muted'}
                 </span>
@@ -320,22 +322,22 @@ export function RemindersView() {
             </div>
             <Switch checked={config?.notifications_enabled || false} onCheckedChange={handleToggleNotifications} className="scale-75 data-[state=checked]:bg-white transition-colors" />
           </div>
-        </motion.div>
+        </m.div>
       </header>
 
       <main className="flex-1 w-full min-h-0 relative z-10 overflow-hidden flex justify-center">
         <div className="w-full max-w-5xl h-full min-h-0 overflow-hidden">
           <AnimatePresence mode="wait">
             {activeTab === 'discover' ? (
-              <motion.div key="discover" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="h-full flex flex-col items-center">
+              <m.div key="discover" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="h-full flex flex-col items-center">
                 <ScrollArea className="w-full flex-1 px-6 pb-12 [&>div]:scrollbar-none">
-                  <div className="w-full space-y-12 pt-4 flex flex-col items-center">
+                  <div className="w-full gap-y-12 pt-4 flex flex-col items-center">
                     <div className={cn('w-full relative group/search pt-4 max-w-3xl transition-all duration-700', searchResults.length > 0 ? 'mt-0' : 'mt-32')}>
                       <div className="absolute -inset-10 bg-white/[0.02] rounded-[3rem] blur-3xl group-focus-within/search:bg-white/[0.05] transition-all duration-1000 pointer-events-none" />
                       <div className="space-y-6">
                         <div className="flex flex-col gap-4">
                           <div className="relative group/input">
-                            <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20 group-focus-within/search:text-white/60 group-hover/input:text-white/40 transition-all duration-500" />
+                            <Search className="absolute left-6 top-1/2 -translate-y-1/2 size-5 text-white/20 group-focus-within/search:text-white/60 group-hover/input:text-white/40 transition-all duration-500" />
                             <Input
                               value={searchQuery}
                               onChange={e => handleSearchInputChange(e.target.value)}
@@ -343,7 +345,7 @@ export function RemindersView() {
                               placeholder="Search global motion picture database..."
                               className="h-16 pl-16 pr-8 rounded-[1.5rem] bg-white/[0.02] border-white/[0.05] focus:bg-white/[0.04] focus:border-white/20 text-lg font-bold placeholder:text-white/10 transition-all duration-500 shadow-elevation-1 focus:shadow-glow-sm"
                             />
-                            {isSearching && <div className="absolute right-6 top-1/2 -translate-y-1/2"><Loader2 className="w-6 h-6 animate-spin text-white/40" /></div>}
+                            {isSearching && <div className="absolute right-6 top-1/2 -translate-y-1/2"><Loader2 className="size-6 animate-spin text-white/40" /></div>}
                           </div>
                           <Button onClick={() => handleSearch()} disabled={isSearching || !searchQuery.trim()} className="h-16 px-12 rounded-[1.5rem] bg-white text-black hover:bg-white/90 font-black uppercase tracking-[0.25em] text-[11px] shadow-glow-sm active:scale-95 transition-all duration-500 w-full">
                             Search
@@ -355,7 +357,7 @@ export function RemindersView() {
                             <span className="text-[10px] font-black uppercase tracking-widest">Trending:</span>
                             <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
                               {trendingSuggestions.map(item => (
-                                <button key={`${item.media_type}-${item.id}`} onClick={() => openTrendingDetails(item)} className="text-[10px] font-bold hover:text-white transition-colors hover:underline underline-offset-4 decoration-white/20">
+                                <button type="button" key={`${item.media_type}-${item.id}`} onClick={() => openTrendingDetails(item)} className="text-[10px] font-bold hover:text-white transition-colors hover:underline underline-offset-4 decoration-white/20">
                                   {item.title}
                                 </button>
                               ))}
@@ -369,8 +371,8 @@ export function RemindersView() {
                       <div className="w-full space-y-10 animate-fade-in-up">
                         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between px-2">
                           <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
-                              <TrendingUp className="w-5 h-5 text-white/60" />
+                            <div className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shadow-inner">
+                              <TrendingUp className="size-5 text-white/60" />
                             </div>
                             <div className="flex flex-col">
                               <h2 className="text-sm font-black uppercase tracking-[0.2em] text-white/80 leading-none">Discovery System</h2>
@@ -384,7 +386,7 @@ export function RemindersView() {
                               { id: 'movie', label: 'Movies' },
                               { id: 'tv', label: 'Series' }
                             ].map(tab => (
-                              <button key={tab.id} onClick={() => setMediaFilter(tab.id as 'all' | 'movie' | 'tv')} className={cn('px-5 py-2 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all duration-500', mediaFilter === tab.id ? 'bg-white text-black shadow-glow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5')}>
+                              <button type="button" key={tab.id} onClick={() => setMediaFilter(tab.id as 'all' | 'movie' | 'tv')} className={cn('px-5 py-2 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all duration-500', mediaFilter === tab.id ? 'bg-white text-black shadow-glow-sm' : 'text-white/30 hover:text-white/60 hover:bg-white/5')}>
                                 {tab.label}
                               </button>
                             ))}
@@ -393,7 +395,7 @@ export function RemindersView() {
 
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-8 gap-y-12">
                           {filteredResults.map((result, idx) => (
-                            <motion.div key={`${result.media_type}-${result.id}`} initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ delay: idx * 0.05, duration: 0.5 }} className="group">
+                            <m.div key={`${result.media_type}-${result.id}`} initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ delay: idx * 0.05, duration: 0.5 }} className="group">
                               <button type="button" className="relative isolate cursor-pointer text-left w-full" onClick={() => {
                                 setSelectedResult({ id: result.id, type: result.media_type as 'movie' | 'tv' })
                                 setDetailsModalOpen(true)
@@ -403,14 +405,14 @@ export function RemindersView() {
                                     <img src={getTmdbImageUrl(result.poster_path, 'w500') || ''} alt={result.title || result.name} className="aspect-[2/3] w-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
                                   ) : (
                                     <div className="aspect-[2/3] w-full flex items-center justify-center bg-white/[0.02] text-white/5">
-                                      {result.media_type === 'movie' ? <Film className="w-16 h-16" /> : <Tv className="w-16 h-16" />}
+                                      {result.media_type === 'movie' ? <Film className="size-16" /> : <Tv className="size-16" />}
                                     </div>
                                   )}
                                   <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-80 transition-opacity duration-500 group-hover:opacity-100" />
 
                                   <div className="absolute top-4 left-4 z-20">
                                     <div className="h-7 px-3 flex items-center gap-2 rounded-full border border-white/10 bg-black/35 backdrop-blur-xl">
-                                      {result.media_type === 'movie' ? <Film className="w-3 h-3 opacity-60" /> : <Tv className="w-3 h-3 opacity-60" />}
+                                      {result.media_type === 'movie' ? <Film className="size-3 opacity-60" /> : <Tv className="size-3 opacity-60" />}
                                       <span className="text-[8px] font-black uppercase tracking-widest">{result.media_type}</span>
                                     </div>
                                   </div>
@@ -429,19 +431,19 @@ export function RemindersView() {
                                   </span>
                                   {(result.vote_average ?? 0) > 0 && (
                                     <>
-                                      <div className="w-1 h-1 rounded-full bg-white/10" />
+                                      <div className="size-1 rounded-full bg-white/10" />
                                       <span className="text-white/40">{(result.vote_average ?? 0).toFixed(1)} Score</span>
                                     </>
                                   )}
                                 </div>
                               </div>
-                            </motion.div>
+                            </m.div>
                           ))}
                         </div>
                       </div>
                     ) : (
                       !isSearching && !searchQuery && (
-                        <div className="flex flex-1 flex-col items-center justify-center py-20 text-center space-y-8 w-full">
+                        <div className="flex flex-1 flex-col items-center justify-center py-20 text-center gap-y-8 w-full">
                           <p className="text-white/20 font-bold uppercase tracking-[0.2em] text-sm">
                             Search the TMDB catalog or open a trending title
                           </p>
@@ -450,25 +452,25 @@ export function RemindersView() {
                     )}
                   </div>
                 </ScrollArea>
-              </motion.div>
+              </m.div>
             ) : activeTab === 'reminders' ? (
-              <motion.div key="reminders" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="flex flex-col h-full min-h-0 overflow-hidden px-6 pb-8 items-center">
+              <m.div key="reminders" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="flex flex-col h-full min-h-0 overflow-hidden px-6 pb-8 items-center">
                 <div className="w-full max-w-4xl flex-1 min-h-0">
                   <RemindersList reminders={reminders} onEdit={(r) => {
                     setEditingReminder(r)
                     setEditorOpen(true)
                   }} onRefresh={loadReminders} />
                 </div>
-              </motion.div>
+              </m.div>
             ) : (
-              <motion.div key="watchlist" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="flex flex-col h-full min-h-0 overflow-hidden px-6 pb-8 items-center">
+              <m.div key="watchlist" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="flex flex-col h-full min-h-0 overflow-hidden px-6 pb-8 items-center">
                 <div className="w-full max-w-4xl flex-1 min-h-0">
                   <WatchlistList items={watchlistItems} onEdit={(item) => {
                     setEditingWatchlistItem(item)
                     setWatchlistEditorOpen(true)
                   }} onRefresh={loadWatchlist} />
                 </div>
-              </motion.div>
+              </m.div>
             )}
           </AnimatePresence>
         </div>
@@ -495,5 +497,6 @@ export function RemindersView() {
       <ReminderEditor open={editorOpen} onOpenChange={setEditorOpen} initialData={editingReminder || undefined} onSave={handleSaveReminder} />
       <WatchlistEditor open={watchlistEditorOpen} onOpenChange={setWatchlistEditorOpen} initialData={editingWatchlistItem || undefined} onSave={handleSaveWatchlist} />
     </div>
+    </LazyMotion>
   )
 }

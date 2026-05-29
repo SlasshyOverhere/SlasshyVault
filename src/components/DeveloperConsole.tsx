@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, m, AnimatePresence, domAnimation } from "framer-motion";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Trash2, Terminal, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -156,9 +156,11 @@ export function DeveloperConsole() {
   const totalCount = logs.length;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+    <LazyMotion features={domAnimation}>
+      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
       {/* Toggle button */}
       <button
+        type="button"
         onClick={() => setOpen(!open)}
         className={cn(
           "flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all",
@@ -168,14 +170,14 @@ export function DeveloperConsole() {
         )}
         aria-label="Toggle developer console"
       >
-        <Terminal className="w-3.5 h-3.5" />
+        <Terminal className="size-3.5" />
         Console
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+        {open ? <ChevronDown className="size-3" /> : <ChevronUp className="size-3" />}
       </button>
 
       <AnimatePresence>
         {open && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -185,7 +187,7 @@ export function DeveloperConsole() {
             {/* Header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-zinc-400" />
+                <Terminal className="size-4 text-zinc-400" />
                 <span className="text-xs font-medium text-zinc-200">Developer Console</span>
                 <span className="text-[10px] text-zinc-500">({totalCount} entries)</span>
               </div>
@@ -193,6 +195,7 @@ export function DeveloperConsole() {
                 {/* Filter buttons */}
                 {(["all", "info", "warn", "error"] as const).map((f) => (
                   <button
+                    type="button"
                     key={f}
                     onClick={() => setFilter(f)}
                     className={cn(
@@ -207,6 +210,7 @@ export function DeveloperConsole() {
                 ))}
                 <div className="w-px h-4 bg-zinc-700 mx-1" />
                 <button
+                  type="button"
                   onClick={() => setAutoScroll(!autoScroll)}
                   className={cn(
                     "px-1.5 py-0.5 text-[10px] rounded transition-colors",
@@ -216,11 +220,12 @@ export function DeveloperConsole() {
                   AUTO
                 </button>
                 <button
+                  type="button"
                   onClick={clearLogs}
                   className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
                   title="Clear logs"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="size-3.5" />
                 </button>
               </div>
             </div>
@@ -258,10 +263,11 @@ export function DeveloperConsole() {
                 {filter !== "all" ? `Showing ${filteredCount}/${totalCount}` : `${totalCount} total`}
               </span>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
     </div>
+    </LazyMotion>
   );
 }
 

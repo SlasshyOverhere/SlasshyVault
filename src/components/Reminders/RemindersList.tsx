@@ -11,8 +11,9 @@ import {
   setMovieReminderActive 
 } from '@/services/api'
 import { cn } from '@/lib/utils'
-import { motion, AnimatePresence } from 'framer-motion'
-import { CountdownTimer, formatLocalReleaseTime } from './CountdownTimer'
+import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion'
+import { CountdownTimer } from './CountdownTimer'
+import { formatLocalReleaseTime } from './CountdownTimer.utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 interface RemindersListProps {
@@ -82,28 +83,31 @@ export function RemindersList({
 
   if (reminders.length === 0) {
     return (
-      <motion.div 
+      <LazyMotion features={domAnimation}>
+      <m.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="flex h-full min-h-0 flex-col items-center justify-center overflow-hidden text-center space-y-6"
+        className="flex h-full min-h-0 flex-col items-center justify-center overflow-hidden text-center gap-y-6"
       >
         <div className="relative">
           <div className="absolute inset-0 bg-white/10 blur-3xl rounded-full" />
-          <div className="relative w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-2xl backdrop-blur-xl">
-            <Bell className="w-8 h-8 text-white/30" />
+          <div className="relative size-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-2xl backdrop-blur-xl">
+            <Bell className="size-8 text-white/30" />
           </div>
         </div>
-        <div className="space-y-2 max-w-sm">
+        <div className="gap-y-2 max-w-sm">
           <h2 className="text-xl font-black text-white tracking-tight">No reminders yet</h2>
           <p className="text-sm text-white/40 leading-relaxed font-medium px-6">
             Discover movies and TV shows and set reminders to get notified when they're released or available.
           </p>
         </div>
-      </motion.div>
+      </m.div>
+      </LazyMotion>
     )
   }
 
   return (
+    <LazyMotion features={domAnimation}>
     <div className="grid h-full min-h-0 grid-rows-[minmax(0,170px)_minmax(0,1fr)] gap-4 overflow-hidden">
       <div className="shrink-0 overflow-hidden">
         {upcoming.length > 0 && <NextUpPanel reminder={upcoming[0]} />}
@@ -112,8 +116,8 @@ export function RemindersList({
       <section className="flex min-h-0 flex-col gap-6 overflow-hidden p-1">
         <div className="flex shrink-0 items-center justify-between gap-4 px-1">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-white/[0.04] flex items-center justify-center border border-white/10">
-            {upcoming.length > 0 ? <Calendar className="w-4 h-4 text-white/40" /> : <History className="w-4 h-4 text-white/40" />}
+            <div className="size-9 rounded-xl bg-white/[0.04] flex items-center justify-center border border-white/10">
+            {upcoming.length > 0 ? <Calendar className="size-4 text-white/40" /> : <History className="size-4 text-white/40" />}
             </div>
             <div className="flex flex-col">
               <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/70">
@@ -133,7 +137,7 @@ export function RemindersList({
         <ScrollArea className="flex-1 min-h-0 pr-3">
           <div className="pb-5">
             {upcoming.length > 0 ? (
-              <motion.div 
+              <m.div 
                 variants={containerVariants}
                 initial="hidden"
                 animate="visible"
@@ -151,7 +155,7 @@ export function RemindersList({
                     />
                   ))}
                 </AnimatePresence>
-              </motion.div>
+              </m.div>
             ) : (
               <div className="grid content-start grid-cols-1 gap-4 opacity-60 grayscale-[0.3] xl:grid-cols-2">
                 {past.map((reminder) => (
@@ -170,12 +174,14 @@ export function RemindersList({
         </ScrollArea>
       </section>
     </div>
+    </LazyMotion>
   )
 }
 
 function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
   return (
-    <motion.div
+    <LazyMotion features={domAnimation}>
+    <m.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       className="group relative h-full overflow-hidden rounded-[2rem] border border-white/[0.05] bg-white/[0.02] p-8 shadow-inner"
@@ -196,7 +202,7 @@ function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
         {/* Left: Info */}
         <div className="min-w-0 flex-1 space-y-4">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-white">
-            <div className="h-2 w-2 animate-pulse rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.6)]" />
+            <div className="size-2 animate-pulse rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.6)]" />
             Next Airing
           </div>
 
@@ -207,7 +213,7 @@ function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
 
             <div className="flex flex-wrap items-center gap-4 text-[11px] font-bold text-white/50">
               <div className="flex items-center gap-2.5 bg-black/20 px-3 py-1.5 rounded-lg backdrop-blur">
-                <Clock className="w-4 h-4 opacity-60" />
+                <Clock className="size-4 opacity-60" />
                 <span>{formatLocalReleaseTime(reminder.reminder_at)}</span>
               </div>
 
@@ -229,7 +235,8 @@ function NextUpPanel({ reminder }: { reminder: MovieReminder }) {
           />
         </div>
       </div>
-    </motion.div>
+    </m.div>
+    </LazyMotion>
   )
 }
 function ReminderCard({ 
@@ -250,7 +257,7 @@ function ReminderCard({
   const sourceLabel = reminder.source === 'tvmaze' ? 'TVmaze' : (reminder.source === 'tmdb' ? 'TMDB' : 'Manual')
   
   return (
-    <motion.div
+    <m.div
       variants={itemVariants}
       layout
       className={cn(
@@ -270,7 +277,7 @@ function ReminderCard({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-white/10">
-              {reminder.media_type === 'movie' ? <Film className="w-5 h-5" /> : <Tv className="w-5 h-5" />}
+              {reminder.media_type === 'movie' ? <Film className="size-5" /> : <Tv className="size-5" />}
             </div>
           )}
           <div className="absolute bottom-1.5 left-1.5 right-1.5 rounded-md bg-black/70 px-1.5 py-0.5 text-center text-[7px] font-black uppercase tracking-widest text-white/60 backdrop-blur-md">
@@ -300,19 +307,19 @@ function ReminderCard({
               <Button 
                 variant="ghost" 
                 size="icon" 
-                className="h-8 w-8 rounded-lg text-white/30 hover:text-white hover:bg-white/10 transition-all"
+                className="size-8 rounded-lg text-white/30 hover:text-white hover:bg-white/10 transition-all"
                 onClick={(e) => { e.stopPropagation(); onEdit(); }}
               >
-                <Edit2 className="w-3.5 h-3.5" />
+                <Edit2 className="size-3.5" />
               </Button>
               <Button 
                 variant="ghost" 
                 size="icon" 
-                className="h-8 w-8 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-400/10 transition-all"
+                className="size-8 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-400/10 transition-all"
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}
                 disabled={isDeleting}
               >
-                {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                {isDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               </Button>
             </div>
           </div>
@@ -322,7 +329,7 @@ function ReminderCard({
               "flex h-8 min-w-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-[10px] font-bold",
               isPast ? "text-white/20" : "text-white/55"
             )}>
-              <Clock className="w-3.5 h-3.5 shrink-0 opacity-40" />
+              <Clock className="size-3.5 shrink-0 opacity-40" />
               <span className="truncate leading-none">
                 {reminderDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at {reminderDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
               </span>
@@ -337,21 +344,22 @@ function ReminderCard({
                 />
               )}
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); onToggle(); }}
                 className={cn(
-                  "h-8 w-8 rounded-lg flex items-center justify-center transition-all border border-white/[0.08] bg-white/[0.03]",
+                  "size-8 rounded-lg flex items-center justify-center transition-all border border-white/[0.08] bg-white/[0.03]",
                   reminder.is_active
                     ? "text-white/35 hover:text-white hover:bg-white/10"
                     : "text-white/60 hover:text-white hover:bg-white/10"
                 )}
                 title={reminder.is_active ? "Pause" : "Resume"}
               >
-                {reminder.is_active ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                {reminder.is_active ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
               </button>
             </div>
           </div>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   )
 }

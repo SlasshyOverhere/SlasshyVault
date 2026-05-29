@@ -1,46 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { motion } from 'framer-motion'
-
-const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
-
-export const getLocalTimezoneLabel = (): string => {
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date())
-  return parts.find(part => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone
-}
-
-export const parseReleaseTarget = (value?: string | null): Date | null => {
-  if (!value) return null
-
-  if (DATE_ONLY_RE.test(value)) {
-    const [year, month, day] = value.split('-').map(Number)
-    return new Date(year, month - 1, day, 9, 0, 0, 0)
-  }
-
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-export const formatLocalReleaseTime = (value?: string | null): string => {
-  const target = parseReleaseTarget(value)
-  if (!target) return 'Time not set'
-
-  return `${target.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })} at ${target.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  })} ${getLocalTimezoneLabel()}`
-}
-
-export const isFutureReleaseTarget = (value?: string | null): boolean => {
-  const target = parseReleaseTarget(value)
-  return !!target && target.getTime() > Date.now()
-}
+import { LazyMotion, m, domAnimation } from 'framer-motion'
+import { getLocalTimezoneLabel, parseReleaseTarget, formatLocalReleaseTime } from './CountdownTimer.utils'
 
 const getParts = (target: Date, now: Date) => {
   const totalMs = target.getTime() - now.getTime()
@@ -103,13 +65,13 @@ export function CountdownTimer({
   if (compact) {
     return (
       <div className={cn(
-        "inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-md transition-all duration-300", 
-        isExpired 
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
-          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10", 
+        "inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-md transition-all duration-300",
+        isExpired
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10",
         className
       )}>
-        {isExpired ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5 opacity-50" />}
+        {isExpired ? <CheckCircle2 className="size-3.5" /> : <Clock className="size-3.5 opacity-50" />}
         <span className="leading-none">{isExpired ? expiredLabel : parts.totalMs <= 0 ? 'Scheduled' : `${parts.days}d ${parts.hours}h ${parts.minutes}m`}</span>
       </div>
     )
@@ -134,16 +96,16 @@ export function CountdownTimer({
 
   return (
     <div className={cn(
-      "rounded-3xl border border-white/10 bg-black/40 p-4 shadow-2xl backdrop-blur-3xl overflow-hidden relative group", 
+      "rounded-3xl border border-white/10 bg-black/40 p-4 shadow-2xl backdrop-blur-3xl overflow-hidden relative group",
       className
     )}>
       {/* Subtle Glow Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
-      
+
       <div className="mb-3 flex items-center justify-between gap-2 relative z-10">
         <div className="flex items-center gap-2">
           <div className={cn(
-            "w-1.5 h-1.5 rounded-full animate-pulse",
+            "size-1.5 rounded-full animate-pulse",
             isExpired ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" : "bg-white/30"
           )} />
           <div className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">
@@ -158,23 +120,25 @@ export function CountdownTimer({
       </div>
 
       {isExpired ? (
-        <motion.div 
+        <LazyMotion features={domAnimation}>
+        <m.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-4 flex items-center gap-3 relative z-10"
         >
-          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="size-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+            <CheckCircle2 className="size-5" />
           </div>
           <div className="space-y-0.5">
             <div className="text-xs font-black text-emerald-100">{expiredLabel}</div>
             <div className="text-[9px] font-bold text-emerald-500/60 uppercase tracking-widest">Released and ready</div>
           </div>
-        </motion.div>
+        </m.div>
+        </LazyMotion>
       ) : parts.totalMs <= 0 ? (
         <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 px-3 py-4 flex items-center gap-3 relative z-10">
-          <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400">
-            <AlertCircle className="w-5 h-5" />
+          <div className="size-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400">
+            <AlertCircle className="size-5" />
           </div>
           <div className="space-y-0.5">
             <div className="text-xs font-black text-amber-100">Pending Update</div>

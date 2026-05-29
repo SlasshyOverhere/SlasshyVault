@@ -36,17 +36,17 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
 
     // Transcoding state
     const [isTranscoding, setIsTranscoding] = useState(false)
-    const [transcodeAttempted, setTranscodeAttempted] = useState(false)
+    const transcodeAttemptedRef = useRef(false)
 
     const hideControlsTimeout = useRef<NodeJS.Timeout | null>(null)
 
     // Attempt to start transcoding when playback fails
     const attemptTranscode = useCallback(async (filePath: string) => {
-        if (transcodeAttempted || isCloud) {
+        if (transcodeAttemptedRef.current || isCloud) {
             return false;
         }
 
-        setTranscodeAttempted(true);
+        transcodeAttemptedRef.current = true;
         setIsTranscoding(true);
         setError(null);
         setIsLoading(true);
@@ -66,7 +66,7 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
             setIsLoading(false);
             return false;
         }
-    }, [transcodeAttempted, isCloud, initialTime]);
+    }, [isCloud, initialTime]);
 
     // Load video file as blob URL using Tauri commands
     useEffect(() => {
@@ -156,7 +156,7 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
         const errorCode = video.error?.code;
         const errorMessage = video.error?.message || 'Unknown error';
 
-        if (errorCode === 4 && !transcodeAttempted && !isCloud && src && !src.startsWith('http')) {
+        if (errorCode === 4 && !transcodeAttemptedRef.current && !isCloud && src && !src.startsWith('http')) {
             const success = await attemptTranscode(src);
             if (success) {
                 return;
@@ -165,7 +165,7 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
 
         setError(`Failed to play video: ${errorMessage}. Try using MPV or VLC player instead.`);
         setIsLoading(false);
-    }, [videoSrc, src, transcodeAttempted, isCloud, attemptTranscode]);
+    }, [src, isCloud, attemptTranscode]);
 
     // Format time helper
     const formatTime = (seconds: number): string => {
@@ -294,15 +294,8 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
     }, [togglePlay, toggleFullscreen, toggleMute, skip, isFullscreen, onClose])
 
     // Report progress periodically
-    useEffect(() => {
-        if (onProgress && currentTime > 0) {
-            const now = Date.now()
-            if (now - progressReportRef.current > 5000) { // Report every 5 seconds
-                progressReportRef.current = now
-                onProgress(currentTime, duration)
-            }
-        }
-    }, [currentTime, duration, onProgress])
+    const onProgressRef = useRef(onProgress)
+    onProgressRef.current = onProgress
 
     // Fullscreen change listener
     useEffect(() => {
@@ -316,19 +309,23 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
     return (
         <div
             ref={containerRef}
-            className="fixed inset-0 z-50 bg-black flex items-center justify-center font-sans"
+            role="region"
+            aria-label="Video player"
+            className="fixed inset-0 z-50 bg-gray-950 flex items-center justify-center font-sans"
             onMouseMove={handleMouseMove}
             onClick={(e) => {
                 if (e.target === containerRef.current) {
                     togglePlay()
                 }
             }}
+            onKeyDown={() => {}}
         >
             {/* Video element */}
             <video
                 ref={videoRef}
                 src={videoSrc || undefined}
                 poster={poster}
+                aria-label={title}
                 className="w-full h-full object-contain"
                 onLoadedMetadata={() => {
                     if (videoRef.current) {
@@ -348,22 +345,31 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                 onTimeUpdate={() => {
                     if (videoRef.current) {
                         setCurrentTime(videoRef.current.currentTime)
+                        if (onProgressRef.current) {
+                            const now = Date.now()
+                            if (now - progressReportRef.current > 5000) {
+                                progressReportRef.current = now
+                                onProgressRef.current(videoRef.current.currentTime, videoRef.current.duration)
+                            }
+                        }
                     }
                 }}
                 onError={handleVideoError}
                 onEnded={onClose}
                 autoPlay
-            />
+            >
+                <track kind="captions" label="English" srcLang="en" />
+            </video>
 
             {/* Loading spinner */}
             {(isLoading || isTranscoding) && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm z-10 transition-opacity duration-300">
                     <div className="relative">
-                        <Loader2 className="h-16 w-16 animate-spin text-white" />
+                        <Loader2 className="size-16 animate-spin text-white" />
                         <div className="absolute inset-0 bg-white/20 blur-xl rounded-full" />
                     </div>
                     {isTranscoding && (
-                        <p className="text-white mt-4 text-sm">Transcoding video for playback...</p>
+                        <p className="text-white mt-4 text-sm">Transcoding video for playback…</p>
                     )}
                 </div>
             )}
@@ -372,11 +378,12 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
             {error && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md text-white z-20 p-8 text-center">
                     <div className="bg-destructive/10 p-4 rounded-full mb-4">
-                        <AlertTriangle className="w-12 h-12 text-destructive" />
+                        <AlertTriangle className="size-12 text-destructive" />
                     </div>
                     <p className="text-xl font-semibold mb-2">Video Error</p>
                     <p className="text-muted-foreground mb-6 max-w-md">{error}</p>
                     <button
+                        type="button"
                         onClick={onClose}
                         className="px-6 py-2.5 bg-white text-black font-semibold rounded-full hover:bg-white/90 transition-all transform hover:scale-105 shadow-lg"
                     >
@@ -396,24 +403,26 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                         <h1 className="text-white text-xl font-bold tracking-tight drop-shadow-md">{title}</h1>
                     </div>
                     <button
+                        type="button"
                         onClick={onClose}
                         className="p-2.5 hover:bg-white/10 rounded-full transition-colors backdrop-blur-md bg-black/20 border border-white/5"
                     >
-                        <X className="h-6 w-6 text-white" />
+                        <X className="size-6 text-white" />
                     </button>
                 </div>
 
                 {/* Center play button */}
                 <div className="flex-1 flex items-center justify-center">
                     <button
+                        type="button"
                         onClick={togglePlay}
                         className="group relative p-8 rounded-full transition-all duration-300 transform hover:scale-110 active:scale-95"
                     >
                         <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-full border border-white/10 transition-colors group-hover:bg-black/60" />
                         {isPlaying ? (
-                            <Pause className="relative h-16 w-16 text-white drop-shadow-lg" />
+                            <Pause className="relative size-16 text-white drop-shadow-lg" />
                         ) : (
-                            <Play className="relative h-16 w-16 text-white ml-2 drop-shadow-lg" />
+                            <Play className="relative size-16 text-white ml-2 drop-shadow-lg" />
                         )}
                     </button>
                 </div>
@@ -442,44 +451,48 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                         <div className="flex items-center gap-4">
                             {/* Play/Pause */}
                             <button
+                                type="button"
                                 onClick={togglePlay}
                                 className="p-2.5 hover:bg-white/10 rounded-full transition-colors text-white hover:text-white"
                             >
                                 {isPlaying ? (
-                                    <Pause className="h-6 w-6 fill-current" />
+                                    <Pause className="size-6 fill-current" />
                                 ) : (
-                                    <Play className="h-6 w-6 fill-current" />
+                                    <Play className="size-6 fill-current" />
                                 )}
                             </button>
 
                             {/* Skip backward */}
                             <button
+                                type="button"
                                 onClick={() => skip(-10)}
                                 className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white group"
                                 title="Skip back 10 seconds"
                             >
-                                <SkipBack className="h-5 w-5 group-hover:-translate-x-0.5 transition-transform" />
+                                <SkipBack className="size-5 group-hover:-translate-x-0.5 transition-transform" />
                             </button>
 
                             {/* Skip forward */}
                             <button
+                                type="button"
                                 onClick={() => skip(10)}
                                 className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white group"
                                 title="Skip forward 10 seconds"
                             >
-                                <SkipForward className="h-5 w-5 group-hover:translate-x-0.5 transition-transform" />
+                                <SkipForward className="size-5 group-hover:translate-x-0.5 transition-transform" />
                             </button>
 
                             {/* Volume */}
                             <div className="flex items-center gap-2 group/vol">
                                 <button
+                                    type="button"
                                     onClick={toggleMute}
                                     className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white"
                                 >
                                     {isMuted || volume === 0 ? (
-                                        <VolumeX className="h-5 w-5" />
+                                        <VolumeX className="size-5" />
                                     ) : (
-                                        <Volume2 className="h-5 w-5" />
+                                        <Volume2 className="size-5" />
                                     )}
                                 </button>
                                 <div className="w-0 group-hover/vol:w-28 overflow-hidden transition-all duration-300 ease-out pl-2">
@@ -497,22 +510,24 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                         <div className="flex items-center gap-3">
                             {/* Settings */}
                             <button
+                                type="button"
                                 className="p-2.5 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white"
                                 title="Settings"
                             >
-                                <Settings className="h-5 w-5" />
+                                <Settings className="size-5" />
                             </button>
 
                             {/* Fullscreen */}
                             <button
+                                type="button"
                                 onClick={toggleFullscreen}
                                 className="p-2.5 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white"
                                 title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                             >
                                 {isFullscreen ? (
-                                    <Minimize2 className="h-5 w-5" />
+                                    <Minimize2 className="size-5" />
                                 ) : (
-                                    <Maximize2 className="h-5 w-5" />
+                                    <Maximize2 className="size-5" />
                                 )}
                             </button>
                         </div>

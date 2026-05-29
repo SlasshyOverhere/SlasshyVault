@@ -20,7 +20,7 @@ import {
   Cloud,
   Globe,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LazyMotion, m, AnimatePresence, domAnimation } from "framer-motion";
 import { useState, useMemo, memo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -174,13 +174,14 @@ export function DownloadsView({
   ];
 
   return (
-    <div className="h-full overflow-hidden relative">
+    <LazyMotion features={domAnimation}>
+      <div className="h-full overflow-hidden relative">
       <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
       <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
       <div className="absolute inset-0 noise-overlay opacity-[0.02] pointer-events-none" />
 
       <div className="relative h-full overflow-y-auto pt-24 pb-4 scrollbar-none">
-        <motion.div
+        <m.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
@@ -188,7 +189,7 @@ export function DownloadsView({
         >
           {/* Header */}
           <section className="flex flex-shrink-0 flex-col gap-6 px-2 sm:flex-row sm:items-center sm:justify-between">
-            <motion.div
+            <m.div
               initial={{ x: -20, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1] }}
@@ -196,17 +197,17 @@ export function DownloadsView({
             >
               <div className="relative group">
                 <div className="absolute -inset-2 bg-white/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-                <div className="relative w-12 h-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
-                  <ArrowDownToLine className="w-6 h-6 text-white/70" />
+                <div className="relative size-12 rounded-[1.25rem] bg-white/5 border border-white/10 flex items-center justify-center shadow-elevation-1">
+                  <ArrowDownToLine className="size-6 text-white/70" />
                 </div>
               </div>
               <div className="space-y-0.5">
-                <h1 className="text-4xl font-black tracking-tighter leading-none bg-clip-text text-transparent bg-gradient-to-b from-white to-white/40">
+                <h1 className="text-4xl font-black tracking-tighter leading-none text-white">
                   Downloads
                 </h1>
                 <div className="flex items-center gap-2">
                   <div className={cn(
-                    "w-1 h-1 rounded-full transition-all duration-500",
+                    "size-1 rounded-full transition-all duration-500",
                     activeJobs.length > 0 ? "bg-emerald-500/50 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.5)]" : "bg-white/10"
                   )} />
                   <p className="text-white/20 text-[9px] font-black uppercase tracking-[0.3em]">
@@ -214,9 +215,9 @@ export function DownloadsView({
                   </p>
                 </div>
               </div>
-            </motion.div>
+            </m.div>
 
-            <motion.div
+            <m.div
               initial={{ x: 20, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.1 }}
@@ -225,11 +226,11 @@ export function DownloadsView({
               <MetricChip label="Active" value={stats.active} active={stats.active > 0} />
               <MetricChip label="Completed" value={stats.completed} />
               <MetricChip label="Failed" value={stats.failed} alert={stats.failed > 0} />
-            </motion.div>
+            </m.div>
           </section>
 
           {/* Toolbar */}
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.15 }}
@@ -253,7 +254,7 @@ export function DownloadsView({
               
               <AnimatePresence>
                 {selectionMode && selectedIds.size > 0 && (
-                  <motion.div
+                  <m.div
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -10 }}
@@ -264,10 +265,10 @@ export function DownloadsView({
                       onClick={handleDeleteSelected}
                       className="h-9 rounded-xl border-red-500/20 bg-red-500/10 px-4 text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 hover:text-red-300"
                     >
-                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                      <Trash2 className="mr-2 size-3.5" />
                       Delete ({selectedIds.size})
                     </Button>
-                  </motion.div>
+                  </m.div>
                 )}
               </AnimatePresence>
             </div>
@@ -281,10 +282,10 @@ export function DownloadsView({
             >
               Clear History
             </Button>
-          </motion.div>
+          </m.div>
 
           {/* Tab Bar */}
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, ease: [0.19, 1, 0.22, 1], delay: 0.2 }}
@@ -292,6 +293,7 @@ export function DownloadsView({
           >
             {TABS.map((tab) => (
               <button
+                type="button"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
@@ -312,7 +314,7 @@ export function DownloadsView({
                 )}
               </button>
             ))}
-          </motion.div>
+          </m.div>
 
           {/* Active Downloads Section */}
           {(activeTab === "all" || activeTab === "active") && (
@@ -324,7 +326,7 @@ export function DownloadsView({
               <AnimatePresence mode="popLayout">
                 <div className="grid gap-3 min-w-0">
                   {activeJobs.map((job, idx) => (
-                    <motion.div
+                    <m.div
                       key={job.id}
                       layout
                       initial={{ opacity: 0, y: 20 }}
@@ -341,7 +343,7 @@ export function DownloadsView({
                         onToggleSelect={() => toggleSelect(job.id)}
                         compact
                       />
-                    </motion.div>
+                    </m.div>
                   ))}
                 </div>
               </AnimatePresence>
@@ -363,7 +365,7 @@ export function DownloadsView({
               onShowHistory={() => setIsHistoryOpen(true)}
             />
           )}
-        </motion.div>
+        </m.div>
       </div>
 
       {/* History Dialog */}
@@ -389,7 +391,7 @@ export function DownloadsView({
             <ScrollArea className="h-full pr-4">
               <div className="grid gap-4 pb-8">
                 {archivedJobs.map((job, idx) => (
-                  <motion.div
+                  <m.div
                     key={job.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -405,7 +407,7 @@ export function DownloadsView({
                       onToggleSelect={() => toggleSelect(job.id)}
                       compact
                     />
-                  </motion.div>
+                  </m.div>
                 ))}
               </div>
             </ScrollArea>
@@ -413,6 +415,7 @@ export function DownloadsView({
         </DialogContent>
       </Dialog>
     </div>
+    </LazyMotion>
   );
 }
 
@@ -436,8 +439,8 @@ function MetricChip({
           ? "border-red-500/15 bg-red-500/[0.04] hover:bg-red-500/[0.06]"
           : "border-white/5 bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]"
     )}>
-      {active && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]" />}
-      {alert && <span className="w-1.5 h-1.5 rounded-full bg-red-500/70 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.4)]" />}
+      {active && <span className="size-1.5 rounded-full bg-emerald-500/70 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]" />}
+      {alert && <span className="size-1.5 rounded-full bg-red-500/70 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.4)]" />}
       <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">{label}</span>
       <span className={cn(
         "text-sm font-black",
@@ -515,21 +518,22 @@ function ArchivedSection({
           onToggleSelect={() => onToggleSelect(latestFiltered.id)}
         />
         {filteredArchived.length > 1 && (
-          <motion.button
+          <m.button
+            type="button"
             onClick={onShowHistory}
             whileHover={{ scale: 1.005 }}
             className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-3.5 transition-all hover:bg-white/[0.04] hover:border-white/10 group"
           >
             <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/[0.03] border border-white/5 group-hover:bg-white/[0.06] transition-colors">
-                <History className="h-4 w-4 text-zinc-500 group-hover:text-white transition-colors" />
+              <div className="flex size-8 items-center justify-center rounded-xl bg-white/[0.03] border border-white/5 group-hover:bg-white/[0.06] transition-colors">
+                <History className="size-4 text-zinc-500 group-hover:text-white transition-colors" />
               </div>
               <span className="text-[11px] font-black uppercase tracking-widest text-zinc-500 group-hover:text-white transition-colors">
                 View {filteredArchived.length - 1} more item{filteredArchived.length - 1 !== 1 ? 's' : ''}
               </span>
             </div>
-            <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-white transition-all transform group-hover:translate-x-1" />
-          </motion.button>
+            <ChevronRight className="size-4 text-zinc-700 group-hover:text-white transition-all transform group-hover:translate-x-1" />
+          </m.button>
         )}
       </div>
     </section>
@@ -538,20 +542,20 @@ function ArchivedSection({
 
 function EmptyDownloadsState() {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
       className="group relative rounded-[2.5rem] border border-dashed border-white/10 bg-white/[0.01] px-6 text-center transition-all hover:bg-white/[0.02] py-14"
     >
-      <div className="mx-auto flex items-center justify-center rounded-[2rem] border border-white/10 bg-white/5 transition-transform duration-500 group-hover:scale-110 h-14 w-14">
-        <Download className="h-6 w-6 text-white/40" />
+      <div className="mx-auto flex items-center justify-center rounded-[2rem] border border-white/10 bg-white/5 transition-transform duration-500 group-hover:scale-110 size-14">
+        <Download className="size-6 text-white/40" />
       </div>
       <h3 className="font-bold text-white mt-5 text-base">Standby Mode</h3>
       <p className="mx-auto max-w-sm text-zinc-500 mt-2 text-xs leading-relaxed">
         The pipeline is idle. Initiate a transfer from the cloud drive to begin acquisition.
       </p>
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -580,7 +584,7 @@ const DownloadRow = memo(function DownloadRow({
   const timeRemaining = formatTimeRemaining(job);
 
   return (
-    <motion.div
+    <m.div
       layout
       className={cn(
         "group relative rounded-[2rem] border transition-all w-full min-w-0 overflow-hidden",
@@ -595,7 +599,7 @@ const DownloadRow = memo(function DownloadRow({
         {isSelectionMode && (
           <div className="flex items-center justify-center shrink-0">
             <div className={cn(
-              "flex h-6 w-6 items-center justify-center rounded-lg border transition-all",
+              "flex size-6 items-center justify-center rounded-lg border transition-all",
               isSelected ? "bg-white border-white text-black" : "border-white/20 text-transparent"
             )}>
               <CheckSquare size={14} strokeWidth={3} />
@@ -606,17 +610,17 @@ const DownloadRow = memo(function DownloadRow({
         {/* Left: Icon area for source type */}
         <div className="hidden sm:flex shrink-0">
           <div className={cn(
-            "flex h-12 w-12 items-center justify-center rounded-[1.25rem] border transition-all",
+            "flex size-12 items-center justify-center rounded-[1.25rem] border transition-all",
             isSelected
               ? "border-white/20 bg-white/[0.08]"
               : "border-white/[0.06] bg-white/[0.02] group-hover:bg-white/[0.04] group-hover:border-white/[0.1]"
           )}>
             {job.sourceKind === "gdrive" ? (
-              <Cloud className="h-5 w-5 text-white/40" />
+              <Cloud className="size-5 text-white/40" />
             ) : job.sourceKind === "direct" ? (
-              <Globe className="h-5 w-5 text-white/40" />
+              <Globe className="size-5 text-white/40" />
             ) : (
-              <HardDrive className="h-5 w-5 text-white/40" />
+              <HardDrive className="size-5 text-white/40" />
             )}
           </div>
         </div>
@@ -630,7 +634,7 @@ const DownloadRow = memo(function DownloadRow({
                 meta.className,
               )}
             >
-              <StatusIcon className="h-3 w-3" />
+              <StatusIcon className="size-3" />
               {meta.label}
             </span>
             <span className="rounded-full border border-white/5 bg-white/[0.03] px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
@@ -671,7 +675,7 @@ const DownloadRow = memo(function DownloadRow({
           
           {job.error && (
             <div className="mt-3 flex items-start gap-3 rounded-2xl border border-red-500/10 bg-red-500/[0.03] p-3.5">
-              <AlertTriangle className="h-4 w-4 text-red-400/70 mt-0.5 shrink-0" />
+              <AlertTriangle className="size-4 text-red-400/70 mt-0.5 shrink-0" />
               <p className="text-xs font-medium text-zinc-400 leading-relaxed">
                 {job.error}
               </p>
@@ -692,7 +696,7 @@ const DownloadRow = memo(function DownloadRow({
               )}>{Math.round(job.progress)}%</span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
-              <motion.div
+              <m.div
                 className={cn(
                   "h-full transition-all",
                   active ? "bg-white shadow-[0_0_15px_rgba(255,255,255,0.5)]" : "bg-white/30"
@@ -717,13 +721,13 @@ const DownloadRow = memo(function DownloadRow({
                     variant="outline"
                     className="h-10 rounded-xl border-white/10 bg-white/[0.04] px-5 text-[10px] font-black uppercase tracking-widest text-white hover:bg-white hover:text-black transition-all duration-300"
                   >
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                    <FolderOpen className="mr-2 size-3.5" />
                     Navigate
                   </Button>
                 ) : (
                   !active && (
                     <div className="inline-flex h-10 items-center rounded-xl border border-white/10 bg-white/5 px-5 text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                      <Trash2 className="mr-2 size-3.5" />
                       Deleted
                     </div>
                   )
@@ -739,9 +743,9 @@ const DownloadRow = memo(function DownloadRow({
                     className="h-10 rounded-xl border-white/10 bg-white/[0.02] px-5 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:bg-white/10 hover:text-white transition-all duration-300"
                   >
                     {job.status === "downloading" ? (
-                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                      <Loader2 className="mr-2 size-3.5 animate-spin" />
                     ) : (
-                      <PauseCircle className="mr-2 h-3.5 w-3.5" />
+                      <PauseCircle className="mr-2 size-3.5" />
                     )}
                     Abort
                   </Button>
@@ -754,9 +758,9 @@ const DownloadRow = memo(function DownloadRow({
                       void onDelete(job.id);
                     }}
                     variant="ghost"
-                    className="h-10 w-10 rounded-xl bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-white"
+                    className="size-10 rounded-xl bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-white"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="size-4" />
                   </Button>
                 )}
               </>
@@ -764,6 +768,6 @@ const DownloadRow = memo(function DownloadRow({
           </div>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   );
 });

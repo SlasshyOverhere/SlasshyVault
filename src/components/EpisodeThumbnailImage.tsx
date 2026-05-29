@@ -1,24 +1,7 @@
 import { useEffect, useState, memo } from "react"
 import { getCachedImageUrl } from "@/services/api"
 import { Loader2 } from "lucide-react"
-
-export const getZipCompressionLabel = (method?: number): string | null => {
-  switch (method) {
-    case 0:
-      return "Store"
-    case 8:
-      return "Deflate"
-    default:
-      return null
-  }
-}
-
-export interface EpisodeThumbnailImageProps {
-  localStillPath?: string
-  tmdbStillUrl: string | null
-  episodeTitle: string
-  episodeNumber: number
-}
+import type { EpisodeThumbnailImageProps } from "./EpisodeThumbnailImage.types"
 
 function EpisodeThumbnailImageBase({
   localStillPath,
@@ -37,6 +20,15 @@ function EpisodeThumbnailImageBase({
       setImageUrl(null)
 
       if (localStillPath) {
+        // If it's a full URL (e.g. from imdbapi.dev primaryImage), use it directly
+        if (localStillPath.startsWith("http://") || localStillPath.startsWith("https://")) {
+          if (!cancelled) {
+            setImageUrl(localStillPath)
+            setLoading(false)
+            return
+          }
+        }
+
         let filename = localStillPath
         if (filename.startsWith("image_cache/")) {
           filename = filename.replace("image_cache/", "")
@@ -72,7 +64,7 @@ function EpisodeThumbnailImageBase({
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-muted to-muted/50">
-        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground/50" />
+        <Loader2 className="size-6 animate-spin text-muted-foreground/50" />
       </div>
     )
   }

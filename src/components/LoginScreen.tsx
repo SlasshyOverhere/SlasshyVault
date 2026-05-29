@@ -33,7 +33,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
               src={slasshyvaultIcon}
               alt=""
               draggable={false}
-              className="pointer-events-none h-4 w-4 object-contain"
+              className="pointer-events-none size-4 object-contain"
             />
             <span data-tauri-drag-region className="pointer-events-none text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-400">
               SlasshyVault
@@ -41,22 +41,24 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           </div>
           <div className="flex items-center gap-1 pr-1.5">
             <button
+              type="button"
               onClick={() => appWindow.minimize()}
               className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-white/10 hover:bg-white/10 hover:text-white"
               title="Minimize"
               aria-label="Minimize window"
             >
-              <Minus className="mx-auto h-3.5 w-3.5" />
+              <Minus className="mx-auto size-3.5" />
             </button>
             <button
+              type="button"
               onClick={async () => {
                 await appWindow.hide()
               }}
-              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
               title="Close"
               aria-label="Hide window"
             >
-              <X className="mx-auto h-3.5 w-3.5" />
+              <X className="mx-auto size-3.5" />
             </button>
           </div>
         </div>
@@ -68,12 +70,12 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
         <div className="flex-1 flex flex-col justify-center px-16 bg-gradient-to-br from-[#0a0a0a] via-[#111] to-[#0a0a0a]">
         {/* Logo and App Name */}
         <div className="flex items-center gap-4 mb-8">
-          <div className="w-14 h-14 rounded-xl border border-white/20 bg-white/5 flex items-center justify-center shadow-lg shadow-white/10">
+          <div className="size-14 rounded-xl border border-white/20 bg-white/5 flex items-center justify-center shadow-lg shadow-white/10">
             <img
               src={slasshyvaultIcon}
               alt="SlasshyVault logo"
               draggable={false}
-              className="w-10 h-10 object-contain"
+              className="size-10 object-contain"
             />
           </div>
           <div>
@@ -98,10 +100,10 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
 
         {/* Feature Badges */}
         <div className="flex flex-wrap gap-3">
-          <FeatureBadge icon={<Film className="w-4 h-4" />} text="Local & Cloud" />
-          <FeatureBadge icon={<Users className="w-4 h-4" />} text="Watch Together" />
-          <FeatureBadge icon={<Shield className="w-4 h-4" />} text="Privacy-First" />
-          <FeatureBadge icon={<Zap className="w-4 h-4" />} text="Auto Sync" />
+          <FeatureBadge icon={<Film className="size-4" />} text="Local & Cloud" />
+          <FeatureBadge icon={<Users className="size-4" />} text="Watch Together" />
+          <FeatureBadge icon={<Shield className="size-4" />} text="Privacy-First" />
+          <FeatureBadge icon={<Zap className="size-4" />} text="Auto Sync" />
         </div>
       </div>
 
@@ -118,6 +120,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
 
           {/* Google Sign In Button */}
           <button
+            type="button"
             onClick={onLogin}
             disabled={isLoading}
             onMouseEnter={() => setIsHovered(true)}
@@ -135,8 +138,8 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           >
             {isLoading ? (
               <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Signing in...</span>
+                <Loader2 className="size-5 animate-spin" />
+                <span>Signing in…</span>
               </>
             ) : (
               <>

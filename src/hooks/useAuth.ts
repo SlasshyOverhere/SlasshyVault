@@ -36,6 +36,7 @@ export function useAuth() {
   const [isIndexing, setIsIndexing] = useState(false)
   const isMountedRef = useRef(true)
   const initialScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const authFailsafeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
 
   const autoDetectMpvIfUnconfigured = async () => {
@@ -81,12 +82,11 @@ export function useAuth() {
   useEffect(() => {
     const checkAuth = async () => {
       let connected = false
-      let authLoadingFailsafe: ReturnType<typeof setTimeout> | null = null
 
       if (isMountedRef.current) {
         setIsAuthLoading(true)
       }
-      authLoadingFailsafe = setTimeout(() => {
+      authFailsafeRef.current = setTimeout(() => {
         if (isMountedRef.current) {
           console.warn('[Auth] Failsafe: forcing auth loading to false after timeout')
           setIsAuthLoading(false)
@@ -111,8 +111,9 @@ export function useAuth() {
       } catch (error) {
         console.error('[Auth] Failed to check connection:', error)
       } finally {
-        if (authLoadingFailsafe) {
-          clearTimeout(authLoadingFailsafe)
+        if (authFailsafeRef.current) {
+          clearTimeout(authFailsafeRef.current)
+          authFailsafeRef.current = null
         }
         if (isMountedRef.current) {
           setIsAuthLoading(false)
@@ -125,6 +126,13 @@ export function useAuth() {
       }
     }
     checkAuth()
+
+    return () => {
+      if (authFailsafeRef.current) {
+        clearTimeout(authFailsafeRef.current)
+        authFailsafeRef.current = null
+      }
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle Google login

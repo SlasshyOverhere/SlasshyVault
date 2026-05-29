@@ -21,6 +21,7 @@ export interface MediaItem {
   progress_percent?: number;
   parent_id?: number;
   tmdb_id?: string;
+  imdb_id?: string;
   episode_title?: string;
   still_path?: string;
   // Cloud storage fields
@@ -1298,11 +1299,12 @@ function mergeCachedSeriesTracks<T extends AudioTrackOption>(
     merged.push(incomingTrack);
   }
 
-  const deduped = merged.filter((track, index, items) => {
+  const seenIdentities = new Set<string>();
+  const deduped = merged.filter((track) => {
     const identity = audioTrackCacheIdentity(track);
-    return items.findIndex((candidate) =>
-      audioTrackCacheIdentity(candidate) === identity,
-    ) === index;
+    if (seenIdentities.has(identity)) return false;
+    seenIdentities.add(identity);
+    return true;
   });
 
   deduped.sort((left, right) => left.label.localeCompare(right.label));
@@ -1334,8 +1336,10 @@ const matchesAudioTrackPreference = (
 
   const preferenceParts = normalizedPreference
     .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+    .flatMap((part) => {
+      const trimmed = part.trim();
+      return trimmed ? [trimmed] : [];
+    });
 
   const languageCode = track.language_code?.trim().toLowerCase();
   const label = track.label.trim().toLowerCase();
@@ -1462,6 +1466,9 @@ export interface ImdbEpisodeRating {
   imdb_id: string;
   imdb_rating: number | null;
   imdb_votes: number | null;
+  still_url?: string | null;
+  title?: string | null;
+  plot?: string | null;
 }
 
 // Season details with episodes from TMDB
@@ -1767,16 +1774,86 @@ export const getEpisodeImdbRatings = async (
   tvId: number,
   seasonNumber: number,
   episodeNumbers: number[],
+  showImdbId?: string,
 ): Promise<Record<number, ImdbEpisodeRating>> => {
   try {
     const ratings = await invoke<Record<number, ImdbEpisodeRating>>(
       "get_episode_imdb_ratings",
-      { tvId, seasonNumber, episodeNumbers },
+      { tvId, seasonNumber, episodeNumbers, showImdbId },
     );
     return ratings;
   } catch (error) {
     console.error("Failed to get IMDb ratings:", error);
     return {};
+  }
+};
+
+export interface ImdbAward {
+  event: string;
+  year: number | null;
+  category: string;
+  is_winner: boolean;
+}
+
+export interface ImdbDetails {
+  imdb_id: string;
+  title: string | null;
+  aggregate_rating: number | null;
+  vote_count: number | null;
+  metacritic_score: number | null;
+  metacritic_url: string | null;
+  metacritic_review_count: number | null;
+  plot: string | null;
+  genres: string[] | null;
+  directors: string[] | null;
+  writers: string[] | null;
+  stars: string[] | null;
+  runtime_seconds: number | null;
+  origin_countries: string[] | null;
+  interests: string[] | null;
+  start_year: number | null;
+  end_year: number | null;
+  mpaa_rating: string | null;
+  domestic_gross: string | null;
+  worldwide_gross: string | null;
+  opening_weekend_gross: string | null;
+  production_budget: string | null;
+  total_nominations: number | null;
+  total_wins: number | null;
+  awards: ImdbAward[] | null;
+  primary_image_url?: string | null;
+}
+
+export const getImdbDetails = async (params: {
+  imdbId?: string;
+  tmdbId?: number;
+  mediaType?: string;
+}): Promise<ImdbDetails | null> => {
+  try {
+    return await invoke<ImdbDetails>("get_imdb_details", params);
+  } catch (error) {
+    console.error("Failed to fetch IMDb details:", error);
+    return null;
+  }
+};
+
+export interface TmdbReview {
+  author: string;
+  content: string;
+  rating: number | null;
+  created_at: string | null;
+  url: string | null;
+}
+
+export const getTmdbReviews = async (
+  tmdbId: number,
+  mediaType: string,
+): Promise<TmdbReview[]> => {
+  try {
+    return await invoke<TmdbReview[]>("get_tmdb_reviews", { tmdbId, mediaType });
+  } catch (error) {
+    console.error("Failed to fetch TMDB reviews:", error);
+    return [];
   }
 };
 
