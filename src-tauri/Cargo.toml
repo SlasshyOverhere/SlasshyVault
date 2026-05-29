@@ -1,6 +1,6 @@
 [package]
 name = "slasshyvault"
-version = "3.0.49"
+version = "3.0.50"
 description = "A Tauri Media Library App"
 authors = ["Suman Patgiri"]
 license = "MIT"
