@@ -1952,6 +1952,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_poster_path(&self, id: i64, poster_path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET poster_path = ?1 WHERE id = ?2",
+            rusqlite::params![poster_path, id],
+        )?;
+        Ok(())
+    }
+
     pub fn media_exists(&self, file_path: &str) -> Result<bool> {
         let path = std::path::Path::new(file_path);
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -2312,6 +2320,21 @@ impl Database {
         self.conn.execute(
             "UPDATE media SET episode_title = ?, overview = ?, still_path = ? WHERE id = ?",
             params![episode_title, overview, still_path, episode_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update only the still_path for an episode identified by parent + season + episode number
+    pub fn update_episode_still_path(
+        &self,
+        parent_id: i64,
+        season: i32,
+        episode: i32,
+        still_path: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET still_path = ?1 WHERE parent_id = ?2 AND season_number = ?3 AND episode_number = ?4",
+            rusqlite::params![still_path, parent_id, season, episode],
         )?;
         Ok(())
     }
@@ -3471,7 +3494,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes

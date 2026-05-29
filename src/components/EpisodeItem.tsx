@@ -20,6 +20,9 @@ export interface EpisodeItemProps {
   index: number
   tmdbData?: TmdbEpisodeInfo
   imdbRating?: { rating: number | null; votes: number | null } | null
+  imdbTitle?: string | null
+  imdbPlot?: string | null
+  imdbStillUrl?: string | null
   isExpanded: boolean
   spoilerProtected: boolean
   isRevealed: boolean
@@ -36,6 +39,9 @@ function EpisodeItemBase({
   index,
   tmdbData,
   imdbRating,
+  imdbTitle,
+  imdbPlot,
+  imdbStillUrl,
   isExpanded,
   spoilerProtected,
   isRevealed,
@@ -51,7 +57,7 @@ function EpisodeItemBase({
   const isFinished = isMediaMarkedWatched(episode)
   const hasProgress = progress > 0 && !isFinished
 
-  const localStillPath = episode.still_path
+  const localStillPath = episode.still_path || imdbStillUrl || undefined
   const stillUrl = localStillPath
     ? null
     : getTmdbImageUrl(tmdbData?.still_path, "w300")
@@ -59,6 +65,7 @@ function EpisodeItemBase({
   const episodeTitle =
     episode.episode_title ||
     tmdbData?.name ||
+    imdbTitle ||
     episode.title ||
     `Episode ${episode.episode_number}`
 
@@ -113,7 +120,7 @@ function EpisodeItemBase({
       })()
     : null
 
-  const descriptionText = episode.overview || tmdbData?.overview || null
+  const descriptionText = episode.overview || tmdbData?.overview || imdbPlot || null
   const showExpandToggle = (descriptionText?.length || 0) > 120
 
   const handlePlayClick = (e?: React.MouseEvent) => {

@@ -1466,6 +1466,9 @@ export interface ImdbEpisodeRating {
   imdb_id: string;
   imdb_rating: number | null;
   imdb_votes: number | null;
+  still_url?: string | null;
+  title?: string | null;
+  plot?: string | null;
 }
 
 // Season details with episodes from TMDB
@@ -1818,6 +1821,7 @@ export interface ImdbDetails {
   total_nominations: number | null;
   total_wins: number | null;
   awards: ImdbAward[] | null;
+  primary_image_url?: string | null;
 }
 
 export const getImdbDetails = async (params: {

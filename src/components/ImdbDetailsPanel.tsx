@@ -102,6 +102,18 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
             {/* Data */}
             {data && !loading && (
               <>
+                {/* Poster Image */}
+                {data.primary_image_url && (
+                  <div className="flex justify-center mb-4">
+                    <img
+                      src={data.primary_image_url}
+                      alt={data.title || "Poster"}
+                      className="w-32 h-auto rounded-lg shadow-lg"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  </div>
+                )}
+
                 {/* Header */}
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 flex-wrap">

@@ -1594,7 +1594,9 @@ function App() {
   const handleContentDetailsMetadataRefresh = useCallback(async (itemId: number) => {
     try {
       const refreshedItem = await getMediaInfo(itemId)
-      setContentDetailsItem(refreshedItem)
+
+      // Guard: don't overwrite if user navigated to different content
+      setContentDetailsItem(prev => prev?.id === itemId ? refreshedItem : prev)
 
       if (selectedShow?.id === itemId) {
         setSelectedShow(refreshedItem)

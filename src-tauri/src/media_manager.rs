@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::database::Database;
+use crate::http_client;
 use crate::tmdb;
 
 const VIDEO_EXTENSIONS: &[&str] = &[
@@ -302,6 +303,7 @@ pub fn process_tv_episode(
         series_cast_names,
         series_poster_path,
         series_tmdb_id,
+        mut series_imdb_id,
         series_id,
         _is_new_series,
     ) = if let Ok(Some(existing_id)) = existing_series {
@@ -318,6 +320,7 @@ pub fn process_tv_episode(
                 existing.cast_names.clone(),
                 existing.poster_path.clone(),
                 existing.tmdb_id.clone(),
+                existing.imdb_id.clone(),
                 Some(existing_id),
                 false,
             )
@@ -325,6 +328,7 @@ pub fn process_tv_episode(
             (
                 parsed.title.clone(),
                 parsed.year,
+                None,
                 None,
                 None,
                 None,
@@ -341,6 +345,7 @@ pub fn process_tv_episode(
         let mut cast_names: Option<String> = None;
         let mut poster_path: Option<String> = None;
         let mut tmdb_id: Option<String> = None;
+        let mut imdb_id: Option<String> = None;
 
         if !api_key.is_empty() {
             if let Ok(Some(metadata)) =
@@ -351,6 +356,7 @@ pub fn process_tv_episode(
                 overview = metadata.overview;
                 cast_names = metadata.cast_names;
                 tmdb_id = metadata.tmdb_id;
+                imdb_id = metadata.imdb_id;
 
                 // Use organized image caching for series poster
                 if let Some(ref poster) = metadata.poster_path {
@@ -358,6 +364,11 @@ pub fn process_tv_episode(
                     // or cache with organized structure
                     poster_path = Some(poster.clone());
                 }
+
+                println!(
+                    "[TMDB] Series metadata for \"{}\": poster={:?}, imdb_id={:?}",
+                    title, poster_path, imdb_id
+                );
             }
         }
 
@@ -368,6 +379,7 @@ pub fn process_tv_episode(
             cast_names,
             poster_path,
             tmdb_id,
+            imdb_id,
             None,
             true,
         )
@@ -390,6 +402,10 @@ pub fn process_tv_episode(
                 // Update metadata if needed
                 if let Some(ref tmdb_id) = series_tmdb_id {
                     if let Ok(existing) = db.get_media_by_id(id) {
+                        // Capture imdb_id from existing series for imdbapi.dev lookups
+                        if series_imdb_id.is_none() && existing.imdb_id.is_some() {
+                            series_imdb_id = existing.imdb_id.clone();
+                        }
                         if existing.tmdb_id.is_none()
                             || existing.poster_path.is_none()
                             || existing.cast_names.is_none()
@@ -404,6 +420,7 @@ pub fn process_tv_episode(
                                 tmdb_id: Some(tmdb_id.clone()),
                                 imdb_id: None,
                                 runtime_seconds: None,
+                                imdb_image_url: None,
                             };
                             if let Err(e) = db.update_metadata(id, &metadata) {
                                 println!("[TV] Warning: Failed to update series metadata: {}", e);
@@ -456,6 +473,7 @@ pub fn process_tv_episode(
     let (episode_title, episode_overview, episode_still) = if let Some(ref tmdb_id) = series_tmdb_id
     {
         // First check if we have cached metadata
+        println!("[META] Episode S{:02}E{:02}: checking local cache...", season, episode);
         let cached_data = db
             .get_cached_episode_metadata(tmdb_id, season, episode)
             .ok()
@@ -486,16 +504,159 @@ pub fn process_tv_episode(
         if cache_valid {
             let cached = cached_data.unwrap();
             println!(
-                "[TV] Using cached metadata for {} S{:02}E{:02}",
-                series_title, season, episode
+                "[META] Episode S{:02}E{:02}: cache hit, still_path={:?}",
+                season, episode, cached.still_path
             );
             (cached.episode_title, cached.overview, cached.still_path)
         } else {
-            // No valid cache - fetch this specific episode from TMDB
-            if !api_key.is_empty() {
+            // No valid cache - try imdbapi.dev for episode image first, then fall back to TMDB
+            println!("[META] Episode S{:02}E{:02}: cache miss, trying imdbapi.dev...", season, episode);
+            let mut imdbapi_still_path: Option<String> = None;
+
+            if let Some(ref imdb_id) = series_imdb_id {
                 println!(
-                    "[TV] Fetching episode metadata from TMDB for {} S{:02}E{:02}",
+                    "[IMDBAPI] Fetching episode image: show={}, S{:02}E{:02}",
+                    imdb_id, season, episode
+                );
+
+                #[derive(serde::Deserialize)]
+                struct ImdbApiEpResp {
+                    #[serde(default)]
+                    episodeNumber: Option<i32>,
+                    #[serde(default)]
+                    primaryImage: Option<ImdbApiPrimaryImg>,
+                }
+                #[derive(serde::Deserialize)]
+                struct ImdbApiPrimaryImg {
+                    #[serde(default)]
+                    url: Option<String>,
+                }
+                #[derive(serde::Deserialize)]
+                struct ImdbApiEpsResp {
+                    #[serde(default)]
+                    episodes: Vec<ImdbApiEpResp>,
+                }
+
+                let url = format!(
+                    "https://api.imdbapi.dev/titles/{}/episodes?season={}",
+                    imdb_id, season
+                );
+                let client = http_client::shared_client();
+                let resp = client
+                    .get(&url)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .send();
+
+                match resp {
+                    Ok(r) if r.status().is_success() => {
+                        if let Ok(data) = r.json::<ImdbApiEpsResp>() {
+                            for ep in &data.episodes {
+                                if ep.episodeNumber == Some(episode) {
+                                    if let Some(ref img) = ep.primaryImage {
+                                        if let Some(ref img_url) = img.url {
+                                            if !img_url.is_empty() {
+                                                // Download and cache the image locally
+                                                // Include URL hash in filename to avoid collisions between different shows
+                                                let url_hash: String = img_url
+                                                    .rsplit('/')
+                                                    .next()
+                                                    .unwrap_or("unknown")
+                                                    .chars()
+                                                    .filter(|c| c.is_alphanumeric())
+                                                    .take(20)
+                                                    .collect();
+                                                let url_hash = if url_hash.is_empty() { "unknown".to_string() } else { url_hash };
+                                                let filename = format!(
+                                                    "imdb_ep_s{:02}e{:02}_{}.jpg",
+                                                    season, episode, url_hash
+                                                );
+                                                let cache_path =
+                                                    Path::new(image_cache_dir).join(&filename);
+                                                if !cache_path.exists() {
+                                                    match client
+                                                        .get(img_url.as_str())
+                                                        .timeout(std::time::Duration::from_secs(15))
+                                                        .send()
+                                                    {
+                                                        Ok(img_resp)
+                                                            if img_resp.status().is_success() =>
+                                                        {
+                                                            if let Ok(bytes) = img_resp.bytes() {
+                                                                let _ = std::fs::write(
+                                                                    &cache_path,
+                                                                    &bytes,
+                                                                );
+                                                                println!(
+                                                                    "[TV] Cached imdbapi.dev episode image: {:?}",
+                                                                    cache_path
+                                                                );
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            println!(
+                                                                "[TV] Failed to download imdbapi.dev image for {} S{:02}E{:02}",
+                                                                series_title, season, episode
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                // Only set still_path if the file actually exists on disk
+                                                if cache_path.exists() {
+                                                    let cached_path = format!("image_cache/{}", filename);
+                                                    println!("[IMDBAPI] Got episode image: {}", cached_path);
+                                                    imdbapi_still_path = Some(cached_path);
+                                                } else {
+                                                    println!("[IMDBAPI] Episode image not available on disk for S{:02}E{:02}", season, episode);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        println!(
+                            "[TV] imdbapi.dev request failed for S{:02}E{:02}",
+                            season, episode
+                        );
+                    }
+                }
+            }
+
+            if series_imdb_id.is_some() && imdbapi_still_path.is_none() {
+                println!("[IMDBAPI] No episode image from imdbapi.dev for S{:02}E{:02}", season, episode);
+            }
+
+            // If we got an image from imdbapi.dev and have cached title/overview, combine them
+            // without hitting TMDB. Otherwise fall back to TMDB for full metadata.
+            let has_cached_text = cached_data.as_ref().map_or(false, |c| {
+                c.episode_title.is_some() || c.overview.is_some()
+            });
+
+            if imdbapi_still_path.is_some() && has_cached_text {
+                let cached = cached_data.unwrap();
+                let still = imdbapi_still_path;
+                println!(
+                    "[TV] Using imdbapi.dev image with cached metadata for {} S{:02}E{:02}",
                     series_title, season, episode
+                );
+                let _ = db.save_cached_episode_metadata(
+                    tmdb_id,
+                    season,
+                    episode,
+                    cached.episode_title.as_deref(),
+                    cached.overview.as_deref(),
+                    still.as_deref(),
+                    cached.air_date.as_deref(),
+                    cached.vote_average,
+                );
+                (cached.episode_title, cached.overview, still)
+            } else if !api_key.is_empty() {
+                println!(
+                    "[TMDB] Fetching episode metadata via TMDB for S{:02}E{:02}",
+                    season, episode
                 );
                 match fetch_single_episode_metadata(
                     api_key,
@@ -506,6 +667,16 @@ pub fn process_tv_episode(
                     image_cache_dir,
                 ) {
                     Ok(Some(ep_info)) => {
+                        // If imdbapi.dev provided a still image, prefer it over TMDB
+                        let final_still = if imdbapi_still_path.is_some() {
+                            imdbapi_still_path
+                        } else {
+                            ep_info.still_path.clone()
+                        };
+                        println!(
+                            "[TMDB] Got episode metadata: title=\"{}\", still={:?}",
+                            ep_info.name, final_still
+                        );
                         // Cache it for future use
                         let _ = db.save_cached_episode_metadata(
                             tmdb_id,
@@ -513,31 +684,34 @@ pub fn process_tv_episode(
                             episode,
                             Some(&ep_info.name),
                             ep_info.overview.as_deref(),
-                            ep_info.still_path.as_deref(),
+                            final_still.as_deref(),
                             ep_info.air_date.as_deref(),
                             ep_info.vote_average,
                         );
-                        (Some(ep_info.name), ep_info.overview, ep_info.still_path)
+                        (Some(ep_info.name), ep_info.overview, final_still)
                     }
                     Ok(None) => {
                         println!(
                             "[TV] No TMDB metadata found for {} S{:02}E{:02}",
                             series_title, season, episode
                         );
-                        (None, None, None)
+                        (None, None, imdbapi_still_path)
                     }
                     Err(e) => {
                         println!("[TV] Failed to fetch episode metadata: {}", e);
-                        (None, None, None)
+                        (None, None, imdbapi_still_path)
                     }
                 }
             } else {
-                (None, None, None)
+                // No API key - use whatever we got from imdbapi.dev
+                (None, None, imdbapi_still_path)
             }
         }
     } else {
         (None, None, None)
     };
+
+
 
     match db.insert_episode_with_metadata(
         &ep_title,
@@ -582,6 +756,42 @@ fn fetch_single_episode_metadata(
     }
 
     Ok(None)
+}
+
+/// Try to fetch an episode still image from imdbapi.dev when TMDB has none.
+/// Returns a cached local image path (relative to image_cache_dir) on success.
+fn fetch_imdb_episode_image(
+    show_imdb_id: &str,
+    season: i32,
+    episode: i32,
+    image_cache_dir: &str,
+    series_title: &str,
+) -> Option<String> {
+    let url = format!(
+        "https://api.imdbapi.dev/titles/{}/episodes?season={}",
+        show_imdb_id, season
+    );
+    let client = crate::http_client::shared_client();
+    let resp = client.get(&url).send().ok()?;
+    let json: serde_json::Value = resp.json().ok()?;
+    let episodes = json.get("episodes")?.as_array()?;
+
+    for ep in episodes {
+        if ep.get("episodeNumber").and_then(|n| n.as_i64()) == Some(episode as i64) {
+            let img_url = ep.get("primaryImage")?.get("url")?.as_str()?;
+            println!(
+                "[TV] Found imdbapi.dev episode image for {} S{:02}E{:02}: {}",
+                series_title, season, episode, img_url
+            );
+            return tmdb::cache_image_organized(
+                img_url,
+                image_cache_dir,
+                series_title,
+                tmdb::ImageType::EpisodeBanner { season, episode },
+            );
+        }
+    }
+    None
 }
 
 pub fn parse_filename(path: &Path) -> ParsedMedia {

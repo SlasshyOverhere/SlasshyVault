@@ -20,6 +20,15 @@ function EpisodeThumbnailImageBase({
       setImageUrl(null)
 
       if (localStillPath) {
+        // If it's a full URL (e.g. from imdbapi.dev primaryImage), use it directly
+        if (localStillPath.startsWith("http://") || localStillPath.startsWith("https://")) {
+          if (!cancelled) {
+            setImageUrl(localStillPath)
+            setLoading(false)
+            return
+          }
+        }
+
         let filename = localStillPath
         if (filename.startsWith("image_cache/")) {
           filename = filename.replace("image_cache/", "")

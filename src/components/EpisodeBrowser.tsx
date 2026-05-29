@@ -499,6 +499,9 @@ export function EpisodeBrowser({
                         index={i}
                         tmdbData={tmdb}
                         imdbRating={imdbRatingProp}
+                        imdbTitle={imdb?.title}
+                        imdbPlot={imdb?.plot}
+                        imdbStillUrl={imdb?.still_url}
                         isExpanded={expandedEpisode === ep.id}
                         spoilerProtected={spoilerEnabled && !isMediaMarkedWatched(ep)}
                         isRevealed={revealedEpisodes.has(ep.id)}

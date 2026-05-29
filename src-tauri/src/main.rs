@@ -1062,13 +1062,38 @@ async fn gdrive_scan_folder(
                         } else {
                         // Search TMDB for the show (only once per show)
                         println!("[CLOUD] Searching TMDB for show: {}", show_title);
-                        let tmdb_result = tmdb::search_metadata(
+                        let mut tmdb_result = tmdb::search_metadata(
                             &api_key,
                             &show_title,
                             "tv",
                             parsed.year,
                             &image_cache_dir,
                         ).ok().flatten();
+
+                        // Log TMDB search result
+                        if let Some(ref meta) = tmdb_result {
+                            println!("[TMDB] Search result for \"{}\": poster_path={:?}, imdb_id={:?}", show_title, meta.poster_path, meta.imdb_id);
+                        }
+
+                        // Always prefer imdbapi.dev poster over TMDB
+                        if let Some(ref meta) = tmdb_result {
+                            if let Some(ref imdb_id) = meta.imdb_id {
+                                println!("[IMDBAPI] Trying imdbapi.dev poster for \"{}\" (imdb_id: {})", show_title, imdb_id);
+                                let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+                                if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                                    if let Ok(json) = resp.json::<serde_json::Value>() {
+                                        if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                                            if let Some(cached) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &tmdb::ImageType::SeriesBanner) {
+                                                println!("[IMDBAPI] Using imdbapi.dev poster as primary for \"{}\"", show_title);
+                                                if let Some(ref mut m) = tmdb_result {
+                                                    m.poster_path = Some(cached);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         // Create the show
                         let (title, year, overview, cast_names, poster_path, tmdb_id_opt) = match &tmdb_result {
@@ -1195,13 +1220,38 @@ async fn gdrive_scan_folder(
             } else {
                 // Index as movie
                 println!("[CLOUD] Searching TMDB for movie: {}", parsed.title);
-                let tmdb_result = tmdb::search_metadata(
+                let mut tmdb_result = tmdb::search_metadata(
                     &api_key,
                     &parsed.title,
                     "movie",
                     parsed.year,
                     &image_cache_dir,
                 ).ok().flatten();
+
+                // Log TMDB search result
+                if let Some(ref meta) = tmdb_result {
+                    println!("[TMDB] Search result for \"{}\": poster_path={:?}, imdb_id={:?}", parsed.title, meta.poster_path, meta.imdb_id);
+                }
+
+                // Always prefer imdbapi.dev poster over TMDB
+                if let Some(ref meta) = tmdb_result {
+                    if let Some(ref imdb_id) = meta.imdb_id {
+                        println!("[IMDBAPI] Trying imdbapi.dev poster for \"{}\" (imdb_id: {})", parsed.title, imdb_id);
+                        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+                        if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                            if let Ok(json) = resp.json::<serde_json::Value>() {
+                                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                                    if let Some(cached) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &tmdb::ImageType::MovieBanner) {
+                                        println!("[IMDBAPI] Using imdbapi.dev poster as primary for \"{}\"", parsed.title);
+                                        if let Some(ref mut m) = tmdb_result {
+                                            m.poster_path = Some(cached);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let (title, year, overview, cast_names, director, poster_path, tmdb_id, runtime_seconds) = match tmdb_result {
                     Some(meta) => (
@@ -5737,7 +5787,9 @@ async fn fix_match(
     let omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
     let image_cache_dir = database::get_image_cache_dir();
 
-    let metadata = if let Some(ref imdb) = imdb_id {
+    println!("[META] fix_match called for media_id={}, tmdb_id={}, imdb_id={:?}", media_id, tmdb_id, imdb_id);
+
+    let mut metadata = if let Some(ref imdb) = imdb_id {
         // IMDb ID provided: resolve via TMDB /find, then fetch full TMDB metadata
         let api_key_c = api_key.clone();
         let imdb_c = imdb.clone();
@@ -5772,7 +5824,7 @@ async fn fix_match(
         let media_type_clone = media_type.clone();
         let image_cache_dir_clone = image_cache_dir.clone();
 
-        tokio::time::timeout(
+        let mut meta = tokio::time::timeout(
             Duration::from_secs(40),
             tokio::task::spawn_blocking(move || {
                 tmdb::fetch_metadata_by_id(
@@ -5786,9 +5838,59 @@ async fn fix_match(
         )
         .await
         .map_err(|_| "Fix Match timed out while fetching metadata. Please try again.".to_string())?
-        .map_err(|e| e.to_string())??
+        .map_err(|e| e.to_string())??;
+
+        // Try to resolve imdb_id from TMDB external_ids if not already set
+        if meta.imdb_id.is_none() {
+            let api_key_c = api_key.clone();
+            let tmdb_id_c = tmdb_id.clone();
+            let media_type_c = media_type.clone();
+            let ext_imdb = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || -> Option<String> {
+                    let ext_url = build_tmdb_api_url(
+                        &format!(
+                            "/{}/{}/external_ids",
+                            if media_type_c == "tv" { "tv" } else { "movie" },
+                            tmdb_id_c
+                        ),
+                        &api_key_c,
+                        "",
+                    );
+                    let client = http_client::shared_client();
+                    let use_bearer = crate::is_access_token(&api_key_c)
+                        && !tmdb::is_backend_proxy_credential(&api_key_c);
+                    let req = if use_bearer {
+                        client
+                            .get(&ext_url)
+                            .header("Authorization", format!("Bearer {}", api_key_c))
+                    } else {
+                        client.get(&ext_url)
+                    };
+                    let resp = req.send().ok()?;
+                    if !resp.status().is_success() {
+                        return None;
+                    }
+                    let json: serde_json::Value = resp.json().ok()?;
+                    json.get("imdb_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                }),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten();
+            if let Some(imdb) = ext_imdb {
+                println!("[TMDB] Resolved imdb_id from external_ids: {}", imdb);
+                meta.imdb_id = Some(imdb);
+            }
+        }
+
+        meta
     };
 
+    println!("[TMDB] fix_match metadata: poster={:?}", metadata.poster_path);
     let updated_title = metadata.title.clone();
     let updated_tmdb_id = metadata.tmdb_id.clone();
 
@@ -5800,6 +5902,31 @@ async fn fix_match(
             .ok()
             .and_then(|item| item.parent_id)
     };
+
+    // Always try imdbapi.dev for poster — prefer it over TMDB if available
+    if let Some(ref imdb_id) = metadata.imdb_id {
+        let image_cache_dir = database::get_image_cache_dir();
+        let image_type = if media_type == "tv" { tmdb::ImageType::SeriesBanner } else { tmdb::ImageType::MovieBanner };
+        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+        if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+            if let Ok(json) = resp.json::<serde_json::Value>() {
+                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                    if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
+                        println!("[IMDBAPI] fix_match poster override: Ok(\"{}\")", cached_path);
+                        metadata.poster_path = Some(cached_path.clone());
+                        if let Ok(db) = state.db.lock() {
+                            let _ = db.update_poster_path(media_id, &cached_path);
+                        }
+                    } else {
+                        println!("[IMDBAPI] fix_match poster: Err(cache failed)");
+                    }
+                } else {
+                    println!("[IMDBAPI] fix_match poster: Err(no image in response), keeping TMDB poster");
+                }
+            }
+        }
+    }
+
 
     let payload = serde_json::json!({
         "type": "metadata-updated",
@@ -7460,64 +7587,139 @@ async fn get_tv_season_episodes(
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
 
+    // Try to get show's imdb_id from database for imdbapi.dev image fallback
+    let show_imdb_id_from_db: Option<String> = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.find_media_by_tmdb(&tv_id.to_string(), "tvshow")
+            .ok()
+            .flatten()
+            .and_then(|m| m.imdb_id)
+    };
+
     let url = build_tmdb_api_url(
         &format!("/tv/{}/season/{}", tv_id, season_number),
         &credential,
         "",
     );
 
-    let result = tokio::task::spawn_blocking(move || -> Result<TvSeasonDetails, String> {
-        let response = http_get_with_retry_auth(&url, &credential, 3)?;
+    // ALL blocking HTTP in std::thread::spawn to avoid tokio runtime panic
+    let (ep_tx, ep_rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let result: Result<TvSeasonDetails, String> = (|| {
+            let response = http_get_with_retry_auth(&url, &credential, 3)?;
 
-        #[derive(serde::Deserialize)]
-        struct RawEpisode {
-            season_number: Option<i32>,
-            episode_number: i32,
-            name: Option<String>,
-            overview: Option<String>,
-            still_path: Option<String>,
-            air_date: Option<String>,
-            runtime: Option<i32>,
-            vote_average: Option<f64>,
-        }
+            #[derive(serde::Deserialize)]
+            struct RawEpisode {
+                season_number: Option<i32>,
+                episode_number: i32,
+                name: Option<String>,
+                overview: Option<String>,
+                still_path: Option<String>,
+                air_date: Option<String>,
+                runtime: Option<i32>,
+                vote_average: Option<f64>,
+            }
 
-        #[derive(serde::Deserialize)]
-        struct RawSeasonDetails {
-            season_number: i32,
-            name: Option<String>,
-            episodes: Option<Vec<RawEpisode>>,
-        }
+            #[derive(serde::Deserialize)]
+            struct RawSeasonDetails {
+                season_number: i32,
+                name: Option<String>,
+                episodes: Option<Vec<RawEpisode>>,
+            }
 
-        let raw: RawSeasonDetails = response.json().map_err(|e| e.to_string())?;
+            let raw: RawSeasonDetails = response.json().map_err(|e| e.to_string())?;
 
-        let episodes: Vec<TvEpisodeInfo> = raw
-            .episodes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| TvEpisodeInfo {
-                season_number: e.season_number.or(Some(raw.season_number)),
-                episode_number: e.episode_number,
-                name: e
+            let image_cache_dir = database::get_image_cache_dir();
+            let episodes: Vec<TvEpisodeInfo> = raw
+                .episodes
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| {
+                    let cached_still = if let Some(ref tmdb_path) = e.still_path {
+                        if !tmdb_path.is_empty() {
+                            let image_type = tmdb::ImageType::EpisodeBanner {
+                                season: raw.season_number,
+                                episode: e.episode_number,
+                            };
+                            tmdb::cache_image_organized(tmdb_path, &image_cache_dir, "episode", image_type)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    TvEpisodeInfo {
+                        season_number: e.season_number.or(Some(raw.season_number)),
+                        episode_number: e.episode_number,
+                        name: e
+                            .name
+                            .unwrap_or_else(|| format!("Episode {}", e.episode_number)),
+                        overview: e.overview,
+                        still_path: cached_still.or(e.still_path),
+                        air_date: e.air_date,
+                        runtime: e.runtime,
+                        vote_average: e.vote_average,
+                    }
+                })
+                .collect();
+
+            Ok(TvSeasonDetails {
+                season_number: raw.season_number,
+                name: raw
                     .name
-                    .unwrap_or_else(|| format!("Episode {}", e.episode_number)),
-                overview: e.overview,
-                still_path: e.still_path,
-                air_date: e.air_date,
-                runtime: e.runtime,
-                vote_average: e.vote_average,
+                    .unwrap_or_else(|| format!("Season {}", raw.season_number)),
+                episodes,
             })
-            .collect();
+        })();
+        let _ = ep_tx.send(result);
+    });
+    let mut result = ep_rx.await.map_err(|e| e.to_string())??;
 
-        Ok(TvSeasonDetails {
-            season_number: raw.season_number,
-            name: raw
-                .name
-                .unwrap_or_else(|| format!("Season {}", raw.season_number)),
-            episodes,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    // Try to get better episode images from imdbapi.dev (also in thread to avoid panic)
+    if let Some(ref show_imdb_id) = show_imdb_id_from_db {
+        println!("[IMDBAPI] Fetching episode images for show {} season {}", show_imdb_id, season_number);
+        let show_imdb_id_clone = show_imdb_id.clone();
+        let (img_tx, img_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let mut image_count = 0usize;
+            let mut results: Vec<(i32, String)> = Vec::new();
+            let imdb_url = format!(
+                "https://api.imdbapi.dev/titles/{}/episodes?season={}",
+                show_imdb_id_clone, season_number
+            );
+            if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                if let Ok(json) = resp.json::<serde_json::Value>() {
+                    if let Some(episodes) = json.get("episodes").and_then(|e| e.as_array()) {
+                        for ep in episodes {
+                            if let (Some(ep_num), Some(img_url)) = (
+                                ep.get("episodeNumber").and_then(|n| n.as_i64()),
+                                ep.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()),
+                            ) {
+                                let image_cache_dir = database::get_image_cache_dir();
+                                let image_type = tmdb::ImageType::EpisodeBanner { season: season_number, episode: ep_num as i32 };
+                                if let Some(cached) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
+                                    image_count += 1;
+                                    results.push((ep_num as i32, cached));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            println!("[IMDBAPI] Got {} episode images from imdbapi.dev", image_count);
+            let _ = img_tx.send(results);
+        });
+        // Apply cached images to result
+        if let Ok(results) = img_rx.await {
+            for (ep_num, path) in results {
+                for info in &mut result.episodes {
+                    if info.episode_number == ep_num {
+                        info.still_path = Some(path.clone());
+                    }
+                }
+            }
+        }
+    }
 
     Ok(result)
 }
@@ -7527,6 +7729,9 @@ struct ImdbEpisodeRating {
     imdb_id: String,
     imdb_rating: Option<f64>,
     imdb_votes: Option<i64>,
+    still_url: Option<String>,
+    title: Option<String>,
+    plot: Option<String>,
 }
 
 #[tauri::command]
@@ -7547,8 +7752,9 @@ async fn get_episode_imdb_ratings(
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
 
-    // All blocking HTTP work must happen off the tokio async runtime thread
-    let results = tokio::task::spawn_blocking(move || {
+    // ALL blocking HTTP in std::thread::spawn to avoid tokio runtime panic (reqwest 0.12)
+    let (ratings_tx, ratings_rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
         let mut results: std::collections::HashMap<i32, ImdbEpisodeRating> = std::collections::HashMap::new();
         let mut missing_from_imdbapi: Vec<i32> = Vec::new();
 
@@ -7584,6 +7790,7 @@ async fn get_episode_imdb_ratings(
 
         // Step 1: Try imdbapi.dev batch fetch if we have the show's IMDb ID
         if let Some(ref show_id) = show_imdb_id {
+            println!("[IMDBAPI] Fetching episode ratings for show {} season {}", show_id, season_number);
             let url = format!("https://api.imdbapi.dev/titles/{}/episodes?season={}", show_id, season_number);
             let client = http_client::shared_client();
             let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send();
@@ -7596,6 +7803,16 @@ async fn get_episode_imdb_ratings(
                 episodeNumber: Option<i32>,
                 #[serde(default)]
                 rating: Option<ImdbApiEpisodeRating>,
+                #[serde(default)]
+                title: Option<String>,
+                #[serde(default)]
+                plot: Option<String>,
+                #[serde(default)]
+                runtimeSeconds: Option<i32>,
+                #[serde(default)]
+                season: Option<String>,
+                #[serde(default)]
+                primaryImage: Option<PrimaryImage>,
             }
             #[derive(serde::Deserialize)]
             struct ImdbApiEpisodeRating {
@@ -7603,6 +7820,15 @@ async fn get_episode_imdb_ratings(
                 aggregateRating: Option<f64>,
                 #[serde(default)]
                 voteCount: Option<i64>,
+            }
+            #[derive(serde::Deserialize)]
+            struct PrimaryImage {
+                #[serde(default)]
+                url: Option<String>,
+                #[serde(default)]
+                width: Option<i32>,
+                #[serde(default)]
+                height: Option<i32>,
             }
 
             match resp {
@@ -7625,11 +7851,15 @@ async fn get_episode_imdb_ratings(
                                         imdb_id,
                                         imdb_rating: rating.aggregateRating,
                                         imdb_votes: rating.voteCount,
+                                        still_url: ep.primaryImage.and_then(|img| img.url),
+                                        title: ep.title.clone(),
+                                        plot: ep.plot.clone(),
                                     });
                                 }
                             }
                         }
                     }
+                    println!("[IMDBAPI] Got {} episode ratings from imdbapi.dev", results.len());
                 }
                 _ => {}
             }
@@ -7680,6 +7910,7 @@ async fn get_episode_imdb_ratings(
             let Some(imdb_id) = imdb_id else { continue };
 
             // Try OMDb
+            println!("[OMDB] Fallback: fetching rating for episode {} via OMDb (imdb_id: {})", ep_num, imdb_id);
             let rating = fetch_imdb_rating_for_id(&omdb_credential, &imdb_id);
             let parsed_rating = rating.as_ref().and_then(|r| {
                 r.imdbRating.as_deref().and_then(|v| v.parse::<f64>().ok())
@@ -7694,11 +7925,15 @@ async fn get_episode_imdb_ratings(
                 imdb_id,
                 imdb_rating: parsed_rating,
                 imdb_votes: parsed_votes,
+                still_url: None,
+                title: None,
+                plot: None,
             });
         }
 
-        results
-    }).await.map_err(|e| e.to_string())?;
+        let _ = ratings_tx.send(results);
+    });
+    let results = ratings_rx.await.map_err(|e| e.to_string())?;
 
     Ok(results)
 }
@@ -7738,6 +7973,7 @@ struct ImdbDetails {
     total_nominations: Option<i32>,
     total_wins: Option<i32>,
     awards: Option<Vec<ImdbAward>>,
+    primary_image_url: Option<String>,
 }
 
 #[tauri::command]
@@ -7783,7 +8019,9 @@ async fn get_imdb_details(
                 return Err(format!("TMDB external_ids error: {}", resp.status()));
             }
             let ids: ExternalIds = resp.json().map_err(|e| e.to_string())?;
-            ids.imdb_id.ok_or_else(|| "No IMDb ID found for this TMDB entry".to_string())?
+            let resolved = ids.imdb_id.ok_or_else(|| "No IMDb ID found for this TMDB entry".to_string())?;
+            println!("[TMDB] Resolved imdb_id {} from tmdb_id {}", resolved, tid);
+            resolved
         } else {
             return Err("Either imdb_id or tmdb_id must be provided".to_string());
         };
@@ -7800,12 +8038,21 @@ async fn get_imdb_details(
         }
 
         // 1. Title details
+        println!("[IMDBAPI] Fetching titles for {}", resolved_imdb_id);
         let title_url = format!("https://api.imdbapi.dev/titles/{}", resolved_imdb_id);
         let client = http_client::shared_client();
         if let Ok(resp) = client.get(&title_url).timeout(std::time::Duration::from_secs(10)).send() {
             if resp.status().is_success() {
                 #[derive(serde::Deserialize)]
+                struct PrimaryImage {
+                    url: Option<String>,
+                    width: Option<i32>,
+                    height: Option<i32>,
+                }
+
+                #[derive(serde::Deserialize)]
                 struct TitleResponse {
+                    primaryImage: Option<PrimaryImage>,
                     primaryTitle: Option<String>,
                     startYear: Option<i32>,
                     endYear: Option<i32>,
@@ -7852,11 +8099,14 @@ async fn get_imdb_details(
                         details.metacritic_url = m.url;
                         details.metacritic_review_count = m.reviewCount;
                     }
+                    details.primary_image_url = title.primaryImage.and_then(|img| img.url);
+                    println!("[IMDBAPI] Got titles data for {}", resolved_imdb_id);
                 }
             }
         }
 
         // 2. Certificates (MPAA rating)
+        println!("[IMDBAPI] Fetching certificates for {}", resolved_imdb_id);
         let certs_url = format!("https://api.imdbapi.dev/titles/{}/certificates", resolved_imdb_id);
         if let Ok(resp) = client.get(&certs_url).timeout(std::time::Duration::from_secs(10)).send() {
             if resp.status().is_success() {
@@ -7874,11 +8124,13 @@ async fn get_imdb_details(
                             .and_then(|c| c.rating.clone())
                             .or_else(|| cert_list.first().and_then(|c| c.rating.clone()));
                     }
+                    println!("[IMDBAPI] Got certificates data for {}", resolved_imdb_id);
                 }
             }
         }
 
         // 3. Box office
+        println!("[IMDBAPI] Fetching boxOffice for {}", resolved_imdb_id);
         let box_url = format!("https://api.imdbapi.dev/titles/{}/boxOffice", resolved_imdb_id);
         if let Ok(resp) = client.get(&box_url).timeout(std::time::Duration::from_secs(10)).send() {
             if resp.status().is_success() {
@@ -7904,11 +8156,13 @@ async fn get_imdb_details(
                     details.worldwide_gross = format_money(&data.worldwideGross);
                     details.opening_weekend_gross = format_money(&data.openingWeekendGross);
                     details.production_budget = format_money(&data.productionBudget);
+                    println!("[IMDBAPI] Got boxOffice data for {}", resolved_imdb_id);
                 }
             }
         }
 
         // 4. Awards
+        println!("[IMDBAPI] Fetching awardNominations for {}", resolved_imdb_id);
         let awards_url = format!("https://api.imdbapi.dev/titles/{}/awardNominations", resolved_imdb_id);
         if let Ok(resp) = client.get(&awards_url).timeout(std::time::Duration::from_secs(10)).send() {
             if resp.status().is_success() {
@@ -7942,6 +8196,7 @@ async fn get_imdb_details(
                             details.awards = Some(award_list);
                         }
                     }
+                    println!("[IMDBAPI] Got awardNominations data for {}", resolved_imdb_id);
                 }
             }
         }
@@ -8041,8 +8296,12 @@ async fn refresh_series_metadata(
         let config = state.config.lock().map_err(|e| e.to_string())?;
         tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default())
     };
+    let credential_for_imdb = credential.clone();
+    let credential_for_poster = credential.clone();
 
     let image_cache_dir = database::get_image_cache_dir();
+    let image_cache_dir_for_imdb = image_cache_dir.clone();
+    let image_cache_dir_for_poster = image_cache_dir.clone();
     let tv_id_str = tv_id.to_string();
     let series_title_clone = series_title.clone();
 
@@ -8107,18 +8366,19 @@ async fn refresh_series_metadata(
     }
 
     // Step 2: Fetch ONLY the episodes the user owns
-    let fetched_episodes = tokio::task::spawn_blocking(move || {
-        tmdb::fetch_owned_episodes_only(
+    // Use std::thread::spawn to avoid tokio runtime panic (reqwest 0.12 blocking client)
+    let (ep_tx, ep_rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = tmdb::fetch_owned_episodes_only(
             &credential,
             &tv_id_str,
             &series_title_clone,
             &image_cache_dir,
             &episode_list,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+        );
+        let _ = ep_tx.send(result);
+    });
+    let fetched_episodes = ep_rx.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
 
     let mut total_images = 0;
 
@@ -8173,12 +8433,163 @@ async fn refresh_series_metadata(
         }
     }
 
+    // Step 4: Try to get better images from imdbapi.dev
+    {
+        let owned_for_imdb = owned_episodes.clone();
+        // Use std::thread::spawn to avoid tokio runtime panic (reqwest 0.12 blocking client)
+        let (imdb_tx, imdb_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let show_imdb_id = tmdb_imdb_id_for_show(tv_id, &credential_for_imdb);
+            let Some(show_imdb_id) = show_imdb_id else {
+                println!("[REFRESH] No IMDb ID found for TMDB ID {}, skipping imdbapi.dev images", tv_id);
+                let _ = imdb_tx.send(Ok(Vec::new()));
+                return;
+            };
+
+            println!("[IMDBAPI] Refreshing episode images for show {}", show_imdb_id);
+
+            let mut seasons: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+            for (_, s, _) in &owned_for_imdb {
+                seasons.insert(*s);
+            }
+
+            let mut results: Vec<(i32, i32, String)> = Vec::new();
+
+            for season_num in &seasons {
+                let imdb_url = format!(
+                    "https://api.imdbapi.dev/titles/{}/episodes?season={}",
+                    show_imdb_id, season_num
+                );
+                let client = http_client::shared_client();
+                let resp = match client.get(&imdb_url).timeout(std::time::Duration::from_secs(10)).send() {
+                    Ok(r) if r.status().is_success() => r,
+                    Ok(r) => {
+                        println!("[REFRESH] imdbapi.dev returned status {} for season {}", r.status(), season_num);
+                        continue;
+                    }
+                    Err(e) => {
+                        println!("[REFRESH] imdbapi.dev request failed for season {}: {}", season_num, e);
+                        continue;
+                    }
+                };
+
+                let json: serde_json::Value = match resp.json() {
+                    Ok(j) => j,
+                    Err(e) => {
+                        println!("[REFRESH] Failed to parse imdbapi.dev response: {}", e);
+                        continue;
+                    }
+                };
+
+                let episodes = match json.get("episodes").and_then(|e| e.as_array()) {
+                    Some(eps) => eps,
+                    None => continue,
+                };
+
+                for ep in episodes {
+                    let ep_num = match ep.get("episodeNumber").and_then(|n| n.as_i64()) {
+                        Some(n) => n,
+                        None => continue,
+                    };
+                    let img_url = match ep.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                        Some(url) => url,
+                        None => continue,
+                    };
+
+                    let is_owned = owned_for_imdb.iter().any(|(_, s, e)| *s == *season_num && *e == ep_num as i32);
+                    if !is_owned {
+                        continue;
+                    }
+
+                    let image_type = tmdb::ImageType::EpisodeBanner {
+                        season: *season_num,
+                        episode: ep_num as i32,
+                    };
+                    if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir_for_imdb), &image_type) {
+                        results.push((*season_num, ep_num as i32, cached_path));
+                    }
+                }
+            }
+
+            let _ = imdb_tx.send(Ok(results));
+        });
+        let imdb_results: Result<Vec<(i32, i32, String)>, String> = imdb_rx.await.map_err(|e| e.to_string())?;
+
+        match imdb_results {
+            Ok(results) if !results.is_empty() => {
+                let db = state.db.lock().map_err(|e| e.to_string())?;
+                for (season, episode, cached_path) in &results {
+                    let _ = db.update_episode_still_path(tv_id, *season, *episode, cached_path);
+                    println!(
+                        "[REFRESH] Updated S{:02}E{:02} with imdbapi.dev image",
+                        season, episode
+                    );
+                }
+                total_images += results.len();
+                println!("[IMDBAPI] Updated {} episode still paths from imdbapi.dev", results.len());
+            }
+            Ok(_) => {
+                println!("[REFRESH] imdbapi.dev: no additional images found");
+            }
+            Err(e) => {
+                println!("[REFRESH] imdbapi.dev image fetch failed: {}", e);
+            }
+        }
+    }
+
+    // Step 8: Refresh show-level poster from TMDB + imdbapi.dev
+    // ALL blocking HTTP in std::thread::spawn to avoid tokio runtime panic
+    println!("[REFRESH] Refreshing show poster...");
+    let mut new_poster_path: Option<String> = None;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let mut poster: Option<String> = None;
+
+        // Step A: TMDB poster
+        let tmdb_result = tmdb::fetch_metadata_by_id(&credential_for_poster, &tv_id.to_string(), "tv", &image_cache_dir_for_poster);
+        if let Ok(ref tmdb_meta) = tmdb_result {
+            if tmdb_meta.poster_path.is_some() {
+                poster = tmdb_meta.poster_path.clone();
+                println!("[REFRESH] TMDB show poster: {:?}", poster);
+            }
+            // Step B: imdbapi.dev poster (overrides TMDB)
+            if let Some(ref show_imdb_id) = tmdb_meta.imdb_id {
+                let imdb_url = format!("https://api.imdbapi.dev/titles/{}", show_imdb_id);
+                if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                    if let Ok(json) = resp.json::<serde_json::Value>() {
+                        if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                            let img_cache = database::get_image_cache_dir();
+                            if let Some(cached) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&img_cache), &tmdb::ImageType::SeriesBanner) {
+                                poster = Some(cached);
+                                println!("[REFRESH] imdbapi.dev poster override: {:?}", poster);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = tx.send(poster);
+    });
+    let poster_result = rx.await.map_err(|e| e.to_string());
+    if let Ok(Some(poster)) = poster_result {
+        new_poster_path = Some(poster);
+    }
+
+    // Update the show's poster_path in the database
+    if let (Some(ref poster), Some(show_db_id)) = (&new_poster_path, _series_db_id) {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.update_poster_path(show_db_id, poster);
+            println!("[REFRESH] Updated show poster_path: {}", poster);
+        }
+    }
+
     let result = format!(
         "Refreshed {} episodes, {} images downloaded",
         fetched_episodes.len(),
         total_images
     );
-    println!("[REFRESH] Completed: {}", result);
+    println!("[REFRESH] Completed: {} (poster_updated={})", result, new_poster_path.is_some());
     Ok(result)
 }
 
@@ -13419,6 +13830,41 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
                         &item.title,
                         &metadata.title,
                     );
+
+                    // PRIMARY poster source: try imdbapi.dev first if we have an imdb_id
+                    // imdbapi.dev primaryImage is preferred over TMDB poster
+                    let tmdb_poster = metadata.poster_path.clone();
+                    if let Some(ref imdb_id) = metadata.imdb_id {
+                        println!("[IMDBAPI] Enrichment primary: trying poster for \"{}\" (imdb_id: {})", item.title, imdb_id);
+                        let image_type = if item.media_type == "tv" || item.media_type == "tvshow" {
+                            tmdb::ImageType::SeriesBanner
+                        } else {
+                            tmdb::ImageType::MovieBanner
+                        };
+                        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+                        if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                            if let Ok(json) = resp.json::<serde_json::Value>() {
+                                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                                    if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
+                                        println!("[IMDBAPI] Enrichment poster (primary) result: Ok(\"{}\")", cached_path);
+                                        metadata.poster_path = Some(cached_path);
+                                    } else {
+                                        println!("[IMDBAPI] Enrichment poster (primary) result: Err(cache failed), keeping TMDB poster");
+                                    }
+                                } else {
+                                    println!("[IMDBAPI] Enrichment poster (primary) result: Err(no image in response), keeping TMDB poster");
+                                }
+                            }
+                        }
+                    }
+
+                    // FALLBACK: TMDB poster is only kept if imdbapi.dev didn't provide one
+                    if metadata.poster_path == tmdb_poster && metadata.poster_path.is_some() {
+                        println!("[TMDB] Using TMDB poster for \"{}\": poster={:?}", item.title, metadata.poster_path);
+                    } else if metadata.poster_path.is_some() {
+                        println!("[TMDB] Enriched \"{}\": imdbapi.dev poster used as primary", item.title);
+                    }
+
                     if db.update_metadata(item.id, &metadata).is_ok() {
                         updated += 1;
                     } else {

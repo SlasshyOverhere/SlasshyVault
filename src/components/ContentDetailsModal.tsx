@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Calendar, Clock, Play, Tv, Check, Loader2, Timer, ChevronDown, Star, User, AudioLines, Captions, SlidersHorizontal, X, RefreshCw, Download, Share2, FileText, Copy, EyeOff, Eye } from "lucide-react"
 import {
   MediaItem, getCachedImageUrl, getMovieDetails, getTmdbImageUrl,
@@ -218,6 +218,7 @@ export function ContentDetailsModal({
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
   const lastItemIdRef = useRef<number | null>(null)
+  const refreshGenerationRef = useRef(0)
   const [showEpisodeUrls, setShowEpisodeUrls] = useState(false)
   const [spoilerEnabled, setSpoilerEnabled] = useState(true)
   const [revealedEpisodes, setRevealedEpisodes] = useState<Set<number>>(new Set())
@@ -289,9 +290,11 @@ export function ContentDetailsModal({
 
   if (!item && lastItemIdRef.current !== null) {
     lastItemIdRef.current = null
+    refreshGenerationRef.current += 1
     setActiveItem(null)
   } else if (item && item.id !== lastItemIdRef.current) {
     lastItemIdRef.current = item.id
+    refreshGenerationRef.current += 1
     setActiveItem(item)
   }
 
@@ -308,19 +311,26 @@ export function ContentDetailsModal({
       return
     }
 
+    const generation = refreshGenerationRef.current
+    const itemId = item.id
+
     setIsRefreshingMetadata(true)
-    heroArtworkCache.delete(item.id)
+    heroArtworkCache.delete(itemId)
     tvDetailsCache.delete(tmdbId)
-    tvSeasonEpisodesCache.delete(tmdbId)
     tvSeasonEpisodesCache.delete(tmdbId)
 
     try {
       const result = await refreshSeriesMetadata(tmdbId, item.title)
-      const refreshedItem =
-        (await Promise.resolve(onMetadataRefresh?.(item.id))) ||
-        (await getMediaInfo(item.id))
+      if (refreshGenerationRef.current !== generation) return
 
-      const refreshedEpisodes = await getEpisodes(item.id)
+      const refreshedItem =
+        (await Promise.resolve(onMetadataRefresh?.(itemId))) ||
+        (await getMediaInfo(itemId))
+      if (refreshGenerationRef.current !== generation) return
+
+      const refreshedEpisodes = await getEpisodes(itemId)
+      if (refreshGenerationRef.current !== generation) return
+
       setActiveItem(refreshedItem)
       setEpisodes(refreshedEpisodes)
       setTmdbEpisodesBySeason(new Map())
@@ -332,6 +342,7 @@ export function ContentDetailsModal({
         description: result,
       })
     } catch (error) {
+      if (refreshGenerationRef.current !== generation) return
       console.error("Failed to refresh metadata in content details modal:", error)
       toast({
         title: "Error",
@@ -339,7 +350,9 @@ export function ContentDetailsModal({
         variant: "destructive",
       })
     } finally {
-      setIsRefreshingMetadata(false)
+      if (refreshGenerationRef.current === generation) {
+        setIsRefreshingMetadata(false)
+      }
     }
   }, [isRefreshingMetadata, item, onMetadataRefresh, toast])
 
@@ -571,10 +584,14 @@ export function ContentDetailsModal({
     void loadTmdbMetadata()
   }, [open, item?.id, selectedSeason, refreshCounter])
 
-  // Instant artwork reset and load
-  useEffect(() => {
+  // Instant artwork reset and load (useLayoutEffect to prevent flash of stale image on reopen)
+  useLayoutEffect(() => {
     const target = activeItem ?? item
-    if (!target) return;
+    if (!target) {
+      setHeroImageUrl(null)
+      setPosterImageUrl(null)
+      return
+    }
 
     // Reset immediately
     setHeroImageUrl(null)
@@ -582,6 +599,7 @@ export function ContentDetailsModal({
     setRuntimeMinutesOverride(null)
     setDirector(null)
     setCreator(null)
+    setMovieVoteAverage(null)
     setTechnicalDetails(null)
 
     const cachedHero = heroArtworkCache.get(target.id)
@@ -900,7 +918,7 @@ export function ContentDetailsModal({
   }, [filteredEpisodes, item, open, selectedSeason, selectedSeasonHasZipEpisodes])
 
   if (!activeItem && !item) return null
-  const displayItem = item || activeItem
+  const displayItem = activeItem ?? item
   if (!displayItem) return null
 
   const isShow = displayItem.media_type === "tvshow"
@@ -1398,9 +1416,9 @@ export function ContentDetailsModal({
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
                                 <div className={cn("w-full h-full", isSpoiler && "blur-md")}>
                                   <EpisodeThumbnailImage
-                                    localStillPath={ep.still_path}
+                                    localStillPath={ep.still_path || imdbRatingData?.still_url || undefined}
                                     tmdbStillUrl={getTmdbImageUrl(ep.still_path || tmdbData?.still_path, 'w300')}
-                                    episodeTitle={tmdbData?.name || ep.title}
+                                    episodeTitle={tmdbData?.name || imdbRatingData?.title || ep.title}
                                     episodeNumber={ep.episode_number || 0}
                                   />
                                 </div>
@@ -1434,7 +1452,7 @@ export function ContentDetailsModal({
                                         </span>
                                       )}
                                     </div>
-                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || ep.title}</h4>
+                                    <h4 className="text-base font-bold text-white line-clamp-1 group-hover:text-white transition-colors tracking-tight">{tmdbData?.name || imdbRatingData?.title || ep.title}</h4>
                                   </div>
                                   <div className="flex items-center gap-3 shrink-0 mt-0.5">
                                     {isWatched && (
@@ -1528,7 +1546,7 @@ export function ContentDetailsModal({
                                   </button>
                                 )}
 
-                                <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || "No description available."}</p>
+                                <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || imdbRatingData?.plot || "No description available."}</p>
                               </div>
                             </div>
                           )
