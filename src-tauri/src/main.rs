@@ -7150,6 +7150,7 @@ struct MovieDetails {
     release_date: Option<String>,
     runtime: Option<i32>,
     director: Option<String>,
+    vote_average: Option<f64>,
 }
 
 // TV Show details for episode selection
@@ -7239,6 +7240,7 @@ async fn get_movie_details(
             overview: Option<String>,
             release_date: Option<String>,
             runtime: Option<i32>,
+            vote_average: Option<f64>,
             credits: Option<TmdbCredits>,
         }
 
@@ -7265,6 +7267,7 @@ async fn get_movie_details(
             release_date: raw.release_date,
             runtime: raw.runtime,
             director,
+            vote_average: raw.vote_average,
         })
     })
     .await

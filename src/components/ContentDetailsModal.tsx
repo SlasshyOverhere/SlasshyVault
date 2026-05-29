@@ -191,6 +191,7 @@ export function ContentDetailsModal({
   const [runtimeMinutesOverride, setRuntimeMinutesOverride] = useState<number | null>(null)
   const [director, setDirector] = useState<string | null>(null)
   const [creator, setCreator] = useState<string | null>(null)
+  const [movieVoteAverage, setMovieVoteAverage] = useState<number | null>(null)
   const [technicalDetails, setTechnicalDetails] = useState<MediaTechnicalDetails | null>(null)
 
   const [episodes, setEpisodes] = useState<MediaItem[]>([])
@@ -632,6 +633,9 @@ export function ContentDetailsModal({
           }
           if (movieDetails.director) {
             setDirector(movieDetails.director)
+          }
+          if (movieDetails.vote_average != null) {
+            setMovieVoteAverage(movieDetails.vote_average)
           }
           if (!nextHero && movieDetails.backdrop_path) {
             nextHero = await resolveLocalImage(movieDetails.backdrop_path)
@@ -1174,6 +1178,19 @@ export function ContentDetailsModal({
                       <Calendar className="size-3.5 text-white/25" />
                       <span className="text-white/80">{displayItem.year || "N/A"}</span>
                     </div>
+                    {!isShow && movieVoteAverage != null && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setImdbPanelImdbId(item?.imdb_id || `tmdb:${item?.tmdb_id}`)
+                        }}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 text-white text-xs font-bold cursor-pointer hover:bg-white/20 transition-colors"
+                      >
+                        <Star className="size-3 fill-current text-yellow-500" />
+                        {movieVoteAverage.toFixed(1)}
+                      </button>
+                    )}
                     {!isShow && (
                       <div className="flex items-center gap-2">
                         <Clock className="size-3.5 text-white/25" />
