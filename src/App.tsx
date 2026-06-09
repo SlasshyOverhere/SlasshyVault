@@ -220,6 +220,22 @@ const LoadingFallback = () => (
   </div>
 )
 
+const formatTimeDigits = (date: Date) => {
+  const h = date.getHours() % 12 || 12
+  const m = date.getMinutes()
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+const formatUpdateError = (error: unknown) => {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
+  }
+  return 'Unknown update error.'
+}
+
 function App() {
   // Migrate old localStorage keys
   useEffect(() => {
@@ -472,12 +488,6 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  const formatTimeDigits = (date: Date) => {
-    const h = date.getHours() % 12 || 12
-    const m = date.getMinutes()
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-  }
-
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
     setNotifications((current) => [
       {
@@ -525,16 +535,6 @@ function App() {
   const [updateProgress, setUpdateProgress] = useState(0)
   const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
   // Initialize beta features
-
-  const formatUpdateError = (error: unknown) => {
-    if (error instanceof Error) return error.message
-    if (typeof error === 'string') return error
-    if (error && typeof error === 'object') {
-      const record = error as Record<string, unknown>
-      return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
-    }
-    return 'Unknown update error.'
-  }
 
   const checkForAvailableUpdate = useCallback(async (showCheckErrors = false) => {
     setUpdateGateStatus('checking')
@@ -1053,7 +1053,7 @@ function App() {
           return
         }
 
-        const nextTracks = [...tracks].sort((left, right) =>
+        const nextTracks = tracks.toSorted((left, right) =>
           left.label.localeCompare(right.label),
         )
         mergeCachedSeriesAudioTracks(series_id, nextTracks)
@@ -1065,7 +1065,7 @@ function App() {
           return
         }
 
-        const nextTracks = [...tracks].sort((left, right) =>
+        const nextTracks = tracks.toSorted((left, right) =>
           left.label.localeCompare(right.label),
         )
         mergeCachedSeriesSubtitleTracks(series_id, nextTracks)
@@ -1151,6 +1151,40 @@ function App() {
       return () => window.clearTimeout(timer)
     }
   }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents, loadAnalytics])
+
+  // Dev-only test trigger listener
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+
+    let lastTriggerTime = 0
+    const interval = setInterval(() => {
+      fetch('/test-trigger.json')
+        .then((res) => {
+          if (!res.ok) throw new Error('Not found')
+          return res.json() as Promise<{ title: string; message: string; timestamp: number; type?: 'info' | 'success' | 'error' }>
+        })
+        .then((data) => {
+          if (data && typeof data.timestamp === 'number' && data.timestamp > lastTriggerTime) {
+            lastTriggerTime = data.timestamp
+            pushNotification({
+              category: classifyNotificationCategory(data.title, data.message),
+              title: data.title,
+              message: data.message,
+            })
+            toast({
+              title: data.title,
+              description: data.message,
+              variant: data.type === 'success' ? 'default' : data.type === 'error' ? 'destructive' : 'info',
+            })
+          }
+        })
+        .catch(() => {
+          // Fail silently
+        })
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [pushNotification, toast])
 
   useEffect(() => {
     if (view !== 'downloads') return
@@ -1364,10 +1398,20 @@ function App() {
       return
     }
 
-    // Show confirmation dialog before playing
-    setPlayConfirmData(item)
-    setPlayConfirmOpen(true)
-  }, [])
+    try {
+      const resumeInfo = await getResumeInfo(item.id)
+      if (resumeInfo.has_progress && resumeInfo.progress_percent <= AUTO_MARK_WATCHED_THRESHOLD_PERCENT) {
+        await startPlaybackFlow(item)
+      } else {
+        setPlayConfirmData(item)
+        setPlayConfirmOpen(true)
+      }
+    } catch (e) {
+      console.error('[App] Failed to check resume info', e)
+      setPlayConfirmData(item)
+      setPlayConfirmOpen(true)
+    }
+  }, [startPlaybackFlow])
 
   const handlePlayConfirm = useCallback(async () => {
     if (!playConfirmData) return
@@ -1946,7 +1990,7 @@ function App() {
                     await appWindow.hide()
                   }}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-200"
                   title="Close"
                   aria-label="Hide window"
                 >

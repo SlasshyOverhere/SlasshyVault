@@ -77,6 +77,42 @@ type SettingsSection =
   | "dev"
   | "nightly";
 
+const sections: {
+  id: SettingsSection;
+  label: string;
+  icon: React.ReactNode;
+}[] = [
+  { id: "general", label: "General", icon: <Settings className="size-4" /> },
+  {
+    id: "account",
+    label: "Account",
+    icon: <Power className="size-4" />,
+  },
+  {
+    id: "updates",
+    label: "Updates",
+    icon: <Shield className="size-4" />,
+  },
+  {
+    id: "cloud",
+    label: "Cache & Storage",
+    icon: <Cloud className="size-4" />,
+  },
+  { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
+  {
+    id: "danger",
+    label: "Factory Reset",
+    icon: <AlertTriangle className="size-4" />,
+  },
+  { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
+  ...(import.meta.env.DEV
+    ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
+    : []),
+  ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
+    ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
+    : []),
+];
+
 export function SettingsModal({
   open,
   onOpenChange,
@@ -460,42 +496,6 @@ export function SettingsModal({
       setDetectingMpv(false);
     }
   };
-
-  const sections: {
-    id: SettingsSection;
-    label: string;
-    icon: React.ReactNode;
-  }[] = [
-    { id: "general", label: "General", icon: <Settings className="size-4" /> },
-    {
-      id: "account",
-      label: "Account",
-      icon: <Power className="size-4" />,
-    },
-    {
-      id: "updates",
-      label: "Updates",
-      icon: <Shield className="size-4" />,
-    },
-    {
-      id: "cloud",
-      label: "Cache & Storage",
-      icon: <Cloud className="size-4" />,
-    },
-    { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
-    {
-      id: "danger",
-      label: "Factory Reset",
-      icon: <AlertTriangle className="size-4" />,
-    },
-    { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
-    ...(import.meta.env.DEV
-      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
-      : []),
-    ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
-      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
-      : []),
-  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

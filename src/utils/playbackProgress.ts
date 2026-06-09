@@ -1,7 +1,7 @@
 import type { MediaItem } from "@/services/api"
 
 export const AUTO_MARK_WATCHED_THRESHOLD_PERCENT = 93
-export const PROMPT_MARK_COMPLETE_THRESHOLD_PERCENT = 80
+const PROMPT_MARK_COMPLETE_THRESHOLD_PERCENT = 80
 
 export function getMediaProgressPercent(item: Pick<MediaItem, "progress_percent" | "resume_position_seconds" | "duration_seconds">): number {
   if (typeof item.progress_percent === "number") {

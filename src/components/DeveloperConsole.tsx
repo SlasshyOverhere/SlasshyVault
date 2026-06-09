@@ -24,6 +24,25 @@ const originalConsole = {
   info: console.info,
 };
 
+const levelStyles: Record<string, string> = {
+  info: "text-blue-300",
+  warn: "text-yellow-300",
+  error: "text-red-300",
+  debug: "text-gray-400",
+};
+
+const levelBadge: Record<string, string> = {
+  info: "bg-blue-500/20 text-blue-300",
+  warn: "bg-yellow-500/20 text-yellow-300",
+  error: "bg-red-500/20 text-red-300",
+  debug: "bg-gray-500/20 text-gray-400",
+};
+
+const sourceBadge: Record<string, string> = {
+  frontend: "bg-zinc-600/30 text-zinc-400",
+  backend: "bg-emerald-600/30 text-emerald-400",
+};
+
 export function DeveloperConsole() {
   const [open, setOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -131,25 +150,6 @@ export function DeveloperConsole() {
     } catch {}
   };
 
-  const levelStyles: Record<string, string> = {
-    info: "text-blue-300",
-    warn: "text-yellow-300",
-    error: "text-red-300",
-    debug: "text-gray-400",
-  };
-
-  const levelBadge: Record<string, string> = {
-    info: "bg-blue-500/20 text-blue-300",
-    warn: "bg-yellow-500/20 text-yellow-300",
-    error: "bg-red-500/20 text-red-300",
-    debug: "bg-gray-500/20 text-gray-400",
-  };
-
-  const sourceBadge: Record<string, string> = {
-    frontend: "bg-zinc-600/30 text-zinc-400",
-    backend: "bg-emerald-600/30 text-emerald-400",
-  };
-
   const feCount = logs.filter((l) => l.source === "frontend").length;
   const beCount = logs.filter((l) => l.source === "backend").length;
   const filteredCount = filteredLogs.length;
@@ -157,7 +157,7 @@ export function DeveloperConsole() {
 
   return (
     <LazyMotion features={domAnimation}>
-      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+      <div className="fixed bottom-32 right-4 z-[9999] flex flex-col items-end gap-2">
       {/* Toggle button */}
       <button
         type="button"

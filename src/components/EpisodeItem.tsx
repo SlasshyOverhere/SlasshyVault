@@ -147,8 +147,8 @@ function EpisodeItemBase({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.45, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
-      <div
-        role="button"
+      <button
+        type="button"
         tabIndex={0}
         onClick={handlePlayClick}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePlayClick() } }}
@@ -308,7 +308,7 @@ function EpisodeItemBase({
             )}
           </div>
         </div>
-      </div>
+      </button>
     </motion.div>
     </LazyMotion>
   )

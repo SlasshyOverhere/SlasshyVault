@@ -39,6 +39,8 @@ const intervalOptions = [
   { value: -1, label: 'Manual interval' },
 ]
 
+const typedData = (d: Partial<WatchlistItemInput> | WatchlistItem | undefined | null) => (d ?? {}) as Partial<WatchlistItemInput> & Partial<WatchlistItem>
+
 export function WatchlistEditor({
   open,
   onOpenChange,
@@ -55,8 +57,6 @@ export function WatchlistEditor({
   const [notificationMode, setNotificationMode] = useState<'single' | 'spam'>('single')
   const [intervalPreset, setIntervalPreset] = useState<string>('30')
   const [manualInterval, setManualInterval] = useState('30')
-
-  const typedData = (d: Partial<WatchlistItemInput> | WatchlistItem | undefined | null) => (d ?? {}) as Partial<WatchlistItemInput> & Partial<WatchlistItem>
 
   useEffect(() => {
     if (!open) return

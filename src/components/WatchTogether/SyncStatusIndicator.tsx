@@ -10,6 +10,39 @@ interface SyncStatusIndicatorProps {
     syncPhase?: SyncPhase;
 }
 
+const healthConfig = {
+    good: {
+        color: 'text-green-500',
+        bgColor: 'bg-green-500/20',
+        icon: Wifi,
+        label: 'In sync',
+    },
+    fair: {
+        color: 'text-yellow-500',
+        bgColor: 'bg-yellow-500/20',
+        icon: Wifi,
+        label: 'Syncing...',
+    },
+    poor: {
+        color: 'text-red-500',
+        bgColor: 'bg-red-500/20',
+        icon: AlertCircle,
+        label: 'Out of sync',
+    },
+    disconnected: {
+        color: 'text-zinc-500',
+        bgColor: 'bg-zinc-500/20',
+        icon: WifiOff,
+        label: 'Disconnected',
+    },
+    unknown: {
+        color: 'text-zinc-400',
+        bgColor: 'bg-zinc-400/20',
+        icon: Wifi,
+        label: 'Connecting...',
+    },
+};
+
 export function SyncStatusIndicator({
     isConnected,
     lastSyncTime,
@@ -62,39 +95,6 @@ export function SyncStatusIndicator({
     };
 
     const health = getSyncHealth();
-
-    const healthConfig = {
-        good: {
-            color: 'text-green-500',
-            bgColor: 'bg-green-500/20',
-            icon: Wifi,
-            label: 'In sync',
-        },
-        fair: {
-            color: 'text-yellow-500',
-            bgColor: 'bg-yellow-500/20',
-            icon: Wifi,
-            label: 'Syncing...',
-        },
-        poor: {
-            color: 'text-red-500',
-            bgColor: 'bg-red-500/20',
-            icon: AlertCircle,
-            label: 'Out of sync',
-        },
-        disconnected: {
-            color: 'text-zinc-500',
-            bgColor: 'bg-zinc-500/20',
-            icon: WifiOff,
-            label: 'Disconnected',
-        },
-        unknown: {
-            color: 'text-zinc-400',
-            bgColor: 'bg-zinc-400/20',
-            icon: Wifi,
-            label: 'Connecting...',
-        },
-    };
 
     const config = healthConfig[health];
     const Icon = config.icon;

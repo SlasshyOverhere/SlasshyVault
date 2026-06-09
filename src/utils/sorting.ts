@@ -17,12 +17,12 @@ export const sortMediaItems = (items: MediaItem[], sortBy: SortOption): MediaIte
   if (sortBy === 'title') {
     // Use Intl.Collator for faster and more correct string comparison
     // Create a shallow copy before sorting
-    return [...items].sort((a, b) => collator.compare(a.title, b.title));
+    return items.toSorted((a, b) => collator.compare(a.title, b.title));
   }
 
   if (sortBy === 'year') {
     // Simple numeric sort
-    return [...items].sort((a, b) => (b.year || 0) - (a.year || 0));
+    return items.toSorted((a, b) => (b.year || 0) - (a.year || 0));
   }
 
   if (sortBy === 'recent') {

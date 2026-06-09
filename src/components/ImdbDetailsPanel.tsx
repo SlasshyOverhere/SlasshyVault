@@ -12,6 +12,20 @@ interface ImdbDetailsPanelProps {
   mediaType?: string
 }
 
+const formatVotes = (votes: number | null) => {
+  if (!votes) return null
+  if (votes >= 1_000_000) return `${(votes / 1_000_000).toFixed(1)}M`
+  if (votes >= 1_000) return `${(votes / 1_000).toFixed(0)}K`
+  return votes.toLocaleString()
+}
+
+const metacriticColor = (score: number | null) => {
+  if (!score) return ""
+  if (score >= 61) return "bg-green-500/20 text-green-400 border-green-500/30"
+  if (score >= 40) return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+  return "bg-red-500/20 text-red-400 border-red-500/30"
+}
+
 export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType }: ImdbDetailsPanelProps) {
   const [data, setData] = useState<ImdbDetails | null>(null)
   const [reviews, setReviews] = useState<TmdbReview[]>([])
@@ -42,20 +56,6 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
       getTmdbReviews(tmdbId, mediaType).then(setReviews)
     }
   }, [open, imdbId, tmdbId, mediaType])
-
-  const formatVotes = (votes: number | null) => {
-    if (!votes) return null
-    if (votes >= 1_000_000) return `${(votes / 1_000_000).toFixed(1)}M`
-    if (votes >= 1_000) return `${(votes / 1_000).toFixed(0)}K`
-    return votes.toLocaleString()
-  }
-
-  const metacriticColor = (score: number | null) => {
-    if (!score) return ""
-    if (score >= 61) return "bg-green-500/20 text-green-400 border-green-500/30"
-    if (score >= 40) return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
-    return "bg-red-500/20 text-red-400 border-red-500/30"
-  }
 
   const yearLabel = () => {
     if (!data?.start_year) return null
@@ -91,6 +91,7 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                 <Film className="size-10 text-white/20" />
                 <p className="text-white/40 text-sm">Unable to load IMDb details</p>
                 <button
+                  type="button"
                   onClick={() => onOpenChange(true)}
                   className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
                 >
@@ -300,8 +301,8 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                       Awards
                     </h3>
                     <div className="space-y-1.5">
-                      {data.awards.map((award, i) => (
-                        <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                      {data.awards.map((award) => (
+                        <div key={`${award.event}-${award.year}-${award.category}`} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/5">
                           <Trophy className="size-3 text-yellow-400 shrink-0" />
                           <span className="text-white/70 text-xs font-medium">{award.event}</span>
                           {award.year && <span className="text-white/30 text-[10px]">{award.year}</span>}
@@ -321,8 +322,8 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                       Reviews
                     </h3>
                     <div className="space-y-3">
-                      {reviews.map((review, i) => (
-                        <div key={i} className="px-3 py-2.5 rounded-lg bg-white/[0.03] border border-white/5 space-y-1.5">
+                      {reviews.map((review) => (
+                        <div key={review.author} className="px-3 py-2.5 rounded-lg bg-white/[0.03] border border-white/5 space-y-1.5">
                           <div className="flex items-center gap-2">
                             <span className="text-white/70 text-xs font-bold">{review.author}</span>
                             {review.rating != null && (

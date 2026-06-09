@@ -29,6 +29,13 @@ const getFileName = (path?: string | null): string | null => {
   return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized
 }
 
+const formatRemaining = (mins: number) => {
+  if (mins < 60) return `${mins}m left`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return m > 0 ? `${h}h ${m}m left` : `${h}h left`
+}
+
 function MovieCardBase({
   item,
   onClick,
@@ -769,12 +776,6 @@ function ContinueCardBase({ item, onClick, index = 0 }: ContinueCardProps) {
     ? item.duration_seconds - item.resume_position_seconds
     : null
   const remainingMinutes = remainingSeconds ? Math.ceil(remainingSeconds / 60) : null
-  const formatRemaining = (mins: number) => {
-    if (mins < 60) return `${mins}m left`
-    const h = Math.floor(mins / 60)
-    const m = mins % 60
-    return m > 0 ? `${h}h ${m}m left` : `${h}h left`
-  }
 
   return (
     <motion.div

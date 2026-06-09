@@ -324,7 +324,7 @@ function DetailModal({ item, onClose, onEdit, onDelete, isDeleting, hasPrev, has
       className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8"
     >
       {/* backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-xl" role="button" tabIndex={-1} onClick={onClose} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose() }} />
+      <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-xl" tabIndex={-1} onClick={onClose} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose() }} />
 
       {/* card */}
       <motion.div

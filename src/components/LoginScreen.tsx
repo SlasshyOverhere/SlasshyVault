@@ -54,7 +54,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
               onClick={async () => {
                 await appWindow.hide()
               }}
-              className="h-7 w-8 rounded-md border border-transparent text-neutral-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-200"
               title="Close"
               aria-label="Hide window"
             >

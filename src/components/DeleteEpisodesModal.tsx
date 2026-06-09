@@ -187,7 +187,7 @@ export function DeleteEpisodesModal({
         const sorted = { ...episodesBySeason };
         Object.keys(sorted).forEach(seasonStr => {
             const season = Number(seasonStr);
-            sorted[season] = [...sorted[season]].sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0));
+            sorted[season] = sorted[season].toSorted((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0));
         });
         return sorted;
     }, [episodesBySeason]);

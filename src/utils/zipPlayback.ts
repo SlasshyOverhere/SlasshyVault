@@ -25,7 +25,7 @@ const formatBytesCompact = (bytes?: number) => {
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
 };
 
-export const estimateZipStartupSeconds = (
+const estimateZipStartupSeconds = (
   item: MediaItem,
   resume: boolean,
 ) => {

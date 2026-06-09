@@ -198,7 +198,7 @@ export function EpisodeBrowser({
   }
 
   const seasons = useMemo(
-    () => [...new Set(episodes.map(e => e.season_number || 1))].sort((a, b) => a - b),
+    () => [...new Set(episodes.map(e => e.season_number || 1))].toSorted((a, b) => a - b),
     [episodes],
   )
 
@@ -206,7 +206,7 @@ export function EpisodeBrowser({
     () =>
       episodes
         .filter(e => (e.season_number || 1) === selectedSeason)
-        .sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0)),
+        .toSorted((a, b) => (a.episode_number || 0) - (b.episode_number || 0)),
     [episodes, selectedSeason],
   )
 

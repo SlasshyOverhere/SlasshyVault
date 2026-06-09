@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useCallback } from 'react'
 import {
     Dialog,
     DialogContent,
@@ -71,15 +71,15 @@ export function ResumeDialog({
     const timeRemaining = formatTimeRemaining(currentPosition, duration)
     const hasProgressData = duration > 0 && currentPosition > 0
 
-    const handleResume = () => {
+    const handleResume = useCallback(() => {
         onOpenChange(false)
         onResume()
-    }
+    }, [onOpenChange, onResume])
 
-    const handleStartOver = () => {
+    const handleStartOver = useCallback(() => {
         onOpenChange(false)
         onStartOver()
-    }
+    }, [onOpenChange, onStartOver])
 
     // Handle keyboard shortcuts
     useEffect(() => {
