@@ -364,7 +364,7 @@ pub enum PlayerMode {
 
 impl Default for PlayerMode {
     fn default() -> Self {
-        PlayerMode::Native
+        PlayerMode::External
     }
 }
 

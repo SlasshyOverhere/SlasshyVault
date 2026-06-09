@@ -141,7 +141,7 @@ export function SettingsModal({
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
     dev_backend_url: "",
-    player_mode: "native",
+    player_mode: "external",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -340,7 +340,7 @@ export function SettingsModal({
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
         dev_backend_url: data.dev_backend_url || "",
-        player_mode: data.player_mode || "native",
+        player_mode: data.player_mode || "external",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -598,42 +598,14 @@ export function SettingsModal({
                           </div>
                           <div>
                             <Label className="text-base font-medium">
-                              Player Engine
+                              MPV Player
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Built-in (recommended) or external MPV
+                              External mpv.exe player (default)
                             </p>
                           </div>
                         </div>
 
-                        {/* Player Mode Toggle */}
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30 border border-border/50">
-                          <div className="space-y-0.5">
-                            <Label className="text-sm font-medium">Player Mode</Label>
-                            <p className="text-xs text-muted-foreground">
-                              {config.player_mode === 'native'
-                                ? 'Built-in libmpv (faster, no external window)'
-                                : 'External mpv.exe (separate window)'}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-xs ${config.player_mode === 'native' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                              Built-in
-                            </span>
-                            <button
-                              onClick={() => setConfig({ ...config, player_mode: config.player_mode === 'native' ? 'external' : 'native' })}
-                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${config.player_mode === 'native' ? 'bg-white/20' : 'bg-white/10'}`}
-                            >
-                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.player_mode === 'native' ? 'translate-x-6' : 'translate-x-1'}`} />
-                            </button>
-                            <span className={`text-xs ${config.player_mode === 'external' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                              External
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Show external MPV settings only in external mode */}
-                        {config.player_mode === 'external' && (
                         <div className="space-y-3">
                         {/* Bundled Player — the hero */}
                         <div className={cn(
@@ -783,7 +755,6 @@ export function SettingsModal({
                           )}
                         </div>
                         </div>
-                      )}
                       </div>
 
 
@@ -925,6 +896,52 @@ export function SettingsModal({
                               <p className="text-xs text-muted-foreground">
                                 Watch movies and shows in sync with friends.
                                 Create or join rooms for synchronized playback.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Built-in Player */}
+                        <div className="p-4 rounded-xl border bg-card border-orange-500/20">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 rounded-lg bg-orange-500/20 flex-shrink-0">
+                              <MonitorPlay className="size-5 text-orange-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-sm font-medium">
+                                    Built-in Player (libmpv)
+                                  </span>
+                                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">
+                                    IN DEV
+                                  </span>
+                                </div>
+                                <Switch
+                                  checked={config.player_mode === 'native'}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) {
+                                      const confirmed = window.confirm(
+                                        "Built-in Player Warning\n\n" +
+                                          "This player is still in active development and may be unstable:\n\n" +
+                                          "\u2022 Playback may stutter or crash\n" +
+                                          "\u2022 Some video formats may not work\n" +
+                                          "\u2022 Features are incomplete\n\n" +
+                                          "Switching will use the built-in libmpv engine instead of external mpv.exe.\n\n" +
+                                          "Do you want to enable the built-in player?",
+                                      );
+                                      if (confirmed) {
+                                        setConfig({ ...config, player_mode: 'native' });
+                                      }
+                                    } else {
+                                      setConfig({ ...config, player_mode: 'external' });
+                                    }
+                                  }}
+                                />
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-2">
+                                Embed video playback directly in the app window.
+                                Actively being developed — expect bugs and missing features.
                               </p>
                             </div>
                           </div>
