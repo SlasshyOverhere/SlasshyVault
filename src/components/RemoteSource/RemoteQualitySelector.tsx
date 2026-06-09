@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, Download, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database } from 'lucide-react'
+import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -95,6 +95,7 @@ export function RemoteQualitySelector({
   open, onOpenChange, title, groupedStreams, onSelect, loading, error,
 }: Props) {
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
+  const [copiedStreamUrl, setCopiedStreamUrl] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
     if (qualityFilter === 'all') return groupedStreams
@@ -178,8 +179,16 @@ export function RemoteQualitySelector({
                               </div>
 
                               <div className="flex items-center gap-3 shrink-0">
-                                <div className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 group-hover:bg-amber-600/10 group-hover:text-amber-400 transition-all duration-200">
-                                  <Download className="size-4" />
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }) }}
+                                  className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300 transition-all duration-200 cursor-pointer"
+                                >
+                                  {copiedStreamUrl === stream.url ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-4" />}
+                                </div>
+                                <div className="size-9 flex items-center justify-center rounded-xl bg-amber-600/10 text-amber-500 group-hover:bg-amber-600/20 group-hover:text-amber-400 transition-all duration-200">
+                                  <Play className="size-4" />
                                 </div>
                               </div>
                             </div>
