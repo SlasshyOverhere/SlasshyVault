@@ -23,15 +23,15 @@ export function RemoteCacheStatusBar({ status }: Props) {
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="bg-[#141414] border border-white/[0.08] rounded-xl px-4 py-3 shadow-2xl min-w-[320px] max-w-md">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            {isDownloading && <Download className="size-4 text-blue-400 animate-pulse" />}
+      <div className="bg-[#0A0A0A] border border-neutral-800 rounded-2xl px-5 py-3.5 shadow-2xl min-w-[340px] max-w-md shadow-black/50">
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2.5">
+            {isDownloading && <Download className="size-4 text-amber-400 animate-pulse" />}
             {isComplete && <CheckCircle2 className="size-4 text-green-400" />}
             {isFailed && <AlertCircle className="size-4 text-red-400" />}
-            {isCancelled && <XCircle className="size-4 text-neutral-400" />}
-            <span className="text-sm font-semibold text-white">
-              {isDownloading && 'Caching...'}
+            {isCancelled && <XCircle className="size-4 text-neutral-500" />}
+            <span className="text-sm font-semibold text-neutral-200">
+              {isDownloading && 'Caching stream...'}
               {isComplete && 'Cached'}
               {isFailed && 'Cache failed'}
               {isCancelled && 'Cache cancelled'}
@@ -39,33 +39,32 @@ export function RemoteCacheStatusBar({ status }: Props) {
           </div>
 
           {isDownloading && (
-            <span className="text-xs text-neutral-400">
+            <span className="text-xs text-neutral-600 font-medium tabular-nums">
               {formatSpeed(status.speedBytesPerSecond)}
             </span>
           )}
         </div>
 
-        {/* Progress bar */}
         {isDownloading && (
           <>
-            <div className="h-1.5 w-full bg-white/[0.06] rounded-full overflow-hidden">
+            <div className="h-1.5 w-full bg-neutral-900 rounded-full overflow-hidden border border-neutral-800/50">
               <div
-                className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all duration-300"
+                className="h-full bg-gradient-to-r from-amber-600 to-amber-400 rounded-full transition-all duration-300"
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
-            <div className="flex justify-between mt-1">
-              <span className="text-[10px] text-neutral-500">
+            <div className="flex justify-between mt-1.5">
+              <span className="text-[10px] text-neutral-600 font-medium tabular-nums">
                 {formatFileSize(status.downloadedBytes)} / {formatFileSize(status.totalBytes)}
               </span>
-              <span className="text-[10px] text-neutral-500">{progressPercent}%</span>
+              <span className="text-[10px] text-neutral-600 font-medium tabular-nums">{progressPercent}%</span>
             </div>
           </>
         )}
 
         {isComplete && (
           <div className="flex justify-between mt-1">
-            <span className="text-[10px] text-green-500">
+            <span className="text-[11px] text-green-500/80 font-medium">
               {formatFileSize(status.totalBytes)} cached
             </span>
           </div>

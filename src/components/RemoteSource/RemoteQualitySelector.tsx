@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, Download, ThumbsUp } from 'lucide-react'
+import { HardDrive, Download, ThumbsUp, Film } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -35,38 +35,39 @@ export function RemoteQualitySelector({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-[#141414] border-white/[0.08] text-white">
+      <DialogContent className="sm:max-w-xl bg-[#0A0A0A] border-neutral-800 text-neutral-100 shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="text-lg font-bold">
-            Select Quality — {title}
+          <DialogTitle className="text-lg font-semibold text-neutral-100 flex items-center gap-2">
+            <Film className="size-4 text-amber-500/70" />
+            <span>{title}</span>
           </DialogTitle>
         </DialogHeader>
 
         {loading && (
-          <div className="flex items-center justify-center py-8">
-            <div className="size-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-            <span className="ml-3 text-sm text-neutral-400">Loading available streams...</span>
+          <div className="flex items-center justify-center py-12 gap-3">
+            <div className="size-5 rounded-full border-2 border-neutral-700 border-t-amber-600/60 animate-spin" />
+            <span className="text-sm text-neutral-500 font-medium">Loading available streams...</span>
           </div>
         )}
 
         {error && (
-          <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+          <div className="text-sm text-red-400 bg-red-500/5 border border-red-800/30 rounded-xl p-4 font-medium">
             {error}
           </div>
         )}
 
         {!loading && !error && groupedStreams.length > 0 && (
           <>
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               {QUALITY_FILTERS.map((f) => (
                 <button
                   key={f}
                   onClick={() => setQualityFilter(f)}
                   className={cn(
-                    'px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200',
+                    'px-3.5 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-200 border',
                     qualityFilter === f
-                      ? 'bg-white/15 text-white border border-white/20'
-                      : 'bg-white/[0.04] text-neutral-400 border border-transparent hover:bg-white/[0.08] hover:text-neutral-200',
+                      ? 'bg-amber-600/15 text-amber-400 border-amber-700/30'
+                      : 'bg-[#0D0D0D] text-neutral-500 border-neutral-800 hover:bg-neutral-900 hover:text-neutral-300 hover:border-neutral-700',
                   )}
                 >
                   {f === 'all' ? 'All' : f}
@@ -75,17 +76,17 @@ export function RemoteQualitySelector({
             </div>
 
             {filtered.length === 0 && (
-              <div className="text-sm text-neutral-500 text-center py-8">
+              <div className="text-sm text-neutral-600 text-center py-10 font-medium">
                 No {qualityFilter} streams available
               </div>
             )}
 
             {filtered.length > 0 && (
-              <ScrollArea className="max-h-96">
-                <div className="space-y-3 pr-4">
+              <ScrollArea className="max-h-[420px]">
+                <div className="space-y-3 pr-3">
                   {filtered.map((group) => (
                     <div key={group.quality}>
-                      <h4 className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-2">
+                      <h4 className="text-[11px] font-bold text-neutral-600 uppercase tracking-widest mb-2.5 px-1">
                         {group.quality}
                       </h4>
                       <div className="space-y-2">
@@ -93,18 +94,18 @@ export function RemoteQualitySelector({
                           <button
                             key={idx}
                             onClick={() => onSelect(stream)}
-                            className="w-full text-left p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.08] hover:border-white/20 transition-all duration-200 group"
+                            className="w-full text-left p-4 rounded-2xl bg-[#0D0D0D] border border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700/60 transition-all duration-200 group"
                           >
-                            <div className="flex items-center justify-between gap-4">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 text-neutral-300 uppercase">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <span className="shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-neutral-800 text-neutral-400 uppercase tracking-wider">
                                   {stream.parsedSource}
                                 </span>
-                                <span className="text-sm font-semibold text-white truncate">
+                                <span className="text-sm font-semibold text-neutral-200 truncate">
                                   {stream.name}
                                 </span>
                                 {stream.recommended && (
-                                  <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-green-500/15 text-green-400 border border-green-500/20">
+                                  <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-600/10 text-amber-500/80 border border-amber-700/20">
                                     <ThumbsUp className="size-3" />
                                     Recommended
                                   </span>
@@ -113,17 +114,19 @@ export function RemoteQualitySelector({
 
                               <div className="flex items-center gap-3 shrink-0">
                                 {stream.videoSize > 0 && (
-                                  <span className="flex items-center gap-1 text-xs text-neutral-400">
-                                    <HardDrive className="size-3" />
+                                  <span className="flex items-center gap-1.5 text-xs text-neutral-600 font-medium">
+                                    <HardDrive className="size-3.5" />
                                     {formatFileSize(stream.videoSize)}
                                   </span>
                                 )}
-                                <Download className="size-4 text-neutral-600 group-hover:text-white transition-colors" />
+                                <div className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 group-hover:bg-amber-600/10 group-hover:text-amber-400 transition-all duration-200">
+                                  <Download className="size-4" />
+                                </div>
                               </div>
                             </div>
 
                             {stream.description && (
-                              <p className="mt-1 text-[11px] text-neutral-500 leading-relaxed line-clamp-2">
+                              <p className="mt-2 text-[12px] text-neutral-600 leading-relaxed line-clamp-2 border-t border-neutral-800/50 pt-2">
                                 {stream.description}
                               </p>
                             )}
@@ -139,7 +142,7 @@ export function RemoteQualitySelector({
         )}
 
         {!loading && !error && groupedStreams.length === 0 && (
-          <div className="text-sm text-neutral-500 text-center py-8">
+          <div className="text-sm text-neutral-600 text-center py-10 font-medium">
             No streams available
           </div>
         )}

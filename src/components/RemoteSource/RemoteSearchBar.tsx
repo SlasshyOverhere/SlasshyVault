@@ -1,5 +1,4 @@
 import { Search, X } from 'lucide-react'
-import { Input } from '@/components/ui/input'
 import { useEffect, useRef, useState } from 'react'
 
 interface Props {
@@ -22,22 +21,24 @@ export function RemoteSearchBar({ value, onChange }: Props) {
   }
 
   return (
-    <div className="relative w-full max-w-xl mx-auto mb-6">
-      <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-neutral-500 pointer-events-none" />
-      <Input
-        placeholder="Search movies & TV shows..."
-        value={local}
-        onChange={(e) => handleChange(e.target.value)}
-        className="pl-10 pr-10 h-12 text-base bg-white/[0.04] border-white/[0.08] focus-visible:ring-white/20 placeholder:text-neutral-600"
-      />
-      {local && (
-        <button
-          onClick={() => { setLocal(''); onChange('') }}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white transition-colors"
-        >
-          <X className="size-4" />
-        </button>
-      )}
+    <div className="relative w-full max-w-2xl">
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-5 text-neutral-500 pointer-events-none transition-colors duration-200 peer-focus-within:text-amber-400" />
+        <input
+          placeholder="Search movies & TV shows..."
+          value={local}
+          onChange={(e) => handleChange(e.target.value)}
+          className="w-full h-14 pl-12 pr-12 text-base font-medium bg-[#0A0A0A] border border-neutral-800 rounded-2xl text-neutral-100 placeholder-neutral-600 transition-all duration-200 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30 focus:bg-[#0D0D0D]"
+        />
+        {local && (
+          <button
+            onClick={() => { setLocal(''); onChange('') }}
+            className="absolute right-4 top-1/2 -translate-y-1/2 size-8 flex items-center justify-center rounded-lg text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800/50 transition-all duration-200"
+          >
+            <X className="size-4" />
+          </button>
+        )}
+      </div>
     </div>
   )
 }

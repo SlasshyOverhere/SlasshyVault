@@ -54,7 +54,7 @@ export function RemoteSourceView() {
     return () => { unsub.then((fn) => fn()) }
   }, [])
 
-  // Playback complete → cleanup dialog
+  // Playback complete => cleanup dialog
   useEffect(() => {
     const unsub = listen<any>('remote-cache-complete', (event) => {
       const s = event.payload as CacheStatus
@@ -100,7 +100,7 @@ export function RemoteSourceView() {
     setFetching(false)
   }, [])
 
-  // User selects a quality → launch MPV (cache starts automatically)
+  // User selects a quality => launch MPV (cache starts automatically)
   const handleQualitySelect = useCallback(async (stream: RemoteStreamData) => {
     const title = selectedItem?.title || selectedItem?.name || 'Unknown'
     const cacheKey = `stream_${Date.now()}`
@@ -115,7 +115,7 @@ export function RemoteSourceView() {
         qualityLabel: stream.parsedQuality,
       })
 
-      toast({ title: 'Playback started', description: `${title} — ${stream.parsedQuality}` })
+      toast({ title: 'Playback started', description: `${title} -- ${stream.parsedQuality}` })
     } catch (e: any) {
       toast({
         title: 'Playback failed',
@@ -141,30 +141,51 @@ export function RemoteSourceView() {
   }, [toast])
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-8 pt-8 pb-4">
-        <h1 className="text-2xl font-bold text-white mb-1">External</h1>
-        <p className="text-sm text-neutral-500">Search and stream from external sources</p>
-      </div>
+    <div className="h-full flex flex-col relative">
+      {/* Ambient background glow */}
+      <div className="pointer-events-none absolute -top-40 -right-40 size-[600px] rounded-full bg-amber-500/3 blur-[120px]" />
+      <div className="pointer-events-none absolute -bottom-40 -left-40 size-[500px] rounded-full bg-sky-500/2 blur-[120px]" />
 
-      <ScrollArea className="flex-1 px-8 pb-8">
-        {pageState === 'search' && (
-          <div>
-            <RemoteSearchBar value={searchQuery} onChange={setSearchQuery} />
-            <RemoteSearchResults results={searchResults} isLoading={isSearching} onSelect={handleSelectResult} />
+      {pageState === 'search' ? (
+        <div className="flex-1 flex flex-col relative z-10">
+          {/* Header + Search - always visible, centered */}
+          <div className="shrink-0 pt-24 pb-8 px-8 text-center">
+            <div className="max-w-lg mx-auto space-y-6">
+              <div className="space-y-3">
+                <div className="flex items-center justify-center gap-3 text-[10px] font-semibold text-neutral-600 uppercase tracking-[0.15em]">
+                  <span className="h-px w-6 bg-neutral-800" />
+                  <span>External Sources</span>
+                  <span className="h-px w-6 bg-neutral-800" />
+                </div>
+                <h1 className="text-4xl font-black tracking-tight text-white leading-none">Stream<br/>anything.</h1>
+                <p className="text-sm text-neutral-500">Search and stream from external sources</p>
+              </div>
+              <RemoteSearchBar value={searchQuery} onChange={setSearchQuery} />
+            </div>
           </div>
-        )}
 
-        {pageState === 'detail' && selectedItem && (
-          <RemoteMediaDetail
-            item={selectedItem}
-            onBack={() => { setPageState('search'); setSelectedItem(null); setGroupedStreams([]); setStreamError(null) }}
-            onFetchMovieStreams={handleFetchMovieStreams}
-            onFetchEpisodeStreams={handleFetchEpisodeStreams}
-            fetching={fetching}
-          />
-        )}
-      </ScrollArea>
+          {/* Results area - only when searching */}
+          {searchQuery && (
+            <ScrollArea className="flex-1 min-h-0 px-8 pb-8">
+              <div className="max-w-lg mx-auto">
+                <RemoteSearchResults results={searchResults} isLoading={isSearching} onSelect={handleSelectResult} />
+              </div>
+            </ScrollArea>
+          )}
+        </div>
+      ) : (
+        <ScrollArea className="flex-1 px-8 pb-8 pt-10 relative z-10">
+          <div className="max-w-4xl mx-auto">
+            <RemoteMediaDetail
+              item={selectedItem!}
+              onBack={() => { setPageState('search'); setSelectedItem(null); setGroupedStreams([]); setStreamError(null) }}
+              onFetchMovieStreams={handleFetchMovieStreams}
+              onFetchEpisodeStreams={handleFetchEpisodeStreams}
+              fetching={fetching}
+            />
+          </div>
+        </ScrollArea>
+      )}
 
       <RemoteQualitySelector
         open={qualityOpen}
