@@ -1584,6 +1584,11 @@ function App() {
       return
     }
 
+    if (item.media_type === 'movie') {
+      await startPlaybackFlow(item)
+      return
+    }
+
     try {
       const resumeInfo = await getResumeInfo(item.id)
       if (resumeInfo.has_progress && resumeInfo.progress_percent <= AUTO_MARK_WATCHED_THRESHOLD_PERCENT) {
