@@ -15,9 +15,10 @@ interface ParsedMeta {
   group: string | null
 }
 
-function StreamMetaTags({ description }: { description: string }) {
+function StreamMetaTags({ description, videoSize }: { description: string; videoSize: number }) {
   const meta = useMemo(() => parseStreamDescription(description), [description])
   const tags: { key: string; label: string | null; icon: React.ComponentType<{ className?: string }> | null }[] = [
+    ...(videoSize > 0 ? [{ key: 'size' as const, label: formatFileSize(videoSize), icon: HardDrive }] : []),
     { key: 'source', label: meta.source, icon: Monitor },
     { key: 'codec', label: meta.codec, icon: Database },
     { key: 'hdr', label: meta.hdr, icon: Subtitles },
@@ -172,12 +173,6 @@ export function RemoteQualitySelector({
                               </div>
 
                               <div className="flex items-center gap-3 shrink-0">
-                                {stream.videoSize > 0 && (
-                                  <span className="flex items-center gap-1.5 text-xs text-neutral-600 font-medium">
-                                    <HardDrive className="size-3.5" />
-                                    {formatFileSize(stream.videoSize)}
-                                  </span>
-                                )}
                                 <div className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 group-hover:bg-amber-600/10 group-hover:text-amber-400 transition-all duration-200">
                                   <Download className="size-4" />
                                 </div>
@@ -186,7 +181,7 @@ export function RemoteQualitySelector({
 
                             {stream.description && (
                               <div className="mt-1.5 border-t border-neutral-800/50 pt-1.5">
-                                <StreamMetaTags description={stream.description} />
+                                <StreamMetaTags description={stream.description} videoSize={stream.videoSize} />
                               </div>
                             )}
                           </button>
