@@ -13,12 +13,14 @@ interface ParsedMeta {
   source: string | null
   hoster: string | null
   group: string | null
+  size: string | null
 }
 
 function StreamMetaTags({ description, videoSize }: { description: string; videoSize: number }) {
   const meta = useMemo(() => parseStreamDescription(description), [description])
+  const sizeLabel = videoSize > 0 ? formatFileSize(videoSize) : meta.size
   const tags: { key: string; label: string | null; icon: React.ComponentType<{ className?: string }> | null }[] = [
-    ...(videoSize > 0 ? [{ key: 'size' as const, label: formatFileSize(videoSize), icon: HardDrive }] : []),
+    ...(sizeLabel ? [{ key: 'size' as const, label: sizeLabel, icon: HardDrive }] : []),
     { key: 'source', label: meta.source, icon: Monitor },
     { key: 'codec', label: meta.codec, icon: Database },
     { key: 'hdr', label: meta.hdr, icon: Subtitles },
@@ -51,7 +53,7 @@ function StreamMetaTags({ description, videoSize }: { description: string; video
 }
 
 function parseStreamDescription(desc: string): ParsedMeta {
-  const m: ParsedMeta = { codec: null, hdr: null, audio: null, source: null, hoster: null, group: null }
+  const m: ParsedMeta = { codec: null, hdr: null, audio: null, source: null, hoster: null, group: null, size: null }
 
   const codecs = desc.match(/x265|x264|HEVC|AVC|AV1|VP9|MPEG-2/i)
   if (codecs) m.codec = codecs[0].toUpperCase()
@@ -70,6 +72,9 @@ function parseStreamDescription(desc: string): ParsedMeta {
 
   const groups = desc.match(/^\[([^\]]+)\]/)
   if (groups) m.group = groups[1]
+
+  const sizes = desc.match(/(?:💾\s*)?([\d.]+)\s*(GB|GiB|MB|MiB)\b/i)
+  if (sizes) m.size = `${sizes[1]} ${sizes[2].toUpperCase()}`
 
   return m
 }
