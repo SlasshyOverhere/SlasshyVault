@@ -1,10 +1,77 @@
 import { useState, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, Download, ThumbsUp, Film } from 'lucide-react'
+import { HardDrive, Download, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
+
+interface ParsedMeta {
+  codec: string | null
+  hdr: string | null
+  audio: string | null
+  source: string | null
+  hoster: string | null
+  group: string | null
+}
+
+function StreamMetaTags({ description }: { description: string }) {
+  const meta = useMemo(() => parseStreamDescription(description), [description])
+  const tags: { key: string; label: string | null; icon: React.ComponentType<{ className?: string }> | null }[] = [
+    { key: 'source', label: meta.source, icon: Monitor },
+    { key: 'codec', label: meta.codec, icon: Database },
+    { key: 'hdr', label: meta.hdr, icon: Subtitles },
+    { key: 'audio', label: meta.audio, icon: AudioLines },
+    { key: 'hoster', label: meta.hoster, icon: null },
+    { key: 'group', label: meta.group, icon: null },
+  ].filter((t) => t.label)
+
+  if (tags.length === 0) {
+    return (
+      <p className="text-[12px] text-neutral-600 leading-relaxed line-clamp-2">
+        {description}
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.map((t) => (
+        <span
+          key={t.key}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider bg-neutral-800/60 text-neutral-400"
+        >
+          {t.icon && <t.icon className="size-3" />}
+          {t.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function parseStreamDescription(desc: string): ParsedMeta {
+  const m: ParsedMeta = { codec: null, hdr: null, audio: null, source: null, hoster: null, group: null }
+
+  const codecs = desc.match(/x265|x264|HEVC|AVC|AV1|VP9|MPEG-2/i)
+  if (codecs) m.codec = codecs[0].toUpperCase()
+
+  const hdrs = desc.match(/\b(SDR|HDR10?|Dolby\s*Vision|HLG|HDR)\b/i)
+  if (hdrs) m.hdr = hdrs[1] || hdrs[0]
+
+  const audios = desc.match(/(?:DDP?|TrueHD|FLAC|AAC|AC3|E-?AC-?3|DTS(?:\s*[-\s]?HD)?)\s*[\d.]+\s*ch/i)
+  if (audios) m.audio = audios[0]
+
+  const sources = desc.match(/\b(WEB-?DL|BluRay|WEBRip|BRRip|DVDRip|HDTV|HDRip|CAM|TS|TC)\b/i)
+  if (sources) m.source = sources[1] || sources[0]
+
+  const hosters = desc.match(/\|\s*([A-Za-z0-9]+)\s*$/)
+  if (hosters) m.hoster = hosters[1]
+
+  const groups = desc.match(/^\[([^\]]+)\]/)
+  if (groups) m.group = groups[1]
+
+  return m
+}
 
 const QUALITY_FILTERS: QualityFilter[] = ['all', '4K', '1080p', '720p']
 
@@ -25,12 +92,7 @@ export function RemoteQualitySelector({
 
   const filtered = useMemo(() => {
     if (qualityFilter === 'all') return groupedStreams
-    return groupedStreams
-      .map((g) => ({
-        ...g,
-        streams: g.streams.filter((s) => s.parsedQuality === qualityFilter),
-      }))
-      .filter((g) => g.streams.length > 0)
+    return groupedStreams.filter((g) => g.quality === qualityFilter)
   }, [groupedStreams, qualityFilter])
 
   return (
@@ -126,9 +188,9 @@ export function RemoteQualitySelector({
                             </div>
 
                             {stream.description && (
-                              <p className="mt-2 text-[12px] text-neutral-600 leading-relaxed line-clamp-2 border-t border-neutral-800/50 pt-2">
-                                {stream.description}
-                              </p>
+                              <div className="mt-1.5 border-t border-neutral-800/50 pt-1.5">
+                                <StreamMetaTags description={stream.description} />
+                              </div>
                             )}
                           </button>
                         ))}
