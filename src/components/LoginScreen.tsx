@@ -21,7 +21,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
   return (
     <div className="fixed inset-0 bg-[#0a0a0a] flex flex-col">
       {/* Custom Title Bar */}
-      <header className="fixed top-0 left-0 right-0 h-9 z-[300] bg-[#0a0a0a]">
+      <header className="fixed top-0 left-0 right-0 h-9 z-[300] bg-background">
         <div className="relative h-full w-full flex items-center justify-between">
           <div
             data-tauri-drag-region
