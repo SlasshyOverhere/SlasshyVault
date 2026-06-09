@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { listen } from '@tauri-apps/api/event'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -36,15 +36,52 @@ export function RemoteSourceView() {
   const [lastPlayedTitle, setLastPlayedTitle] = useState('')
   const [lastCacheKey, setLastCacheKey] = useState('')
 
+  const HISTORY_KEY = 'remote-search-history'
+  const MAX_HISTORY = 20
+
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
+    } catch { return [] }
+  })
+
+  useEffect(() => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(searchHistory))
+  }, [searchHistory])
+
+  const lastSavedRef = useRef<string>('')
+
+  const addToHistory = useCallback((query: string) => {
+    const q = query.trim()
+    if (!q || q.length < 2 || q.toLowerCase() === lastSavedRef.current) return
+    lastSavedRef.current = q.toLowerCase()
+    setSearchHistory((prev) => {
+      const filtered = prev.filter((s) => s.toLowerCase() !== q.toLowerCase())
+      return [q, ...filtered].slice(0, MAX_HISTORY)
+    })
+  }, [])
+
+  const removeFromHistory = useCallback((query: string) => {
+    setSearchHistory((prev) => prev.filter((s) => s !== query))
+  }, [])
+
+  const clearHistory = useCallback(() => {
+    setSearchHistory([])
+  }, [])
+
   // Search
   useEffect(() => {
     if (!searchQuery.trim()) { setSearchResults([]); return }
     setIsSearching(true)
     invoke<TmdbSearchResponse>('search_tmdb', { query: searchQuery })
-      .then((res) => setSearchResults(res.results || []))
+      .then((res) => {
+        const results = res.results || []
+        if (results.length > 0) addToHistory(searchQuery)
+        setSearchResults(results)
+      })
       .catch(() => setSearchResults([]))
       .finally(() => setIsSearching(false))
-  }, [searchQuery])
+  }, [searchQuery, addToHistory])
 
   // Cache progress events
   useEffect(() => {
@@ -157,12 +194,44 @@ export function RemoteSourceView() {
                   <span>External Sources</span>
                   <span className="h-px w-6 bg-neutral-800" />
                 </div>
-                <h1 className="text-4xl font-black tracking-tight text-white leading-none">Stream<br/>anything.</h1>
+                <h1 className="text-4xl font-black tracking-tight text-white leading-none">Stream<br/>fuckin anything.</h1>
                 <p className="text-sm text-neutral-500">Search and stream from external sources</p>
               </div>
               <RemoteSearchBar value={searchQuery} onChange={setSearchQuery} />
             </div>
           </div>
+
+          {/* Search history - shown when idle */}
+          {!searchQuery && searchHistory.length > 0 && (
+            <div className="px-8">
+              <div className="max-w-lg mx-auto w-full">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[11px] font-semibold tracking-[0.08em] text-white/60 uppercase">Recent Searches</span>
+                  <button onClick={clearHistory} className="text-[12px] text-white/50 hover:text-white/80 transition-colors">Clear history</button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {searchHistory.map((q) => (
+                    <div
+                      key={q}
+                      className="inline-flex items-center h-7 px-3 rounded-full bg-[#1B1B1B] hover:bg-[#272727] transition-colors duration-200 gap-1.5 cursor-pointer"
+                      onClick={() => setSearchQuery(q)}
+                    >
+                      <span className="text-[13px] font-medium text-white leading-none">{q}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFromHistory(q) }}
+                        className="text-white/50 hover:text-white/80 transition-colors shrink-0"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                          <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" />
+                          <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Results area - only when searching */}
           {searchQuery && (
