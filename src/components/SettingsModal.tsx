@@ -141,6 +141,7 @@ export function SettingsModal({
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
     dev_backend_url: "",
+    player_mode: "native",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -339,6 +340,7 @@ export function SettingsModal({
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
         dev_backend_url: data.dev_backend_url || "",
+        player_mode: data.player_mode || "native",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -596,14 +598,43 @@ export function SettingsModal({
                           </div>
                           <div>
                             <Label className="text-base font-medium">
-                              MPV Player
+                              Player Engine
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Required for video playback
+                              Built-in (recommended) or external MPV
                             </p>
                           </div>
                         </div>
 
+                        {/* Player Mode Toggle */}
+                        <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30 border border-border/50">
+                          <div className="space-y-0.5">
+                            <Label className="text-sm font-medium">Player Mode</Label>
+                            <p className="text-xs text-muted-foreground">
+                              {config.player_mode === 'native'
+                                ? 'Built-in libmpv (faster, no external window)'
+                                : 'External mpv.exe (separate window)'}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs ${config.player_mode === 'native' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                              Built-in
+                            </span>
+                            <button
+                              onClick={() => setConfig({ ...config, player_mode: config.player_mode === 'native' ? 'external' : 'native' })}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${config.player_mode === 'native' ? 'bg-white/20' : 'bg-white/10'}`}
+                            >
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.player_mode === 'native' ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                            <span className={`text-xs ${config.player_mode === 'external' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                              External
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Show external MPV settings only in external mode */}
+                        {config.player_mode === 'external' && (
+                        <div className="space-y-3">
                         {/* Bundled Player — the hero */}
                         <div className={cn(
                           "rounded-xl border transition-all overflow-hidden",
@@ -751,11 +782,13 @@ export function SettingsModal({
                             </div>
                           )}
                         </div>
+                        </div>
+                      )}
                       </div>
 
 
                     </m.div>
-                  )}
+                   )}
 
                   {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (
