@@ -160,9 +160,6 @@ export function RemoteQualitySelector({
                           >
                             <div className="flex items-start justify-between gap-4">
                               <div className="flex items-center gap-3 min-w-0 flex-1">
-                                <span className="shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-neutral-800 text-neutral-400 uppercase tracking-wider">
-                                  {stream.parsedSource}
-                                </span>
                                 <span className="text-sm font-semibold text-neutral-200 truncate">
                                   {stream.name}
                                 </span>
