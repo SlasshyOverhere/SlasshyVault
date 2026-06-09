@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/tauri'
+import { getCachedImageUrl } from '@/services/api'
 import { cn } from '@/lib/utils'
 import type { TmdbSearchResult } from './remote.types'
 
@@ -36,12 +37,90 @@ interface TmdbSeasonDetails {
   episodes: TmdbEpisodeInfo[]
 }
 
+// Resolve an image path: TMDB paths (/...) get TMDB URL, local cache paths get getCachedImageUrl
+function tmdbImage(path: string | null | undefined, size: string): string | null {
+  if (!path) return null
+  // Full URL or asset:// already resolved
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) return path
+  // TMDB paths start with /
+  if (path.startsWith('/')) return `https://image.tmdb.org/t/p/${size}${path}`
+  return null // local cache path, handle separately
+}
+
+// Aggressively preload images with high parallelism
+function preloadImages(urls: string[], concurrency = 20): void {
+  let index = 0
+  function next() {
+    while (index < urls.length) {
+      const url = urls[index++]
+      const img = new Image()
+      img.fetchPriority = 'high'
+      img.loading = 'eager'
+      img.src = url
+    }
+  }
+  for (let i = 0; i < concurrency; i++) next()
+}
+
+// Episode thumbnail with async image resolution (handles TMDB + local cache paths)
+const EpisodeThumbnail = memo(function EpisodeThumbnail({
+  stillPath, alt,
+}: {
+  stillPath: string | null | undefined, alt: string
+}) {
+  const [imgUrl, setImgUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (!stillPath) { setImgUrl(null); return }
+
+      if (stillPath.startsWith('http://') || stillPath.startsWith('https://') || stillPath.startsWith('asset://')) {
+        if (!cancelled) setImgUrl(stillPath)
+        return
+      }
+
+      if (stillPath.startsWith('/')) {
+        if (!cancelled) setImgUrl(`https://image.tmdb.org/t/p/w300${stillPath}`)
+        return
+      }
+
+      let filename = stillPath
+      if (filename.startsWith('image_cache/')) filename = filename.replace('image_cache/', '')
+      try {
+        const url = await getCachedImageUrl(filename)
+        if (!cancelled) setImgUrl(url)
+      } catch {
+        if (!cancelled) setImgUrl(null)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [stillPath])
+
+  if (!imgUrl) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-neutral-900">
+        <Film className="size-5 text-neutral-700" />
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={imgUrl}
+      alt={alt}
+      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+    />
+  )
+})
+
 export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEpisodeStreams, fetching }: Props) {
   const [imdbId, setImdbId] = useState<string | null>(null)
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
   const [seasonData, setSeasonData] = useState<Map<number, TmdbEpisodeInfo[]>>(new Map())
-  const [loadingSeason, setLoadingSeason] = useState<Set<number>>(new Set())
+  const preloadedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     const load = async () => {
@@ -56,6 +135,48 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
           if (s.length > 0) {
             setActiveSeason(s[0].season_number)
           }
+          // Kick off episode preload for ALL seasons eagerly
+          s.forEach((season: TvSeason) => {
+            const sn = season.season_number
+            invoke<TmdbSeasonDetails>('get_tv_season_episodes', {
+              tvId: item.id,
+              seasonNumber: sn,
+            })
+              .then((data) => {
+                setSeasonData((prev) => {
+                  const next = new Map(prev)
+                  next.set(sn, data.episodes || [])
+                  return next
+                })
+                // Preload all episode images for this season
+                const episodes = data.episodes || []
+                const tmdbUrls = episodes
+                  .map((ep: TmdbEpisodeInfo) => tmdbImage(ep.still_path, 'w300'))
+                  .filter(Boolean) as string[]
+                const needed = tmdbUrls.filter((u) => !preloadedRef.current.has(u))
+                if (needed.length > 0) {
+                  needed.forEach((u) => preloadedRef.current.add(u))
+                  preloadImages(needed, 20)
+                }
+                // Also kick off async preload for local cache paths
+                episodes.forEach((ep: TmdbEpisodeInfo) => {
+                  if (!ep.still_path || ep.still_path.startsWith('/') || ep.still_path.startsWith('http')) return
+                  let filename = ep.still_path
+                  if (filename.startsWith('image_cache/')) filename = filename.replace('image_cache/', '')
+                  if (preloadedRef.current.has(`cache:${filename}`)) return
+                  preloadedRef.current.add(`cache:${filename}`)
+                  getCachedImageUrl(filename).then((url) => {
+                    if (url) {
+                      const img = new Image()
+                      img.fetchPriority = 'high'
+                      img.loading = 'eager'
+                      img.src = url
+                    }
+                  }).catch(() => {})
+                })
+              })
+              .catch(() => {})
+          })
           try {
             const extIds = await invoke<any>('get_imdb_details', {
               imdbId: null,
@@ -72,40 +193,10 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
     load()
   }, [item.id, item.media_type])
 
-  useEffect(() => {
-    if (item.media_type !== 'tv' || seasonData.has(activeSeason)) return
-
-    setLoadingSeason((prev) => new Set(prev).add(activeSeason))
-    invoke<TmdbSeasonDetails>('get_tv_season_episodes', {
-      tvId: item.id,
-      seasonNumber: activeSeason,
-    })
-      .then((data) => {
-        setSeasonData((prev) => {
-          const next = new Map(prev)
-          next.set(activeSeason, data.episodes || [])
-          return next
-        })
-      })
-      .catch((e) => console.error('Failed to load episodes:', e))
-      .finally(() => {
-        setLoadingSeason((prev) => {
-          const next = new Set(prev)
-          next.delete(activeSeason)
-          return next
-        })
-      })
-  }, [item.id, item.media_type, activeSeason, imdbId, seasonData])
-
   const episodes = seasonData.get(activeSeason) || []
 
-  const poster = item.poster_path
-    ? `https://image.tmdb.org/t/p/w342${item.poster_path}`
-    : null
-
-  const backdrop = item.backdrop_path
-    ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}`
-    : null
+  const poster = tmdbImage(item.poster_path, 'w342')
+  const backdrop = tmdbImage(item.backdrop_path, 'w1280')
 
   // ── Movie view ──
   if (item.media_type === 'movie') {
@@ -253,34 +344,26 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
 
       {/* Episode list */}
       <div className="space-y-2">
-        {loadingSeason.has(activeSeason) && (
+        {!seasonData.has(activeSeason) && (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="size-5 text-neutral-500 animate-spin" />
           </div>
         )}
 
-        {!loadingSeason.has(activeSeason) && episodes.length === 0 && (
+        {seasonData.has(activeSeason) && episodes.length === 0 && (
           <div className="text-center py-16 text-sm text-neutral-600 font-medium">No episodes found for this season.</div>
         )}
 
-        {!loadingSeason.has(activeSeason) && episodes.map((ep) => (
+        {seasonData.has(activeSeason) && episodes.map((ep) => (
           <div
             key={ep.episode_number}
             className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all duration-200 group"
           >
             <div className="shrink-0 w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
-              {ep.still_path ? (
-                <img
-                  src={`https://image.tmdb.org/t/p/w300${ep.still_path}`}
-                  alt={ep.name}
-                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <Film className="size-5 text-neutral-700" />
-                </div>
-              )}
+              <EpisodeThumbnail
+                stillPath={ep.still_path}
+                alt={ep.name}
+              />
             </div>
 
             <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
