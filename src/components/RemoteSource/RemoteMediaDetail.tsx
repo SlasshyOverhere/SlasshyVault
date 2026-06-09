@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from 'react'
+import { useState, useEffect, useCallback, memo } from 'react'
 import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/tauri'
@@ -45,21 +45,6 @@ function tmdbImage(path: string | null | undefined, size: string): string | null
   // TMDB paths start with /
   if (path.startsWith('/')) return `https://image.tmdb.org/t/p/${size}${path}`
   return null // local cache path, handle separately
-}
-
-// Aggressively preload images with high parallelism
-function preloadImages(urls: string[], concurrency = 20): void {
-  let index = 0
-  function next() {
-    while (index < urls.length) {
-      const url = urls[index++]
-      const img = new Image()
-      img.fetchPriority = 'high'
-      img.loading = 'eager'
-      img.src = url
-    }
-  }
-  for (let i = 0; i < concurrency; i++) next()
 }
 
 // Episode thumbnail with async image resolution (handles TMDB + local cache paths)
@@ -120,7 +105,22 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
   const [seasonData, setSeasonData] = useState<Map<number, TmdbEpisodeInfo[]>>(new Map())
-  const preloadedRef = useRef<Set<string>>(new Set())
+
+  const fetchSeason = useCallback((seasonNum: number) => {
+    invoke<TmdbSeasonDetails>('get_tv_season_episodes', {
+      tvId: item.id,
+      seasonNumber: seasonNum,
+    })
+      .then((data) => {
+        setSeasonData((prev) => {
+          if (prev.has(seasonNum)) return prev
+          const next = new Map(prev)
+          next.set(seasonNum, data.episodes || [])
+          return next
+        })
+      })
+      .catch(() => {})
+  }, [item.id])
 
   useEffect(() => {
     const load = async () => {
@@ -134,49 +134,8 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
           setSeasons(s)
           if (s.length > 0) {
             setActiveSeason(s[0].season_number)
+            fetchSeason(s[0].season_number)
           }
-          // Kick off episode preload for ALL seasons eagerly
-          s.forEach((season: TvSeason) => {
-            const sn = season.season_number
-            invoke<TmdbSeasonDetails>('get_tv_season_episodes', {
-              tvId: item.id,
-              seasonNumber: sn,
-            })
-              .then((data) => {
-                setSeasonData((prev) => {
-                  const next = new Map(prev)
-                  next.set(sn, data.episodes || [])
-                  return next
-                })
-                // Preload all episode images for this season
-                const episodes = data.episodes || []
-                const tmdbUrls = episodes
-                  .map((ep: TmdbEpisodeInfo) => tmdbImage(ep.still_path, 'w300'))
-                  .filter(Boolean) as string[]
-                const needed = tmdbUrls.filter((u) => !preloadedRef.current.has(u))
-                if (needed.length > 0) {
-                  needed.forEach((u) => preloadedRef.current.add(u))
-                  preloadImages(needed, 20)
-                }
-                // Also kick off async preload for local cache paths
-                episodes.forEach((ep: TmdbEpisodeInfo) => {
-                  if (!ep.still_path || ep.still_path.startsWith('/') || ep.still_path.startsWith('http')) return
-                  let filename = ep.still_path
-                  if (filename.startsWith('image_cache/')) filename = filename.replace('image_cache/', '')
-                  if (preloadedRef.current.has(`cache:${filename}`)) return
-                  preloadedRef.current.add(`cache:${filename}`)
-                  getCachedImageUrl(filename).then((url) => {
-                    if (url) {
-                      const img = new Image()
-                      img.fetchPriority = 'high'
-                      img.loading = 'eager'
-                      img.src = url
-                    }
-                  }).catch(() => {})
-                })
-              })
-              .catch(() => {})
-          })
           try {
             const extIds = await invoke<any>('get_imdb_details', {
               imdbId: null,
@@ -191,9 +150,16 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
       }
     }
     load()
-  }, [item.id, item.media_type])
+  }, [item.id, item.media_type, fetchSeason])
+
+  useEffect(() => {
+    if (seasonData.has(activeSeason)) return
+    fetchSeason(activeSeason)
+  }, [activeSeason, seasonData, fetchSeason])
 
   const episodes = seasonData.get(activeSeason) || []
+  const activeSeasonInfo = seasons.find(s => s.season_number === activeSeason)
+  const episodeCount = activeSeasonInfo?.episode_count ?? 0
 
   const poster = tmdbImage(item.poster_path, 'w342')
   const backdrop = tmdbImage(item.backdrop_path, 'w1280')
@@ -344,61 +310,71 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
 
       {/* Episode list */}
       <div className="space-y-2">
-        {!seasonData.has(activeSeason) && (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="size-5 text-neutral-500 animate-spin" />
-          </div>
-        )}
-
-        {seasonData.has(activeSeason) && episodes.length === 0 && (
-          <div className="text-center py-16 text-sm text-neutral-600 font-medium">No episodes found for this season.</div>
-        )}
-
-        {seasonData.has(activeSeason) && episodes.map((ep) => (
-          <div
-            key={ep.episode_number}
-            className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all duration-200 group"
-          >
-            <div className="shrink-0 w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
-              <EpisodeThumbnail
-                stillPath={ep.still_path}
-                alt={ep.name}
-              />
+        {!seasonData.has(activeSeason) ? (
+          Array.from({ length: episodeCount || 8 }, (_, i) => (
+            <div key={i} className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80">
+              <div className="shrink-0 w-44 aspect-video rounded-xl bg-neutral-800 animate-pulse" />
+              <div className="flex-1 flex flex-col justify-center gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-3 w-16 bg-neutral-800 rounded animate-pulse" />
+                  <div className="h-4 w-48 bg-neutral-800 rounded animate-pulse" />
+                </div>
+                <div className="h-3 w-full max-w-sm bg-neutral-800 rounded animate-pulse" />
+              </div>
+              <div className="shrink-0 flex items-center">
+                <div className="size-10 rounded-xl bg-neutral-800 animate-pulse" />
+              </div>
             </div>
+          ))
+        ) : episodes.length === 0 ? (
+          <div className="text-center py-16 text-sm text-neutral-600 font-medium">No episodes found for this season.</div>
+        ) : (
+          episodes.map((ep) => (
+            <div
+              key={ep.episode_number}
+              className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all duration-200 group"
+            >
+              <div className="shrink-0 w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
+                <EpisodeThumbnail
+                  stillPath={ep.still_path}
+                  alt={ep.name}
+                />
+              </div>
 
-            <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold text-neutral-600 tabular-nums shrink-0">
-                  S{String(activeSeason).padStart(2, '0')} &middot; E{String(ep.episode_number).padStart(2, '0')}
-                </span>
-                <h3 className="text-sm font-semibold text-neutral-200 truncate">{ep.name}</h3>
-                {ep.vote_average != null && ep.vote_average > 0 && (
-                  <span className="flex items-center gap-1 text-[11px] text-amber-500/70 shrink-0">
-                    <Star className="size-3 fill-amber-500/40" />
-                    {ep.vote_average.toFixed(1)}
+              <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-neutral-600 tabular-nums shrink-0">
+                    S{String(activeSeason).padStart(2, '0')} &middot; E{String(ep.episode_number).padStart(2, '0')}
                   </span>
+                  <h3 className="text-sm font-semibold text-neutral-200 truncate">{ep.name}</h3>
+                  {ep.vote_average != null && ep.vote_average > 0 && (
+                    <span className="flex items-center gap-1 text-[11px] text-amber-500/70 shrink-0">
+                      <Star className="size-3 fill-amber-500/40" />
+                      {ep.vote_average.toFixed(1)}
+                    </span>
+                  )}
+                </div>
+                {ep.overview && (
+                  <p className="text-xs text-neutral-600 leading-relaxed line-clamp-2">{ep.overview}</p>
                 )}
               </div>
-              {ep.overview && (
-                <p className="text-xs text-neutral-600 leading-relaxed line-clamp-2">{ep.overview}</p>
-              )}
-            </div>
 
-            <div className="shrink-0 flex items-center">
-              <button
-                onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name)}
-                disabled={!imdbId || fetching}
-                className="size-10 flex items-center justify-center rounded-xl bg-amber-600/10 border border-amber-700/20 text-amber-500/70 hover:bg-amber-600/20 hover:text-amber-400 hover:border-amber-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
-              >
-                {fetching ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Play className="size-4 fill-current" />
-                )}
-              </button>
+              <div className="shrink-0 flex items-center">
+                <button
+                  onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name)}
+                  disabled={!imdbId || fetching}
+                  className="size-10 flex items-center justify-center rounded-xl bg-amber-600/10 border border-amber-700/20 text-amber-500/70 hover:bg-amber-600/20 hover:text-amber-400 hover:border-amber-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  {fetching ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Play className="size-4 fill-current" />
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   )
