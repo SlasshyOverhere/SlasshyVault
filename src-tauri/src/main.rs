@@ -20,6 +20,9 @@ mod mpv_bundle;
 mod mpv_controller;
 mod zip_parser;
 mod zip_stream_proxy;
+mod obfuscator;
+mod remote_source;
+mod stream_cache;
 
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
@@ -84,6 +87,7 @@ pub struct AppState {
     pub wt_controller: Arc<tokio::sync::Mutex<Option<watch_together_mpv::WatchTogetherController>>>,
     pub oauth_listener: Arc<Mutex<Option<tokio::net::TcpListener>>>,
     pub oauth_nonce: Arc<Mutex<Option<String>>>,
+    pub cache_manager: stream_cache::CacheManager,
 }
 
 // API Response types
@@ -7685,7 +7689,7 @@ async fn get_tv_season_episodes(
 ) -> Result<TvSeasonDetails, String> {
     // First, try to get from local cache
     let tv_id_str = tv_id.to_string();
-    let image_cache_dir = database::get_image_cache_dir();
+    let _image_cache_dir = database::get_image_cache_dir();
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         if let Ok(cached_episodes) = db.get_cached_episodes_for_season(&tv_id_str, season_number) {
@@ -7697,16 +7701,6 @@ async fn get_tv_season_episodes(
                 let episodes: Vec<TvEpisodeInfo> = cached_episodes
                     .into_iter()
                     .map(|e| {
-                        // Verify still_path file actually exists
-                        let verified_still_path = e.still_path.and_then(|path| {
-                            let full_path = std::path::Path::new(&image_cache_dir).join(&path);
-                            if full_path.exists() {
-                                Some(path)
-                            } else {
-                                None // File doesn't exist, return None
-                            }
-                        });
-
                         TvEpisodeInfo {
                             season_number: Some(season_number),
                             episode_number: e.episode_number,
@@ -7714,7 +7708,7 @@ async fn get_tv_season_episodes(
                                 .episode_title
                                 .unwrap_or_else(|| format!("Episode {}", e.episode_number)),
                             overview: e.overview,
-                            still_path: verified_still_path,
+                            still_path: e.still_path,
                             air_date: e.air_date,
                             runtime: None,
                             vote_average: e.vote_average,
@@ -7790,7 +7784,7 @@ async fn get_tv_season_episodes(
                 .unwrap_or_default()
                 .into_iter()
                 .map(|e| {
-                    let cached_still = if let Some(ref tmdb_path) = e.still_path {
+                    let _cached_still = if let Some(ref tmdb_path) = e.still_path {
                         if !tmdb_path.is_empty() {
                             let image_type = tmdb::ImageType::EpisodeBanner {
                                 season: raw.season_number,
@@ -7810,7 +7804,7 @@ async fn get_tv_season_episodes(
                             .name
                             .unwrap_or_else(|| format!("Episode {}", e.episode_number)),
                         overview: e.overview,
-                        still_path: cached_still.or(e.still_path),
+                        still_path: e.still_path,
                         air_date: e.air_date,
                         runtime: e.runtime,
                         vote_average: e.vote_average,
@@ -14714,6 +14708,375 @@ fn migrate_app_data() {
     }
 }
 
+// ── Remote Source Commands ──────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteStreamResponse {
+    name: String,
+    description: String,
+    url: String,
+    video_size: i64,
+    not_web_ready: bool,
+    parsed_quality: String,
+    parsed_source: String,
+    #[serde(default)]
+    recommended: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupedStreamsResponse {
+    quality: String,
+    streams: Vec<RemoteStreamResponse>,
+}
+
+#[tauri::command]
+async fn remote_get_movie_streams(
+    imdb_id: String,
+) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let streams = tokio::task::spawn_blocking(move || {
+        remote_source::fetch_movie_streams(&imdb_id)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let grouped = remote_source::group_streams(streams);
+    let response: Vec<GroupedStreamsResponse> = grouped
+        .into_iter()
+        .map(|g| GroupedStreamsResponse {
+            quality: g.quality,
+            streams: g
+                .streams
+                .into_iter()
+                .map(|s| RemoteStreamResponse {
+                    name: s.name,
+                    description: s.description,
+                    url: s.url,
+                    video_size: s.video_size,
+                    not_web_ready: s.not_web_ready,
+                    parsed_quality: s.parsed_quality,
+                    parsed_source: s.parsed_source,
+                    recommended: s.recommended,
+                })
+                .collect(),
+        })
+        .collect();
+
+    Ok(response)
+}
+
+#[tauri::command]
+async fn remote_get_series_streams(
+    imdb_id: String,
+    season: i32,
+    episode: i32,
+) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let streams = tokio::task::spawn_blocking(move || {
+        remote_source::fetch_series_streams(&imdb_id, season, episode)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let grouped = remote_source::group_streams(streams);
+    let response: Vec<GroupedStreamsResponse> = grouped
+        .into_iter()
+        .map(|g| GroupedStreamsResponse {
+            quality: g.quality,
+            streams: g
+                .streams
+                .into_iter()
+                .map(|s| RemoteStreamResponse {
+                    name: s.name,
+                    description: s.description,
+                    url: s.url,
+                    video_size: s.video_size,
+                    not_web_ready: s.not_web_ready,
+                    parsed_quality: s.parsed_quality,
+                    parsed_source: s.parsed_source,
+                    recommended: s.recommended,
+                })
+                .collect(),
+        })
+        .collect();
+
+    Ok(response)
+}
+
+#[tauri::command]
+async fn remote_play_with_mpv(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    title: String,
+    video_size: i64,
+    media_identifier: String,
+    quality_label: String,
+) -> Result<ApiResponse, String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+
+    let mpv_path = config
+        .mpv_path
+        .as_ref()
+        .ok_or_else(|| "MPV path not set".to_string())?;
+
+    if mpv_path.is_empty() || !std::path::Path::new(mpv_path).exists() {
+        return Err("MPV path not set or invalid".to_string());
+    }
+
+    println!(
+        "[REMOTE-MPV] Playing '{}' (quality: {}) from: {}",
+        title, quality_label, media_identifier
+    );
+
+    // ── Cache path: use zip_cache_dir (user's configured external/ZIP cache location) ──
+    let cache_root = match config.zip_cache_dir.as_deref() {
+        Some(d) if !d.is_empty() => std::path::PathBuf::from(d),
+        _ => database::get_app_data_dir().join("stream_cache"),
+    };
+
+    let cache_subdir = cache_root.join(format!("remote_{}", media_identifier));
+    std::fs::create_dir_all(&cache_subdir)
+        .map_err(|e| format!("Failed to create cache dir: {}", e))?;
+
+    let cache_path = cache_subdir.join("video.mp4");
+    let already_cached = cache_path.exists();
+
+    println!(
+        "[REMOTE-MPV] Cache path: {} (exists: {})",
+        cache_path.display(),
+        already_cached
+    );
+
+    // ── Track with CacheManager for progress/cleanup ──
+    {
+        let mut active = state
+            .cache_manager
+            .lock_active()?;
+        let target_path_str = cache_path.to_string_lossy().to_string();
+        active.insert(
+            media_identifier.clone(),
+            stream_cache::ActiveCache {
+                cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                status: stream_cache::CacheStatus {
+                    cache_key: media_identifier.clone(),
+                    state: stream_cache::CacheState::Idle,
+                    downloaded_bytes: if already_cached {
+                        cache_path.metadata().map(|m| m.len()).unwrap_or(0)
+                    } else {
+                        0
+                    },
+                    total_bytes: video_size.max(1) as u64,
+                    speed_bytes_per_second: 0.0,
+                    target_path: target_path_str.clone(),
+                },
+            },
+        );
+        drop(active);
+
+        // Emit initial status
+        if already_cached {
+            let status = stream_cache::CacheStatus {
+                cache_key: media_identifier.clone(),
+                state: stream_cache::CacheState::Complete,
+                downloaded_bytes: video_size.max(1) as u64,
+                total_bytes: video_size.max(1) as u64,
+                speed_bytes_per_second: 0.0,
+                target_path: target_path_str,
+            };
+            let _ = app_handle.emit_all("remote-cache-progress", &status);
+        }
+    }
+
+    // ── Build MPV command ──
+    let mut cmd = std::process::Command::new(mpv_path);
+
+    cmd.arg("--force-window=immediate");
+    cmd.arg("--keep-open=yes");
+
+    // 3 minutes forward, 1 minute back
+    cmd.arg("--cache=yes");
+    cmd.arg("--demuxer-readahead-secs=180");
+    cmd.arg("--demuxer-max-bytes=1GiB");
+    cmd.arg("--demuxer-max-back-bytes=300MiB");
+
+    // No buffering pauses
+    cmd.arg("--cache-pause=no");
+    cmd.arg("--cache-pause-wait=0");
+
+    cmd.arg(format!("--force-media-title={}", title));
+
+    if !already_cached {
+        // Save stream to cache file while playing (same technique as zip episodes)
+        cmd.arg(format!("--stream-record={}", cache_path.to_string_lossy()));
+    }
+
+    cmd.arg("--");
+    cmd.arg(&url);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+
+    println!(
+        "[REMOTE-MPV] Launching: {} {}",
+        mpv_path,
+        if already_cached {
+            "(from cache)"
+        } else {
+            "(streaming + saving)"
+        }
+    );
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start MPV: {}", e))?;
+
+    // ── Background: monitor file for progress, wait for MPV exit ──
+    let title_clone = title.clone();
+    let cache_path_clone = cache_path.clone();
+    let cache_key = media_identifier.clone();
+    let manager = state.cache_manager.clone();
+    let app_clone = app_handle.clone();
+
+    std::thread::spawn(move || {
+        // Poll file size for progress during playback
+        if !already_cached {
+            let total = video_size.max(1) as u64;
+            let started = std::time::Instant::now();
+            loop {
+                // Check if MPV is still running
+                match child.try_wait() {
+                    Ok(Some(_)) => break, // exited
+                    Ok(None) => {}         // still running
+                    Err(_) => break,
+                }
+
+                if let Ok(meta) = cache_path_clone.metadata() {
+                    let downloaded = meta.len();
+                    let elapsed = started.elapsed().as_secs_f64().max(0.001);
+                    let speed = downloaded as f64 / elapsed;
+
+                    if let Ok(mut active) = manager.lock_active() {
+                        if let Some(entry) = active.get_mut(&cache_key) {
+                            entry.status.downloaded_bytes = downloaded;
+                            entry.status.speed_bytes_per_second = speed;
+                            entry.status.state = stream_cache::CacheState::Downloading(
+                                (downloaded as f64 / total as f64) * 100.0,
+                            );
+                            let s = entry.status.clone();
+                            drop(active);
+                            let _ = app_clone.emit_all("remote-cache-progress", &s);
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        } else {
+            let _ = child.wait();
+        }
+
+        // Mark complete
+        if let Ok(mut active) = manager.lock_active() {
+            if let Some(entry) = active.get_mut(&cache_key) {
+                entry.status.state = stream_cache::CacheState::Complete;
+                entry.status.downloaded_bytes = entry.status.total_bytes;
+                let s = entry.status.clone();
+                drop(active);
+                let _ = app_clone.emit_all("remote-cache-progress", &s);
+            }
+        }
+
+        println!("[REMOTE-MPV] Playback ended for '{}'", title_clone);
+    });
+
+    Ok(ApiResponse {
+        message: "Playback started".to_string(),
+    })
+}
+
+#[tauri::command]
+async fn remote_start_cache(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    url: String,
+    cache_key: String,
+    total_bytes: i64,
+    title: String,
+) -> Result<(), String> {
+    let config = {
+        let c = state.config.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+
+    state
+        .cache_manager
+        .start(app_handle, config, url, cache_key, total_bytes, title)
+}
+
+#[tauri::command]
+async fn remote_stop_cache(
+    state: State<'_, AppState>,
+    cache_key: String,
+) -> Result<(), String> {
+    state.cache_manager.stop(&cache_key)
+}
+
+#[tauri::command]
+async fn remote_get_cache_status(
+    state: State<'_, AppState>,
+    cache_key: String,
+) -> Result<Option<stream_cache::CacheStatus>, String> {
+    Ok(state.cache_manager.status(&cache_key))
+}
+
+#[tauri::command]
+async fn remote_get_all_cache_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<stream_cache::CacheStatus>, String> {
+    Ok(state.cache_manager.all_status())
+}
+
+#[tauri::command]
+async fn remote_cleanup_cache(
+    state: State<'_, AppState>,
+    cache_key: String,
+) -> Result<(), String> {
+    state.cache_manager.cleanup(&cache_key)
+}
+
+#[tauri::command]
+async fn remote_cleanup_all_cache(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.cache_manager.cleanup_all()
+}
+
+#[tauri::command]
+async fn remote_is_cache_dir_set(
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(stream_cache::CacheManager::is_cache_dir_set(&config))
+}
+
+#[tauri::command]
+async fn remote_get_cache_dir(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    let dir = stream_cache::CacheManager::cache_dir(&config);
+    Ok(dir.to_string_lossy().to_string())
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -14827,6 +15190,7 @@ fn main() {
         wt_controller: Arc::new(tokio::sync::Mutex::new(None)),
         oauth_listener: Arc::new(Mutex::new(None)),
         oauth_nonce: Arc::new(Mutex::new(None)),
+        cache_manager: stream_cache::CacheManager::new(),
     };
 
     // Create system tray menu
@@ -15275,6 +15639,18 @@ fn main() {
             wt_get_client_id,
             wt_launch_mpv,
             wt_send_mpv_command,
+            // Remote Source commands
+            remote_get_movie_streams,
+            remote_get_series_streams,
+            remote_play_with_mpv,
+            remote_start_cache,
+            remote_stop_cache,
+            remote_get_cache_status,
+            remote_get_all_cache_status,
+            remote_cleanup_cache,
+            remote_cleanup_all_cache,
+            remote_is_cache_dir_set,
+            remote_get_cache_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import {
   Settings,
-  Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3
+  Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3, Radio
 } from "lucide-react"
 import { LazyMotion, domAnimation, m } from "framer-motion"
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react"
@@ -91,6 +91,7 @@ export function Sidebar({
 
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
+    { id: "remote", label: "External", icon: Radio },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "directlinks", label: "Direct Links", icon: Link2 },

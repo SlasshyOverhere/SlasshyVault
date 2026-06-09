@@ -92,6 +92,7 @@ import {
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
+import { RemoteSourceView } from '@/components/RemoteSource/RemoteSourceView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -2573,6 +2574,22 @@ function App() {
                       className="h-full"
                     >
                       <RemindersView />
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </div>
+            ) : view === 'remote' ? (
+              <div className="flex-1 overflow-hidden">
+                <div className="h-full min-h-0">
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key="remote"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full"
+                    >
+                      <RemoteSourceView />
                     </motion.div>
                   </AnimatePresence>
                 </div>
