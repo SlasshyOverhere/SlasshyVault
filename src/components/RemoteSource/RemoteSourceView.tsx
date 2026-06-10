@@ -523,6 +523,9 @@ export function RemoteSourceView() {
                   <span className="h-px w-6 bg-neutral-800" />
                 </div>
                 <h1 className="text-3xl font-black tracking-tight text-white leading-none">Stream fuckin anything.</h1>
+                <p className="text-[10px] text-neutral-700 leading-relaxed max-w-md mx-auto">
+                  All media sources are third-party. We do not host, store, or control any content.
+                </p>
               </div>
               <RemoteSearchBar value={searchQuery} onChange={setSearchQuery} />
               {!searchQuery && searchHistory.length > 0 && (
