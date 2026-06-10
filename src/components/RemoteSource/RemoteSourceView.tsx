@@ -462,14 +462,20 @@ export function RemoteSourceView() {
           setSelectedItem((prev) => prev ? { ...prev, imdb_id: details.imdb_id } as TmdbSearchResult : prev)
         }
       } else {
-        const details = await invoke<any>('get_tv_details', { tvId: searchItem.id })
+        const [details, extIds] = await Promise.all([
+          invoke<any>('get_tv_details', { tvId: searchItem.id }),
+          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch(() => null),
+        ])
         if (reqId !== detailReqId.current) return
         if (details.poster_path) {
           setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
           invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
         }
         if (details.backdrop_path) {
-          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
+          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } : prev)
+        }
+        if (extIds?.imdb_id) {
+          setSelectedItem((prev) => prev ? { ...prev, imdb_id: extIds.imdb_id } : prev)
         }
       }
     } catch { /* use whatever we have */ }
@@ -496,6 +502,7 @@ export function RemoteSourceView() {
           <div className="max-w-4xl mx-auto">
             <RemoteMediaDetail
               item={selectedItem!}
+              imdbId={(selectedItem as any).imdb_id}
               onBack={handleBackToLibrary}
               onFetchMovieStreams={handleFetchMovieStreams}
               onFetchEpisodeStreams={handleFetchEpisodeStreams}

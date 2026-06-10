@@ -43,6 +43,7 @@ export interface TmdbSearchResult {
   release_date?: string
   first_air_date?: string
   vote_average?: number
+  imdb_id?: string
 }
 
 export function formatFileSize(bytes: number): string {

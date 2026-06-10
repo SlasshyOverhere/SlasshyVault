@@ -8,6 +8,7 @@ import type { TmdbSearchResult } from './remote.types'
 
 interface Props {
   item: TmdbSearchResult
+  imdbId?: string | null
   onBack: () => void
   onFetchMovieStreams: (imdbId: string) => void
   onFetchEpisodeStreams: (imdbId: string, season: number, episode: number, episodeTitle: string) => void
@@ -100,13 +101,14 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
   )
 })
 
-export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEpisodeStreams, fetching }: Props) {
-  const [imdbId, setImdbId] = useState<string | null>(null)
+export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMovieStreams, onFetchEpisodeStreams, fetching }: Props) {
+  const [localImdbId, setLocalImdbId] = useState<string | null>(null)
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
   const [seasonData, setSeasonData] = useState<Map<number, TmdbEpisodeInfo[]>>(new Map())
   const [fetchedBackdrop, setFetchedBackdrop] = useState<string | null>(null)
   const loadingSeasons = useRef(new Set<number>())
+  const imdbId = propImdbId ?? localImdbId
 
   const fetchSeason = useCallback((seasonNum: number) => {
     if (loadingSeasons.current.has(seasonNum)) return
@@ -133,9 +135,14 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
     const load = async () => {
       try {
         if (item.media_type === 'movie') {
-          const details = await invoke<any>('get_movie_details', { movieId: item.id })
-          setImdbId(details.imdb_id || null)
-          if (details.backdrop_path) setFetchedBackdrop(details.backdrop_path)
+          if (!propImdbId) {
+            const details = await invoke<any>('get_movie_details', { movieId: item.id })
+            if (details.imdb_id) setLocalImdbId(details.imdb_id)
+            if (details.backdrop_path) setFetchedBackdrop(details.backdrop_path)
+          } else {
+            const details = await invoke<any>('get_movie_details', { movieId: item.id }).catch(() => null)
+            if (details?.backdrop_path) setFetchedBackdrop(details.backdrop_path)
+          }
         } else {
           const details = await invoke<any>('get_tv_details', { tvId: item.id })
           if (details.backdrop_path) setFetchedBackdrop(details.backdrop_path)
@@ -144,21 +151,23 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
           if (s.length > 0) {
             setActiveSeason(s[0].season_number)
           }
-          try {
-            const extIds = await invoke<any>('get_imdb_details', {
-              imdbId: null,
-              tmdbId: item.id,
-              mediaType: 'tv',
-            })
-            if (extIds?.imdb_id) setImdbId(extIds.imdb_id)
-          } catch {}
+          if (!propImdbId) {
+            try {
+              const extIds = await invoke<any>('get_imdb_details', {
+                imdbId: null,
+                tmdbId: item.id,
+                mediaType: 'tv',
+              })
+              if (extIds?.imdb_id) setLocalImdbId(extIds.imdb_id)
+            } catch {}
+          }
         }
       } catch (e) {
         console.error('Failed to load details:', e)
       }
     }
     load()
-  }, [item.id, item.media_type])
+  }, [item.id, item.media_type, propImdbId])
 
   useEffect(() => {
     if (seasonData.has(activeSeason)) return
