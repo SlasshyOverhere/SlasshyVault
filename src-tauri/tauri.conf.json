@@ -80,7 +80,9 @@
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [],
+      "resources": [
+  "mpv/*.dll"
+],
       "shortDescription": "",
       "targets": "all",
       "windows": {
