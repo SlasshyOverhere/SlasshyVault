@@ -146,6 +146,7 @@ export function RemoteSourceView() {
   const [lastCacheKey, setLastCacheKey] = useState('')
 
   const imdbIdRef = useRef<string>('')
+  const detailReqId = useRef(0)
 
   // Next episode prompt
   const [nextEpisodePrompt, setNextEpisodePrompt] = useState<{ show: boolean; imdbId: string; season: number; episode: number; title: string }>({ show: false, imdbId: '', season: 0, episode: 0, title: '' })
@@ -440,29 +441,39 @@ export function RemoteSourceView() {
   }, [toast])
 
   const handleLibraryCardClick = useCallback(async (item: RemoteLibraryItem) => {
+    const reqId = ++detailReqId.current
     const searchItem = toSearchResult(item)
-    // Fetch fresh TMDB details to get poster_path and backdrop_path (DB may have null)
+    // Navigate immediately so the user sees feedback right away
+    setSelectedItem(searchItem)
+    setPageState('detail')
+    // Fetch fresh TMDB details in the background to enrich poster/backdrop
     try {
       if (item.media_type === 'movie') {
         const details = await invoke<any>('get_movie_details', { movieId: searchItem.id })
+        if (reqId !== detailReqId.current) return
         if (details.poster_path) {
-          searchItem.poster_path = details.poster_path
+          setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
           invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
         }
-        if (details.backdrop_path) (searchItem as any).backdrop_path = details.backdrop_path
-        if (details.imdb_id) (searchItem as any).imdb_id = details.imdb_id
+        if (details.backdrop_path) {
+          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
+        }
+        if (details.imdb_id) {
+          setSelectedItem((prev) => prev ? { ...prev, imdb_id: details.imdb_id } as TmdbSearchResult : prev)
+        }
       } else {
         const details = await invoke<any>('get_tv_details', { tvId: searchItem.id })
+        if (reqId !== detailReqId.current) return
         if (details.poster_path) {
-          searchItem.poster_path = details.poster_path
+          setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
           invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
         }
-        if (details.backdrop_path) (searchItem as any).backdrop_path = details.backdrop_path
+        if (details.backdrop_path) {
+          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
+        }
       }
     } catch { /* use whatever we have */ }
-    setSelectedItem(searchItem)
-    setPageState('detail')
-    // Refresh library to pick up the updated poster
+    if (reqId !== detailReqId.current) return
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
