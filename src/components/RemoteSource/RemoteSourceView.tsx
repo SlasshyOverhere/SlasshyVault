@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { listen } from '@tauri-apps/api/event'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -10,9 +10,10 @@ import { RemoteQualitySelector } from './RemoteQualitySelector'
 import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
-import { Film, Play, Tv2, Clock } from 'lucide-react'
+import { Film, Play } from 'lucide-react'
 import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
+import { getCachedImageUrl } from '@/services/api'
 
 interface TmdbSearchResponse { results: TmdbSearchResult[]; total_results: number }
 
@@ -62,17 +63,56 @@ interface RemoteLibraryItem {
 function toSearchResult(item: RemoteLibraryItem): TmdbSearchResult {
   const tmdbId = item.tmdb_id ? parseInt(item.tmdb_id) : item.id
   return {
-    id: tmdbId,
+    id: Number.isFinite(tmdbId) ? tmdbId : item.id,
     title: item.media_type === 'movie' ? item.title : undefined,
     name: item.media_type === 'tv' ? item.title : undefined,
     media_type: item.media_type as 'movie' | 'tv',
-    poster_path: item.poster_path,
-    overview: item.overview,
+    poster_path: item.poster_path ?? undefined,
+    overview: item.overview ?? undefined,
     release_date: item.year ? String(item.year) : undefined,
     first_air_date: item.year ? String(item.year) : undefined,
     vote_average: undefined,
   }
 }
+
+const LibraryPoster = memo(function LibraryPoster({ posterPath, alt }: { posterPath: string | null; alt: string }) {
+  const [imgUrl, setImgUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (!posterPath) { if (!cancelled) setImgUrl(null); return }
+      if (posterPath.startsWith('http://') || posterPath.startsWith('https://') || posterPath.startsWith('asset://')) {
+        if (!cancelled) setImgUrl(posterPath)
+        return
+      }
+      if (posterPath.startsWith('/')) {
+        if (!cancelled) setImgUrl(`https://image.tmdb.org/t/p/w185${posterPath}`)
+        return
+      }
+      let filename = posterPath
+      if (filename.startsWith('image_cache/')) filename = filename.replace('image_cache/', '')
+      try {
+        const url = await getCachedImageUrl(filename)
+        if (!cancelled) setImgUrl(url)
+      } catch {
+        if (!cancelled) setImgUrl(null)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [posterPath])
+
+  const url = imgUrl && !failed ? imgUrl : null
+  return url ? (
+    <img src={url} alt={alt} className="w-full h-full object-cover" loading="lazy" onError={() => setFailed(true)} />
+  ) : (
+    <div className="w-full h-full flex items-center justify-center bg-neutral-900">
+      <Film className="size-5 text-neutral-700" />
+    </div>
+  )
+})
 
 export function RemoteSourceView() {
   const { toast } = useToast()
@@ -135,12 +175,12 @@ export function RemoteSourceView() {
     })
   }, [])
 
-  const removeFromHistory = useCallback((query: string) => {
-    setSearchHistory((prev) => prev.filter((s) => s !== query))
-  }, [])
-
   const clearHistory = useCallback(() => {
     setSearchHistory([])
+  }, [])
+
+  const removeFromHistory = useCallback((q: string) => {
+    setSearchHistory((prev) => prev.filter((s) => s !== q))
   }, [])
 
   // Load remote library on mount
@@ -399,11 +439,32 @@ export function RemoteSourceView() {
     toast({ title: 'Kept', description: 'File will be auto-cleaned based on cache settings.' })
   }, [toast])
 
-  const handleLibraryCardClick = useCallback((item: RemoteLibraryItem) => {
+  const handleLibraryCardClick = useCallback(async (item: RemoteLibraryItem) => {
     const searchItem = toSearchResult(item)
+    // Fetch fresh TMDB details to get poster_path and backdrop_path (DB may have null)
+    try {
+      if (item.media_type === 'movie') {
+        const details = await invoke<any>('get_movie_details', { movieId: searchItem.id })
+        if (details.poster_path) {
+          searchItem.poster_path = details.poster_path
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
+        }
+        if (details.backdrop_path) (searchItem as any).backdrop_path = details.backdrop_path
+        if (details.imdb_id) (searchItem as any).imdb_id = details.imdb_id
+      } else {
+        const details = await invoke<any>('get_tv_details', { tvId: searchItem.id })
+        if (details.poster_path) {
+          searchItem.poster_path = details.poster_path
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
+        }
+        if (details.backdrop_path) (searchItem as any).backdrop_path = details.backdrop_path
+      }
+    } catch { /* use whatever we have */ }
     setSelectedItem(searchItem)
     setPageState('detail')
-  }, [])
+    // Refresh library to pick up the updated poster
+    loadRemoteLibrary()
+  }, [loadRemoteLibrary])
 
   const handleBackToLibrary = useCallback(() => {
     setSelectedItem(null)
@@ -411,8 +472,6 @@ export function RemoteSourceView() {
     setStreamError(null)
     setPageState(searchQuery ? 'search' : 'library')
   }, [searchQuery])
-
-  const showLibrary = pageState === 'library' || (pageState === 'search' && !searchQuery)
 
   return (
     <div className="h-full flex flex-col relative">
@@ -448,6 +507,32 @@ export function RemoteSourceView() {
                 <h1 className="text-3xl font-black tracking-tight text-white leading-none">Stream fuckin anything.</h1>
               </div>
               <RemoteSearchBar value={searchQuery} onChange={setSearchQuery} />
+              {!searchQuery && searchHistory.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {searchHistory.slice(0, 10).map((q) => (
+                    <span
+                      key={q}
+                      className="group/chip inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-neutral-900/80 border border-neutral-800/60 text-[11px] text-neutral-500"
+                    >
+                      <button onClick={() => setSearchQuery(q)} className="hover:text-neutral-200 transition-colors">
+                        {q}
+                      </button>
+                      <button
+                        onClick={() => removeFromHistory(q)}
+                        className="text-neutral-700 hover:text-red-400 transition-colors leading-none"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    onClick={clearHistory}
+                    className="px-2 py-0.5 rounded-md text-[11px] text-neutral-600 hover:text-red-400 transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -455,33 +540,22 @@ export function RemoteSourceView() {
           {!searchQuery && remoteLibrary.length > 0 && (
             <div className="px-8 pb-4">
               <h2 className="text-[11px] font-bold uppercase tracking-widest text-neutral-600 mb-4">My Library</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-2.5">
                 {remoteLibrary.map((item) => (
                   <button
                     key={item.id}
                     onClick={() => handleLibraryCardClick(item)}
                     className="group text-left focus:outline-none"
                   >
-                    <div className="aspect-[2/3] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 group-hover:border-amber-700/40 transition-all duration-300 relative">
-                      {item.poster_path ? (
-                        <img
-                          src={item.poster_path.startsWith('/') ? `https://image.tmdb.org/t/p/w342${item.poster_path}` : item.poster_path}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Film className="size-8 text-neutral-700" />
-                        </div>
-                      )}
+                    <div className="aspect-[2/3] rounded-lg overflow-hidden bg-neutral-900 border border-neutral-800/60 group-hover:border-amber-700/40 transition-all duration-300 relative">
+                      <LibraryPoster posterPath={item.poster_path} alt={item.title} />
                       {/* Media type badge */}
-                      <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider bg-black/60 text-neutral-300">
+                      <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-black/60 text-neutral-400">
                         {item.media_type === 'movie' ? 'Movie' : 'TV'}
                       </div>
                       {/* Resume progress bar */}
                       {item.resume_position_seconds > 0 && item.duration_seconds > 0 && (
-                        <div className="absolute bottom-0 left-0 right-0 h-1 bg-neutral-800">
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-neutral-800">
                           <div
                             className="h-full bg-amber-500/70 transition-all"
                             style={{ width: `${Math.min(100, (item.resume_position_seconds / item.duration_seconds) * 100)}%` }}
@@ -489,17 +563,17 @@ export function RemoteSourceView() {
                         </div>
                       )}
                       {/* Play overlay on hover */}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-300 flex items-center justify-center">
-                        <div className="size-12 rounded-full bg-amber-600/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0">
-                          <Play className="size-5 fill-white ml-0.5" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-300 flex items-center justify-center">
+                        <div className="size-8 rounded-full bg-amber-600/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
+                          <Play className="size-3.5 fill-white ml-0.5" />
                         </div>
                       </div>
                     </div>
-                    <p className="mt-1.5 text-[13px] font-semibold text-neutral-200 truncate leading-tight">
+                    <p className="mt-1 text-[11px] font-semibold text-neutral-300 truncate leading-tight">
                       {item.title}
                     </p>
                     {item.year && (
-                      <p className="text-[11px] text-neutral-600">{item.year}</p>
+                      <p className="text-[10px] text-neutral-600">{item.year}</p>
                     )}
                   </button>
                 ))}

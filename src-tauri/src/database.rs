@@ -4981,6 +4981,12 @@ impl Database {
         overview: Option<&str>,
     ) -> Result<i64> {
         if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "movie")? {
+            if poster_path.is_some() || overview.is_some() || year.is_some() {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
+                    params![poster_path, overview, year, id],
+                );
+            }
             return Ok(id);
         }
         let file_path = format!("remote://movie/{}", tmdb_id);
@@ -5001,6 +5007,12 @@ impl Database {
         overview: Option<&str>,
     ) -> Result<i64> {
         if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "tvshow")? {
+            if poster_path.is_some() || overview.is_some() || year.is_some() {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
+                    params![poster_path, overview, year, id],
+                );
+            }
             return Ok(id);
         }
         let file_path = format!("remote://tvshow/{}", tmdb_id);
@@ -5048,6 +5060,25 @@ impl Database {
             params![show_title, file_path, parent_id, season, episode, ep_name, still_path, overview],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, backdrop_path: Option<&str>) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%' LIMIT 1"
+        )?;
+        let ids: Vec<i64> = {
+            let mut rows = stmt.query(params![tmdb_id])?;
+            std::iter::from_fn(|| rows.next().ok().flatten().map(|r| r.get::<_, i64>(0).unwrap())).collect()
+        };
+        for id in ids {
+            if let Some(pp) = poster_path {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path) WHERE id = ?",
+                    params![pp, id],
+                );
+            }
+        }
+        Ok(())
     }
 }
 

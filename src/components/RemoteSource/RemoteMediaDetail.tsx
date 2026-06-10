@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react'
+import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/tauri'
@@ -105,8 +105,12 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
   const [seasonData, setSeasonData] = useState<Map<number, TmdbEpisodeInfo[]>>(new Map())
+  const [fetchedBackdrop, setFetchedBackdrop] = useState<string | null>(null)
+  const loadingSeasons = useRef(new Set<number>())
 
   const fetchSeason = useCallback((seasonNum: number) => {
+    if (loadingSeasons.current.has(seasonNum)) return
+    loadingSeasons.current.add(seasonNum)
     invoke<TmdbSeasonDetails>('get_tv_season_episodes', {
       tvId: item.id,
       seasonNumber: seasonNum,
@@ -120,6 +124,9 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
         })
       })
       .catch(() => {})
+      .finally(() => {
+        loadingSeasons.current.delete(seasonNum)
+      })
   }, [item.id])
 
   useEffect(() => {
@@ -128,13 +135,14 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
         if (item.media_type === 'movie') {
           const details = await invoke<any>('get_movie_details', { movieId: item.id })
           setImdbId(details.imdb_id || null)
+          if (details.backdrop_path) setFetchedBackdrop(details.backdrop_path)
         } else {
           const details = await invoke<any>('get_tv_details', { tvId: item.id })
+          if (details.backdrop_path) setFetchedBackdrop(details.backdrop_path)
           const s = (details.seasons || []).filter((s: TvSeason) => s.season_number > 0)
           setSeasons(s)
           if (s.length > 0) {
             setActiveSeason(s[0].season_number)
-            fetchSeason(s[0].season_number)
           }
           try {
             const extIds = await invoke<any>('get_imdb_details', {
@@ -150,7 +158,7 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
       }
     }
     load()
-  }, [item.id, item.media_type, fetchSeason])
+  }, [item.id, item.media_type])
 
   useEffect(() => {
     if (seasonData.has(activeSeason)) return
@@ -162,7 +170,7 @@ export function RemoteMediaDetail({ item, onBack, onFetchMovieStreams, onFetchEp
   const episodeCount = activeSeasonInfo?.episode_count ?? 0
 
   const poster = tmdbImage(item.poster_path, 'w342')
-  const backdrop = tmdbImage(item.backdrop_path, 'w1280')
+  const backdrop = tmdbImage(item.backdrop_path || fetchedBackdrop, 'w1280')
 
   // ── Movie view ──
   if (item.media_type === 'movie') {

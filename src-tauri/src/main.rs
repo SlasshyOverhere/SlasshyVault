@@ -7824,6 +7824,23 @@ async fn get_tv_season_episodes(
     });
     let mut result = ep_rx.await.map_err(|e| e.to_string())??;
 
+    // Cache the fetched episode data so subsequent calls don't miss
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        for ep in &result.episodes {
+            let _ = db.save_cached_episode_metadata(
+                &tv_id_str,
+                season_number,
+                ep.episode_number,
+                Some(&ep.name),
+                ep.overview.as_deref(),
+                ep.still_path.as_deref(),
+                ep.air_date.as_deref(),
+                ep.vote_average,
+            );
+        }
+    }
+
     // Try to get better episode images from imdbapi.dev (also in thread to avoid panic)
     if let Some(ref show_imdb_id) = show_imdb_id_from_db {
         println!("[IMDBAPI] Fetching episode images for show {} season {}", show_imdb_id, season_number);
@@ -15153,6 +15170,18 @@ async fn remote_get_resume_info(
 }
 
 #[tauri::command]
+async fn remote_update_poster(
+    state: State<'_, AppState>,
+    tmdb_id: i64,
+    poster_path: Option<String>,
+) -> Result<(), String> {
+    let tmdb_str = tmdb_id.to_string();
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_remote_poster(&tmdb_str, poster_path.as_deref(), None)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn remote_start_cache(
     state: State<'_, AppState>,
     app_handle: AppHandle,
@@ -15803,6 +15832,7 @@ fn main() {
             remote_play_with_resume,
             remote_clear_progress,
             remote_get_resume_info,
+            remote_update_poster,
             remote_get_library,
             remote_start_cache,
             remote_stop_cache,
