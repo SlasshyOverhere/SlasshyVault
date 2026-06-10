@@ -16,8 +16,6 @@ mod transcoder;
 mod watch_together;
 mod watch_together_mpv;
 mod zip_manager;
-mod mpv_bundle;
-mod mpv_controller;
 mod zip_parser;
 mod zip_stream_proxy;
 mod obfuscator;
@@ -6591,159 +6589,6 @@ async fn play_with_mpv(
     Ok(ApiResponse {
         message: format!("Playback started: {}", media.title),
     })
-}
-
-/// Play media with the native libmpv player (embedded).
-/// Falls back to external mpv.exe if native is unavailable.
-/// Currently handles local files and GDrive cloud URLs.
-#[tauri::command]
-async fn play_with_native_mpv(
-    state: State<'_, AppState>,
-    native: State<'_, mpv_controller::MpvController>,
-    media_id: i64,
-    resume: bool,
-    audio_language: Option<String>,
-    subtitle_language: Option<String>,
-) -> Result<ApiResponse, String> {
-    if !native.is_enabled {
-        return Err("Native MPV player is not available. Please check your installation or switch to external MPV in Settings.".to_string());
-    }
-
-    let config = {
-        let c = state.config.lock().map_err(|e| e.to_string())?;
-        c.clone()
-    };
-
-    let (media, resume_info) = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        let media = db.get_media_by_id(media_id).map_err(|e| e.to_string())?;
-        let resume_info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
-        (media, resume_info)
-    };
-
-    let title = media.title.clone();
-    let season_number = media.season_number;
-    let episode_number = media.episode_number;
-    let media_type = media.media_type.clone();
-    let is_cloud = media.is_cloud.unwrap_or(false);
-
-    let start_position = if resume && resume_info.has_progress {
-        resume_info.position
-    } else {
-        0.0
-    };
-
-    if start_position > 0.0 {
-        println!("[MPV-NATIVE] Resuming from {:.2}s for '{}'", start_position, title);
-    }
-
-    // Resolve source URL
-    let playback_url = if is_cloud {
-        let file_id = media.cloud_file_id.as_deref()
-            .ok_or_else(|| "Cloud file has no file ID".to_string())?;
-        let (url, _token) = state
-            .gdrive_client
-            .get_stream_url(file_id)
-            .await
-            .map_err(|e| format!("Failed to get cloud streaming URL: {}", e))?;
-        // Set auth header for native player
-        if let Ok(token) = state.gdrive_client.get_access_token().await {
-            let auth_header = format!("Authorization: Bearer {}", token);
-            native_mpv_set_property_inner(&native, "http-header-fields", serde_json::Value::String(auth_header))?;
-        }
-        url
-    } else {
-        media.file_path.ok_or_else(|| "No file path for local media".to_string())?
-    };
-
-    println!("[MPV-NATIVE] Loading '{}' from: {}", title, playback_url);
-
-    // Set audio/subtitle language preferences
-    if let Some(ref lang) = audio_language.filter(|v| !v.trim().is_empty()) {
-        if let Some(aid) = lang.strip_prefix("aid:") {
-            native.send(serde_json::json!(["aid", aid.trim()]).to_string()).ok();
-        } else {
-            native.send(serde_json::json!(["alang", lang.trim()]).to_string()).ok();
-        }
-    }
-    if let Some(ref lang) = subtitle_language.filter(|v| !v.trim().is_empty()) {
-        if let Some(sid) = lang.strip_prefix("sid:") {
-            native.send(serde_json::json!(["sid", sid.trim()]).to_string()).ok();
-        } else {
-            native.send(serde_json::json!(["slang", lang.trim()]).to_string()).ok();
-        }
-    }
-
-    // Set cache options for URLs
-    if is_cloud || playback_url.starts_with("http") {
-        native.send(serde_json::json!(["cache", "yes"]).to_string()).ok();
-        native.send(serde_json::json!(["demuxer-max-bytes", "500MiB"]).to_string()).ok();
-        native.send(serde_json::json!(["demuxer-max-back-bytes", "100MiB"]).to_string()).ok();
-    }
-
-    // Observe properties for frontend tracking
-    let observe_props = [
-        "time-pos", "duration", "pause", "seeking", "eof-reached",
-        "paused-for-cache", "cache-buffering-state", "demuxer-cache-time",
-        "track-list", "aid", "sid", "volume", "mute", "sub-scale",
-    ];
-    for prop in &observe_props {
-        native.send(serde_json::Value::String(prop.to_string()).to_string()).ok();
-    }
-
-    // mpv renders directly into the main window window behind the WebView2.
-    // The frontend toggles body transparency via .native-player-active CSS class.
-    native_mpv_load_inner(&native, &playback_url, if start_position > 0.0 { Some(start_position) } else { None }, Some(true))?;
-
-    println!("[MPV-NATIVE] Playback started for media ID: {}", media_id);
-
-    // Update last_watched
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        let _ = db.update_last_watched(media_id);
-    }
-
-    // Frontend should listen for "mpv-event" with "mpv-event-ended" type
-    // to detect playback end with native player (instead of "mpv-playback-ended").
-
-    Ok(ApiResponse {
-        message: format!("Native playback started: {}", title),
-    })
-}
-
-/// Internal helper for native_mpv_load without Tauri State overhead.
-fn native_mpv_load_inner(
-    native: &mpv_controller::MpvController,
-    url: &str,
-    start_time: Option<f64>,
-    hwdec: Option<bool>,
-) -> Result<(), String> {
-    native.send(serde_json::json!(["stop", []]).to_string())?;
-
-    let hwdec_val = if hwdec.unwrap_or(true) { "auto-copy" } else { "no" };
-    native.send(serde_json::json!(["hwdec", hwdec_val]).to_string())?;
-
-    if let Some(time) = start_time {
-        if time > 0.0 {
-            native.send(serde_json::json!(["loadfile", [url, "replace", format!("start=+{}", time as i64)]]).to_string())?;
-        } else {
-            native.send(serde_json::json!(["loadfile", [url]]).to_string())?;
-        }
-    } else {
-        native.send(serde_json::json!(["loadfile", [url]]).to_string())?;
-    }
-
-    native.send(serde_json::json!(["pause", false]).to_string())?;
-    Ok(())
-}
-
-/// Internal helper for native_mpv_set_property without Tauri State overhead.
-fn native_mpv_set_property_inner(
-    native: &mpv_controller::MpvController,
-    name: &str,
-    value: serde_json::Value,
-) -> Result<(), String> {
-    native.send(serde_json::json!([name, value]).to_string())
 }
 
 // Play media with VLC (external player)
@@ -15524,29 +15369,6 @@ fn main() {
                 println!("[STARTUP] Warning: Failed to clean ZIP cache: {}", error);
             }
 
-            // Ensure bundled mpv DLLs are extracted before initializing
-            // the native player controller. This is a no-op if no zip was
-            // embedded at compile time (the DLLs must be on PATH or in the
-            // exe directory).
-            if let Some(dll_dir) = mpv_bundle::ensure_mpv_dlls(&database::get_app_data_dir()) {
-                if let Some(dll_dir_str) = dll_dir.to_str() {
-                    println!("[MPV-BUNDLE] Extracted mpv DLLs to {}", dll_dir_str);
-                }
-            }
-
-            // Initialize native libmpv player controller.
-            // Creates a child HWND and spawns mpv event/message threads.
-            // If init fails (e.g. mpv-2.dll not found), the controller is
-            // disabled and native commands will return errors. The external
-            // mpv.exe path remains available as fallback.
-            let native_player = mpv_controller::MpvController::new(&app.handle());
-            if native_player.is_enabled {
-                println!("[MPV-NATIVE] libmpv controller initialized successfully");
-            } else {
-                eprintln!("[MPV-NATIVE] Failed to initialize libmpv. Native playback disabled, falling back to external MPV.");
-            }
-            app.manage(native_player);
-
             // Start background cloud polling (runs independently of window)
             let app_handle_for_polling = app.handle();
             tauri::async_runtime::spawn(async move {
@@ -15726,17 +15548,8 @@ fn main() {
             update_episode_duration,
             fix_match,
             play_with_mpv,
-            play_with_native_mpv,
             play_with_vlc,
             get_mpv_status,
-            // Native libmpv player commands
-            mpv_controller::native_mpv_load,
-            mpv_controller::native_mpv_pause,
-            mpv_controller::native_mpv_seek,
-            mpv_controller::native_mpv_set_volume,
-            mpv_controller::native_mpv_set_property,
-            mpv_controller::native_mpv_observe_property,
-            mpv_controller::native_mpv_stop,
             get_active_mpv_sessions,
             get_cached_image,
             get_cached_image_path,

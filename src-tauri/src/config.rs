@@ -349,7 +349,7 @@ pub struct Config {
     // All auth, TMDB proxy, and WebSocket URLs are derived from this
     #[serde(default)]
     pub dev_backend_url: Option<String>,
-    // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
+    // Player mode: "external" (mpv.exe spawned, default)
     #[serde(default)]
     pub player_mode: PlayerMode,
 }
@@ -358,7 +358,6 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum PlayerMode {
-    Native,
     External,
 }
 

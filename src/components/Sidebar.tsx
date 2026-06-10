@@ -329,13 +329,13 @@ export function Sidebar({
                 title={isPinned ? "Unpin sidebar" : "Pin sidebar"}
                 aria-label={isPinned ? "Unpin sidebar" : "Pin sidebar"}
                 className={cn(
-                  "w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center",
+                  "w-full h-10 rounded-xl border transition-all duration-200 flex items-center justify-center",
                   isPinned
-                    ? "text-white bg-white/[0.08] border-white/20"
-                    : "text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+                    ? "text-amber-400 bg-amber-500/10 border-amber-500/25"
+                    : "text-neutral-500 border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.08] hover:text-white hover:border-white/10"
                 )}
               >
-                {isPinned ? <PinOff className="size-4.5" /> : <Pin className="size-4.5" />}
+                {isPinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
               </button>
               <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                 <span className="text-xs font-semibold text-white">{isPinned ? "Unpin sidebar" : "Pin sidebar"}</span>
@@ -348,9 +348,9 @@ export function Sidebar({
                 onClick={onOpenSettings}
                 title="Open settings"
                 aria-label="Open settings"
-                className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+                className="w-full h-10 rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center text-neutral-500 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
               >
-                <Settings className="size-4.5 transition-transform duration-200 group-hover:rotate-45" />
+                <Settings className="size-4 transition-transform duration-200 group-hover:rotate-45" />
               </button>
               <div className="absolute left-full top-1/2 ml-3 -translate-y-1/2 z-[60] whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-3 py-2 shadow-2xl pointer-events-none opacity-0 translate-x-1 transition-all duration-200 [transition-delay:0ms] group-hover:[transition-delay:100ms] group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0">
                 <span className="text-xs font-semibold text-white">Open Settings</span>
@@ -366,14 +366,16 @@ export function Sidebar({
                 title={isPinned ? "Unpin sidebar" : "Pin sidebar"}
                 aria-label={isPinned ? "Unpin sidebar" : "Pin sidebar"}
                 className={cn(
-                  "group h-11 w-full rounded-xl border transition-colors duration-200 flex items-center justify-center gap-2 px-2",
+                  "group h-11 w-full rounded-xl border transition-all duration-200 flex items-center justify-center gap-2.5 px-3",
                   isPinned
-                    ? "border-white/20 bg-white/[0.08] text-white"
-                    : "border-white/[0.06] bg-white/[0.03] text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+                    ? "border-amber-500/25 bg-amber-500/10 text-amber-400 shadow-sm shadow-amber-500/5"
+                    : "border-white/[0.06] bg-white/[0.03] text-neutral-500 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
                 )}
               >
-                {isPinned ? <PinOff className="size-4.5" /> : <Pin className="size-4.5" />}
-                <span className="text-xs font-semibold tracking-wide">{isPinned ? "Pinned" : "Pin sidebar"}</span>
+                {isPinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                <span className="text-[11px] font-semibold tracking-wider uppercase">
+                  {isPinned ? "Pinned" : "Pin sidebar"}
+                </span>
               </button>
               <button
                 type="button"
@@ -381,10 +383,10 @@ export function Sidebar({
                 onClick={onOpenSettings}
                 title="Open settings"
                 aria-label="Open settings"
-                className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-colors duration-200 flex items-center justify-center gap-2 px-2 text-neutral-400 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
+                className="group h-11 w-full rounded-xl border border-white/[0.06] bg-white/[0.03] transition-all duration-200 flex items-center justify-center gap-2.5 px-3 text-neutral-500 hover:bg-white/[0.08] hover:text-white hover:border-white/10"
               >
-                <Settings className="size-4.5 transition-transform duration-200 group-hover:rotate-45" />
-                <span className="text-xs font-semibold tracking-wide">Settings</span>
+                <Settings className="size-4 transition-transform duration-200 group-hover:rotate-45" />
+                <span className="text-[11px] font-semibold tracking-wider uppercase">Settings</span>
               </button>
           </div>
         )}

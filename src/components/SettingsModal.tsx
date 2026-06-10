@@ -901,52 +901,6 @@ export function SettingsModal({
                           </div>
                         </div>
 
-                        {/* Built-in Player */}
-                        <div className="p-4 rounded-xl border bg-card border-orange-500/20">
-                          <div className="flex items-start gap-3">
-                            <div className="p-2 rounded-lg bg-orange-500/20 flex-shrink-0">
-                              <MonitorPlay className="size-5 text-orange-400" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className="text-sm font-medium">
-                                    Built-in Player (libmpv)
-                                  </span>
-                                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400 rounded">
-                                    IN DEV
-                                  </span>
-                                </div>
-                                <Switch
-                                  checked={config.player_mode === 'native'}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) {
-                                      const confirmed = window.confirm(
-                                        "Built-in Player Warning\n\n" +
-                                          "This player is still in active development and may be unstable:\n\n" +
-                                          "\u2022 Playback may stutter or crash\n" +
-                                          "\u2022 Some video formats may not work\n" +
-                                          "\u2022 Features are incomplete\n\n" +
-                                          "Switching will use the built-in libmpv engine instead of external mpv.exe.\n\n" +
-                                          "Do you want to enable the built-in player?",
-                                      );
-                                      if (confirmed) {
-                                        setConfig({ ...config, player_mode: 'native' });
-                                      }
-                                    } else {
-                                      setConfig({ ...config, player_mode: 'external' });
-                                    }
-                                  }}
-                                />
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-2">
-                                Embed video playback directly in the app window.
-                                Actively being developed — expect bugs and missing features.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
                       </div>
 
                     </m.div>
