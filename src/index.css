@@ -83,6 +83,17 @@
     letter-spacing: -0.01em;
   }
 
+  /* Native player: transparent body so mpv child HWND shows through */
+  html:has(body.native-player-active),
+  body.native-player-active {
+    background: transparent !important;
+  }
+
+  body.native-player-active #root,
+  body.native-player-active #root > div {
+    background: transparent !important;
+  }
+
   body:not(.app-window-maximized) {
     border-radius: 10px;
     clip-path: inset(0 round 10px);

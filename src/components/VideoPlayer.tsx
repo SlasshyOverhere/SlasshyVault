@@ -307,9 +307,8 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
     }, [])
 
     return (
-        <div
+        <section
             ref={containerRef}
-            role="region"
             aria-label="Video player"
             className="fixed inset-0 z-50 bg-gray-950 flex items-center justify-center font-sans"
             onMouseMove={handleMouseMove}
@@ -534,6 +533,6 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
     )
 }

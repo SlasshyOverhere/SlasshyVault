@@ -349,6 +349,22 @@ pub struct Config {
     // All auth, TMDB proxy, and WebSocket URLs are derived from this
     #[serde(default)]
     pub dev_backend_url: Option<String>,
+    // Player mode: "external" (mpv.exe spawned, default)
+    #[serde(default)]
+    pub player_mode: PlayerMode,
+}
+
+/// Which MPV engine to use
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayerMode {
+    External,
+}
+
+impl Default for PlayerMode {
+    fn default() -> Self {
+        PlayerMode::External
+    }
 }
 
 fn default_cloud_cache_max_mb() -> u32 {
@@ -399,6 +415,7 @@ impl Default for Config {
             zip_cache_expiry_days: 7,
             notifications_enabled: true,
             dev_backend_url: None,
+            player_mode: PlayerMode::default(),
         }
     }
 }

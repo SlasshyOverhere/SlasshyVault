@@ -71,6 +71,8 @@ const formatTvReminderTitle = (
   return `${cleaned} - ${episodeCode}`
 }
 
+const typedData = (d: Partial<MovieReminderInput> | MovieReminder | undefined | null) => (d ?? {}) as Partial<MovieReminderInput> & Partial<MovieReminder>
+
 export function ReminderEditor({
   open,
   onOpenChange,
@@ -88,8 +90,6 @@ export function ReminderEditor({
   const [notes, setNotes] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [source, setSource] = useState('manual')
-
-  const typedData = (d: Partial<MovieReminderInput> | MovieReminder | undefined | null) => (d ?? {}) as Partial<MovieReminderInput> & Partial<MovieReminder>
 
   useEffect(() => {
     if (!open) return

@@ -21,7 +21,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
   return (
     <div className="fixed inset-0 bg-[#0a0a0a] flex flex-col">
       {/* Custom Title Bar */}
-      <header className="fixed top-0 left-0 right-0 h-9 z-[300] bg-[#0a0a0a]">
+      <header className="fixed top-0 left-0 right-0 h-9 z-[300] bg-background">
         <div className="relative h-full w-full flex items-center justify-between">
           <div
             data-tauri-drag-region
@@ -54,7 +54,7 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
               onClick={async () => {
                 await appWindow.hide()
               }}
-              className="h-7 w-8 rounded-md border border-transparent text-neutral-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+              className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-200"
               title="Close"
               aria-label="Hide window"
             >

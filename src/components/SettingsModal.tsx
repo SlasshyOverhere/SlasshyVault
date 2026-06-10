@@ -77,6 +77,42 @@ type SettingsSection =
   | "dev"
   | "nightly";
 
+const sections: {
+  id: SettingsSection;
+  label: string;
+  icon: React.ReactNode;
+}[] = [
+  { id: "general", label: "General", icon: <Settings className="size-4" /> },
+  {
+    id: "account",
+    label: "Account",
+    icon: <Power className="size-4" />,
+  },
+  {
+    id: "updates",
+    label: "Updates",
+    icon: <Shield className="size-4" />,
+  },
+  {
+    id: "cloud",
+    label: "Cache & Storage",
+    icon: <Cloud className="size-4" />,
+  },
+  { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
+  {
+    id: "danger",
+    label: "Factory Reset",
+    icon: <AlertTriangle className="size-4" />,
+  },
+  { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
+  ...(import.meta.env.DEV
+    ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
+    : []),
+  ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
+    ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
+    : []),
+];
+
 export function SettingsModal({
   open,
   onOpenChange,
@@ -105,6 +141,7 @@ export function SettingsModal({
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
     dev_backend_url: "",
+    player_mode: "external",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -303,6 +340,7 @@ export function SettingsModal({
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
         dev_backend_url: data.dev_backend_url || "",
+        player_mode: data.player_mode || "external",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -461,42 +499,6 @@ export function SettingsModal({
     }
   };
 
-  const sections: {
-    id: SettingsSection;
-    label: string;
-    icon: React.ReactNode;
-  }[] = [
-    { id: "general", label: "General", icon: <Settings className="size-4" /> },
-    {
-      id: "account",
-      label: "Account",
-      icon: <Power className="size-4" />,
-    },
-    {
-      id: "updates",
-      label: "Updates",
-      icon: <Shield className="size-4" />,
-    },
-    {
-      id: "cloud",
-      label: "Cache & Storage",
-      icon: <Cloud className="size-4" />,
-    },
-    { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
-    {
-      id: "danger",
-      label: "Factory Reset",
-      icon: <AlertTriangle className="size-4" />,
-    },
-    { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
-    ...(import.meta.env.DEV
-      ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
-      : []),
-    ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
-      ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
-      : []),
-  ];
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <LazyMotion features={domAnimation}>
@@ -599,11 +601,12 @@ export function SettingsModal({
                               MPV Player
                             </Label>
                             <p className="text-sm text-muted-foreground">
-                              Required for video playback
+                              External mpv.exe player (default)
                             </p>
                           </div>
                         </div>
 
+                        <div className="space-y-3">
                         {/* Bundled Player — the hero */}
                         <div className={cn(
                           "rounded-xl border transition-all overflow-hidden",
@@ -751,11 +754,12 @@ export function SettingsModal({
                             </div>
                           )}
                         </div>
+                        </div>
                       </div>
 
 
                     </m.div>
-                  )}
+                   )}
 
                   {/* ===== Beta Features ===== */}
                   {activeSection === "beta" && (

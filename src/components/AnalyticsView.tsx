@@ -147,6 +147,8 @@ function HeatmapCalendar({ data }: { data: HeatmapDay[] }) {
 
 // ==================== SVG AREA CHART ====================
 
+const CHART_PADDING = { top: 10, right: 10, bottom: 30, left: 45 }
+
 function AreaChart({ data }: { data: { date: string; value: number }[] }) {
   if (data.length === 0) {
     return <div className="flex h-48 items-center justify-center text-sm text-white/30">No data yet</div>
@@ -154,26 +156,25 @@ function AreaChart({ data }: { data: { date: string; value: number }[] }) {
 
   const width = 800
   const height = 200
-  const padding = { top: 10, right: 10, bottom: 30, left: 45 }
-  const chartW = width - padding.left - padding.right
-  const chartH = height - padding.top - padding.bottom
+  const chartW = width - CHART_PADDING.left - CHART_PADDING.right
+  const chartH = height - CHART_PADDING.top - CHART_PADDING.bottom
 
   const maxVal = Math.max(...data.map((d) => d.value), 1)
   const xStep = chartW / Math.max(data.length - 1, 1)
 
   const points = data.map((d, i) => ({
-    x: padding.left + i * xStep,
-    y: padding.top + chartH - (d.value / maxVal) * chartH,
+    x: CHART_PADDING.left + i * xStep,
+    y: CHART_PADDING.top + chartH - (d.value / maxVal) * chartH,
   }))
 
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding.top + chartH} L ${points[0].x} ${padding.top + chartH} Z`
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${CHART_PADDING.top + chartH} L ${points[0].x} ${CHART_PADDING.top + chartH} Z`
 
   const labelInterval = Math.max(Math.floor(data.length / 8), 1)
   const xLabels = data.reduce<{ x: number; label: string }[]>((acc, d, i) => {
     if (i % labelInterval === 0 || i === data.length - 1) {
       acc.push({
-        x: padding.left + i * xStep,
+        x: CHART_PADDING.left + i * xStep,
         label: new Date(d.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       })
     }
@@ -183,7 +184,7 @@ function AreaChart({ data }: { data: { date: string; value: number }[] }) {
   const ySteps = 4
   const yLabels = Array.from({ length: ySteps + 1 }, (_, i) => {
     const val = (maxVal / ySteps) * i
-    return { y: padding.top + chartH - (val / maxVal) * chartH, label: formatDuration(val) }
+    return { y: CHART_PADDING.top + chartH - (val / maxVal) * chartH, label: formatDuration(val) }
   })
 
   return (
@@ -196,8 +197,8 @@ function AreaChart({ data }: { data: { date: string; value: number }[] }) {
       </defs>
       {yLabels.map((yl) => (
         <g key={yl.label}>
-          <line x1={padding.left} y1={yl.y} x2={width - padding.right} y2={yl.y} stroke="white" strokeOpacity="0.05" />
-          <text x={padding.left - 6} y={yl.y + 3} textAnchor="end" fill="white" fillOpacity="0.25" fontSize="9" fontFamily="inherit">{yl.label}</text>
+          <line x1={CHART_PADDING.left} y1={yl.y} x2={width - CHART_PADDING.right} y2={yl.y} stroke="white" strokeOpacity="0.05" />
+          <text x={CHART_PADDING.left - 6} y={yl.y + 3} textAnchor="end" fill="white" fillOpacity="0.25" fontSize="9" fontFamily="inherit">{yl.label}</text>
         </g>
       ))}
       <path d={areaPath} fill="url(#areaGrad)" />

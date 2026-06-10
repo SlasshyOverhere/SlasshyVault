@@ -17,13 +17,9 @@ export function togglePin(id: string | number): boolean {
   return ids.has(strId)
 }
 
-export function isPinned(id: string | number): boolean {
-  return getPinnedIds().has(String(id))
-}
-
 export function sortPinnedFirst<T extends { id: string | number }>(items: T[]): T[] {
   const pinned = getPinnedIds()
-  return [...items].sort((a, b) => {
+  return items.toSorted((a, b) => {
     const aPinned = pinned.has(String(a.id)) ? 1 : 0
     const bPinned = pinned.has(String(b.id)) ? 1 : 0
     return bPinned - aPinned

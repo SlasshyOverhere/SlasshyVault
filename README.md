@@ -148,7 +148,7 @@ Pull requests are welcome.
 
 # Disclaimer
 
-This project is entirely **vibe-coded** as a hobby project. 
+**External Sources:** The "External" tab provides a search interface to third-party streaming sources. SlasshyVault does not host, store, control, or distribute any media content. All media is sourced from third-party providers, and the app merely indexes and links to publicly available data. Users are responsible for complying with applicable copyright laws in their jurisdiction. If you believe any content infringes your rights, contact the respective source provider directly.
 
 ---
 

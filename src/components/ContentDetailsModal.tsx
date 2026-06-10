@@ -831,7 +831,7 @@ export function ContentDetailsModal({
       const tracks = await getAudioTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = [...tracks].sort((left, right) =>
+      const nextTracks = tracks.toSorted((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -896,7 +896,7 @@ export function ContentDetailsModal({
       const tracks = await getSubtitleTracks(sampleEpisode.id)
       if (cancelled) return
 
-      const nextTracks = [...tracks].sort((left, right) =>
+      const nextTracks = tracks.toSorted((left, right) =>
         left.label.localeCompare(right.label),
       )
 
@@ -1126,8 +1126,8 @@ export function ContentDetailsModal({
     <>
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogPortal>
-        <div
-          role="button"
+        <button
+          type="button"
           tabIndex={-1}
           className="fixed inset-x-0 bottom-0 top-9 z-40 bg-black/52 backdrop-blur-md"
           onClick={() => onOpenChange(false)}
@@ -1405,9 +1405,9 @@ export function ContentDetailsModal({
                           )
 
                           return (
-                            <div
+                            <button
+                              type="button"
                               key={ep.id}
-                              role="button"
                               tabIndex={0}
                               onClick={() => onPrimaryAction(ep)}
                               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onPrimaryAction(ep) }}
@@ -1548,7 +1548,7 @@ export function ContentDetailsModal({
 
                                 <p className={cn("text-sm text-white/50 line-clamp-2 leading-snug group-hover:text-white/70 transition-colors", isSpoiler && "blur-sm")}>{ep.overview || tmdbData?.overview || imdbRatingData?.plot || "No description available."}</p>
                               </div>
-                            </div>
+                            </button>
                           )
                         })}
                       </div>
@@ -1565,8 +1565,8 @@ export function ContentDetailsModal({
           </div>
 
           {audioControls && playbackSettingsOpen && (
-            <div
-              role="button"
+            <button
+              type="button"
               tabIndex={-1}
               className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 px-4 backdrop-blur-[3px]"
               onClick={() => setPlaybackSettingsOpen(false)}
@@ -1578,7 +1578,7 @@ export function ContentDetailsModal({
               >
                 {audioControls}
               </div>
-            </div>
+            </button>
           )}
 
           {shareFileId && (

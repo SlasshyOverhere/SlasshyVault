@@ -63,6 +63,8 @@ import {
   openDownloadJobTarget,
   getAnalyticsData,
   AnalyticsData,
+  playMediaNative,
+  getConfig,
 } from '@/services/api'
 import {
   Search, Loader2, Film, Tv,
@@ -90,6 +92,7 @@ import {
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
+import { RemoteSourceView } from '@/components/RemoteSource/RemoteSourceView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -220,6 +223,30 @@ const LoadingFallback = () => (
   </div>
 )
 
+const formatTimeDigits = (date: Date) => {
+  const h = date.getHours() % 12 || 12
+  const m = date.getMinutes()
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+const formatTime = (seconds: number): string => {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+const formatUpdateError = (error: unknown) => {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
+  }
+  return 'Unknown update error.'
+}
+
 function App() {
   // Migrate old localStorage keys
   useEffect(() => {
@@ -273,6 +300,106 @@ function App() {
     }
   })
   const [sortBy] = useState<SortOption>('title')
+  const [isNativePlaying, setIsNativePlaying] = useState(false)
+
+  // Native player state
+  const [nativePos, setNativePos] = useState(0)
+  const [nativeDuration, setNativeDuration] = useState(0)
+  const [nativePaused, setNativePaused] = useState(false)
+  const [nativeVolume, setNativeVolume] = useState(100)
+  const [nativeMuted, setNativeMuted] = useState(false)
+  const [nativeAudioTracks, setNativeAudioTracks] = useState<Array<{id: number, lang: string}>>([])
+  const [nativeSubTracks, setNativeSubTracks] = useState<Array<{id: number, lang: string}>>([])
+  const [nativeAid, setNativeAid] = useState<number | null>(null)
+  const [nativeSid, setNativeSid] = useState<number | null>(null)
+  const [nativeSubScale, setNativeSubScale] = useState(1.0)
+  const [controlsVisible, setControlsVisible] = useState(true)
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const controlsEl = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    document.body.classList.toggle('native-player-active', isNativePlaying)
+    return () => document.body.classList.remove('native-player-active')
+  }, [isNativePlaying])
+
+  // Auto-hide controls during playback
+  useEffect(() => {
+    if (!isNativePlaying) {
+      setControlsVisible(true)
+      return
+    }
+    const show = () => {
+      setControlsVisible(true)
+      if (controlsTimer.current) clearTimeout(controlsTimer.current)
+      controlsTimer.current = setTimeout(() => {
+        if (!nativePaused) setControlsVisible(false)
+      }, 3000)
+    }
+    show()
+    window.addEventListener('mousemove', show)
+    window.addEventListener('keydown', show)
+    return () => {
+      window.removeEventListener('mousemove', show)
+      window.removeEventListener('keydown', show)
+      if (controlsTimer.current) clearTimeout(controlsTimer.current)
+    }
+  }, [isNativePlaying, nativePaused])
+
+  // Keyboard controls for native player
+  useEffect(() => {
+    if (!isNativePlaying) return
+    const handler = (e: KeyboardEvent) => {
+      const key = e.key
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      switch (key) {
+        case 'Escape':
+        case 'q':
+        case 'Q':
+          invoke('native_mpv_stop').catch(() => {})
+          setIsNativePlaying(false)
+          break
+        case ' ':
+          e.preventDefault()
+          invoke('native_mpv_pause', { paused: !nativePaused })
+          break
+        case 'ArrowLeft':
+          invoke('native_mpv_seek', { position: Math.max(0, nativePos - 5) })
+          break
+        case 'ArrowRight':
+          invoke('native_mpv_seek', { position: Math.min(nativeDuration, nativePos + 5) })
+          break
+        case 'ArrowUp':
+          invoke('native_mpv_set_volume', { volume: Math.min(100, nativeVolume + 5) })
+          break
+        case 'ArrowDown':
+          invoke('native_mpv_set_volume', { volume: Math.max(0, nativeVolume - 5) })
+          break
+        case 'f':
+        case 'F':
+          appWindow.toggleMaximize()
+          break
+        case '=':
+        case '+':
+          setNativeSubScale(s => {
+            const v = Math.min(3, s + 0.1)
+            invoke('native_mpv_set_property', { name: 'sub-scale', value: v })
+            return v
+          })
+          break
+        case '-':
+          setNativeSubScale(s => {
+            const v = Math.max(0.3, s - 0.1)
+            invoke('native_mpv_set_property', { name: 'sub-scale', value: v })
+            return v
+          })
+          break
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isNativePlaying, nativePaused, nativePos, nativeDuration, nativeVolume])
 
   // Memoized sorted items to prevent re-sorting on every render
   const sortedItems = useMemo(() => {
@@ -472,12 +599,6 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  const formatTimeDigits = (date: Date) => {
-    const h = date.getHours() % 12 || 12
-    const m = date.getMinutes()
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-  }
-
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
     setNotifications((current) => [
       {
@@ -525,16 +646,6 @@ function App() {
   const [updateProgress, setUpdateProgress] = useState(0)
   const [isUpdateNoticeVisible, setIsUpdateNoticeVisible] = useState(false)
   // Initialize beta features
-
-  const formatUpdateError = (error: unknown) => {
-    if (error instanceof Error) return error.message
-    if (typeof error === 'string') return error
-    if (error && typeof error === 'object') {
-      const record = error as Record<string, unknown>
-      return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
-    }
-    return 'Unknown update error.'
-  }
 
   const checkForAvailableUpdate = useCallback(async (showCheckErrors = false) => {
     setUpdateGateStatus('checking')
@@ -907,6 +1018,7 @@ function App() {
     let unlistenZipProcessing: UnlistenFn | undefined
     let unlistenReminderFired: UnlistenFn | undefined
     let unlistenWatchlistReminderFired: UnlistenFn | undefined
+    let unlistenMpvEvent: UnlistenFn | undefined
 
     const setupListeners = async () => {
       unlistenProgress = await listen<ScanProgressPayload>('scan-progress', (event) => {
@@ -1053,7 +1165,7 @@ function App() {
           return
         }
 
-        const nextTracks = [...tracks].sort((left, right) =>
+        const nextTracks = tracks.toSorted((left, right) =>
           left.label.localeCompare(right.label),
         )
         mergeCachedSeriesAudioTracks(series_id, nextTracks)
@@ -1065,10 +1177,77 @@ function App() {
           return
         }
 
-        const nextTracks = [...tracks].sort((left, right) =>
+        const nextTracks = tracks.toSorted((left, right) =>
           left.label.localeCompare(right.label),
         )
         mergeCachedSeriesSubtitleTracks(series_id, nextTracks)
+      })
+
+      // Native libmpv player events
+      unlistenMpvEvent = await listen<[string, unknown]>('mpv-event', async (event) => {
+        const [eventType, raw] = event.payload
+        if (!eventType) return
+
+        if (eventType === 'mpv-event-ended') {
+          const reason = (raw as Record<string, string>)?.reason
+          console.log('[MPV-NATIVE] Playback ended:', reason)
+          setIsNativePlaying(false)
+          await Promise.all([loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
+          return
+        }
+
+        if (eventType === 'mpv-prop-change') {
+          const data = raw as Record<string, unknown>
+          const name = data?.name as string
+          const val = data?.data
+          if (!name) return
+
+          switch (name) {
+            case 'time-pos':
+              if (typeof val === 'number') setNativePos(val)
+              break
+            case 'duration':
+              if (typeof val === 'number') setNativeDuration(val)
+              break
+            case 'pause':
+              if (typeof val === 'boolean') setNativePaused(val)
+              break
+            case 'volume':
+              if (typeof val === 'number') setNativeVolume(val)
+              break
+            case 'mute':
+              if (typeof val === 'boolean') setNativeMuted(val)
+              break
+            case 'aid':
+              if (typeof val === 'number') setNativeAid(val)
+              break
+            case 'sid':
+              if (typeof val === 'number') setNativeSid(val)
+              break
+            case 'sub-scale':
+              if (typeof val === 'number') setNativeSubScale(val)
+              break
+            case 'track-list':
+              if (Array.isArray(val)) {
+                const audioTracks = val
+                  .filter(t => (t as Record<string, unknown>)?.type === 'audio')
+                  .map((t, idx) => {
+                    const track = t as Record<string, unknown>
+                    return { id: track.id as number, lang: (track.lang as string) || `Track ${idx + 1}` }
+                  })
+                if (audioTracks.length > 0) setNativeAudioTracks(audioTracks)
+
+                const subTracks = val
+                  .filter(t => (t as Record<string, unknown>)?.type === 'sub')
+                  .map((t, idx) => {
+                    const track = t as Record<string, unknown>
+                    return { id: track.id as number, lang: (track.lang as string) || `Track ${idx + 1}` }
+                  })
+                if (subTracks.length > 0) setNativeSubTracks(subTracks)
+              }
+              break
+          }
+        }
       })
 
       unlistenLibraryUpdated = await listen<{ type?: string; title?: string; media_id?: number; parent_id?: number }>('library-updated', async (event) => {
@@ -1124,6 +1303,7 @@ function App() {
       unlistenMpvEnded?.()
       unlistenMpvAudioTracks?.()
       unlistenMpvSubtitleTracks?.()
+      unlistenMpvEvent?.()
       unlistenLibraryUpdated?.()
       unlistenNotification?.()
       unlistenCloudIndexingStarted?.()
@@ -1151,6 +1331,40 @@ function App() {
       return () => window.clearTimeout(timer)
     }
   }, [view, searchQuery, cloudSubTab, fetchData, loadHistoryEvents, loadAnalytics])
+
+  // Dev-only test trigger listener
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+
+    let lastTriggerTime = 0
+    const interval = setInterval(() => {
+      fetch('/test-trigger.json')
+        .then((res) => {
+          if (!res.ok) throw new Error('Not found')
+          return res.json() as Promise<{ title: string; message: string; timestamp: number; type?: 'info' | 'success' | 'error' }>
+        })
+        .then((data) => {
+          if (data && typeof data.timestamp === 'number' && data.timestamp > lastTriggerTime) {
+            lastTriggerTime = data.timestamp
+            pushNotification({
+              category: classifyNotificationCategory(data.title, data.message),
+              title: data.title,
+              message: data.message,
+            })
+            toast({
+              title: data.title,
+              description: data.message,
+              variant: data.type === 'success' ? 'default' : data.type === 'error' ? 'destructive' : 'info',
+            })
+          }
+        })
+        .catch(() => {
+          // Fail silently
+        })
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [pushNotification, toast])
 
   useEffect(() => {
     if (view !== 'downloads') return
@@ -1298,7 +1512,14 @@ function App() {
     const effectiveSize = item.zip_uncompressed_size ?? item.zip_compressed_size ?? item.file_size_bytes ?? null
 
     try {
-      await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize)
+      // Check player mode config — use native libmpv if enabled
+      const config = await getConfig()
+      if (config.player_mode === 'native') {
+        await playMediaNative(item.id, resume, audioPreference, subtitlePreference)
+        setIsNativePlaying(true)
+      } else {
+        await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize)
+      }
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
         await waitForMinimumZipOverlayVisibility(overlayVisibleSince)
@@ -1364,10 +1585,25 @@ function App() {
       return
     }
 
-    // Show confirmation dialog before playing
-    setPlayConfirmData(item)
-    setPlayConfirmOpen(true)
-  }, [])
+    if (item.media_type === 'movie') {
+      await startPlaybackFlow(item)
+      return
+    }
+
+    try {
+      const resumeInfo = await getResumeInfo(item.id)
+      if (resumeInfo.has_progress && resumeInfo.progress_percent <= AUTO_MARK_WATCHED_THRESHOLD_PERCENT) {
+        await startPlaybackFlow(item)
+      } else {
+        setPlayConfirmData(item)
+        setPlayConfirmOpen(true)
+      }
+    } catch (e) {
+      console.error('[App] Failed to check resume info', e)
+      setPlayConfirmData(item)
+      setPlayConfirmOpen(true)
+    }
+  }, [startPlaybackFlow])
 
   const handlePlayConfirm = useCallback(async () => {
     if (!playConfirmData) return
@@ -1730,7 +1966,7 @@ function App() {
   const showUpdateNotice = isUpdateNoticeVisible && (Boolean(updateInfo) || updateGateStatus === 'error')
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden bg-gradient-mesh">
+    <div className={`flex h-screen text-foreground overflow-hidden ${isNativePlaying ? 'bg-transparent' : 'bg-background bg-gradient-mesh'}`}>
       {/* Indexing confirmation dialog for first-time users */}
       <Dialog open={showIndexingPrompt} onOpenChange={declineIndexing}>
         <DialogContent>
@@ -1891,9 +2127,158 @@ function App() {
       {isAuthenticated && (
         <>
           <ZipPlaybackLoadingOverlay loadingState={zipPlaybackLoading} />
+          {isNativePlaying && (
+            <div
+              ref={controlsEl}
+              className="fixed inset-0 z-[999] flex flex-col justify-between pointer-events-none"
+            >
+              {/* Top gradient */}
+              <div className={`absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} />
+
+              {/* Bottom gradient */}
+              <div className={`absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-black/80 via-black/40 to-transparent transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} />
+
+              {/* Top bar */}
+              <div className={`relative z-10 flex items-center gap-3 px-4 pt-3 transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <button
+                  onClick={() => { invoke('native_mpv_stop'); setIsNativePlaying(false) }}
+                  className="pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-medium backdrop-blur-sm transition-colors"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+                  Back
+                </button>
+              </div>
+
+              {/* Bottom bar */}
+              <div className={`relative z-10 px-4 pb-4 transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                {/* Timeline */}
+                <div className="pointer-events-auto mb-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={nativeDuration || 1}
+                    step={0.1}
+                    value={nativePos}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value)
+                      invoke('native_mpv_seek', { position: v })
+                    }}
+                    className="w-full h-1 appearance-none bg-white/20 rounded-full cursor-pointer accent-white [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-lg"
+                  />
+                  <div className="flex justify-between mt-1 px-0.5">
+                    <span className="text-white/60 text-xs tabular-nums">{formatTime(nativePos)}</span>
+                    <span className="text-white/60 text-xs tabular-nums">{formatTime(nativeDuration)}</span>
+                  </div>
+                </div>
+
+                {/* Controls row */}
+                <div className="pointer-events-auto flex items-center gap-3">
+                  {/* Play/Pause */}
+                  <button
+                    onClick={() => invoke('native_mpv_pause', { paused: !nativePaused })}
+                    className="flex items-center justify-center w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm transition-colors"
+                  >
+                    {nativePaused ? (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="text-white"><polygon points="5,3 19,12 5,21"/></svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="text-white"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    )}
+                  </button>
+
+                  {/* Volume */}
+                  <div className="flex items-center gap-2 group">
+                    <button
+                      onClick={() => invoke('native_mpv_set_property', { name: 'mute', value: !nativeMuted })}
+                      className="text-white/70 hover:text-white transition-colors"
+                    >
+                      {nativeMuted || nativeVolume === 0 ? (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                      ) : nativeVolume < 50 ? (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                      )}
+                    </button>
+                    <div className="w-0 group-hover:w-20 overflow-hidden transition-all duration-200">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={nativeVolume}
+                        onChange={e => invoke('native_mpv_set_volume', { volume: parseInt(e.target.value) })}
+                        className="w-20 h-1 appearance-none bg-white/20 rounded-full cursor-pointer accent-white [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+                      />
+                    </div>
+                    <span className="text-white/50 text-xs tabular-nums w-8">{nativeVolume}</span>
+                  </div>
+
+                  <div className="flex-1" />
+
+                  {/* Subtitle track */}
+                  <select
+                    value={nativeSid ?? ''}
+                    onChange={e => {
+                      const v = e.target.value
+                      invoke('native_mpv_set_property', { name: 'sid', value: v === 'off' ? 'no' : parseInt(v) })
+                    }}
+                    className="pointer-events-auto bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs px-2 py-1.5 rounded-md border-0 outline-none cursor-pointer transition-colors"
+                  >
+                    <option value="off" className="bg-neutral-900 text-white">Sub: Off</option>
+                    {nativeSubTracks.map(t => (
+                      <option key={t.id} value={t.id} className="bg-neutral-900 text-white">Sub: {t.lang}</option>
+                    ))}
+                  </select>
+
+                  {/* Subtitle size */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setNativeSubScale(s => {
+                        const v = Math.max(0.3, s - 0.1)
+                        invoke('native_mpv_set_property', { name: 'sub-scale', value: v })
+                        return v
+                      })}
+                      className="pointer-events-auto text-white/60 hover:text-white text-xs px-1.5 py-1 rounded hover:bg-white/10 transition-colors"
+                    >A⁻</button>
+                    <span className="text-white/40 text-[10px] tabular-nums w-6 text-center">{nativeSubScale.toFixed(1)}</span>
+                    <button
+                      onClick={() => setNativeSubScale(s => {
+                        const v = Math.min(3, s + 0.1)
+                        invoke('native_mpv_set_property', { name: 'sub-scale', value: v })
+                        return v
+                      })}
+                      className="pointer-events-auto text-white/60 hover:text-white text-xs px-1.5 py-1 rounded hover:bg-white/10 transition-colors"
+                    >A⁺</button>
+                  </div>
+
+                  {/* Audio track */}
+                  <select
+                    value={nativeAid ?? ''}
+                    onChange={e => {
+                      const v = e.target.value
+                      invoke('native_mpv_set_property', { name: 'aid', value: v === 'off' ? 'no' : parseInt(v) })
+                    }}
+                    className="pointer-events-auto bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs px-2 py-1.5 rounded-md border-0 outline-none cursor-pointer transition-colors"
+                  >
+                    {nativeAudioTracks.map(t => (
+                      <option key={t.id} value={t.id} className="bg-neutral-900 text-white">Audio: {t.lang}</option>
+                    ))}
+                  </select>
+
+                  {/* Fullscreen */}
+                  <button
+                    onClick={() => appWindow.toggleMaximize()}
+                    className="pointer-events-auto text-white/70 hover:text-white transition-colors"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Custom Title Bar */}
-          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-gray-950">
+          {!isNativePlaying && (
+          <header className="fixed top-0 left-0 right-0 h-9 z-[220] border-b border-white/10 bg-background transition-colors duration-300">
             <div className="relative h-full w-full flex items-center justify-between">
               <div className="absolute top-0 left-0 right-0 h-1.5" />
               <div
@@ -1946,7 +2331,7 @@ function App() {
                     await appWindow.hide()
                   }}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-300"
+                  className="h-7 w-8 rounded-md border border-transparent text-neutral-400 transition-colors hover:border-rose-500/40 hover:bg-rose-500/20 hover:text-rose-200"
                   title="Close"
                   aria-label="Hide window"
                 >
@@ -1955,12 +2340,15 @@ function App() {
               </div>
             </div>
           </header>
+          )}
           {/* Background decorative orbs */}
+          {!isNativePlaying && (
           <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
             <div className="bg-orb bg-orb-1" />
             <div className="bg-orb bg-orb-2" />
             <div className="bg-orb bg-orb-3" />
           </div>
+          )}
 
           <AnimatePresence>
             {zipProcessingPopup && (
@@ -2006,6 +2394,8 @@ function App() {
             )}
           </AnimatePresence>
 
+          {!isNativePlaying && (
+          <>
           <Sidebar
             currentView={view === 'episodes' ? 'cloud' : view}
             setView={(v) => {
@@ -2184,6 +2574,22 @@ function App() {
                       className="h-full"
                     >
                       <RemindersView />
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </div>
+            ) : view === 'remote' ? (
+              <div className="flex-1 overflow-hidden">
+                <div className="h-full min-h-0">
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key="remote"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full"
+                    >
+                      <RemoteSourceView />
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -2712,6 +3118,8 @@ function App() {
               </ScrollArea>
             )}
           </main>
+          </>
+          )}
 
           <Suspense fallback={null}>
             <SettingsModal

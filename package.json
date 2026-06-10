@@ -3,7 +3,7 @@
   "author": "Suman Patgiri",
   "license": "MIT",
   "private": true,
-  "version": "3.0.50",
+  "version": "3.0.51",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,7 +16,8 @@
     "tauri:dev": "tauri dev",
     "tauri:dev:nightly": "node scripts/dev-nightly.mjs",
     "tauri:build": "tauri build",
-    "test": "vitest"
+    "test": "vitest",
+    "test:toast": "node tests/trigger-toast.js"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

@@ -1048,6 +1048,7 @@ impl Database {
         if search.is_some() {
             sql.push_str(" AND title LIKE ?");
         }
+        sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
         sql.push_str(" ORDER BY title");
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -1130,6 +1131,7 @@ impl Database {
             }
         }
 
+        sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
         sql.push_str(" ORDER BY id DESC LIMIT ?");
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -3790,6 +3792,28 @@ impl Database {
             .collect()
     }
 
+    /// Get remote source library: all TV show and movie records created by the External tab.
+    pub fn get_remote_library(&self) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format, is_cloud, cloud_file_id
+             FROM media
+             WHERE file_path LIKE 'remote://%'
+               AND media_type IN ('movie', 'tvshow')
+             ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
+        )?;
+
+        let items = stmt.query_map([], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
     /// Get all poster paths currently in use (including still_paths and cached episode images)
     pub fn get_all_poster_paths(&self) -> Result<Vec<String>> {
         let mut all_paths = Vec::new();
@@ -4350,6 +4374,7 @@ impl Database {
             let cloud_value = if cloud { 1 } else { 0 };
             self.conn.query_row(&sql, params![cloud_value], map_row)
         } else {
+            sql.push_str(" WHERE (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
             self.conn.query_row(&sql, [], map_row)
         }
     }
@@ -4921,6 +4946,139 @@ impl Database {
     {
         let idx = row.as_ref().column_index(name).ok()?;
         row.get(idx).ok()
+    }
+
+    // ── Remote Source (External tab) helpers ──
+
+    pub fn find_media_by_tmdb_id(&self, tmdb_id: &str, media_type: &str) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM media WHERE tmdb_id = ? AND media_type = ? AND file_path LIKE 'remote://%' LIMIT 1"
+        )?;
+        let mut rows = stmt.query(params![tmdb_id, media_type])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn find_remote_episode(&self, parent_id: i64, season: i32, episode: i32) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM media WHERE parent_id = ? AND season_number = ? AND episode_number = ? AND media_type = 'tvepisode' AND file_path LIKE 'remote://%' LIMIT 1"
+        )?;
+        let mut rows = stmt.query(params![parent_id, season, episode])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn insert_or_get_remote_movie(
+        &self,
+        tmdb_id: &str,
+        title: &str,
+        year: Option<i32>,
+        poster_path: Option<&str>,
+        overview: Option<&str>,
+    ) -> Result<i64> {
+        if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "movie")? {
+            if poster_path.is_some() || overview.is_some() || year.is_some() {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
+                    params![poster_path, overview, year, id],
+                );
+            }
+            return Ok(id);
+        }
+        let file_path = format!("remote://movie/{}", tmdb_id);
+        self.conn.execute(
+            "INSERT INTO media (title, year, poster_path, overview, file_path, media_type, tmdb_id)
+             VALUES (?, ?, ?, ?, ?, 'movie', ?)",
+            params![title, year, poster_path, overview, file_path, tmdb_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn insert_or_get_remote_tvshow(
+        &self,
+        tmdb_id: &str,
+        title: &str,
+        year: Option<i32>,
+        poster_path: Option<&str>,
+        overview: Option<&str>,
+    ) -> Result<i64> {
+        if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "tvshow")? {
+            if poster_path.is_some() || overview.is_some() || year.is_some() {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
+                    params![poster_path, overview, year, id],
+                );
+            }
+            return Ok(id);
+        }
+        let file_path = format!("remote://tvshow/{}", tmdb_id);
+        self.conn.execute(
+            "INSERT INTO media (title, year, poster_path, overview, file_path, media_type, tmdb_id)
+             VALUES (?, ?, ?, ?, ?, 'tvshow', ?)",
+            params![title, year, poster_path, overview, file_path, tmdb_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn insert_or_get_remote_episode(
+        &self,
+        parent_id: i64,
+        season: i32,
+        episode: i32,
+        show_title: &str,
+        episode_title: Option<&str>,
+        still_path: Option<&str>,
+        overview: Option<&str>,
+    ) -> Result<i64> {
+        if let Some(id) = self.find_remote_episode(parent_id, season, episode)? {
+            // Update metadata in case it changed
+            if let Err(e) = self.conn.execute(
+                "UPDATE media SET episode_title = COALESCE(?, episode_title), still_path = COALESCE(?, still_path), overview = COALESCE(?, overview) WHERE id = ?",
+                params![episode_title, still_path, overview, id],
+            ) {
+                println!("[DB] Warning: failed to update remote episode metadata: {}", e);
+            }
+            return Ok(id);
+        }
+        let parent_tmdb: Option<String> = self.conn
+            .query_row(
+                "SELECT tmdb_id FROM media WHERE id = ?",
+                params![parent_id],
+                |row| row.get(0),
+            )
+            .ok();
+        let tmdb_part = parent_tmdb.as_deref().unwrap_or("unknown");
+        let file_path = format!("remote://tvshow/{}/S{:02}E{:02}", tmdb_part, season, episode);
+        let ep_name = episode_title.unwrap_or("");
+        self.conn.execute(
+            "INSERT INTO media (title, file_path, media_type, parent_id, season_number, episode_number, episode_title, still_path, overview)
+             VALUES (?, ?, 'tvepisode', ?, ?, ?, ?, ?, ?)",
+            params![show_title, file_path, parent_id, season, episode, ep_name, still_path, overview],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, backdrop_path: Option<&str>) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%' LIMIT 1"
+        )?;
+        let ids: Vec<i64> = {
+            let mut rows = stmt.query(params![tmdb_id])?;
+            std::iter::from_fn(|| rows.next().ok().flatten().map(|r| r.get::<_, i64>(0).unwrap())).collect()
+        };
+        for id in ids {
+            if let Some(pp) = poster_path {
+                let _ = self.conn.execute(
+                    "UPDATE media SET poster_path = COALESCE(?, poster_path) WHERE id = ?",
+                    params![pp, id],
+                );
+            }
+        }
+        Ok(())
     }
 }
 

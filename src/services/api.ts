@@ -110,6 +110,8 @@ export interface Config {
   // Dev mode: override backend URL (e.g. http://localhost:3001)
   // Auth, TMDB proxy, and WebSocket URLs are all derived from this
   dev_backend_url?: string;
+  // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
+  player_mode?: "native" | "external";
 }
 
 export interface ResumeInfo {
@@ -863,6 +865,26 @@ export const playMedia = async (
     });
   } catch (error) {
     console.error("Failed to play with MPV:", error);
+    throw error;
+  }
+};
+
+// Play media with native libmpv player (embedded)
+export const playMediaNative = async (
+  id: number,
+  resume: boolean,
+  audioLanguage?: string | null,
+  subtitleLanguage?: string | null,
+): Promise<void> => {
+  try {
+    await invoke("play_with_native_mpv", {
+      mediaId: id,
+      resume,
+      audioLanguage: audioLanguage?.trim() || null,
+      subtitleLanguage: subtitleLanguage?.trim() || null,
+    });
+  } catch (error) {
+    console.error("Failed to play with native MPV:", error);
     throw error;
   }
 };
