@@ -14803,6 +14803,15 @@ async fn remote_get_series_streams(
     Ok(response)
 }
 
+#[derive(Serialize)]
+struct RemotePlaybackResponse {
+    media_id: i64,
+    has_resume: bool,
+    position: f64,
+    duration: f64,
+    progress_percent: f64,
+}
+
 #[tauri::command]
 async fn remote_play_with_mpv(
     app_handle: AppHandle,
@@ -14812,7 +14821,18 @@ async fn remote_play_with_mpv(
     video_size: i64,
     media_identifier: String,
     quality_label: String,
-) -> Result<ApiResponse, String> {
+    // Netflix-style metadata
+    media_type: String,
+    tmdb_id: i64,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    episode_title: Option<String>,
+    poster_path: Option<String>,
+    still_path: Option<String>,
+    overview: Option<String>,
+    year: Option<i32>,
+    start_position: f64,
+) -> Result<RemotePlaybackResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
         c.clone()
@@ -14828,11 +14848,53 @@ async fn remote_play_with_mpv(
     }
 
     println!(
-        "[REMOTE-MPV] Playing '{}' (quality: {}) from: {}",
-        title, quality_label, media_identifier
+        "[REMOTE-MPV] Playing '{}' (quality: {}, type: {}, tmdb: {})",
+        title, quality_label, media_type, tmdb_id
     );
 
-    // ── Cache path: use zip_cache_dir (user's configured external/ZIP cache location) ──
+    // ── 1. Create/get DB records ──
+    let tmdb_str = tmdb_id.to_string();
+    let poster_str = poster_path.as_deref();
+    let overview_str = overview.as_deref();
+    let still_str = still_path.as_deref();
+    let ep_title_str = episode_title.as_deref();
+
+    let (media_id, resume_info) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+
+        if media_type == "tv" {
+            let show_id = db.insert_or_get_remote_tvshow(
+                &tmdb_str, &title, year, poster_str, overview_str,
+            ).map_err(|e| e.to_string())?;
+
+            let ep_id = db.insert_or_get_remote_episode(
+                show_id,
+                season_number.unwrap_or(1),
+                episode_number.unwrap_or(1),
+                &title,
+                ep_title_str,
+                still_str,
+                overview_str,
+            ).map_err(|e| e.to_string())?;
+
+            let info = db.get_resume_info(ep_id).map_err(|e| e.to_string())?;
+            (ep_id, info)
+        } else {
+            let movie_id = db.insert_or_get_remote_movie(
+                &tmdb_str, &title, year, poster_str, overview_str,
+            ).map_err(|e| e.to_string())?;
+
+            let info = db.get_resume_info(movie_id).map_err(|e| e.to_string())?;
+            (movie_id, info)
+        }
+    };
+
+    println!(
+        "[REMOTE-MPV] DB media_id={}, resume={}, position={:.1}s / {:.1}s",
+        media_id, resume_info.has_progress, resume_info.position, resume_info.duration
+    );
+
+    // ── 2. Cache path ──
     let cache_root = match config.zip_cache_dir.as_deref() {
         Some(d) if !d.is_empty() => std::path::PathBuf::from(d),
         _ => database::get_app_data_dir().join("stream_cache"),
@@ -14851,11 +14913,9 @@ async fn remote_play_with_mpv(
         already_cached
     );
 
-    // ── Track with CacheManager for progress/cleanup ──
+    // ── 3. Track with CacheManager ──
     {
-        let mut active = state
-            .cache_manager
-            .lock_active()?;
+        let mut active = state.cache_manager.lock_active()?;
         let target_path_str = cache_path.to_string_lossy().to_string();
         active.insert(
             media_identifier.clone(),
@@ -14877,7 +14937,6 @@ async fn remote_play_with_mpv(
         );
         drop(active);
 
-        // Emit initial status
         if already_cached {
             let status = stream_cache::CacheStatus {
                 cache_key: media_identifier.clone(),
@@ -14891,73 +14950,66 @@ async fn remote_play_with_mpv(
         }
     }
 
-    // ── Build MPV command ──
-    let mut cmd = std::process::Command::new(mpv_path);
+    // ── 4. Determine source & build CloudCacheSettings ──
+    let source = if already_cached {
+        cache_path.to_string_lossy().to_string()
+    } else {
+        url.clone()
+    };
 
-    cmd.arg("--force-window=immediate");
-    cmd.arg("--keep-open=yes");
+    let cache_settings = if already_cached {
+        None
+    } else {
+        Some(mpv_ipc::CloudCacheSettings {
+            enabled: true,
+            cache_dir: cache_subdir.to_string_lossy().to_string(),
+            max_size_mb: 102400, // 100 GB — effectively unlimited for single-file cache
+        })
+    };
 
-    // 3 minutes forward, 1 minute back
-    cmd.arg("--cache=yes");
-    cmd.arg("--demuxer-readahead-secs=180");
-    cmd.arg("--demuxer-max-bytes=1GiB");
-    cmd.arg("--demuxer-max-back-bytes=300MiB");
+    // ── 5. Launch MPV with tracking ──
+    let start_pos = start_position.max(0.0);
 
-    // No buffering pauses
-    cmd.arg("--cache-pause=no");
-    cmd.arg("--cache-pause-wait=0");
-
-    cmd.arg(format!("--force-media-title={}", title));
-
-    if !already_cached {
-        // Save stream to cache file while playing (same technique as zip episodes)
-        cmd.arg(format!("--stream-record={}", cache_path.to_string_lossy()));
-    }
-
-    cmd.arg("--");
-    cmd.arg(&url);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-
-    cmd.stdout(std::process::Stdio::inherit());
-    cmd.stderr(std::process::Stdio::inherit());
-
-    println!(
-        "[REMOTE-MPV] Launching: {} {}",
+    let pid = mpv_ipc::launch_mpv_with_tracking(
         mpv_path,
-        if already_cached {
-            "(from cache)"
-        } else {
-            "(streaming + saving)"
-        }
-    );
+        &source,
+        media_id,
+        Some(&title),
+        start_pos,
+        None, // no auth header
+        cache_settings.as_ref(),
+        None, // no audio language
+        None, // no subtitle language
+        None, // no ipc server
+        Some(video_size),
+        None, // no duration override
+    )
+    .map_err(|e| format!("Failed to launch MPV with tracking: {}", e))?;
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start MPV: {}", e))?;
-
-    // ── Background: monitor file for progress, wait for MPV exit ──
+    // ── 6. Background threads ──
     let title_clone = title.clone();
     let cache_path_clone = cache_path.clone();
     let cache_key = media_identifier.clone();
     let manager = state.cache_manager.clone();
     let app_clone = app_handle.clone();
+    let db_path = database::get_app_data_dir()
+        .join("slasshyvault.db")
+        .to_string_lossy()
+        .to_string();
+    let is_tv = media_type == "tv";
+    let tmdb_id_clone = tmdb_id;
+    let season_clone = season_number;
+    let episode_clone = episode_number;
 
     std::thread::spawn(move || {
-        // Poll file size for progress during playback
+        // ── Thread A: Cache download monitor ──
         if !already_cached {
             let total = video_size.max(1) as u64;
             let started = std::time::Instant::now();
             loop {
-                // Check if MPV is still running
-                match child.try_wait() {
-                    Ok(Some(_)) => break, // exited
-                    Ok(None) => {}         // still running
-                    Err(_) => break,
+                match mpv_ipc::is_mpv_running(pid) {
+                    true => {}
+                    false => break,
                 }
 
                 if let Ok(meta) = cache_path_clone.metadata() {
@@ -14980,11 +15032,9 @@ async fn remote_play_with_mpv(
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
-        } else {
-            let _ = child.wait();
         }
 
-        // Mark complete
+        // Mark cache as complete
         if let Ok(mut active) = manager.lock_active() {
             if let Some(entry) = active.get_mut(&cache_key) {
                 entry.status.state = stream_cache::CacheState::Complete;
@@ -14995,11 +15045,110 @@ async fn remote_play_with_mpv(
             }
         }
 
+        // ── Thread B: Playback progress tracking ──
+        if let Ok(db) = database::Database::new(&db_path) {
+            let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
+
+            // Update last_watched if valid progress was recorded
+            if result.final_position.is_some()
+                && result.final_duration.is_some()
+                && result.final_duration.unwrap_or(0.0) > 0.0
+            {
+                let _ = db.update_last_watched(media_id);
+            }
+
+            // Emit playback-ended event for next-episode flow
+            let _ = app_clone.emit_all(
+                "mpv-playback-ended",
+                serde_json::json!({
+                    "media_id": media_id,
+                    "completed": result.completed,
+                    "final_position": result.final_position,
+                    "final_duration": result.final_duration,
+                    "media_type": if is_tv { "tv" } else { "movie" },
+                    "tmdb_id": tmdb_id_clone,
+                    "season_number": season_clone,
+                    "episode_number": episode_clone,
+                    "title": title_clone,
+                }),
+            );
+        } else {
+            println!("[REMOTE-MPV] Failed to open database for progress tracking");
+        }
+
         println!("[REMOTE-MPV] Playback ended for '{}'", title_clone);
     });
 
-    Ok(ApiResponse {
-        message: "Playback started".to_string(),
+    Ok(RemotePlaybackResponse {
+        media_id,
+        has_resume: resume_info.has_progress,
+        position: resume_info.position,
+        duration: resume_info.duration,
+        progress_percent: resume_info.progress_percent,
+    })
+}
+
+#[tauri::command]
+async fn remote_play_with_resume(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<RemotePlaybackResponse, String> {
+    // Called after user chooses "Resume" from the dialog
+    // Just returns the resume info so the frontend can re-call remote_play_with_mpv
+    // with the appropriate resume flag
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
+    Ok(RemotePlaybackResponse {
+        media_id,
+        has_resume: info.has_progress,
+        position: info.position,
+        duration: info.duration,
+        progress_percent: info.progress_percent,
+    })
+}
+
+#[tauri::command]
+async fn remote_clear_progress(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.clear_progress(media_id).map_err(|e| e.to_string())
+}
+
+/// Check resume info for a remote media item BEFORE launching playback.
+/// Looks up the media record by tmdb_id (and season/episode for TV).
+#[tauri::command]
+async fn remote_get_resume_info(
+    state: State<'_, AppState>,
+    tmdb_id: i64,
+    media_type: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+) -> Result<RemotePlaybackResponse, String> {
+    let tmdb_str = tmdb_id.to_string();
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let media_id = if media_type == "tv" {
+        // Find the show first, then the episode
+        let show_id = db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No record found".to_string())?;
+        db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No record found".to_string())?
+    } else {
+        db.find_media_by_tmdb_id(&tmdb_str, "movie")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No record found".to_string())?
+    };
+    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
+    Ok(RemotePlaybackResponse {
+        media_id,
+        has_resume: info.has_progress,
+        position: info.position,
+        duration: info.duration,
+        progress_percent: info.progress_percent,
     })
 }
 
@@ -15058,6 +15207,14 @@ async fn remote_cleanup_all_cache(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.cache_manager.cleanup_all()
+}
+
+#[tauri::command]
+async fn remote_get_library(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_remote_library().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -15643,6 +15800,10 @@ fn main() {
             remote_get_movie_streams,
             remote_get_series_streams,
             remote_play_with_mpv,
+            remote_play_with_resume,
+            remote_clear_progress,
+            remote_get_resume_info,
+            remote_get_library,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
