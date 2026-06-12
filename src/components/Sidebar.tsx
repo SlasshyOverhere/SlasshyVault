@@ -46,7 +46,7 @@ export function Sidebar({
   const getWindowWidth = useCallback(() => window.innerWidth, []);
   const windowWidth = useSyncExternalStore(subscribeWindowResize, getWindowWidth);
   const [isHovered, setIsHovered] = useState(false);
-  const [isPinned, setIsPinned] = useState(false);
+  const [isPinned, setIsPinned] = useState(() => localStorage.getItem('slasshyvault_sidebar_pinned') === 'true');
   const [gdriveConnected, setGdriveConnected] = useState(false);
   const [gdriveInfo, setGdriveInfo] = useState<DriveAccountInfo | null>(null);
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -72,6 +72,10 @@ export function Sidebar({
       if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('slasshyvault_sidebar_pinned', String(isPinned));
+  }, [isPinned]);
 
   const isCollapsed = !isHovered && !isPinned;
   const sidebarWidth = isCollapsed ? 64 : (windowWidth < 1100 ? 232 : 264);

@@ -11,7 +11,7 @@ import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
 import { Film, Play } from 'lucide-react'
-import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
+import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus, StreamVerification } from './remote.types'
 import { getYear } from './remote.types'
 import { getCachedImageUrl } from '@/services/api'
 
@@ -145,6 +145,10 @@ export function RemoteSourceView() {
   const [lastPlayedTitle, setLastPlayedTitle] = useState('')
   const [lastCacheKey, setLastCacheKey] = useState('')
 
+  // Stream verification
+  const [verifyingStreams, setVerifyingStreams] = useState(false)
+  const [streamStatusMap, setStreamStatusMap] = useState<Record<string, boolean>>({})
+
   const imdbIdRef = useRef<string>('')
   const detailReqId = useRef(0)
 
@@ -259,6 +263,40 @@ export function RemoteSourceView() {
     setPageState('detail')
   }, [])
 
+  const collectStreamUrls = (groups: GroupedStreams[]): string[] => {
+    const urls: string[] = []
+    for (const g of groups) {
+      for (const s of g.streams) {
+        urls.push(s.url)
+      }
+    }
+    return urls
+  }
+
+  const triggerVerification = useCallback(async (groups: GroupedStreams[]) => {
+    const urls = collectStreamUrls(groups)
+    if (urls.length === 0) return
+
+    setStreamStatusMap({})
+    setVerifyingStreams(true)
+
+    try {
+      const results = await invoke<StreamVerification[]>('remote_verify_streams', { urls })
+      const map: Record<string, boolean> = {}
+      for (const r of results) {
+        map[r.url] = r.active
+      }
+      setStreamStatusMap(map)
+    } catch {
+      const map: Record<string, boolean> = {}
+      for (const url of urls) {
+        map[url] = true
+      }
+      setStreamStatusMap(map)
+    }
+    setVerifyingStreams(false)
+  }, [])
+
   // Movie: fetch streams and open quality selector
   const handleFetchMovieStreams = useCallback(async (imdbId: string) => {
     setFetching(true)
@@ -272,11 +310,12 @@ export function RemoteSourceView() {
     try {
       const streams = await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId })
       setGroupedStreams(streams)
+      triggerVerification(streams)
     } catch (e: any) {
       setStreamError(typeof e === 'string' ? e : 'Failed to load streams')
     }
     setFetching(false)
-  }, [])
+  }, [triggerVerification])
 
   // Series episode: fetch streams and open quality selector
   const handleFetchEpisodeStreams = useCallback(async (imdbId: string, season: number, episode: number, episodeTitle: string) => {
@@ -291,11 +330,12 @@ export function RemoteSourceView() {
     try {
       const streams = await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season, episode })
       setGroupedStreams(streams)
+      triggerVerification(streams)
     } catch (e: any) {
       setStreamError(typeof e === 'string' ? e : 'Failed to load streams')
     }
     setFetching(false)
-  }, [])
+  }, [triggerVerification])
 
   const handlePlayNextEpisode = useCallback(() => {
     const prompt = nextEpisodePrompt
@@ -639,6 +679,8 @@ export function RemoteSourceView() {
         onSelect={handleQualitySelect}
         loading={fetching}
         error={streamError}
+        verifying={verifyingStreams}
+        streamStatus={streamStatusMap}
       />
 
       {/* Resume Dialog */}

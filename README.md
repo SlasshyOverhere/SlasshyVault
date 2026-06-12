@@ -7,7 +7,7 @@ It indexes video content from Google Drive, enriches it with TMDB metadata, and 
 
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.49-black?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.52-black?style=flat-square)
 
 ## What SlasshyVault Does
 
@@ -128,14 +128,6 @@ slasshyvault/
 ├── package.json
 └── README.md
 ```
-
-## Recent Highlights
-
-- Improved notification behavior and reduced repeated notifications
-- Added `.rar` archive support for supported playback cases
-- Added frontend archive compatibility messaging
-- Added `.tar` detection with clear unsupported reason
-- Fixed MPV archive playback titles so TV episodes show better metadata
 
 ## Contributing
 

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check } from 'lucide-react'
+import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -89,18 +89,63 @@ interface Props {
   onSelect: (stream: RemoteStreamData) => void
   loading?: boolean
   error?: string | null
+  verifying?: boolean
+  streamStatus?: Record<string, boolean>
 }
 
 export function RemoteQualitySelector({
-  open, onOpenChange, title, groupedStreams, onSelect, loading, error,
+  open, onOpenChange, title, groupedStreams, onSelect, loading, error, verifying, streamStatus = {},
 }: Props) {
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
   const [copiedStreamUrl, setCopiedStreamUrl] = useState<string | null>(null)
+  const [showInactive, setShowInactive] = useState(false)
+
+  const verificationDone = !verifying && Object.keys(streamStatus).length > 0
+
+  const totalUrls = useMemo(() => {
+    const urls = new Set<string>()
+    for (const g of groupedStreams) {
+      for (const s of g.streams) {
+        urls.add(s.url)
+      }
+    }
+    return urls.size
+  }, [groupedStreams])
+
+  const verifiedCount = useMemo(() => {
+    return Object.keys(streamStatus).length
+  }, [streamStatus])
+
+  const inactiveCount = useMemo(() => {
+    let count = 0
+    for (const g of groupedStreams) {
+      for (const s of g.streams) {
+        if (streamStatus[s.url] === false) count++
+      }
+    }
+    return count
+  }, [groupedStreams, streamStatus])
+
+  const isStreamActive = (url: string): boolean => {
+    if (Object.keys(streamStatus).length === 0) return true
+    return streamStatus[url] !== false
+  }
 
   const filtered = useMemo(() => {
-    if (qualityFilter === 'all') return groupedStreams
-    return groupedStreams.filter((g) => g.quality === qualityFilter)
-  }, [groupedStreams, qualityFilter])
+    let groups = groupedStreams
+    if (qualityFilter !== 'all') {
+      groups = groups.filter((g) => g.quality === qualityFilter)
+    }
+    if (!showInactive && verificationDone) {
+      groups = groups
+        .map((g) => ({
+          ...g,
+          streams: g.streams.filter((s) => streamStatus[s.url] !== false),
+        }))
+        .filter((g) => g.streams.length > 0)
+    }
+    return groups
+  }, [groupedStreams, qualityFilter, showInactive, verificationDone, streamStatus])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -127,6 +172,20 @@ export function RemoteQualitySelector({
 
         {!loading && !error && groupedStreams.length > 0 && (
           <>
+            {/* Verification banner */}
+            {verifying && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-700/20">
+                <Loader2 className="size-4 text-amber-400 animate-spin shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-amber-300/90">Verifying stream links...</p>
+                  <p className="text-[11px] text-neutral-500 font-medium">
+                    Checked {verifiedCount} of {totalUrls} &middot; {inactiveCount} inactive
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Quality filter chips */}
             <div className="flex gap-1.5">
               {QUALITY_FILTERS.map((f) => (
                 <button
@@ -144,9 +203,22 @@ export function RemoteQualitySelector({
               ))}
             </div>
 
+            {/* Show inactive toggle */}
+            {verificationDone && inactiveCount > 0 && (
+              <button
+                onClick={() => setShowInactive(!showInactive)}
+                className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-600 hover:text-neutral-300 transition-colors"
+              >
+                {showInactive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                {showInactive ? `Hide inactive sources` : `Show inactive sources (${inactiveCount})`}
+              </button>
+            )}
+
             {filtered.length === 0 && (
               <div className="text-sm text-neutral-600 text-center py-10 font-medium">
-                No {qualityFilter} streams available
+                {verificationDone && inactiveCount === totalUrls
+                  ? 'No active streams available. Toggle "Show inactive sources" above to try anyway.'
+                  : `No ${qualityFilter} streams available`}
               </div>
             )}
 
@@ -159,47 +231,89 @@ export function RemoteQualitySelector({
                         {group.quality}
                       </h4>
                       <div className="space-y-2">
-                        {group.streams.map((stream, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => onSelect(stream)}
-                            className="w-full text-left p-4 rounded-2xl bg-[#0D0D0D] border border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700/60 transition-all duration-200 group"
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex items-center gap-3 min-w-0 flex-1">
-                                <span className="text-sm font-semibold text-neutral-200 truncate">
-                                  {stream.name}
-                                </span>
-                                {stream.recommended && (
-                                  <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-600/10 text-amber-500/80 border border-amber-700/20">
-                                    <ThumbsUp className="size-3" />
-                                    Recommended
+                        {group.streams.map((stream, idx) => {
+                          const active = isStreamActive(stream.url)
+                          const checkPending = Object.keys(streamStatus).length > 0 && streamStatus[stream.url] === undefined
+
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => active && onSelect(stream)}
+                              className={cn(
+                                'w-full text-left p-4 rounded-2xl bg-[#0D0D0D] border group transition-all duration-200',
+                                active
+                                  ? 'border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700/60'
+                                  : 'border-neutral-800/40 opacity-50 cursor-default',
+                              )}
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex items-center gap-3 min-w-0 flex-1">
+                                  <span className={cn(
+                                    'text-sm font-semibold truncate',
+                                    active ? 'text-neutral-200' : 'text-neutral-500',
+                                  )}>
+                                    {stream.name}
                                   </span>
-                                )}
+
+                                  {/* Active badge */}
+                                  {verificationDone && active && (
+                                    <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-green-500/10 text-green-500/70 border border-green-700/20">
+                                      Active
+                                    </span>
+                                  )}
+
+                                  {/* Inactive badge */}
+                                  {verificationDone && !active && (
+                                    <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-red-500/10 text-red-400/70 border border-red-800/20">
+                                      <WifiOff className="size-3" />
+                                      Unreachable
+                                    </span>
+                                  )}
+
+                                  {/* Checking badge */}
+                                  {checkPending && (
+                                    <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-neutral-800/60 text-neutral-500 border border-neutral-700/30">
+                                      <Loader2 className="size-3 animate-spin" />
+                                      Checking...
+                                    </span>
+                                  )}
+
+                                  {stream.recommended && active && (
+                                    <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-600/10 text-amber-500/80 border border-amber-700/20">
+                                      <ThumbsUp className="size-3" />
+                                      Recommended
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }) }}
+                                    className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300 transition-all duration-200 cursor-pointer"
+                                  >
+                                    {copiedStreamUrl === stream.url ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-4" />}
+                                  </div>
+                                  <div className={cn(
+                                    'size-9 flex items-center justify-center rounded-xl transition-all duration-200',
+                                    active
+                                      ? 'bg-amber-600/10 text-amber-500 group-hover:bg-amber-600/20 group-hover:text-amber-400'
+                                      : 'bg-neutral-800/30 text-neutral-600',
+                                  )}>
+                                    <Play className="size-4" />
+                                  </div>
+                                </div>
                               </div>
 
-                              <div className="flex items-center gap-3 shrink-0">
-                                <div
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }) }}
-                                  className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300 transition-all duration-200 cursor-pointer"
-                                >
-                                  {copiedStreamUrl === stream.url ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-4" />}
+                              {stream.description && (
+                                <div className="mt-1.5 border-t border-neutral-800/50 pt-1.5">
+                                  <StreamMetaTags description={stream.description} videoSize={stream.videoSize} />
                                 </div>
-                                <div className="size-9 flex items-center justify-center rounded-xl bg-amber-600/10 text-amber-500 group-hover:bg-amber-600/20 group-hover:text-amber-400 transition-all duration-200">
-                                  <Play className="size-4" />
-                                </div>
-                              </div>
-                            </div>
-
-                            {stream.description && (
-                              <div className="mt-1.5 border-t border-neutral-800/50 pt-1.5">
-                                <StreamMetaTags description={stream.description} videoSize={stream.videoSize} />
-                              </div>
-                            )}
-                          </button>
-                        ))}
+                              )}
+                            </button>
+                          )
+                        })}
                       </div>
                     </div>
                   ))}

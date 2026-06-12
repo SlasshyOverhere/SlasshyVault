@@ -46,6 +46,13 @@ export interface TmdbSearchResult {
   imdb_id?: string
 }
 
+export type StreamStatus = 'pending' | 'active' | 'inactive'
+
+export interface StreamVerification {
+  url: string
+  active: boolean
+}
+
 export function formatFileSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let size = bytes

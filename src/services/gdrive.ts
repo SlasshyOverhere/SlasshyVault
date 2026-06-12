@@ -322,6 +322,7 @@ export interface CloudScanResult {
   movies_count: number;
   tv_count: number;
   message: string;
+  skipped_reasons?: string[];
   // Aliases for convenience
   indexed?: number;
   skipped?: number;

@@ -160,6 +160,57 @@ pub struct GoogleDriveClient {
     http_client: reqwest::Client,
 }
 
+/// Maximum number of retries for transient Drive API errors (rate limits, 5xx)
+const MAX_DRIVE_RETRIES: u32 = 3;
+
+/// Execute a Drive API request with retry logic for rate limits (429) and server errors (5xx)
+async fn drive_request_with_retry(
+    client: &reqwest::Client,
+    request_builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut last_error = String::new();
+    for attempt in 0..=MAX_DRIVE_RETRIES {
+        let response = request_builder
+            .try_clone()
+            .ok_or("Failed to clone request for retry")?
+            .send()
+            .await
+            .map_err(|e| format!("Drive API request failed: {}", e))?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        let error_text = response.text().await.unwrap_or_default();
+
+        // Retry on 429 (rate limit) and 5xx (server errors)
+        if status.as_u16() == 429 || status.as_u16() >= 500 {
+            if attempt < MAX_DRIVE_RETRIES {
+                let delay = std::time::Duration::from_millis(1000 * (2u64.pow(attempt)));
+                println!(
+                    "[GDRIVE] Rate limit/server error ({}), retrying in {:?}... (attempt {}/{})",
+                    status.as_u16(),
+                    delay,
+                    attempt + 1,
+                    MAX_DRIVE_RETRIES
+                );
+                tokio::time::sleep(delay).await;
+                last_error = format!("Drive API error: {} (attempt {})", error_text, attempt + 1);
+                continue;
+            }
+        }
+
+        return Err(format!("Drive API error: {}", error_text));
+    }
+
+    Err(format!(
+        "Drive API failed after {} retries: {}",
+        MAX_DRIVE_RETRIES, last_error
+    ))
+}
+
 impl GoogleDriveClient {
     pub fn new() -> Self {
         let tokens_path = get_tokens_path();
@@ -845,7 +896,7 @@ impl GoogleDriveClient {
     pub async fn get_changes_start_token(&self) -> Result<String, String> {
         let access_token = self.get_access_token().await?;
 
-        let url = format!("{}/changes/startPageToken", DRIVE_API_BASE);
+        let url = format!("{}/changes/startPageToken?supportsAllDrives=true&includeItemsFromAllDrives=true", DRIVE_API_BASE);
 
         let response = self
             .http_client
@@ -941,6 +992,70 @@ impl GoogleDriveClient {
                 return Ok((all_video_files, removed_file_ids, current_token));
             }
         }
+    }
+
+    /// Recursively list all descendant folder IDs under a given parent folder.
+    /// This is used to determine which files belong to tracked folders (including subfolders).
+    pub async fn list_all_folder_ids(&self, folder_id: &str) -> Result<std::collections::HashSet<String>, String> {
+        let access_token = self.get_access_token().await?;
+        let mut all_ids = std::collections::HashSet::new();
+        let mut page_token: Option<String> = None;
+
+        all_ids.insert(folder_id.to_string());
+
+        loop {
+            let mut url = format!(
+                "{}/files?q=%27{}%27+in+parents+and+mimeType=%27application/vnd.google-apps.folder%27&fields=nextPageToken,files(id)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true",
+                DRIVE_API_BASE,
+                folder_id
+            );
+            if let Some(ref pt) = page_token {
+                url.push_str(&format!("&pageToken={}", pt));
+            }
+
+            let response = self
+                .http_client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .send()
+                .await
+                .map_err(|e| format!("Failed to list subfolders: {}", e))?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_default();
+                return Err(format!("Drive API error listing subfolders: {}", error_text));
+            }
+
+            let result: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse subfolder response: {}", e))?;
+
+            if let Some(files) = result["files"].as_array() {
+                for file in files {
+                    if let Some(id) = file["id"].as_str() {
+                        if all_ids.insert(id.to_string()) {
+                            // Recursively get subfolders of this folder
+                            match Box::pin(self.list_all_folder_ids(id)).await {
+                                Ok(descendant_ids) => {
+                                    all_ids.extend(descendant_ids);
+                                }
+                                Err(e) => {
+                                    println!("[GDRIVE] Warning: failed to list subfolders for {id}: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            match result["nextPageToken"].as_str() {
+                Some(pt) => page_token = Some(pt.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(all_ids)
     }
 }
 
