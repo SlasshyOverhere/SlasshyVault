@@ -88,6 +88,27 @@ pub struct AppState {
     pub cache_manager: stream_cache::CacheManager,
 }
 
+/// RAII guard that prevents concurrent cloud folder scans.
+/// Acquired via `try_acquire` (returns `None` if already scanning)
+/// and automatically releases the lock when dropped.
+pub struct ScanLock<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> ScanLock<'a> {
+    pub fn try_acquire(flag: &'a AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| ScanLock { flag })
+    }
+}
+
+impl<'a> Drop for ScanLock<'a> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 // API Response types
 #[derive(Serialize)]
 struct ApiResponse {
@@ -719,6 +740,9 @@ struct CloudIndexResult {
     movies_count: usize,
     tv_count: usize,
     message: String,
+    /// Human-readable reasons for skipped files (e.g., "duplicate", "unsupported format", "permission denied")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    skipped_reasons: Option<Vec<String>>,
 }
 
 /// Resolve an existing TV show using normalized/fuzzy matching to avoid split series
@@ -797,6 +821,11 @@ async fn gdrive_scan_folder(
     folder_id: String,
     folder_name: String,
 ) -> Result<CloudIndexResult, String> {
+    // Acquire scan lock to prevent concurrent scans from racing
+    let _scan_lock = ScanLock::try_acquire(&state.is_scanning).ok_or_else(|| {
+        "A cloud scan is already in progress. Please wait for it to complete.".to_string()
+    })?;
+
     println!(
         "[CLOUD] Starting scan of folder: {} (auto-detect)",
         folder_name
@@ -935,6 +964,7 @@ async fn gdrive_scan_folder(
         let mut movies_count = 0;
         let mut tv_count = 0;
         let mut entry_counter = 0usize;
+        let mut skipped_reasons: Vec<String> = Vec::new();
 
         // Cache for TV shows: title -> (db_id, tmdb_id, show_folder_id)
         let mut tv_show_cache: HashMap<String, (i64, Option<String>, String)> = HashMap::new();
@@ -947,28 +977,20 @@ async fn gdrive_scan_folder(
             if db.cloud_file_exists(&file.id) {
                 let _ = db.clear_cloud_index_failure(&file.id);
                 skipped_count += 1;
-                continue;
-            }
-
-            // Also skip duplicate file names already present in the DB from prior indexing.
-            if let Ok(Some(_)) = db.get_media_by_file_path(&file.name) {
-                let _ = db.clear_cloud_index_failure(&file.id);
-                println!(
-                    "[CLOUD] Skipping already indexed file_path '{}' for cloud file {}",
-                    file.name, file.id
-                );
-                skipped_count += 1;
+                skipped_reasons.push(format!("{} — already indexed (cloud ID exists)", file.name));
                 continue;
             }
 
             if is_zip_drive_item(&file) {
                 if !zip_indexing_enabled {
                     skipped_count += 1;
+                    skipped_reasons.push(format!("{} — ZIP indexing disabled in settings", file.name));
                     continue;
                 }
 
                 let Some(access_token) = zip_access_token.as_deref() else {
                     skipped_count += 1;
+                    skipped_reasons.push(format!("{} — ZIP access token unavailable", file.name));
                     continue;
                 };
 
@@ -991,6 +1013,7 @@ async fn gdrive_scan_folder(
                                 "Archive was scanned but no playable TV episode entries were identified",
                             );
                             skipped_count += 1;
+                            skipped_reasons.push(format!("{} — ZIP archive contained no playable TV episodes", file.name));
                             continue;
                         }
 
@@ -1016,6 +1039,7 @@ async fn gdrive_scan_folder(
                         println!("[ARCHIVE] Failed to index '{}': {}", file.name, error);
                         let _ = db.upsert_cloud_index_failure(&file.id, &file.name, &error);
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP indexing error: {}", file.name, error));
                         continue;
                     }
                 }
@@ -1309,10 +1333,15 @@ async fn gdrive_scan_folder(
             }
         }
 
-        Ok((indexed_count, skipped_count, movies_count, tv_count))
+        Ok((indexed_count, skipped_count, movies_count, tv_count, skipped_reasons))
     }).await.map_err(|e| format!("Task failed: {}", e))??;
 
-    let (indexed_count, skipped_count, movies_count, tv_count) = result;
+    let (indexed_count, skipped_count, movies_count, tv_count, mut skipped_reasons) = result;
+
+    // Add TAR archive skip reasons
+    for archive_name in &unsupported_archives {
+        skipped_reasons.push(format!("{} — TAR archives are not supported (requires sequential read)", archive_name));
+    }
     let skipped_count = skipped_count + unsupported_archives.len();
 
     if !zip_files_detected.is_empty() {
@@ -1368,6 +1397,7 @@ async fn gdrive_scan_folder(
         movies_count,
         tv_count,
         message,
+        skipped_reasons: None,
     })
 }
 
@@ -1456,6 +1486,11 @@ async fn scan_all_cloud_folders(
     state: State<'_, AppState>,
     window: Window,
 ) -> Result<CloudIndexResult, String> {
+    // Acquire scan lock to prevent concurrent scans from racing
+    let _scan_lock = ScanLock::try_acquire(&state.is_scanning).ok_or_else(|| {
+        "A cloud scan is already in progress. Please wait for it to complete.".to_string()
+    })?;
+
     // Get all tracked folders
     let folders = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -1472,6 +1507,7 @@ async fn scan_all_cloud_folders(
             message:
                 "No cloud folders configured. Use the Indexing prompt or add folders in Settings."
                     .to_string(),
+            skipped_reasons: None,
         });
     }
 
@@ -1479,8 +1515,17 @@ async fn scan_all_cloud_folders(
     let mut total_skipped = 0;
     let mut total_movies = 0;
     let mut total_tv = 0;
+    let mut all_skipped_reasons: Vec<String> = Vec::new();
 
-    for (folder_id, folder_name, _) in folders {
+    for (folder_id, folder_name, auto_scan) in folders {
+        if !auto_scan {
+            println!(
+                "[CLOUD SCAN] Skipping folder '{}' (auto_scan disabled)",
+                folder_name
+            );
+            continue;
+        }
+
         println!(
             "[CLOUD SCAN] Scanning folder: {} ({})",
             folder_name, folder_id
@@ -1548,6 +1593,7 @@ async fn scan_all_cloud_folders(
             let mut skipped_count = 0;
             let mut movies_count = 0;
             let mut tv_count = 0;
+            let mut skipped_reasons: Vec<String> = Vec::new();
 
             let mut tv_show_cache: HashMap<String, (i64, Option<String>, String)> = HashMap::new();
             let mut season_cache: HashMap<(String, i32), Vec<tmdb::TmdbEpisodeInfo>> =
@@ -1556,17 +1602,20 @@ async fn scan_all_cloud_folders(
             for file in files {
                 if db.cloud_file_exists(&file.id) {
                     skipped_count += 1;
+                    skipped_reasons.push(format!("{} — already indexed (cloud ID exists)", file.name));
                     continue;
                 }
 
                 if is_zip_drive_item(&file) {
                     if !zip_indexing_enabled {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP indexing disabled in settings", file.name));
                         continue;
                     }
 
                     let Some(access_token) = zip_access_token.as_deref() else {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP access token unavailable", file.name));
                         continue;
                     };
 
@@ -1750,6 +1799,8 @@ async fn scan_all_cloud_folders(
                         )
                         .is_err()
                     {
+                        skipped_count += 1;
+                        skipped_reasons.push(format!("{} — database insert failed for episode", file.name));
                         continue;
                     }
 
@@ -1817,6 +1868,8 @@ async fn scan_all_cloud_folders(
                         )
                         .is_err()
                     {
+                        skipped_count += 1;
+                        skipped_reasons.push(format!("{} — database insert failed for movie", file.name));
                         continue;
                     }
 
@@ -1825,18 +1878,26 @@ async fn scan_all_cloud_folders(
                 }
             }
 
-            Ok((indexed_count, skipped_count, movies_count, tv_count))
+            Ok((indexed_count, skipped_count, movies_count, tv_count, skipped_reasons))
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))?;
 
         let result = result?;
 
-        let (indexed, skipped, movies, tv) = result;
-        total_indexed += indexed;
+        let (indexed, skipped, movies, tv, mut skipped_reasons) = result;
+
+        // Add TAR archive skip reasons
+        for archive_name in &unsupported_archives {
+            skipped_reasons.push(format!("{} — TAR archives are not supported (requires sequential read)", archive_name));
+        }
         total_skipped += skipped + unsupported_archives.len();
+
+        total_indexed += indexed;
         total_movies += movies;
         total_tv += tv;
+
+        all_skipped_reasons.extend(skipped_reasons);
 
         // Update last scanned timestamp
         if let Ok(db) = state.db.lock() {
@@ -1874,6 +1935,12 @@ async fn scan_all_cloud_folders(
         )
         .ok();
 
+    let skipped_reasons = if all_skipped_reasons.is_empty() {
+        None
+    } else {
+        Some(all_skipped_reasons)
+    };
+
     Ok(CloudIndexResult {
         success: true,
         indexed_count: total_indexed,
@@ -1881,6 +1948,7 @@ async fn scan_all_cloud_folders(
         movies_count: total_movies,
         tv_count: total_tv,
         message,
+        skipped_reasons,
     })
 }
 
@@ -1905,6 +1973,7 @@ async fn check_cloud_changes(
             movies_count: 0,
             tv_count: 0,
             message: "Not connected to Google Drive".to_string(),
+            skipped_reasons: None,
         });
     }
 
@@ -1945,15 +2014,16 @@ async fn check_cloud_changes(
                 movies_count: 0,
                 tv_count: 0,
                 message: "Changes tracking initialized".to_string(),
+                skipped_reasons: None,
             });
         }
     };
 
-    // Get tracked folder IDs
+    // Get tracked folder IDs (only those with auto_scan enabled)
     let tracked_folders: std::collections::HashSet<String> = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let folders = db.get_cloud_folders().map_err(|e| e.to_string())?;
-        folders.into_iter().map(|(id, _, _)| id).collect()
+        folders.into_iter().filter(|(_, _, auto_scan)| *auto_scan).map(|(id, _, _)| id).collect()
     };
 
     if tracked_folders.is_empty() {
@@ -1965,6 +2035,7 @@ async fn check_cloud_changes(
             movies_count: 0,
             tv_count: 0,
             message: "No cloud folders configured".to_string(),
+            skipped_reasons: None,
         });
     }
 
@@ -2089,6 +2160,10 @@ async fn check_cloud_changes(
             total_duration
         );
         println!("[CLOUD CHANGES] ══════════════════════════════════════════");
+        // Save token even when no changes — the page token has moved forward
+        if let Ok(db) = state.db.lock() {
+            let _ = db.set_gdrive_changes_token(&new_token);
+        }
         return Ok(CloudIndexResult {
             success: true,
             indexed_count: 0,
@@ -2103,6 +2178,7 @@ async fn check_cloud_changes(
                     removed_titles.len()
                 )
             },
+            skipped_reasons: None,
         });
     }
 
@@ -2116,15 +2192,33 @@ async fn check_cloud_changes(
     }
     println!("[CLOUD CHANGES] └─────────────────────────────────────────");
 
-    // Filter to only files in our tracked folders
+    // Build complete set of all descendant folder IDs under tracked folders
+    // so we can detect files in subdirectories (not just immediate children)
+    println!("[CLOUD CHANGES] Building folder tree for {} tracked folder(s)...", tracked_folders.len());
+    let tree_build_start = std::time::Instant::now();
+    let mut all_tracked_folder_ids: std::collections::HashSet<String> = tracked_folders.clone();
+    for folder_id in &tracked_folders {
+        match state.gdrive_client.list_all_folder_ids(folder_id).await {
+            Ok(descendant_ids) => {
+                all_tracked_folder_ids.extend(descendant_ids);
+            }
+            Err(e) => {
+                println!("[CLOUD CHANGES] Warning: failed to list subfolders for {}: {}. Will only check direct parents.", folder_id, e);
+            }
+        }
+    }
+    let tree_build_duration = tree_build_start.elapsed();
+    println!("[CLOUD CHANGES] Folder tree built in {:?} ({} total folders)", tree_build_duration, all_tracked_folder_ids.len());
+
+    // Filter to only files in our tracked folders (including subfolders)
     let files_to_index: Vec<gdrive::DriveItem> = changed_files
         .into_iter()
         .filter(|file| {
             if let Some(ref parents) = file.parents {
-                let in_tracked = parents.iter().any(|p| tracked_folders.contains(p));
+                let in_tracked = parents.iter().any(|p| all_tracked_folder_ids.contains(p));
                 if !in_tracked {
                     println!(
-                        "[CLOUD CHANGES] Skipping {} (not in tracked folders)",
+                        "[CLOUD CHANGES] Skipping {} (not in tracked folder tree)",
                         file.name
                     );
                 }
@@ -2156,6 +2250,15 @@ async fn check_cloud_changes(
             total_duration
         );
         println!("[CLOUD CHANGES] ══════════════════════════════════════════");
+        // Save token — changes were consumed even though they're outside tracked folders
+        if let Ok(db) = state.db.lock() {
+            let _ = db.set_gdrive_changes_token(&new_token);
+        }
+        let skipped_reasons: Option<Vec<String>> = if unsupported_archives.is_empty() {
+            None
+        } else {
+            Some(unsupported_archives.iter().map(|a| format!("{} — TAR archives are not supported (requires sequential read)", a)).collect())
+        };
         return Ok(CloudIndexResult {
             success: true,
             indexed_count: 0,
@@ -2170,6 +2273,7 @@ async fn check_cloud_changes(
                     unsupported_archives.len()
                 )
             },
+            skipped_reasons,
         });
     }
 
@@ -2235,6 +2339,7 @@ async fn check_cloud_changes(
             let mut skipped_count = 0;
             let mut movies_count = 0;
             let mut tv_count = 0;
+            let mut skipped_reasons: Vec<String> = Vec::new();
 
             // Cache for TV show IDs to avoid creating duplicates
             let mut tv_show_cache: std::collections::HashMap<String, i64> =
@@ -2249,16 +2354,7 @@ async fn check_cloud_changes(
                         file_name
                     );
                     skipped_count += 1;
-                    continue;
-                }
-
-                // Also check if file_path already exists (from previous incomplete indexing)
-                if let Ok(Some(_)) = db.get_media_by_file_path(&file_name) {
-                    println!(
-                        "[CLOUD CHANGES]   ⊘ Skipping (file_path already exists): {}",
-                        file_name
-                    );
-                    skipped_count += 1;
+                    skipped_reasons.push(format!("{} — already indexed (cloud ID exists)", file_name));
                     continue;
                 }
 
@@ -2286,11 +2382,13 @@ async fn check_cloud_changes(
                 if is_zip_drive_item(&pseudo_file) {
                     if !zip_indexing_enabled {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP indexing disabled in settings", file_name));
                         continue;
                     }
 
                     let Some(access_token) = zip_access_token.as_deref() else {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP access token unavailable", file_name));
                         continue;
                     };
 
@@ -2310,6 +2408,7 @@ async fn check_cloud_changes(
                                     "Archive was scanned but no playable TV episode entries were identified",
                                 );
                                 skipped_count += 1;
+                                skipped_reasons.push(format!("{} — ZIP archive contained no playable TV episodes", file_name));
                             } else {
                                 let _ = db.clear_cloud_index_failure(&file_id);
                                 tv_count += items.len();
@@ -2321,6 +2420,7 @@ async fn check_cloud_changes(
                             println!("[ZIP] Failed to index '{}': {}", file_name, error);
                             let _ = db.upsert_cloud_index_failure(&file_id, &file_name, &error);
                             skipped_count += 1;
+                            skipped_reasons.push(format!("{} — ZIP indexing error: {}", file_name, error));
                             continue;
                         }
                     }
@@ -2394,6 +2494,8 @@ async fn check_cloud_changes(
                                             existing_show.id
                                         } else {
                                             println!("[CLOUD CHANGES]   ERROR creating TV show: {}", e);
+                                            skipped_count += 1;
+                                            skipped_reasons.push(format!("{} — database insert failed for TV show", file_name));
                                             continue;
                                         }
                                     }
@@ -2436,6 +2538,8 @@ async fn check_cloud_changes(
                         }
                         Err(e) => {
                             println!("[CLOUD CHANGES]   ERROR inserting episode: {}", e);
+                            skipped_count += 1;
+                            skipped_reasons.push(format!("{} — database insert failed for episode", file_name));
                             continue;
                         }
                     }
@@ -2468,12 +2572,16 @@ async fn check_cloud_changes(
                             ));
                             movies_count += 1;
                         }
-                        Err(_) => continue,
+                        Err(_) => {
+                            skipped_count += 1;
+                            skipped_reasons.push(format!("{} — database insert failed for movie", file_name));
+                            continue;
+                        }
                     }
                 }
             }
 
-            Ok((indexed_items, skipped_count, movies_count, tv_count))
+            Ok((indexed_items, skipped_count, movies_count, tv_count, skipped_reasons))
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))?
@@ -2481,7 +2589,12 @@ async fn check_cloud_changes(
 
     let phase1_result = phase1_result?;
 
-    let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
+    let (indexed_items, skipped_count, movies_count, tv_count, mut skipped_reasons) = phase1_result;
+
+    // Add TAR archive skip reasons
+    for archive_name in &unsupported_archives {
+        skipped_reasons.push(format!("{} — TAR archives are not supported (requires sequential read)", archive_name));
+    }
     let skipped_count = skipped_count + unsupported_archives.len();
     let indexed_count = indexed_items.len();
     let phase1_duration = index_start.elapsed();
@@ -2713,6 +2826,19 @@ async fn check_cloud_changes(
     println!("[CLOUD CHANGES] Total time: {:?}", total_duration);
     println!("[CLOUD CHANGES] ══════════════════════════════════════════");
 
+    // Save token now that indexing has completed successfully.
+    // WARNING: If the app crashes between the save and the return,
+    // the next poll will resume from after these changes, which is correct.
+    if let Ok(db) = state.db.lock() {
+        let _ = db.set_gdrive_changes_token(&new_token);
+    }
+
+    let final_skipped_reasons = if skipped_reasons.is_empty() {
+        None
+    } else {
+        Some(skipped_reasons)
+    };
+
     Ok(CloudIndexResult {
         success: true,
         indexed_count,
@@ -2720,6 +2846,7 @@ async fn check_cloud_changes(
         movies_count,
         tv_count,
         message,
+        skipped_reasons: final_skipped_reasons,
     })
 }
 
@@ -11728,6 +11855,7 @@ async fn background_check_cloud_changes(
             movies_count: 0,
             tv_count: 0,
             message: "Not connected to Google Drive".to_string(),
+            skipped_reasons: None,
         });
     }
 
@@ -11765,6 +11893,7 @@ async fn background_check_cloud_changes(
                 movies_count: 0,
                 tv_count: 0,
                 message: "Changes tracking initialized".to_string(),
+                skipped_reasons: None,
             });
         }
     };
@@ -11904,6 +12033,7 @@ async fn background_check_cloud_changes(
                     removed_titles.len()
                 )
             },
+            skipped_reasons: None,
         });
     }
 
@@ -11941,6 +12071,7 @@ async fn background_check_cloud_changes(
                     unsupported_archives.len()
                 )
             },
+            skipped_reasons: None,
         });
     }
 
@@ -12021,6 +12152,7 @@ async fn background_check_cloud_changes(
             let mut skipped_count = 0;
             let mut movies_count = 0;
             let mut tv_count = 0;
+            let mut skipped_reasons: Vec<String> = Vec::new();
             let mut entry_counter = 0usize;
             let mut tv_show_cache: std::collections::HashMap<String, i64> =
                 std::collections::HashMap::new();
@@ -12029,11 +12161,13 @@ async fn background_check_cloud_changes(
                 if db.cloud_file_exists(&file_id) {
                     let _ = db.clear_cloud_index_failure(&file_id);
                     skipped_count += 1;
+                    skipped_reasons.push(format!("{} — already indexed (cloud ID exists)", file_name));
                     continue;
                 }
 
                 if let Ok(Some(_)) = db.get_media_by_file_path(&file_name) {
                     skipped_count += 1;
+                    skipped_reasons.push(format!("{} — already indexed (file path exists)", file_name));
                     continue;
                 }
 
@@ -12060,11 +12194,13 @@ async fn background_check_cloud_changes(
                 if is_zip_drive_item(&pseudo_file) {
                     if !zip_indexing_enabled {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP indexing disabled in settings", file_name));
                         continue;
                     }
 
                     let Some(access_token) = zip_access_token.as_deref() else {
                         skipped_count += 1;
+                        skipped_reasons.push(format!("{} — ZIP access token unavailable", file_name));
                         continue;
                     };
 
@@ -12076,28 +12212,30 @@ async fn background_check_cloud_changes(
                         &archive_cache_config,
                         &mut tv_show_cache,
                     ) {
-                        Ok(items) => {
-                            if items.is_empty() {
-                                let _ = db.upsert_cloud_index_failure(
-                                    &file_id,
-                                    &file_name,
-                                    "Archive was scanned but no playable TV episode entries were identified",
-                                );
-                                skipped_count += 1;
-                            } else {
-                                let _ = db.clear_cloud_index_failure(&file_id);
-                                tv_count += items.len();
-                                entry_counter += items.len();
-                                indexed_items.extend(items);
-                            }
-                            continue;
-                        }
-                        Err(error) => {
-                            println!("[ZIP] Failed to index '{}': {}", file_name, error);
-                            let _ = db.upsert_cloud_index_failure(&file_id, &file_name, &error);
-                            skipped_count += 1;
-                            continue;
-                        }
+                                Ok(items) => {
+                                    if items.is_empty() {
+                                        let _ = db.upsert_cloud_index_failure(
+                                            &file_id,
+                                            &file_name,
+                                            "Archive was scanned but no playable TV episode entries were identified",
+                                        );
+                                        skipped_count += 1;
+                                        skipped_reasons.push(format!("{} — ZIP archive contained no playable TV episodes", file_name));
+                                    } else {
+                                        let _ = db.clear_cloud_index_failure(&file_id);
+                                        tv_count += items.len();
+                                        entry_counter += items.len();
+                                        indexed_items.extend(items);
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    println!("[ZIP] Failed to index '{}': {}", file_name, error);
+                                    let _ = db.upsert_cloud_index_failure(&file_id, &file_name, &error);
+                                    skipped_count += 1;
+                                    skipped_reasons.push(format!("{} — ZIP indexing error: {}", file_name, error));
+                                    continue;
+                                }
                     }
                 }
 
@@ -12222,13 +12360,18 @@ async fn background_check_cloud_changes(
                 }
             }
 
-            Ok((indexed_items, skipped_count, movies_count, tv_count))
+            Ok((indexed_items, skipped_count, movies_count, tv_count, skipped_reasons))
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))?
     }?;
 
-    let (indexed_items, skipped_count, movies_count, tv_count) = phase1_result;
+    let (indexed_items, skipped_count, movies_count, tv_count, mut skipped_reasons) = phase1_result;
+
+    // Add TAR archive skip reasons
+    for archive_name in &unsupported_archives {
+        skipped_reasons.push(format!("{} — TAR archives are not supported (requires sequential read)", archive_name));
+    }
     let skipped_count = skipped_count + unsupported_archives.len();
     let indexed_count = indexed_items.len();
 
@@ -12453,6 +12596,8 @@ async fn background_check_cloud_changes(
         indexed_count, skipped_count, total_duration
     );
 
+    let final_skipped_reasons = if skipped_reasons.is_empty() { None } else { Some(skipped_reasons) };
+
     Ok(CloudIndexResult {
         success: true,
         indexed_count,
@@ -12460,6 +12605,7 @@ async fn background_check_cloud_changes(
         movies_count,
         tv_count,
         message: format!("Indexed {} new files", indexed_count),
+        skipped_reasons: final_skipped_reasons,
     })
 }
 
@@ -15095,6 +15241,15 @@ async fn remote_get_library(
 }
 
 #[tauri::command]
+async fn remote_verify_streams(
+    urls: Vec<String>,
+) -> Result<Vec<remote_source::StreamVerification>, String> {
+    tokio::task::spawn_blocking(move || remote_source::verify_streams(&urls))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn remote_is_cache_dir_set(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
@@ -15650,6 +15805,7 @@ fn main() {
             remote_get_resume_info,
             remote_update_poster,
             remote_get_library,
+            remote_verify_streams,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
