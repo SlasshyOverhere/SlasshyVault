@@ -731,17 +731,11 @@ pub fn search_multi_raw(
         })
         .collect::<Vec<_>>();
 
-    // Populate imdb_id for each result via the details/external_ids endpoint.
-    // This is a best-effort enrichment — failures are silently skipped.
-    let enriched: Vec<TmdbSearchListItem> = results
-        .into_iter()
-        .map(|mut item| {
-            item.imdb_id = fetch_imdb_id(api_key, item.id, &item.media_type);
-            item
-        })
-        .collect();
+    // imdb_id is NOT fetched here — it would be N sequential API calls per search
+    // (one per result). Instead, imdb_id is resolved on-demand when the user
+    // selects a result to find streams (single API call at that point).
 
-    Ok(enriched)
+    Ok(results)
 }
 
 /// Fetch top trending movies and TV shows for lightweight UI suggestions.
