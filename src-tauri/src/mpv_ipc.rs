@@ -323,6 +323,8 @@ pub fn launch_mpv_with_tracking(
     };
     let is_local_zip_proxy =
         actual_source.starts_with("http://127.0.0.1:") && actual_source.ends_with("/stream");
+    let is_local_url_proxy =
+        actual_source.starts_with("http://127.0.0.1:") || actual_source.starts_with("http://localhost:");
 
     // Create the Lua tracking script
     let script_path = create_lua_script(media_id)?;
@@ -430,7 +432,8 @@ pub fn launch_mpv_with_tracking(
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
         cmd.arg("--keep-open=yes");
-        if is_local_zip_proxy {
+        // Longer timeout for any localhost-backed proxy (remote proxy, ZIP proxy, or direct local proxy URL)
+        if is_local_zip_proxy || is_local_url_proxy {
             cmd.arg("--network-timeout=120");
         } else {
             cmd.arg("--network-timeout=30");
@@ -486,6 +489,16 @@ pub fn launch_mpv_with_tracking(
             cmd.arg("--demuxer-max-bytes=500MiB");
             cmd.arg("--demuxer-max-back-bytes=100MiB");
         }
+    }
+
+    // For .part files (progressive download), enable cache so MPV can handle the growing file
+    if !is_url && file_or_url.ends_with(".part") {
+        cmd.arg("--cache=yes");
+        cmd.arg("--demuxer-max-bytes=150MiB");
+        cmd.arg("--demuxer-max-back-bytes=30MiB");
+        cmd.arg("--demuxer-readahead-secs=180");
+        cmd.arg("--cache-pause=no");
+        println!("[MPV] Progressive playback mode: caching enabled for .part file");
     }
 
     // Security enhancement: Add the -- separator to prevent argument injection

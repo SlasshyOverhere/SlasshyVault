@@ -10,7 +10,7 @@ import { RemoteQualitySelector } from './RemoteQualitySelector'
 import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
-import { Film, Play } from 'lucide-react'
+import { Film, Play, X } from 'lucide-react'
 import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
 import { getCachedImageUrl } from '@/services/api'
@@ -58,6 +58,9 @@ interface RemoteLibraryItem {
   last_watched: string | null
   resume_position_seconds: number
   duration_seconds: number
+  season_number: number | null
+  episode_number: number | null
+  episode_title: string | null
 }
 
 function toSearchResult(item: RemoteLibraryItem): TmdbSearchResult {
@@ -139,7 +142,8 @@ export function RemoteSourceView() {
 
   // Resume dialog
   const [resumeDialog, setResumeDialog] = useState<ResumeDialogState>({ open: false, mediaId: 0, title: '', position: 0, duration: 0 })
-  const pendingStreamRef = useRef<{ stream: RemoteStreamData; identifier: string; startPosition: number } | null>(null)
+  const pendingStreamRef = useRef<{ stream: RemoteStreamData; identifier: string; startPosition: number; mediaId?: number } | null>(null)
+  const pendingFetchedStreamsRef = useRef<RemoteStreamData[] | null>(null)
 
   // Cache
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null)
@@ -266,10 +270,47 @@ export function RemoteSourceView() {
     setNextEpisodePrompt((prev) => ({ ...prev, show: false }))
   }, [])
 
-  const handleSelectResult = useCallback((item: TmdbSearchResult) => {
+  const handleSelectResult = useCallback(async (item: TmdbSearchResult) => {
     setSelectedItem(item)
     setPageState('detail')
-  }, [])
+    // Check for existing resume progress when selecting from search results
+    try {
+      const resumeInfo = await invoke<any>('remote_get_resume_info', {
+        tmdbId: item.id,
+        mediaType: item.media_type,
+        seasonNumber: item.media_type === 'tv' ? currentSeason : null,
+        episodeNumber: item.media_type === 'tv' ? currentEpisode : null,
+      })
+      if (resumeInfo.has_resume) {
+        const identifier = getMediaIdentifier(item, currentSeason, currentEpisode)
+        setResumeDialog({
+          open: true,
+          mediaId: resumeInfo.media_id,
+          title: item.title || item.name || 'Unknown',
+          position: resumeInfo.position,
+          duration: resumeInfo.duration,
+        })
+        pendingStreamRef.current = { stream: null as any, identifier, startPosition: resumeInfo.position, mediaId: resumeInfo.media_id }
+        // Fetch streams in background
+        const imdbId = item.imdb_id
+        if (imdbId) {
+          try {
+            const isTv = item.media_type === 'tv'
+            const streams = isTv
+              ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: currentSeason, episode: currentEpisode, forceRefresh: false })
+              : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
+            const flat = streams.flatMap((g) => g.streams)
+            if (flat.length > 0) {
+              pendingFetchedStreamsRef.current = flat
+              if (pendingStreamRef.current) {
+                pendingStreamRef.current.stream = flat[0]
+              }
+            }
+          } catch { /* streams will be fetched on demand */ }
+        }
+      }
+    } catch { /* no resume data */ }
+  }, [currentSeason, currentEpisode])
 
   // Stream verification removed — causes rate limiting against addon servers.
   // All streams are shown as available without probing.
@@ -330,9 +371,13 @@ export function RemoteSourceView() {
   ) => {
     try {
       const year = item.release_date || item.first_air_date || ''
-      const response = await invoke<any>('remote_play_with_mpv', {
+      const showName = item.title || item.name || stream.name || 'Unknown'
+      const displayTitle = item.media_type === 'tv' && episodeTitle
+        ? `${showName} - S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} - ${episodeTitle}`
+        : showName
+      await invoke<any>('remote_play_with_mpv', {
         url: stream.url,
-        title: item.title || item.name || 'Unknown',
+        title: displayTitle,
         videoSize: stream.videoSize,
         mediaIdentifier: identifier,
         qualityLabel: stream.parsedQuality,
@@ -348,24 +393,8 @@ export function RemoteSourceView() {
         startPosition,
       })
 
-      // Cache media_id for future resume checks
-      const storageKey = `remote-media-id-${identifier}`
-      localStorage.setItem(storageKey, String(response.media_id))
-
       // Refresh library to pick up the new record
       loadRemoteLibrary()
-
-      // If there's resume info and we started at 0, show resume dialog
-      if (response.has_resume && startPosition === 0) {
-        setResumeDialog({
-          open: true,
-          mediaId: response.media_id,
-          title: item.title || item.name || 'Unknown',
-          position: response.position,
-          duration: response.duration,
-        })
-        pendingStreamRef.current = { stream, identifier, startPosition: response.position }
-      }
 
       toast({ title: 'Playback started', description: `${episodeTitle || item.title || item.name} -- ${stream.parsedQuality}` })
     } catch (e: any) {
@@ -383,45 +412,70 @@ export function RemoteSourceView() {
     const identifier = getMediaIdentifier(selectedItem, currentSeason, currentEpisode)
     setQualityOpen(false)
 
-    // Check if we have a cached media_id for this content
-    const storageKey = `remote-media-id-${identifier}`
-    const cachedMediaId = localStorage.getItem(storageKey)
-
-    if (cachedMediaId) {
-      try {
-        const resumeInfo = await invoke<any>('remote_get_resume_info', {
-          tmdbId: selectedItem.id,
-          mediaType: selectedItem.media_type,
-          seasonNumber: selectedItem.media_type === 'tv' ? currentSeason : null,
-          episodeNumber: selectedItem.media_type === 'tv' ? currentEpisode : null,
+    // Check if there's existing resume progress for this content
+    try {
+      const resumeInfo = await invoke<any>('remote_get_resume_info', {
+        tmdbId: selectedItem.id,
+        mediaType: selectedItem.media_type,
+        seasonNumber: selectedItem.media_type === 'tv' ? currentSeason : null,
+        episodeNumber: selectedItem.media_type === 'tv' ? currentEpisode : null,
+      })
+      if (resumeInfo.has_resume) {
+        setResumeDialog({
+          open: true,
+          mediaId: resumeInfo.media_id,
+          title: selectedItem.title || selectedItem.name || 'Unknown',
+          position: resumeInfo.position,
+          duration: resumeInfo.duration,
         })
-        if (resumeInfo.has_resume) {
-          setResumeDialog({
-            open: true,
-            mediaId: resumeInfo.media_id,
-            title: selectedItem.title || selectedItem.name || 'Unknown',
-            position: resumeInfo.position,
-            duration: resumeInfo.duration,
-          })
-          pendingStreamRef.current = { stream, identifier, startPosition: resumeInfo.position }
-          return
-        }
-      } catch {
-        // No record found, proceed with fresh play
+        pendingStreamRef.current = { stream, identifier, startPosition: resumeInfo.position, mediaId: resumeInfo.media_id }
+        return
       }
+    } catch {
+      // No record found, proceed with fresh play
     }
 
     launchPlayback(stream, identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
   }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, toast])
+
+  // Helper to get a stream for resume — uses cached streams or fetches on demand
+  const getStreamForResume = useCallback(async (item: TmdbSearchResult): Promise<RemoteStreamData | null> => {
+    // Check already-fetched streams first
+    if (pendingFetchedStreamsRef.current && pendingFetchedStreamsRef.current.length > 0) {
+      return pendingFetchedStreamsRef.current[0]
+    }
+    // Fetch streams on demand
+    try {
+      const imdbId = item.imdb_id
+      if (!imdbId) return null
+      const isTv = item.media_type === 'tv'
+      const streams = isTv
+        ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: currentSeason, episode: currentEpisode, forceRefresh: false })
+        : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
+      const flat = streams.flatMap((g) => g.streams)
+      return flat.length > 0 ? flat[0] : null
+    } catch { return null }
+  }, [currentSeason, currentEpisode])
 
   // Resume dialog handlers
   const handleResume = useCallback(async () => {
     const pending = pendingStreamRef.current
     if (!pending || !selectedItem) return
     setResumeDialog((prev) => ({ ...prev, open: false }))
-    launchPlayback(pending.stream, pending.identifier, pending.startPosition, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
+
+    let stream: RemoteStreamData | null = pending.stream
+    if (!stream) {
+      stream = await getStreamForResume(selectedItem)
+      if (!stream) {
+        toast({ title: 'No streams found', description: 'Could not find streams to resume playback.', variant: 'destructive' })
+        pendingStreamRef.current = null
+        return
+      }
+    }
+    launchPlayback(stream, pending.identifier, pending.startPosition, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
     pendingStreamRef.current = null
-  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback])
+    pendingFetchedStreamsRef.current = null
+  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, getStreamForResume, toast])
 
   const handleStartOver = useCallback(async () => {
     const pending = pendingStreamRef.current
@@ -429,16 +483,25 @@ export function RemoteSourceView() {
     setResumeDialog((prev) => ({ ...prev, open: false }))
 
     try {
-      const storageKey = `remote-media-id-${pending.identifier}`
-      const mediaId = localStorage.getItem(storageKey)
-      if (mediaId) {
-        await invoke('remote_clear_progress', { mediaId: parseInt(mediaId) })
+      if (pending.mediaId) {
+        await invoke('remote_clear_progress', { mediaId: pending.mediaId })
       }
     } catch { /* ignore */ }
 
-    launchPlayback(pending.stream, pending.identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
+    let stream: RemoteStreamData | null = pending.stream
+    if (!stream) {
+      stream = await getStreamForResume(selectedItem)
+      if (!stream) {
+        toast({ title: 'No streams found', description: 'Could not find streams to start playback.', variant: 'destructive' })
+        pendingStreamRef.current = null
+        pendingFetchedStreamsRef.current = null
+        return
+      }
+    }
+    launchPlayback(stream, pending.identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
     pendingStreamRef.current = null
-  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback])
+    pendingFetchedStreamsRef.current = null
+  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, getStreamForResume, toast])
 
   const handleCleanup = useCallback(async () => {
     try {
@@ -455,12 +518,61 @@ export function RemoteSourceView() {
     toast({ title: 'Kept', description: 'File will be auto-cleaned based on cache settings.' })
   }, [toast])
 
+  const handleRemoveFromLibrary = useCallback(async (item: RemoteLibraryItem, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await invoke('remote_remove_from_library', { mediaId: item.id })
+      setRemoteLibrary((prev) => prev.filter((i) => i.id !== item.id))
+      toast({ title: 'Removed', description: `${item.title} removed from library.` })
+    } catch (err: any) {
+      toast({ title: 'Remove failed', description: typeof err === 'string' ? err : 'Failed to remove', variant: 'destructive' })
+    }
+  }, [toast])
+
   const handleLibraryCardClick = useCallback(async (item: RemoteLibraryItem) => {
     const reqId = ++detailReqId.current
     const searchItem = toSearchResult(item)
     // Navigate immediately so the user sees feedback right away
     setSelectedItem(searchItem)
     setPageState('detail')
+    setShowCleanup(false) // Dismiss cleanup dialog if open
+
+    // If item has resume progress, show resume dialog immediately
+    const hasProgress = item.resume_position_seconds > 0 && item.duration_seconds > 0
+    if (hasProgress) {
+      const identifier = getMediaIdentifier(searchItem, item.season_number ?? undefined, item.episode_number ?? undefined)
+      // Set episode context so title formatting works
+      if (item.season_number != null) setCurrentSeason(item.season_number)
+      if (item.episode_number != null) setCurrentEpisode(item.episode_number)
+      if (item.episode_title) setCurrentEpisodeTitle(item.episode_title)
+      setResumeDialog({
+        open: true,
+        mediaId: item.id,
+        title: item.title || 'Unknown',
+        position: item.resume_position_seconds,
+        duration: item.duration_seconds,
+      })
+      pendingStreamRef.current = { stream: null as any, identifier, startPosition: item.resume_position_seconds, mediaId: item.id }
+      // Fetch streams in background so handleResume can use them
+      const imdbId = searchItem.imdb_id
+      if (imdbId) {
+        try {
+          const isTv = item.media_type === 'tvshow' || item.media_type === 'tv'
+          const streams = isTv
+            ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: item.season_number ?? 1, episode: item.episode_number ?? 1, forceRefresh: false })
+            : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
+          const flat = streams.flatMap((g) => g.streams)
+          if (flat.length > 0) {
+            pendingFetchedStreamsRef.current = flat
+            // Update the pending ref with the best stream
+            if (pendingStreamRef.current) {
+              pendingStreamRef.current.stream = flat[0]
+            }
+          }
+        } catch { /* streams will be fetched on demand if this fails */ }
+      }
+    }
+
     // Fetch fresh TMDB details in the background to enrich poster/backdrop
     try {
       if (item.media_type === 'movie') {
@@ -663,6 +775,14 @@ export function RemoteSourceView() {
                           />
                         </div>
                       )}
+                      {/* Delete button on hover */}
+                      <button
+                        onClick={(e) => handleRemoveFromLibrary(item, e)}
+                        className="absolute top-1 right-1 size-5 rounded-full bg-black/70 text-neutral-400 hover:text-red-400 hover:bg-black/90 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all z-10"
+                        title="Remove from library"
+                      >
+                        <X className="size-3" />
+                      </button>
                       {/* Play overlay on hover */}
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-300 flex items-center justify-center">
                         <div className="size-8 rounded-full bg-amber-600/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">

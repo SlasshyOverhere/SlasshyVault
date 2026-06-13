@@ -18,6 +18,7 @@ mod watch_together_mpv;
 mod zip_manager;
 mod zip_parser;
 mod zip_stream_proxy;
+mod remote_stream_proxy;
 mod obfuscator;
 mod remote_source;
 mod stream_cache;
@@ -14719,6 +14720,107 @@ fn migrate_app_data() {
     }
 }
 
+// ── Progressive Download Helpers ─────────────────────────────────────
+
+/// Download the first `buffer_bytes` from `url` to `dest_path` using an HTTP Range request.
+async fn progressive_download(url: &str, dest_path: &std::path::Path, buffer_bytes: u64) -> Result<(), String> {
+    use reqwest::header;
+
+    // Ensure parent directory exists
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create_dir: {}", e))?;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+
+    // Try Range request first; fall back to full download if server doesn't support it
+    let range_end = buffer_bytes.saturating_sub(1);
+    let range_header = format!("bytes=0-{}", range_end);
+
+    let resp = client
+        .get(url)
+        .header(header::RANGE, &range_header)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 206 {
+        return Err(format!("HTTP {}", status));
+    }
+
+    let mut file = std::fs::File::create(dest_path).map_err(|e| format!("file create: {}", e))?;
+    let mut bytes_written: u64 = 0;
+
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("chunk read: {}", e))?;
+        use std::io::Write;
+        file.write_all(&chunk).map_err(|e| format!("file write: {}", e))?;
+        bytes_written += chunk.len() as u64;
+        if bytes_written >= buffer_bytes {
+            break;
+        }
+    }
+
+    use std::io::Write as _;
+    file.flush().map_err(|e| format!("file flush: {}", e))?;
+    println!("[PROGRESSIVE-DL] Downloaded {} bytes to {}", bytes_written, dest_path.display());
+    Ok(())
+}
+
+/// Continue downloading from `buffer_bytes` offset to the end of the file.
+async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, total_bytes: u64) -> Result<(), String> {
+    use reqwest::header;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600)) // 1 hour for large files
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+
+    let range_header = format!("bytes={}-", start_offset);
+
+    let resp = client
+        .get(url)
+        .header(header::RANGE, &range_header)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 206 {
+        return Err(format!("HTTP {}", status));
+    }
+
+    // Open file in append mode
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dest_path)
+        .map_err(|e| format!("file open: {}", e))?;
+    use std::io::Seek;
+    file.seek(std::io::SeekFrom::Start(start_offset))
+        .map_err(|e| format!("file seek: {}", e))?;
+
+    let mut bytes_written: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("chunk read: {}", e))?;
+        use std::io::Write;
+        file.write_all(&chunk).map_err(|e| format!("file write: {}", e))?;
+        bytes_written += chunk.len() as u64;
+    }
+
+    use std::io::Write as _;
+    file.flush().map_err(|e| format!("file flush: {}", e))?;
+    println!("[PROGRESSIVE-DL] Downloaded remaining {} bytes (total offset {})", bytes_written, start_offset + bytes_written);
+    Ok(())
+}
+
 // ── Remote Source Commands ──────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -14941,7 +15043,19 @@ async fn remote_play_with_mpv(
         _ => database::get_app_data_dir().join("stream_cache"),
     };
 
-    let cache_subdir = cache_root.join(format!("remote_{}", media_identifier));
+    // Human-readable folder name: "Movie Name" or "Show Name S01E03"
+    let folder_name = {
+        let sanitized: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect();
+        let sanitized = sanitized.trim().to_string();
+        if media_type == "tv" {
+            let s = season_number.unwrap_or(0);
+            let e = episode_number.unwrap_or(0);
+            format!("{}_S{:02}E{:02}", sanitized, s, e)
+        } else {
+            sanitized
+        }
+    };
+    let cache_subdir = cache_root.join(format!("remote_{}", folder_name));
     std::fs::create_dir_all(&cache_subdir)
         .map_err(|e| format!("Failed to create cache dir: {}", e))?;
 
@@ -14991,22 +15105,39 @@ async fn remote_play_with_mpv(
         }
     }
 
-    // ── 4. Determine source & build CloudCacheSettings ──
+    // ── 4. Determine source — local proxy with download-to-disk for seeking ──
+    // If the URL is already a local proxy URL, pass it directly to MPV without double-proxying.
+    // If the URL is already a local proxy URL, pass it directly to MPV without double-proxying.
+    let is_local_url = url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
     let source = if already_cached {
         cache_path.to_string_lossy().to_string()
-    } else {
+    } else if is_local_url {
+        println!("[REMOTE-MPV] URL is already local, passing directly to MPV: {}", url);
         url.clone()
+    } else {
+        // Start a local proxy that downloads the file and serves Range requests.
+        // The addon returns a 302 redirect to Google CDN; the proxy follows it
+        // and downloads to disk while serving from the growing .part file.
+        let proxy_cache_dir = cache_subdir.clone();
+        let proxy_key = media_identifier.clone();
+        let proxy_title = title.clone();
+        let proxy_cache_path = cache_path.clone();
+        match remote_stream_proxy::start_proxy(url.clone(), proxy_cache_dir, proxy_key, proxy_title, Some(proxy_cache_path)) {
+            Ok(handle) => {
+                let local_url = handle.localhost_url();
+                println!("[REMOTE-MPV] Local proxy started: {}", local_url);
+                remote_stream_proxy::set_active_proxy(handle);
+                local_url
+            }
+            Err(e) => {
+                println!("[REMOTE-MPV] Proxy failed ({}), falling back to direct URL", e);
+                url.clone()
+            }
+        }
     };
 
-    let cache_settings = if already_cached {
-        None
-    } else {
-        Some(mpv_ipc::CloudCacheSettings {
-            enabled: true,
-            cache_dir: cache_subdir.to_string_lossy().to_string(),
-            max_size_mb: 102400, // 100 GB — effectively unlimited for single-file cache
-        })
-    };
+    // No stream-record needed — the proxy handles disk caching
+    let cache_settings = None;
 
     // ── 5. Launch MPV with tracking ──
     let start_pos = start_position.max(0.0);
@@ -15043,8 +15174,8 @@ async fn remote_play_with_mpv(
     let episode_clone = episode_number;
 
     std::thread::spawn(move || {
-        // ── Thread A: Cache download monitor ──
-        if !already_cached {
+        // ── Thread A: Cache download monitor (only for proxied downloads, not direct URLs) ──
+        if !already_cached && !is_local_url {
             let total = video_size.max(1) as u64;
             let started = std::time::Instant::now();
             loop {
@@ -15053,7 +15184,10 @@ async fn remote_play_with_mpv(
                     false => break,
                 }
 
-                if let Ok(meta) = cache_path_clone.metadata() {
+                // Watch the proxy's .part file, then fall back to the final path when done
+                let part_path = cache_path_clone.with_extension("part");
+                let watch_path = if part_path.exists() { part_path } else { cache_path_clone.clone() };
+                if let Ok(meta) = watch_path.metadata() {
                     let downloaded = meta.len();
                     let elapsed = started.elapsed().as_secs_f64().max(0.001);
                     let speed = downloaded as f64 / elapsed;
@@ -15075,20 +15209,25 @@ async fn remote_play_with_mpv(
             }
         }
 
-        // Mark cache as complete
-        if let Ok(mut active) = manager.lock_active() {
-            if let Some(entry) = active.get_mut(&cache_key) {
-                entry.status.state = stream_cache::CacheState::Complete;
-                entry.status.downloaded_bytes = entry.status.total_bytes;
-                let s = entry.status.clone();
-                drop(active);
-                let _ = app_clone.emit_all("remote-cache-progress", &s);
+        // Mark cache as complete (skip for direct local URLs)
+        if !is_local_url {
+            if let Ok(mut active) = manager.lock_active() {
+                if let Some(entry) = active.get_mut(&cache_key) {
+                    entry.status.state = stream_cache::CacheState::Complete;
+                    entry.status.downloaded_bytes = entry.status.total_bytes;
+                    let s = entry.status.clone();
+                    drop(active);
+                    let _ = app_clone.emit_all("remote-cache-progress", &s);
+                }
             }
         }
 
         // ── Thread B: Playback progress tracking ──
         if let Ok(db) = database::Database::new(&db_path) {
             let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
+
+            // Stop the local proxy if one was started
+            remote_stream_proxy::clear_active_proxy();
 
             // Update last_watched if valid progress was recorded
             if result.final_position.is_some()
@@ -15268,6 +15407,18 @@ async fn remote_get_library(
 ) -> Result<Vec<crate::database::MediaItem>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_remote_library().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_remove_from_library(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    // Remove episodes first if this is a TV show parent
+    db.remove_series_episodes(media_id).map_err(|e| e.to_string()).ok();
+    db.remove_media(media_id).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -15855,6 +16006,7 @@ fn main() {
             remote_get_resume_info,
             remote_update_poster,
             remote_get_library,
+            remote_remove_from_library,
             remote_verify_streams,
             remote_start_cache,
             remote_stop_cache,
