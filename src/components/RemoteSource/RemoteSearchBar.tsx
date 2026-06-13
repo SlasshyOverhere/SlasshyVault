@@ -23,7 +23,7 @@ export function RemoteSearchBar({ value, onChange }: Props) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [externalRef])
+  }, [])
 
   useEffect(() => {
     setLocal(value)
@@ -44,7 +44,7 @@ export function RemoteSearchBar({ value, onChange }: Props) {
       <div className="relative">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-5 text-neutral-500 pointer-events-none transition-colors duration-200 peer-focus-within:text-neutral-300" />
         <input
-          ref={internalRef}
+          ref={searchInputRef}
           placeholder="Search movies & TV shows..."
           value={local}
           onChange={(e) => handleChange(e.target.value)}
