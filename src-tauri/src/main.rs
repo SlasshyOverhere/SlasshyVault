@@ -52,6 +52,10 @@ lazy_static::lazy_static! {
     };
     static ref RECENT_UI_NOTIFICATIONS: Mutex<HashMap<String, std::time::Instant>> =
         Mutex::new(HashMap::new());
+    // Holds the running npm addon child process so it stays alive
+    static ref RUNNING_ADDON_PROCESS: Mutex<Option<tokio::process::Child>> = Mutex::new(None);
+    // Background task that reads addon stdout to keep the pipe open
+    static ref ADDON_STDOUT_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
 }
 
 // MPV session info
@@ -14854,14 +14858,7 @@ async fn remote_get_movie_streams(
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
     let base_url = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
-        config
-            .addon_url
-            .as_ref()
-            .filter(|u| !u.is_empty())
-            .ok_or_else(|| {
-                "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
-            })?
-            .clone()
+        get_active_addon_url_from_config(&config)?
     };
 
     let refresh = force_refresh.unwrap_or(false);
@@ -14906,14 +14903,7 @@ async fn remote_get_series_streams(
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
     let base_url = {
         let config = state.config.lock().map_err(|e| e.to_string())?;
-        config
-            .addon_url
-            .as_ref()
-            .filter(|u| !u.is_empty())
-            .ok_or_else(|| {
-                "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
-            })?
-            .clone()
+        get_active_addon_url_from_config(&config)?
     };
 
     let refresh = force_refresh.unwrap_or(false);
@@ -15426,6 +15416,24 @@ async fn remote_remove_from_library(
 }
 
 #[tauri::command]
+async fn remote_add_to_library(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+    title: String,
+    media_type: String,
+    year: Option<i32>,
+    poster_path: Option<String>,
+    overview: Option<String>,
+) -> Result<i64, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    if media_type == "movie" {
+        db.insert_or_get_remote_movie(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
+    } else {
+        db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
+    }.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn remote_is_cache_dir_set(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
@@ -15440,6 +15448,32 @@ async fn remote_get_cache_dir(
     let config = state.config.lock().map_err(|e| e.to_string())?;
     let dir = stream_cache::CacheManager::cache_dir(&config);
     Ok(dir.to_string_lossy().to_string())
+}
+
+/// Resolve the active addon URL from addon_sources (default source first, then first enabled).
+/// Falls back to legacy addon_url if no sources configured.
+fn get_active_addon_url_from_config(config: &config::Config) -> Result<String, String> {
+    // Try addon_sources first
+    if !config.addon_sources.is_empty() {
+        // Find default source
+        if let Some(src) = config.addon_sources.iter().find(|s| s.is_default && s.enabled) {
+            return Ok(src.url.clone());
+        }
+        // Fall back to first enabled source
+        if let Some(src) = config.addon_sources.iter().find(|s| s.enabled) {
+            return Ok(src.url.clone());
+        }
+        return Err("All addon sources are disabled. Enable at least one source.".to_string());
+    }
+    // Legacy fallback
+    config
+        .addon_url
+        .as_ref()
+        .filter(|u| !u.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
+        })
 }
 
 #[tauri::command]
@@ -15478,29 +15512,15 @@ fn validate_addon_url(url_str: &str) -> Result<(), String> {
 
     let host_lower = host.to_lowercase();
 
-    // Block localhost and loopback hostnames
-    if host_lower == "localhost"
-        || host_lower == "localhost.localdomain"
+    // Allow localhost, loopback, and private IPs for local addon servers
+    // Only block truly dangerous patterns
+    if host_lower == "localhost.localdomain"
         || host_lower.ends_with(".localhost")
     {
-        return Err("localhost URLs are not allowed for addon servers.".to_string());
+        return Err("Invalid hostname.".to_string());
     }
 
-    // Block IPv6 loopback
-    if host_lower == "::1" || host_lower == "[::1]" {
-        return Err("Loopback IPv6 address is not allowed.".to_string());
-    }
-
-    // Block IPv4 addresses in private/reserved ranges
     if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-        if ip.is_loopback() {
-            return Err("Loopback IP address is not allowed.".to_string());
-        }
-        if ip.is_private() {
-            return Err(
-                "Private IP addresses (10.x, 172.16-31.x, 192.168.x) are not allowed.".to_string(),
-            );
-        }
         if ip.is_unspecified() {
             return Err("0.0.0.0 is not allowed.".to_string());
         }
@@ -15544,6 +15564,327 @@ fn set_addon_url(state: State<'_, AppState>, url: String) -> Result<(), String> 
     config.addon_url = Some(url.trim().to_string());
     config::save_config(&config).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Get all configured addon sources
+#[tauri::command]
+fn get_addon_sources(state: State<'_, AppState>) -> Result<Vec<config::AddonSource>, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.addon_sources.clone())
+}
+
+/// Add a new addon source
+#[tauri::command]
+fn add_addon_source(
+    state: State<'_, AppState>,
+    name: String,
+    url: String,
+) -> Result<config::AddonSource, String> {
+    validate_addon_url(&url)?;
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let source = config::AddonSource {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.trim().to_string(),
+        url: url.trim().to_string(),
+        enabled: true,
+        is_default: config.addon_sources.is_empty(), // first source becomes default
+        npm_package: None,
+        npm_args: vec![],
+    };
+    config.addon_sources.push(source.clone());
+    // Also set legacy addon_url for backward compat with remote_source
+    if source.is_default {
+        config.addon_url = Some(source.url.clone());
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(source)
+}
+
+/// Remove an addon source by ID
+#[tauri::command]
+fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let was_default = config
+        .addon_sources
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.is_default)
+        .unwrap_or(false);
+    config.addon_sources.retain(|s| s.id != id);
+    // If we removed the default, promote the first remaining source
+    if was_default {
+        if let Some(first) = config.addon_sources.first_mut() {
+            first.is_default = true;
+            config.addon_url = Some(first.url.clone());
+        } else {
+            config.addon_url = None;
+        }
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Set a source as the active default
+#[tauri::command]
+fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let mut found = false;
+    let mut active_url = None;
+    for source in &mut config.addon_sources {
+        if source.id == id {
+            source.is_default = true;
+            active_url = Some(source.url.clone());
+            found = true;
+        } else {
+            source.is_default = false;
+        }
+    }
+    if !found {
+        return Err("Source not found".to_string());
+    }
+    if let Some(url) = active_url {
+        config.addon_url = Some(url);
+    }
+    remote_source::clear_streams_cache();
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Check if npx/node is available on the system
+#[tauri::command]
+fn check_npx_package() -> Result<bool, String> {
+    let npx_check = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/c", "npx", "--version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    } else {
+        std::process::Command::new("npx")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    };
+    match npx_check {
+        Ok(status) => Ok(status.success()),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Enable/disable an addon source
+#[tauri::command]
+fn toggle_addon_source(
+    state: State<'_, AppState>,
+    source_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let src = config
+        .addon_sources
+        .iter_mut()
+        .find(|s| s.id == source_id)
+        .ok_or("Source not found")?;
+    src.enabled = enabled;
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Auto-detect a running addon server on common ports via TCP connect.
+#[tauri::command]
+async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
+    let ports = [11470, 3000, 8080, 12345, 4000, 5000, 7000, 9000];
+
+    for port in &ports {
+        let addr = format!("127.0.0.1:{}", port);
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            return Ok(Some(config::AddonSource {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "Local Addon".to_string(),
+                url: format!("http://127.0.0.1:{}", port),
+                enabled: true,
+                is_default: true,
+                npm_package: None,
+                npm_args: vec![],
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Start an npm addon process and store it globally.
+/// Uses a fixed PORT env var so the addon always starts on the same port.
+/// Stdin is piped with "y" to accept any disclaimer prompts.
+/// Stdout/stderr go to null so pipes don't close and kill the process.
+async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), String> {
+    let mut npx_args = vec![package.to_string()];
+    npx_args.extend(args.iter().cloned());
+
+    let mut child = if cfg!(target_os = "windows") {
+        let mut cmd_args = vec!["/c".to_string(), "npx".to_string()];
+        cmd_args.extend(npx_args.clone());
+        tokio::process::Command::new("cmd")
+            .args(&cmd_args)
+            .env("PORT", "11470")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
+    } else {
+        tokio::process::Command::new("npx")
+            .args(&npx_args)
+            .env("PORT", "11470")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
+    };
+
+    // Write "y" to stdin to accept any disclaimer, then close stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(b"y\n").await;
+        // stdin drops here, closing the pipe (sends EOF)
+    }
+
+    // Give it a moment to start
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // Store the child process globally
+    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+        if let Some(mut old) = proc.take() {
+            let _ = old.kill();
+        }
+        *proc = Some(child);
+    }
+
+    println!("[addon:{}] Process started on port 11470", package);
+    Ok(())
+}
+
+/// Install an npm package and run it as an addon server.
+/// Accepts any npm package name and optional arguments.
+/// Reads stdout to find the URL the server started on.
+#[tauri::command]
+async fn install_npm_addon(
+    package: String,
+    args: Vec<String>,
+) -> Result<config::AddonSource, String> {
+    if package.trim().is_empty() {
+        return Err("Package name cannot be empty".to_string());
+    }
+
+    let package = package.trim().to_string();
+
+    // Build npx args: <package> <args...>
+    let mut npx_args = vec![package.clone()];
+    npx_args.extend(args.clone());
+
+    // On Windows, use cmd /c to resolve npx from PATH
+    let mut child = if cfg!(target_os = "windows") {
+        let mut cmd_args = vec!["/c".to_string(), "npx".to_string()];
+        cmd_args.extend(npx_args.clone());
+        tokio::process::Command::new("cmd")
+            .args(&cmd_args)
+            .env("PORT", "11470")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
+    } else {
+        tokio::process::Command::new("npx")
+            .args(&npx_args)
+            .env("PORT", "11470")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
+    };
+
+    // Write "y" to stdin to accept disclaimer
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(b"y\n").await;
+    }
+
+    // Read stdout line by line to find the server URL
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let mut reader = tokio::io::BufReader::new(stdout);
+    let mut found_url: Option<String> = None;
+    let url_regex = regex::Regex::new(r"https?://[^\s]+").unwrap();
+    let timeout = std::time::Duration::from_secs(30);
+    let start = std::time::Instant::now();
+
+    use tokio::io::AsyncBufReadExt;
+    let mut line = String::new();
+    loop {
+        if start.elapsed() > timeout {
+            break;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(2), reader.read_line(&mut line)).await {
+            Ok(Ok(0)) => break, // EOF
+            Ok(Ok(_)) => {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    println!("[install_npm_addon] {}", trimmed);
+                }
+                // Look for a URL in the output (e.g. "Addon running on http://localhost:51546")
+                if let Some(m) = url_regex.find(trimmed) {
+                    let url = m.as_str().to_string();
+                    // Verify it's actually a server URL (has a port number)
+                    if url.contains(':') && url.matches(':').count() >= 2 {
+                        found_url = Some(url);
+                        break;
+                    }
+                }
+                line.clear();
+            }
+            Ok(Err(e)) => {
+                println!("[install_npm_addon] stdout read error: {}", e);
+                break;
+            }
+            Err(_) => {
+                // Timeout on this line, keep trying
+                line.clear();
+                continue;
+            }
+        }
+    }
+
+    match found_url {
+        Some(url) => {
+            // Clean up trailing chars (periods, commas, etc.)
+            let url = url.trim_end_matches(|c: char| c == '.' || c == ',' || c == ')').to_string();
+            println!("[install_npm_addon] Server detected at {}", url);
+            // Kill the discovery process (stdout pipe will close and kill it anyway)
+            let _ = child.kill().await;
+            // Restart the addon with null stdio so it stays alive on port 11470
+            start_npm_addon_process(&package, &args).await?;
+            // Use fixed port 11470 since PORT env var is set
+            let url = "http://127.0.0.1:11470".to_string();
+            Ok(config::AddonSource {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: package.clone(),
+                url,
+                enabled: true,
+                is_default: true,
+                npm_package: Some(package),
+                npm_args: args,
+            })
+        }
+        None => {
+            let _ = child.kill().await;
+            Err(format!(
+                "Package '{}' started but no server URL detected in output after 30 seconds.",
+                package
+            ))
+        }
+    }
 }
 
 #[tauri::command]
@@ -15802,6 +16143,24 @@ fn main() {
                         println!("[STARTUP] Cleaned up {} expired cache files ({:.1} MB)",
                             deleted, freed as f64 / (1024.0 * 1024.0));
                     }
+                }
+            }
+
+            // Auto-start npm addon sources on app launch
+            for source in &config.addon_sources {
+                if let Some(ref pkg) = source.npm_package {
+                    let pkg = pkg.clone();
+                    let args = source.npm_args.clone();
+                    println!("[STARTUP] Auto-starting addon from npm package: {}", pkg);
+                    tokio::spawn(async move {
+                        // Small delay to let the app fully initialize
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        match start_npm_addon_process(&pkg, &args).await {
+                            Ok(_) => println!("[STARTUP] Addon started successfully"),
+                            Err(e) => eprintln!("[STARTUP] Failed to start addon: {}", e),
+                        }
+                    });
+                    break; // Only start the first npm source
                 }
             }
 
@@ -16092,6 +16451,7 @@ fn main() {
             remote_update_poster,
             remote_get_library,
             remote_remove_from_library,
+            remote_add_to_library,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
@@ -16102,16 +16462,34 @@ fn main() {
             remote_get_cache_dir,
             get_addon_url,
             set_addon_url,
+            get_addon_sources,
+            add_addon_source,
+            remove_addon_source,
+            set_active_source,
+            check_npx_package,
+            toggle_addon_source,
+            auto_setup_addon,
+            install_npm_addon,
             remote_clear_streams_cache,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Prevent app from exiting when last window closes
-            // This keeps the backend running so we can recreate the window from tray
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
-                println!("[TRAY] Exit prevented. App running in background. Click tray to reopen.");
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                    println!("[TRAY] Exit prevented. App running in background. Click tray to reopen.");
+                }
+                tauri::RunEvent::Exit => {
+                    // Kill the running addon process on app exit
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        if let Some(mut child) = proc.take() {
+                            println!("[EXIT] Killing addon server process...");
+                            let _ = child.kill();
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }

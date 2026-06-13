@@ -77,3 +77,47 @@ pub fn quick_client() -> &'static reqwest::blocking::Client {
 pub fn long_client() -> &'static reqwest::blocking::Client {
     &LONG_CLIENT
 }
+
+/// Make a raw HTTP GET request to a local server using TCP.
+/// Bypasses reqwest's loopback restriction. Returns the response body as a String.
+pub fn local_http_get(url: &str) -> Result<String, String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed.host_str().ok_or("No host in URL")?;
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let path = if parsed.path().is_empty() { "/" } else { parsed.path() };
+    let query = parsed.query().map(|q| format!("?{}", q)).unwrap_or_default();
+    let addr = format!("{}:{}", host, port);
+
+    let mut stream = TcpStream::connect(&addr)
+        .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .map_err(|e| format!("Failed to set timeout: {}", e))?;
+
+    let request = format!(
+        "GET {}{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n\r\n",
+        path, query, if port == 80 { host.to_string() } else { format!("{}:{}", host, port) }
+    );
+
+    stream.write_all(request.as_bytes())
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    let response_str = String::from_utf8_lossy(&response);
+    let body_start = response_str.find("\r\n\r\n")
+        .ok_or("Invalid HTTP response")?;
+    let body = &response_str[body_start + 4..];
+
+    // Check status code
+    let status_line = response_str.lines().next().unwrap_or("");
+    if !status_line.contains("200") {
+        return Err(format!("HTTP error: {}", status_line));
+    }
+
+    Ok(body.to_string())
+}

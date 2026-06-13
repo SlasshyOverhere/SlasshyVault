@@ -114,6 +114,16 @@ export interface Config {
   player_mode?: "native" | "external";
   // User-configured addon URL for External tab streaming
   addon_url?: string;
+  // Multiple addon sources for External tab
+  addon_sources?: AddonSource[];
+}
+
+export interface AddonSource {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  is_default: boolean;
 }
 
 export interface ResumeInfo {

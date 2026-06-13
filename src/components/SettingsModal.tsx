@@ -115,6 +115,242 @@ const sections: {
     : []),
 ];
 
+// Addon Source interface matching Rust backend
+interface AddonSource {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  is_default: boolean;
+  npm_package?: string;
+  npm_args?: string[];
+}
+
+function AddonSourcesManager() {
+  const { toast } = useToast();
+  const [sources, setSources] = useState<AddonSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+  const loadSources = useCallback(async () => {
+    try {
+      const data = await invoke<AddonSource[]>("get_addon_sources");
+      setSources(data);
+    } catch (e) {
+      console.error("[AddonSourcesManager] loadSources:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSources(); }, [loadSources]);
+
+  const handleAdd = useCallback(async () => {
+    if (!newUrl.trim()) return;
+    setAdding(true);
+    try {
+      await invoke("add_addon_source", { name: newName, url: newUrl });
+      setNewName("");
+      setNewUrl("");
+      await loadSources();
+      toast({ title: "Source added" });
+    } catch (e: any) {
+      toast({ title: "Failed to add source", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      setAdding(false);
+    }
+  }, [newName, newUrl, loadSources, toast]);
+
+  const handleRemove = useCallback(async (id: string) => {
+    try {
+      await invoke("remove_addon_source", { id });
+      await loadSources();
+      toast({ title: "Source removed" });
+    } catch (e: any) {
+      toast({ title: "Failed to remove", description: e?.message || String(e), variant: "destructive" });
+    }
+  }, [loadSources, toast]);
+
+  const handleSetActive = useCallback(async (id: string) => {
+    try {
+      await invoke("set_active_source", { id });
+      await loadSources();
+      window.dispatchEvent(new CustomEvent("config-saved"));
+    } catch (e: any) {
+      toast({ title: "Failed to set active", description: e?.message || String(e), variant: "destructive" });
+    }
+  }, [loadSources, toast]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> Loading sources...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Existing sources */}
+      {sources.length > 0 && (
+        <div className="space-y-2">
+          {sources.map((src) => (
+            <div
+              key={src.id}
+              className={`p-3 rounded-xl border flex items-center gap-3 ${
+                src.is_default
+                  ? "bg-white/5 border-white/10"
+                  : "bg-card border-border"
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">{src.name}</span>
+                  {src.is_default && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/60 uppercase tracking-wider">
+                      Active
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">{src.url}</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {!src.is_default && (
+                  <button
+                    onClick={() => handleSetActive(src.id)}
+                    className="text-xs px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Set Active
+                  </button>
+                )}
+                <button
+                  onClick={() => handleRemove(src.id)}
+                  className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sources.length === 0 && (
+        <div className="text-center py-6">
+          <p className="text-sm text-muted-foreground">No addon sources configured.</p>
+        </div>
+      )}
+
+      {/* Add new source manually */}
+      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+        <Label className="text-sm font-medium">Add Source</Label>
+        <Input
+          placeholder="Source name (optional)"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          className="h-9"
+        />
+        <Input
+          type="url"
+          placeholder="http://127.0.0.1:11470"
+          value={newUrl}
+          onChange={(e) => setNewUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+          className="h-9"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={!newUrl.trim() || adding}
+          className="w-full h-9 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+        >
+          {adding ? "Adding..." : "Add Source"}
+        </button>
+      </div>
+
+      {/* Install from npm */}
+      <NpmAddonInstaller onInstalled={loadSources} />
+    </div>
+  );
+}
+
+function NpmAddonInstaller({ onInstalled }: { onInstalled: () => void }) {
+  const { toast } = useToast();
+  const [npmPackage, setNpmPackage] = useState("");
+  const [npmArgs, setNpmArgs] = useState("--yes");
+  const [installing, setInstalling] = useState(false);
+
+  const handleInstall = useCallback(async () => {
+    if (!npmPackage.trim()) return;
+    setInstalling(true);
+    try {
+      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : [];
+      const source = await invoke<any>("install_npm_addon", {
+        package: npmPackage.trim(),
+        args,
+      });
+      // Add the detected source to config
+      await invoke("add_addon_source", { name: source.name, url: source.url });
+      onInstalled();
+      toast({
+        title: "Addon installed & running",
+        description: `${source.name} is running at ${source.url}`,
+      });
+      setNpmPackage("");
+    } catch (e: any) {
+      toast({
+        title: "Installation failed",
+        description: e?.message || String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setInstalling(false);
+    }
+  }, [npmPackage, npmArgs, onInstalled, toast]);
+
+  return (
+    <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+      <div className="flex items-center gap-2">
+        <Label className="text-sm font-medium">Install from npm</Label>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 uppercase tracking-wider">
+          Auto-start
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Enter an npm package name. The app will install and run it automatically.
+      </p>
+      <Input
+        placeholder="npm package name"
+        value={npmPackage}
+        onChange={(e) => setNpmPackage(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") handleInstall(); }}
+        className="h-9"
+      />
+      <Input
+        placeholder="Arguments (e.g. --yes)"
+        value={npmArgs}
+        onChange={(e) => setNpmArgs(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") handleInstall(); }}
+        className="h-9"
+      />
+      <button
+        onClick={handleInstall}
+        disabled={!npmPackage.trim() || installing}
+        className="w-full h-9 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors flex items-center justify-center gap-2"
+      >
+        {installing ? (
+          <>
+            <Loader2 className="size-3.5 animate-spin" />
+            Installing & starting...
+          </>
+        ) : (
+          "Install & Run"
+        )}
+      </button>
+    </div>
+  );
+}
+
 export function SettingsModal({
   open,
   onOpenChange,
@@ -1653,26 +1889,19 @@ export function SettingsModal({
                       <div>
                         <h2 className="text-lg font-semibold">External Sources</h2>
                         <p className="text-sm text-muted-foreground">
-                          Configure your addon URL for streaming content in the External tab.
+                          Manage addon sources for streaming content in the External tab.
                         </p>
                       </div>
 
-                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-white/8">
-                            <Radio className="size-5 text-foreground" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Addon URL
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Your SlasshyVault addon proxy URL
-                            </p>
-                          </div>
-                        </div>
+                      {/* Addon Sources Manager */}
+                      <AddonSourcesManager />
 
-                        <div className="space-y-3">
+                      {/* Legacy single URL (collapsed) */}
+                      <details className="group">
+                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+                          Advanced: Manual addon URL override
+                        </summary>
+                        <div className="mt-3 p-4 rounded-xl bg-card border border-border space-y-3">
                           <div>
                             <Label htmlFor="addon-url" className="text-sm font-medium">
                               Addon URL
@@ -1686,11 +1915,11 @@ export function SettingsModal({
                               className="mt-1"
                             />
                             <p className="text-xs text-muted-foreground mt-1">
-                              The base URL of your SlasshyVault addon. Streams will be fetched from this URL.
+                              Direct addon URL. Only used as fallback when no source is configured above.
                             </p>
                           </div>
                         </div>
-                      </div>
+                      </details>
                     </m.div>
                   )}
 

@@ -185,7 +185,17 @@ pub fn clear_streams_cache() {
     clear_stream_cache();
 }
 
+fn is_loopback_url(url: &str) -> bool {
+    url.contains("127.0.0.1") || url.contains("localhost") || url.contains("[::1]")
+}
+
 fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
+    // Use raw TCP client for localhost to bypass reqwest loopback restriction
+    if is_loopback_url(url) {
+        let body = crate::http_client::local_http_get(url)?;
+        return parse_streams_body(&body);
+    }
+
     let client = crate::http_client::shared_client();
     let max_retries = 3u32;
     let mut last_error = String::new();
@@ -232,39 +242,44 @@ fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
             .text()
             .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-        let raw: StreamsResponse = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        return parse_streams_body(&body);
 
-        let streams: Vec<RemoteStream> = raw
-            .streams
-            .into_iter()
-            .map(|s| {
-                let quality = parse_quality(&s.name);
-                let source = parse_source(&s.name);
-                RemoteStream {
-                    name: s.name,
-                    description: s.description.or(s.title).unwrap_or_default(),
-                    url: s.url.clone(),
-                    video_size: s.behavior_hints.video_size,
-                    not_web_ready: s.behavior_hints.not_web_ready,
-                    parsed_quality: quality,
-                    parsed_source: source,
-                    recommended: is_recommended_url(&s.url),
-                }
-            })
-            .collect();
-
-        if streams.is_empty() {
-            return Err("No streams available for this content".to_string());
-        }
-
-        return Ok(streams);
     }
 
     Err(format!(
         "Failed to fetch streams after {} retries: {}",
         max_retries, last_error
     ))
+}
+
+fn parse_streams_body(body: &str) -> Result<Vec<RemoteStream>, String> {
+    let raw: StreamsResponse = serde_json::from_str(body)
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let streams: Vec<RemoteStream> = raw
+        .streams
+        .into_iter()
+        .map(|s| {
+            let quality = parse_quality(&s.name);
+            let source = parse_source(&s.name);
+            RemoteStream {
+                name: s.name,
+                description: s.description.or(s.title).unwrap_or_default(),
+                url: s.url.clone(),
+                video_size: s.behavior_hints.video_size,
+                not_web_ready: s.behavior_hints.not_web_ready,
+                parsed_quality: quality,
+                parsed_source: source,
+                recommended: is_recommended_url(&s.url),
+            }
+        })
+        .collect();
+
+    if streams.is_empty() {
+        return Err("No streams available for this content".to_string());
+    }
+
+    Ok(streams)
 }
 
 pub fn group_streams(streams: Vec<RemoteStream>) -> Vec<GroupedStreams> {

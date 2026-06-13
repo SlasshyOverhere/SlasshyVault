@@ -10,7 +10,7 @@ import { RemoteQualitySelector } from './RemoteQualitySelector'
 import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
-import { Film, Play, X } from 'lucide-react'
+import { Film, Play, X, Loader2 } from 'lucide-react'
 import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
 import { getCachedImageUrl } from '@/services/api'
@@ -168,6 +168,7 @@ function RemoteSourceViewInner() {
   const [libraryLimit, setLibraryLimit] = useState(50)
   const [addonUrlConfigured, setAddonUrlConfigured] = useState<boolean | null>(null)
   const [setupAddonUrl, setSetupAddonUrl] = useState('')
+  const [activeSource, setActiveSource] = useState<{ name: string; url: string } | null>(null)
 
   const [pageState, setPageState] = useState<PageState>('library')
   const [selectedItem, setSelectedItem] = useState<TmdbSearchResult | null>(null)
@@ -247,11 +248,21 @@ function RemoteSourceViewInner() {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
-  // Check if addon URL is configured
+  // Check if addon URL is configured (sources or legacy URL)
   useEffect(() => {
     invoke<string | null>('get_config')
       .then((config: any) => {
-        setAddonUrlConfigured(!!config?.addon_url)
+        const hasSources = config?.addon_sources?.length > 0
+        const hasLegacyUrl = !!config?.addon_url
+        setAddonUrlConfigured(hasSources || hasLegacyUrl)
+        // Get the active source info
+        if (hasSources) {
+          const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
+          const src = defaultSrc || config.addon_sources[0]
+          setActiveSource({ name: src.name, url: src.url })
+        } else if (hasLegacyUrl) {
+          setActiveSource({ name: 'Addon', url: config.addon_url })
+        }
       })
       .catch(() => setAddonUrlConfigured(false))
   }, [])
@@ -674,21 +685,73 @@ function RemoteSourceViewInner() {
     setPageState(searchQuery ? 'search' : 'library')
   }, [searchQuery])
 
-  // Save addon URL from setup wizard
+  // Check if a TMDB item is already in the library
+  const isInLibrary = useCallback((item: TmdbSearchResult) => {
+    const tmdbId = String(item.id)
+    return remoteLibrary.some(lib => lib.tmdb_id === tmdbId && lib.media_type === (item.media_type === 'tv' ? 'tvshow' : 'movie'))
+  }, [remoteLibrary])
+
+  // Add content to library without playing
+  const [addingToLibrary, setAddingToLibrary] = useState(false)
+  const handleAddToLibrary = useCallback(async () => {
+    if (!selectedItem || addingToLibrary) return
+    setAddingToLibrary(true)
+    try {
+      await invoke('remote_add_to_library', {
+        tmdbId: String(selectedItem.id),
+        title: selectedItem.title || selectedItem.name || '',
+        mediaType: selectedItem.media_type === 'tv' ? 'tv' : 'movie',
+        year: getYear(selectedItem.release_date || selectedItem.first_air_date) ? parseInt(getYear(selectedItem.release_date || selectedItem.first_air_date)) : null,
+        posterPath: selectedItem.poster_path || null,
+        overview: selectedItem.overview || null,
+      })
+      await loadRemoteLibrary()
+      toast({ title: 'Added to library' })
+    } catch (e: any) {
+      toast({ title: 'Failed to add', description: typeof e === 'string' ? e : 'Could not add to library', variant: 'destructive' })
+    } finally {
+      setAddingToLibrary(false)
+    }
+  }, [selectedItem, addingToLibrary, loadRemoteLibrary, toast])
+
+  // Save addon URL from setup wizard (uses new add_addon_source command)
   const handleSaveAddonUrl = useCallback(async () => {
     const url = setupAddonUrl.trim()
     if (!url) return
     try {
-      const config = await invoke<any>('get_config')
-      config.addon_url = url
-      await invoke('save_config', { newConfig: config, confirmed: true })
+      await invoke('add_addon_source', { name: 'Default', url })
       setAddonUrlConfigured(true)
       loadRemoteLibrary()
-      toast({ title: 'Addon URL saved', description: 'You can now stream content from the External tab.' })
+      window.dispatchEvent(new CustomEvent('config-saved'))
+      toast({ title: 'Source added', description: 'You can now stream content from the External tab.' })
     } catch (e: any) {
       toast({ title: 'Failed to save', description: e?.message || 'Could not save addon URL.', variant: 'destructive' })
     }
   }, [setupAddonUrl, loadRemoteLibrary, toast])
+
+  // npm install handler
+  const [npmPackage, setNpmPackage] = useState('')
+  const [npmArgs, setNpmArgs] = useState('--yes')
+  const [npmInstalling, setNpmInstalling] = useState(false)
+
+  // npm package install handler
+  const handleNpmInstall = useCallback(async () => {
+    if (!npmPackage.trim()) return
+    setNpmInstalling(true)
+    try {
+      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
+      const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
+      await invoke('add_addon_source', { name: result.name, url: result.url })
+      setAddonUrlConfigured(true)
+      loadRemoteLibrary()
+      window.dispatchEvent(new CustomEvent('config-saved'))
+      toast({ title: 'Addon installed & running', description: `Connected to ${result.url}` })
+    } catch (e: any) {
+      toast({ title: 'Installation failed', description: e?.message || String(e), variant: 'destructive' })
+    } finally {
+      setNpmInstalling(false)
+    }
+  }, [npmPackage, npmArgs, loadRemoteLibrary, toast])
 
   // Show setup wizard if addon URL is not configured
   if (addonUrlConfigured === false) {
@@ -708,6 +771,40 @@ function RemoteSourceViewInner() {
               </p>
             </div>
             <div className="space-y-3">
+              <input
+                type="text"
+                value={npmPackage}
+                onChange={(e) => setNpmPackage(e.target.value)}
+                placeholder="npm package name"
+                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
+              />
+              <input
+                type="text"
+                value={npmArgs}
+                onChange={(e) => setNpmArgs(e.target.value)}
+                placeholder="arguments (e.g. --yes)"
+                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleNpmInstall() }}
+              />
+              <button
+                onClick={handleNpmInstall}
+                disabled={!npmPackage.trim() || npmInstalling}
+                className="w-full h-11 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2"
+              >
+                {npmInstalling ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Installing & starting...
+                  </>
+                ) : (
+                  "Install & Run"
+                )}
+              </button>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-neutral-800" />
+                <span className="text-xs text-neutral-600">or add URL manually</span>
+                <div className="flex-1 h-px bg-neutral-800" />
+              </div>
               <input
                 type="url"
                 value={setupAddonUrl}
@@ -756,6 +853,9 @@ function RemoteSourceViewInner() {
               onFetchMovieStreams={handleFetchMovieStreams}
               onFetchEpisodeStreams={handleFetchEpisodeStreams}
               fetching={fetching}
+              isInLibrary={isInLibrary(selectedItem!)}
+              onAddToLibrary={handleAddToLibrary}
+              addingToLibrary={addingToLibrary}
             />
           </div>
         </ScrollArea>
@@ -771,6 +871,13 @@ function RemoteSourceViewInner() {
                   <span>External Sources</span>
                   <span className="h-px w-6 bg-neutral-800" />
                 </div>
+                {activeSource && (
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs text-neutral-400">{activeSource.name}</span>
+                    <span className="text-[10px] text-neutral-600 truncate max-w-[200px]">{activeSource.url}</span>
+                  </div>
+                )}
                 <h1 className="text-3xl font-black tracking-tight text-white leading-none">Stream fuckin anything.</h1>
                 <p className="text-[10px] text-neutral-700 leading-relaxed max-w-md mx-auto">
                   All media sources are third-party. We do not host, store, or control any content.
