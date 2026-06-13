@@ -8,6 +8,53 @@ use std::sync::{Arc, Mutex, RwLock};
 /// design would require per-stream routing and is out of scope for now.
 static ACTIVE_PROXY: Mutex<Option<RemoteStreamProxyHandle>> = Mutex::new(None);
 
+/// Download from a reader into the .part file, tracking progress.
+fn download_from_reader(
+    dl_state: &std::sync::Arc<ProxyState>,
+    dl_stop: &AtomicBool,
+    total: u64,
+    reader: &mut dyn Read,
+) {
+    dl_state.total_size.store(total, Ordering::Relaxed);
+
+    let mut file = match std::fs::File::create(&dl_state.file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("File: {}", e));
+            return;
+        }
+    };
+
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut written: u64 = 0;
+
+    loop {
+        if dl_stop.load(Ordering::Relaxed) { return; }
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if let Err(e) = file.write_all(&buf[..n]) {
+                    *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
+                        Some(format!("Write: {}", e));
+                    return;
+                }
+                written += n as u64;
+                dl_state.downloaded.store(written, Ordering::Relaxed);
+            }
+            Err(e) => {
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
+                    Some(format!("Read: {}", e));
+                return;
+            }
+        }
+    }
+
+    let _ = file.flush();
+    dl_state.complete.store(true, Ordering::Relaxed);
+    let _ = std::fs::rename(&dl_state.file_path, &dl_state.final_path);
+    println!("[REMOTE-PROXY] Done: {} bytes", written);
+}
+
 /// Allowed Content-Type prefixes for proxied responses.
 const ALLOWED_CONTENT_TYPES: &[&str] = &[
     "video/",
@@ -135,6 +182,23 @@ pub fn start_proxy(
         }
 
         println!("[REMOTE-PROXY] Downloading: {}", dl_url);
+
+        // Check if this is a localhost URL - use raw TCP to bypass reqwest loopback restriction
+        let is_loopback = dl_url.contains("127.0.0.1") || dl_url.contains("localhost") || dl_url.contains("[::1]");
+
+        if is_loopback {
+            // Use raw TCP for localhost URLs
+            match crate::http_client::local_http_get_raw(&dl_url) {
+                Ok((total, mut reader)) => {
+                    dl_state.total_size.store(total, Ordering::Relaxed);
+                    download_from_reader(&dl_state, &dl_stop, total, &mut reader);
+                }
+                Err(e) => {
+                    *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Local HTTP: {}", e));
+                }
+            }
+            return;
+        }
 
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(3600))

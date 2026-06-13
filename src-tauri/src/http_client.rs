@@ -121,3 +121,63 @@ pub fn local_http_get(url: &str) -> Result<String, String> {
 
     Ok(body.to_string())
 }
+
+/// Make a raw HTTP GET request to a local server using TCP, returning a streaming reader.
+/// Returns (content_length, reader) where reader yields the response body bytes.
+/// Bypasses reqwest's loopback restriction for streaming large files.
+pub fn local_http_get_raw(url: &str) -> Result<(u64, std::io::BufReader<std::net::TcpStream>), String> {
+    use std::io::{BufRead, Read, Write};
+    use std::net::TcpStream;
+
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed.host_str().ok_or("No host in URL")?;
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let path = if parsed.path().is_empty() { "/" } else { parsed.path() };
+    let query = parsed.query().map(|q| format!("?{}", q)).unwrap_or_default();
+    let addr = format!("{}:{}", host, port);
+
+    let mut stream = TcpStream::connect(&addr)
+        .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(3600)))
+        .map_err(|e| format!("Failed to set timeout: {}", e))?;
+
+    let request = format!(
+        "GET {}{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: */*\r\n\r\n",
+        path, query, if port == 80 { host.to_string() } else { format!("{}:{}", host, port) }
+    );
+
+    stream.write_all(request.as_bytes())
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    // Read headers line by line
+    let mut reader = std::io::BufReader::new(stream);
+    let mut content_length: u64 = 0;
+    let mut status_ok = false;
+
+    loop {
+        let mut header_line = String::new();
+        reader.read_line(&mut header_line)
+            .map_err(|e| format!("Failed to read header: {}", e))?;
+        let trimmed = header_line.trim();
+
+        if trimmed.is_empty() {
+            break; // End of headers
+        }
+
+        // Check status
+        if trimmed.starts_with("HTTP/") {
+            status_ok = trimmed.contains("200") || trimmed.contains("206");
+        }
+
+        // Parse Content-Length
+        if let Some(val) = trimmed.strip_prefix("Content-Length:").or_else(|| trimmed.strip_prefix("content-length:")) {
+            content_length = val.trim().parse().unwrap_or(0);
+        }
+    }
+
+    if !status_ok {
+        return Err("HTTP error (non-200/206 status)".to_string());
+    }
+
+    Ok((content_length, reader))
+}

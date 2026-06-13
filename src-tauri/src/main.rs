@@ -15100,13 +15100,13 @@ async fn remote_play_with_mpv(
     }
 
     // ── 4. Determine source — local proxy with download-to-disk for seeking ──
-    // If the URL is already a local proxy URL, pass it directly to MPV without double-proxying.
-    // If the URL is already a local proxy URL, pass it directly to MPV without double-proxying.
-    let is_local_url = url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
+    // Only skip the proxy if the URL is already our own local proxy (contains /stream endpoint).
+    // Localhost addon URLs (e.g. http://localhost:11470) still need the proxy for disk caching.
+    let is_own_proxy = url.contains("/stream") && (url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:"));
     let source = if already_cached {
         cache_path.to_string_lossy().to_string()
-    } else if is_local_url {
-        println!("[REMOTE-MPV] URL is already local, passing directly to MPV: {}", url);
+    } else if is_own_proxy {
+        println!("[REMOTE-MPV] URL is already our proxy, passing directly to MPV: {}", url);
         url.clone()
     } else {
         // Start a local proxy that downloads the file and serves Range requests.
@@ -15169,7 +15169,7 @@ async fn remote_play_with_mpv(
 
     std::thread::spawn(move || {
         // ── Thread A: Cache download monitor (only for proxied downloads, not direct URLs) ──
-        if !already_cached && !is_local_url {
+        if !already_cached && !is_own_proxy {
             let total = video_size.max(1) as u64;
             let started = std::time::Instant::now();
             loop {
@@ -15204,7 +15204,7 @@ async fn remote_play_with_mpv(
         }
 
         // Mark cache as complete (skip for direct local URLs)
-        if !is_local_url {
+        if !is_own_proxy {
             if let Ok(mut active) = manager.lock_active() {
                 if let Some(entry) = active.get_mut(&cache_key) {
                     entry.status.state = stream_cache::CacheState::Cached { path: entry.status.target_path.clone() };
