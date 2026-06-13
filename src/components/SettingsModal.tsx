@@ -73,6 +73,7 @@ type SettingsSection =
   | "updates"
   | "cloud"
   | "api"
+  | "external"
   | "danger"
   | "dev"
   | "nightly";
@@ -99,6 +100,7 @@ const sections: {
     icon: <Cloud className="size-4" />,
   },
   { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
+  { id: "external", label: "External", icon: <Radio className="size-4" /> },
   {
     id: "danger",
     label: "Factory Reset",
@@ -142,6 +144,7 @@ export function SettingsModal({
     zip_cache_expiry_days: 7,
     dev_backend_url: "",
     player_mode: "external",
+    addon_url: "",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -341,6 +344,7 @@ export function SettingsModal({
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
         dev_backend_url: data.dev_backend_url || "",
         player_mode: data.player_mode || "external",
+        addon_url: data.addon_url || "",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -1630,6 +1634,59 @@ export function SettingsModal({
                             <p className="text-xs text-yellow-500/70">
                               This is a pre-release build. Logs include verbose debug information
                               from the ZIP proxy cache, MPV playback, cloud scanning, and more.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </m.div>
+                  )}
+
+                  {/* ===== External Sources ===== */}
+                  {activeSection === "external" && (
+                    <m.div
+                      key="external"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h2 className="text-lg font-semibold">External Sources</h2>
+                        <p className="text-sm text-muted-foreground">
+                          Configure your addon URL for streaming content in the External tab.
+                        </p>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-white/8">
+                            <Radio className="size-5 text-foreground" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium">
+                              Addon URL
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Your SlasshyVault addon proxy URL
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div>
+                            <Label htmlFor="addon-url" className="text-sm font-medium">
+                              Addon URL
+                            </Label>
+                            <Input
+                              id="addon-url"
+                              type="url"
+                              value={config.addon_url || ""}
+                              onChange={(e) => setConfig({ ...config, addon_url: e.target.value })}
+                              placeholder="https://your-addon-url.com"
+                              className="mt-1"
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              The base URL of your SlasshyVault addon. Streams will be fetched from this URL.
                             </p>
                           </div>
                         </div>

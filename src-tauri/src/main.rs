@@ -14744,10 +14744,25 @@ struct GroupedStreamsResponse {
 
 #[tauri::command]
 async fn remote_get_movie_streams(
+    state: State<'_, AppState>,
     imdb_id: String,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        config
+            .addon_url
+            .as_ref()
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
+            })?
+            .clone()
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
     let streams = tokio::task::spawn_blocking(move || {
-        remote_source::fetch_movie_streams(&imdb_id)
+        remote_source::fetch_movie_streams(&imdb_id, &base_url, refresh)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -14779,12 +14794,27 @@ async fn remote_get_movie_streams(
 
 #[tauri::command]
 async fn remote_get_series_streams(
+    state: State<'_, AppState>,
     imdb_id: String,
     season: i32,
     episode: i32,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        config
+            .addon_url
+            .as_ref()
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
+            })?
+            .clone()
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
     let streams = tokio::task::spawn_blocking(move || {
-        remote_source::fetch_series_streams(&imdb_id, season, episode)
+        remote_source::fetch_series_streams(&imdb_id, season, episode, &base_url, refresh)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -15264,6 +15294,26 @@ async fn remote_get_cache_dir(
     let config = state.config.lock().map_err(|e| e.to_string())?;
     let dir = stream_cache::CacheManager::cache_dir(&config);
     Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_addon_url(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.addon_url.clone())
+}
+
+#[tauri::command]
+fn set_addon_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    config.addon_url = Some(url);
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn remote_clear_streams_cache() -> Result<(), String> {
+    remote_source::clear_streams_cache();
+    Ok(())
 }
 
 fn main() {
@@ -15814,6 +15864,9 @@ fn main() {
             remote_cleanup_all_cache,
             remote_is_cache_dir_set,
             remote_get_cache_dir,
+            get_addon_url,
+            set_addon_url,
+            remote_clear_streams_cache,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

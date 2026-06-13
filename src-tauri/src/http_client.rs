@@ -22,6 +22,8 @@ static SHARED_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .tcp_nodelay(true)
         .http1_only()
         .user_agent("SlasshyVault/1.0")
+        .gzip(true)
+        .deflate(true)
         .build()
         .expect("Failed to build shared HTTP client")
 });
@@ -36,6 +38,8 @@ static QUICK_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .tcp_nodelay(true)
         .http1_only()
         .user_agent("SlasshyVault/1.0")
+        .gzip(true)
+        .deflate(true)
         .build()
         .expect("Failed to build quick HTTP client")
 });
@@ -46,6 +50,8 @@ static LONG_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .timeout(std::time::Duration::from_secs(300))
         .pool_max_idle_per_host(0)
         .user_agent("SlasshyVault/1.0")
+        .gzip(true)
+        .deflate(true)
         .build()
         .expect("Failed to build long HTTP client")
 });

@@ -352,6 +352,9 @@ pub struct Config {
     // Player mode: "external" (mpv.exe spawned, default)
     #[serde(default)]
     pub player_mode: PlayerMode,
+    // User-configured addon/proxy URL for External tab streaming
+    #[serde(default)]
+    pub addon_url: Option<String>,
 }
 
 /// Which MPV engine to use
@@ -416,6 +419,7 @@ impl Default for Config {
             notifications_enabled: true,
             dev_backend_url: None,
             player_mode: PlayerMode::default(),
+            addon_url: None,
         }
     }
 }

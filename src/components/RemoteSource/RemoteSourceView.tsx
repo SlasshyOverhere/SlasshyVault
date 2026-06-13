@@ -11,7 +11,7 @@ import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
 import { Film, Play } from 'lucide-react'
-import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus, StreamVerification } from './remote.types'
+import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
 import { getCachedImageUrl } from '@/services/api'
 
@@ -120,6 +120,8 @@ export function RemoteSourceView() {
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [remoteLibrary, setRemoteLibrary] = useState<RemoteLibraryItem[]>([])
+  const [addonUrlConfigured, setAddonUrlConfigured] = useState<boolean | null>(null)
+  const [setupAddonUrl, setSetupAddonUrl] = useState('')
 
   const [pageState, setPageState] = useState<PageState>('library')
   const [selectedItem, setSelectedItem] = useState<TmdbSearchResult | null>(null)
@@ -145,9 +147,6 @@ export function RemoteSourceView() {
   const [lastPlayedTitle, setLastPlayedTitle] = useState('')
   const [lastCacheKey, setLastCacheKey] = useState('')
 
-  // Stream verification
-  const [verifyingStreams, setVerifyingStreams] = useState(false)
-  const [streamStatusMap, setStreamStatusMap] = useState<Record<string, boolean>>({})
 
   const imdbIdRef = useRef<string>('')
   const detailReqId = useRef(0)
@@ -199,6 +198,15 @@ export function RemoteSourceView() {
   useEffect(() => {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
+
+  // Check if addon URL is configured
+  useEffect(() => {
+    invoke<string | null>('get_config')
+      .then((config: any) => {
+        setAddonUrlConfigured(!!config?.addon_url)
+      })
+      .catch(() => setAddonUrlConfigured(false))
+  }, [])
 
   // Search
   useEffect(() => {
@@ -263,42 +271,11 @@ export function RemoteSourceView() {
     setPageState('detail')
   }, [])
 
-  const collectStreamUrls = (groups: GroupedStreams[]): string[] => {
-    const urls: string[] = []
-    for (const g of groups) {
-      for (const s of g.streams) {
-        urls.push(s.url)
-      }
-    }
-    return urls
-  }
-
-  const triggerVerification = useCallback(async (groups: GroupedStreams[]) => {
-    const urls = collectStreamUrls(groups)
-    if (urls.length === 0) return
-
-    setStreamStatusMap({})
-    setVerifyingStreams(true)
-
-    try {
-      const results = await invoke<StreamVerification[]>('remote_verify_streams', { urls })
-      const map: Record<string, boolean> = {}
-      for (const r of results) {
-        map[r.url] = r.active
-      }
-      setStreamStatusMap(map)
-    } catch {
-      const map: Record<string, boolean> = {}
-      for (const url of urls) {
-        map[url] = true
-      }
-      setStreamStatusMap(map)
-    }
-    setVerifyingStreams(false)
-  }, [])
+  // Stream verification removed — causes rate limiting against addon servers.
+  // All streams are shown as available without probing.
 
   // Movie: fetch streams and open quality selector
-  const handleFetchMovieStreams = useCallback(async (imdbId: string) => {
+  const handleFetchMovieStreams = useCallback(async (imdbId: string, forceRefresh = false) => {
     setFetching(true)
     setStreamError(null)
     setGroupedStreams([])
@@ -308,17 +285,16 @@ export function RemoteSourceView() {
     setCurrentEpisodeTitle('')
     imdbIdRef.current = imdbId
     try {
-      const streams = await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId })
+      const streams = await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh })
       setGroupedStreams(streams)
-      triggerVerification(streams)
     } catch (e: any) {
       setStreamError(typeof e === 'string' ? e : 'Failed to load streams')
     }
     setFetching(false)
-  }, [triggerVerification])
+  }, [])
 
   // Series episode: fetch streams and open quality selector
-  const handleFetchEpisodeStreams = useCallback(async (imdbId: string, season: number, episode: number, episodeTitle: string) => {
+  const handleFetchEpisodeStreams = useCallback(async (imdbId: string, season: number, episode: number, episodeTitle: string, forceRefresh = false) => {
     setFetching(true)
     setStreamError(null)
     setGroupedStreams([])
@@ -328,14 +304,13 @@ export function RemoteSourceView() {
     setCurrentEpisodeTitle(episodeTitle)
     imdbIdRef.current = imdbId
     try {
-      const streams = await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season, episode })
+      const streams = await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season, episode, forceRefresh })
       setGroupedStreams(streams)
-      triggerVerification(streams)
     } catch (e: any) {
       setStreamError(typeof e === 'string' ? e : 'Failed to load streams')
     }
     setFetching(false)
-  }, [triggerVerification])
+  }, [])
 
   const handlePlayNextEpisode = useCallback(() => {
     const prompt = nextEpisodePrompt
@@ -530,6 +505,71 @@ export function RemoteSourceView() {
     setPageState(searchQuery ? 'search' : 'library')
   }, [searchQuery])
 
+  // Save addon URL from setup wizard
+  const handleSaveAddonUrl = useCallback(async () => {
+    const url = setupAddonUrl.trim()
+    if (!url) return
+    try {
+      const config = await invoke<any>('get_config')
+      config.addon_url = url
+      await invoke('save_config', { newConfig: config, confirmed: true })
+      setAddonUrlConfigured(true)
+      loadRemoteLibrary()
+      toast({ title: 'Addon URL saved', description: 'You can now stream content from the External tab.' })
+    } catch (e: any) {
+      toast({ title: 'Failed to save', description: e?.message || 'Could not save addon URL.', variant: 'destructive' })
+    }
+  }, [setupAddonUrl, loadRemoteLibrary, toast])
+
+  // Show setup wizard if addon URL is not configured
+  if (addonUrlConfigured === false) {
+    return (
+      <div className="h-full flex flex-col relative">
+        <div className="pointer-events-none absolute -top-40 -right-40 size-[600px] rounded-full bg-amber-500/3 blur-[120px]" />
+        <div className="pointer-events-none absolute -bottom-40 -left-40 size-[500px] rounded-full bg-sky-500/2 blur-[120px]" />
+        <div className="flex-1 flex items-center justify-center relative z-10">
+          <div className="max-w-md w-full space-y-6 p-8">
+            <div className="space-y-2 text-center">
+              <div className="mx-auto size-16 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center">
+                <Film className="size-8 text-neutral-500" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-100">No addon configured</h2>
+              <p className="text-sm text-neutral-500">
+                To stream content, you need to add your SlasshyVault addon URL.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <input
+                type="url"
+                value={setupAddonUrl}
+                onChange={(e) => setSetupAddonUrl(e.target.value)}
+                placeholder="https://your-addon-url.com"
+                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAddonUrl() }}
+              />
+              <button
+                onClick={handleSaveAddonUrl}
+                disabled={!setupAddonUrl.trim()}
+                className="w-full h-11 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm transition-all duration-200"
+              >
+                Save & Start Streaming
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Loading state while checking config
+  if (addonUrlConfigured === null) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="size-10 rounded-full border-2 border-neutral-800 border-t-amber-700/40 animate-spin" />
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col relative">
       {/* Ambient background glow */}
@@ -679,8 +719,8 @@ export function RemoteSourceView() {
         onSelect={handleQualitySelect}
         loading={fetching}
         error={streamError}
-        verifying={verifyingStreams}
-        streamStatus={streamStatusMap}
+        verifying={false}
+        streamStatus={{}}
       />
 
       {/* Resume Dialog */}

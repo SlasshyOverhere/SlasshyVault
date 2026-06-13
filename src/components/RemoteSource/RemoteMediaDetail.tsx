@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo } from 'lucide-react'
+import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/tauri'
 import { getCachedImageUrl } from '@/services/api'
@@ -10,8 +10,8 @@ interface Props {
   item: TmdbSearchResult
   imdbId?: string | null
   onBack: () => void
-  onFetchMovieStreams: (imdbId: string) => void
-  onFetchEpisodeStreams: (imdbId: string, season: number, episode: number, episodeTitle: string) => void
+  onFetchMovieStreams: (imdbId: string, forceRefresh?: boolean) => void
+  onFetchEpisodeStreams: (imdbId: string, season: number, episode: number, episodeTitle: string, forceRefresh?: boolean) => void
   fetching?: boolean
 }
 
@@ -232,7 +232,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 <p className="text-sm text-neutral-400 leading-relaxed line-clamp-4 max-w-xl">{item.overview}</p>
               )}
 
-              <div className="pt-2">
+              <div className="pt-2 flex items-center gap-2">
                 <Button
                   onClick={() => imdbId && onFetchMovieStreams(imdbId)}
                   disabled={!imdbId || fetching}
@@ -240,6 +240,15 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 >
                   {fetching ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Play className="size-4 mr-2 fill-current" />}
                   {fetching ? 'Loading streams...' : 'Find streams'}
+                </Button>
+                <Button
+                  onClick={() => imdbId && onFetchMovieStreams(imdbId, true)}
+                  disabled={!imdbId || fetching}
+                  variant="outline"
+                  className="h-11 px-3 rounded-xl border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900 transition-all duration-200"
+                  title="Refresh streams (bypass cache)"
+                >
+                  <RefreshCw className={cn("size-4", fetching && "animate-spin")} />
                 </Button>
               </div>
             </div>
@@ -376,7 +385,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 )}
               </div>
 
-              <div className="shrink-0 flex items-center">
+              <div className="shrink-0 flex items-center gap-1.5">
                 <button
                   onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name)}
                   disabled={!imdbId || fetching}
@@ -387,6 +396,14 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                   ) : (
                     <Play className="size-4 fill-current" />
                   )}
+                </button>
+                <button
+                  onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name, true)}
+                  disabled={!imdbId || fetching}
+                  className="size-10 flex items-center justify-center rounded-xl border border-neutral-800 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+                  title="Refresh streams (bypass cache)"
+                >
+                  <RefreshCw className={cn("size-3.5", fetching && "animate-spin")} />
                 </button>
               </div>
             </div>

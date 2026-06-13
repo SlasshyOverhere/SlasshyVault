@@ -1,4 +1,45 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+// In-memory cache for stream results (5 minute TTL)
+const STREAM_CACHE_TTL: Duration = Duration::from_secs(300);
+
+struct CacheEntry {
+    streams: Vec<RemoteStream>,
+    fetched_at: Instant,
+}
+
+static STREAM_CACHE: Mutex<Option<HashMap<String, CacheEntry>>> = Mutex::new(None);
+
+fn get_cached_streams(key: &str) -> Option<Vec<RemoteStream>> {
+    let cache = STREAM_CACHE.lock().ok()?;
+    let cache = cache.as_ref()?;
+    let entry = cache.get(key)?;
+    if entry.fetched_at.elapsed() < STREAM_CACHE_TTL {
+        Some(entry.streams.clone())
+    } else {
+        None
+    }
+}
+
+fn set_cached_streams(key: &str, streams: Vec<RemoteStream>) {
+    let mut cache = STREAM_CACHE.lock().unwrap();
+    let map = cache.get_or_insert_with(HashMap::new);
+    map.insert(
+        key.to_string(),
+        CacheEntry {
+            streams,
+            fetched_at: Instant::now(),
+        },
+    );
+}
+
+fn clear_stream_cache() {
+    let mut cache = STREAM_CACHE.lock().unwrap();
+    *cache = None;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +66,10 @@ fn is_recommended_url(url: &str) -> bool {
 #[derive(Debug, Deserialize)]
 struct RawStream {
     name: String,
-    description: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     url: String,
     #[serde(default)]
     behavior_hints: BehaviorHints,
@@ -35,8 +79,16 @@ struct RawStream {
 struct BehaviorHints {
     #[serde(default)]
     not_web_ready: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_f64_as_i64")]
     video_size: i64,
+}
+
+fn deserialize_f64_as_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: f64 = serde::Deserialize::deserialize(deserializer)?;
+    Ok(v as i64)
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,18 +129,52 @@ pub fn parse_source(name: &str) -> String {
     }
 }
 
-pub fn fetch_movie_streams(imdb_id: &str) -> Result<Vec<RemoteStream>, String> {
-    let url = crate::obfuscator::movie_stream_url(imdb_id);
-    fetch_and_parse_streams(&url)
+pub fn fetch_movie_streams(imdb_id: &str, base_url: &str, force_refresh: bool) -> Result<Vec<RemoteStream>, String> {
+    let cache_key = format!("movie:{}", imdb_id);
+
+    if !force_refresh {
+        if let Some(cached) = get_cached_streams(&cache_key) {
+            println!("[REMOTE] Cache hit for {}", cache_key);
+            return Ok(cached);
+        }
+    }
+
+    let url = format!("{}/stream/movie/{}.json", base_url.trim_end_matches('/'), imdb_id);
+    let streams = fetch_and_parse_streams(&url)?;
+    set_cached_streams(&cache_key, streams.clone());
+    Ok(streams)
 }
 
 pub fn fetch_series_streams(
     imdb_id: &str,
     season: i32,
     episode: i32,
+    base_url: &str,
+    force_refresh: bool,
 ) -> Result<Vec<RemoteStream>, String> {
-    let url = crate::obfuscator::series_stream_url(imdb_id, season, episode);
-    fetch_and_parse_streams(&url)
+    let cache_key = format!("series:{}:{}:{}", imdb_id, season, episode);
+
+    if !force_refresh {
+        if let Some(cached) = get_cached_streams(&cache_key) {
+            println!("[REMOTE] Cache hit for {}", cache_key);
+            return Ok(cached);
+        }
+    }
+
+    let url = format!(
+        "{}/stream/series/{}:{}:{}.json",
+        base_url.trim_end_matches('/'),
+        imdb_id,
+        season,
+        episode
+    );
+    let streams = fetch_and_parse_streams(&url)?;
+    set_cached_streams(&cache_key, streams.clone());
+    Ok(streams)
+}
+
+pub fn clear_streams_cache() {
+    clear_stream_cache();
 }
 
 fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
@@ -103,8 +189,11 @@ fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
         return Err(format!("Server returned {}", response.status()));
     }
 
-    let raw: StreamsResponse = response
-        .json()
+    let body = response
+        .text()
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    let raw: StreamsResponse = serde_json::from_str(&body)
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     let streams: Vec<RemoteStream> = raw
@@ -115,7 +204,7 @@ fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
             let source = parse_source(&s.name);
             RemoteStream {
                 name: s.name,
-                description: s.description,
+                description: s.description.or(s.title).unwrap_or_default(),
                 url: s.url.clone(),
                 video_size: s.behavior_hints.video_size,
                 not_web_ready: s.behavior_hints.not_web_ready,

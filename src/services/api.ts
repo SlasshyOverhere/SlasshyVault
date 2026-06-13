@@ -112,6 +112,8 @@ export interface Config {
   dev_backend_url?: string;
   // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
   player_mode?: "native" | "external";
+  // User-configured addon URL for External tab streaming
+  addon_url?: string;
 }
 
 export interface ResumeInfo {
