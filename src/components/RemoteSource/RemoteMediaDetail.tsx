@@ -41,11 +41,9 @@ interface TmdbSeasonDetails {
 // Resolve an image path: TMDB paths (/...) get TMDB URL, local cache paths get getCachedImageUrl
 function tmdbImage(path: string | null | undefined, size: string): string | null {
   if (!path) return null
-  // Full URL or asset:// already resolved
   if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) return path
-  // TMDB paths start with /
   if (path.startsWith('/')) return `https://image.tmdb.org/t/p/${size}${path}`
-  return null // local cache path, handle separately
+  return null
 }
 
 // Episode thumbnail with async image resolution (handles TMDB + local cache paths)
@@ -55,9 +53,13 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
   stillPath: string | null | undefined, alt: string
 }) {
   const [imgUrl, setImgUrl] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    setLoaded(false)
+    setError(false)
     const load = async () => {
       if (!stillPath) { setImgUrl(null); return }
 
@@ -67,7 +69,8 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
       }
 
       if (stillPath.startsWith('/')) {
-        if (!cancelled) setImgUrl(`https://image.tmdb.org/t/p/w300${stillPath}`)
+        // #87/#99: w185 instead of w300 for thumbnail-sized containers
+        if (!cancelled) setImgUrl(`https://image.tmdb.org/t/p/w185${stillPath}`)
         return
       }
 
@@ -84,20 +87,29 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
     return () => { cancelled = true }
   }, [stillPath])
 
-  if (!imgUrl) {
+  // #49/#90: Error fallback + loading skeleton
+  if (!imgUrl || error) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-neutral-900">
-        <Film className="size-5 text-neutral-700" />
+        <Film className="size-5 text-neutral-600" />
       </div>
     )
   }
 
   return (
-    <img
-      src={imgUrl}
-      alt={alt}
-      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-    />
+    <div className="relative w-full h-full">
+      {!loaded && <div className="absolute inset-0 bg-neutral-800 animate-pulse" />}
+      <img
+        src={imgUrl}
+        alt={alt}
+        onLoad={() => setLoaded(true)}
+        onError={() => setError(true)}
+        className={cn(
+          'w-full h-full object-cover transition-transform duration-500 group-hover:scale-105',
+          !loaded && 'opacity-0'
+        )}
+      />
+    </div>
   )
 })
 
@@ -107,6 +119,8 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
   const [activeSeason, setActiveSeason] = useState<number>(1)
   const [seasonData, setSeasonData] = useState<Map<number, TmdbEpisodeInfo[]>>(new Map())
   const [fetchedBackdrop, setFetchedBackdrop] = useState<string | null>(null)
+  // #91: Poster loading state
+  const [posterLoaded, setPosterLoaded] = useState(false)
   const loadingSeasons = useRef(new Set<number>())
   const imdbId = propImdbId ?? localImdbId
 
@@ -129,6 +143,17 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
       .finally(() => {
         loadingSeasons.current.delete(seasonNum)
       })
+  }, [item.id])
+
+  // #47: Clear seasonData when switching items
+  useEffect(() => {
+    setSeasonData(new Map())
+    setSeasons([])
+    setActiveSeason(1)
+    setFetchedBackdrop(null)
+    setLocalImdbId(null)
+    setPosterLoaded(false)
+    loadingSeasons.current.clear()
   }, [item.id])
 
   useEffect(() => {
@@ -180,6 +205,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
 
   const poster = tmdbImage(item.poster_path, 'w342')
   const backdrop = tmdbImage(item.backdrop_path || fetchedBackdrop, 'w1280')
+  const displayTitle = item.title || item.name || ''
 
   // ── Movie view ──
   if (item.media_type === 'movie') {
@@ -191,27 +217,40 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
         </button>
 
         <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-[#0A0A0A]">
-          {backdrop && (
+          {/* #92: Backdrop with loading fallback */}
+          {backdrop ? (
             <div className="absolute inset-0">
-              <img src={backdrop} alt="" className="w-full h-full object-cover opacity-20" />
+              <img src={backdrop} alt={`${displayTitle} backdrop`} className="w-full h-full object-cover opacity-20" />
               <div className="absolute inset-0 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/80 to-[#0A0A0A]/40" />
             </div>
+          ) : (
+            <div className="absolute inset-0 bg-neutral-950/50" />
           )}
 
-          <div className="relative flex gap-8 p-8">
-            <div className="shrink-0 w-44 aspect-[2/3] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl">
+          {/* #63/#65: Standardized sizing, responsive stacking */}
+          <div className="relative flex flex-col sm:flex-row gap-6 sm:gap-8 p-6 sm:p-8">
+            <div className="shrink-0 w-44 aspect-[2/3] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl self-center sm:self-auto relative">
+              {/* #91: Poster loading skeleton */}
               {poster ? (
-                <img src={poster} alt={item.title || ''} className="w-full h-full object-cover" />
+                <>
+                  {!posterLoaded && <div className="absolute inset-0 bg-neutral-800 animate-pulse" />}
+                  <img
+                    src={poster}
+                    alt={displayTitle}
+                    onLoad={() => setPosterLoaded(true)}
+                    className={cn('w-full h-full object-cover', !posterLoaded && 'opacity-0')}
+                  />
+                </>
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <Film className="size-8 text-neutral-700" />
+                  <Film className="size-8 text-neutral-600" />
                 </div>
               )}
             </div>
 
             <div className="flex-1 min-w-0 flex flex-col justify-center space-y-4">
               <div>
-                <h2 className="text-3xl font-bold text-neutral-100 leading-tight">{item.title || item.name}</h2>
+                <h2 className="text-3xl font-bold text-neutral-100 leading-tight">{displayTitle}</h2>
                 <div className="flex items-center gap-3 mt-2 text-sm text-neutral-500">
                   {item.release_date && (
                     <span className="flex items-center gap-1.5">
@@ -268,26 +307,39 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
 
       {/* Show header */}
       <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-[#0A0A0A]">
-        {backdrop && (
+        {/* #92: Backdrop with loading fallback */}
+        {backdrop ? (
           <div className="absolute inset-0">
-            <img src={backdrop} alt="" className="w-full h-full object-cover opacity-15" />
+            <img src={backdrop} alt={`${displayTitle} backdrop`} className="w-full h-full object-cover opacity-15" />
             <div className="absolute inset-0 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/80 to-[#0A0A0A]/40" />
           </div>
+        ) : (
+          <div className="absolute inset-0 bg-neutral-950/50" />
         )}
 
-        <div className="relative flex gap-6 p-6">
-          <div className="shrink-0 w-28 aspect-[2/3] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-xl">
+        {/* #63: Standardized to p-8/w-44/text-3xl to match movie, #65: responsive */}
+        <div className="relative flex flex-col sm:flex-row gap-6 sm:gap-8 p-6 sm:p-8">
+          <div className="shrink-0 w-44 aspect-[2/3] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl self-center sm:self-auto relative">
+            {/* #91: Poster loading skeleton */}
             {poster ? (
-              <img src={poster} alt={item.name || ''} className="w-full h-full object-cover" />
+              <>
+                {!posterLoaded && <div className="absolute inset-0 bg-neutral-800 animate-pulse" />}
+                <img
+                  src={poster}
+                  alt={displayTitle}
+                  onLoad={() => setPosterLoaded(true)}
+                  className={cn('w-full h-full object-cover', !posterLoaded && 'opacity-0')}
+                />
+              </>
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <Film className="size-6 text-neutral-700" />
+                <Film className="size-8 text-neutral-600" />
               </div>
             )}
           </div>
 
-          <div className="flex-1 min-w-0 space-y-2.5 flex flex-col justify-center">
-            <h2 className="text-2xl font-bold text-neutral-100">{item.name}</h2>
+          <div className="flex-1 min-w-0 space-y-4 flex flex-col justify-center">
+            <h2 className="text-3xl font-bold text-neutral-100">{displayTitle}</h2>
             <div className="flex items-center gap-3 text-sm text-neutral-500 flex-wrap">
               {item.first_air_date && (
                 <span className="flex items-center gap-1.5">
@@ -307,14 +359,14 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
               </span>
             </div>
             {item.overview && (
-              <p className="text-sm text-neutral-500 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
+              <p className="text-sm text-neutral-400 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
             )}
           </div>
         </div>
       </div>
 
-      {/* Season selector */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+      {/* #102: Season selector with scroll affordance */}
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
         {seasons.map((s) => (
           <button
             key={s.season_number}
@@ -338,8 +390,8 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
       <div className="space-y-2">
         {!seasonData.has(activeSeason) ? (
           Array.from({ length: episodeCount || 8 }, (_, i) => (
-            <div key={i} className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80">
-              <div className="shrink-0 w-44 aspect-video rounded-xl bg-neutral-800 animate-pulse" />
+            <div key={i} className="flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80">
+              <div className="shrink-0 w-full sm:w-44 aspect-video rounded-xl bg-neutral-800 animate-pulse" />
               <div className="flex-1 flex flex-col justify-center gap-2">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-16 bg-neutral-800 rounded animate-pulse" />
@@ -358,9 +410,10 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
           episodes.map((ep) => (
             <div
               key={ep.episode_number}
-              className="flex gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all duration-200 group"
+              className="flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all duration-200 group"
             >
-              <div className="shrink-0 w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
+              {/* #66: Episode rows responsive stacking */}
+              <div className="shrink-0 w-full sm:w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
                 <EpisodeThumbnail
                   stillPath={ep.still_path}
                   alt={ep.name}
@@ -381,7 +434,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                   )}
                 </div>
                 {ep.overview && (
-                  <p className="text-xs text-neutral-600 leading-relaxed line-clamp-2">{ep.overview}</p>
+                  <p className="text-xs text-neutral-400 leading-relaxed line-clamp-2">{ep.overview}</p>
                 )}
               </div>
 
