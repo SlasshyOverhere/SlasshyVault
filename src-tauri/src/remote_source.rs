@@ -179,47 +179,84 @@ pub fn clear_streams_cache() {
 
 fn fetch_and_parse_streams(url: &str) -> Result<Vec<RemoteStream>, String> {
     let client = crate::http_client::shared_client();
+    let max_retries = 3u32;
+    let mut last_error = String::new();
 
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("Failed to fetch streams: {}", e))?;
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            let delay_ms = 1000 * (1 << attempt);
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms as u64));
+            println!(
+                "[REMOTE] Stream fetch retry attempt {} after {}ms delay",
+                attempt + 1,
+                delay_ms
+            );
+        }
 
-    if !response.status().is_success() {
-        return Err(format!("Server returned {}", response.status()));
-    }
-
-    let body = response
-        .text()
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    let raw: StreamsResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let streams: Vec<RemoteStream> = raw
-        .streams
-        .into_iter()
-        .map(|s| {
-            let quality = parse_quality(&s.name);
-            let source = parse_source(&s.name);
-            RemoteStream {
-                name: s.name,
-                description: s.description.or(s.title).unwrap_or_default(),
-                url: s.url.clone(),
-                video_size: s.behavior_hints.video_size,
-                not_web_ready: s.behavior_hints.not_web_ready,
-                parsed_quality: quality,
-                parsed_source: source,
-                recommended: is_recommended_url(&s.url),
+        let response = match client.get(url).send() {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format!("Failed to fetch streams: {}", e);
+                println!(
+                    "[REMOTE] Stream fetch network error (attempt {}): {}",
+                    attempt + 1,
+                    last_error
+                );
+                continue;
             }
-        })
-        .collect();
+        };
 
-    if streams.is_empty() {
-        return Err("No streams available for this content".to_string());
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.is_client_error() {
+                return Err(format!("Server returned {}", status));
+            }
+            last_error = format!("Server returned {}", status);
+            println!(
+                "[REMOTE] Stream fetch server error (attempt {}): {}",
+                attempt + 1,
+                last_error
+            );
+            continue;
+        }
+
+        let body = response
+            .text()
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        let raw: StreamsResponse = serde_json::from_str(&body)
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        let streams: Vec<RemoteStream> = raw
+            .streams
+            .into_iter()
+            .map(|s| {
+                let quality = parse_quality(&s.name);
+                let source = parse_source(&s.name);
+                RemoteStream {
+                    name: s.name,
+                    description: s.description.or(s.title).unwrap_or_default(),
+                    url: s.url.clone(),
+                    video_size: s.behavior_hints.video_size,
+                    not_web_ready: s.behavior_hints.not_web_ready,
+                    parsed_quality: quality,
+                    parsed_source: source,
+                    recommended: is_recommended_url(&s.url),
+                }
+            })
+            .collect();
+
+        if streams.is_empty() {
+            return Err("No streams available for this content".to_string());
+        }
+
+        return Ok(streams);
     }
 
-    Ok(streams)
+    Err(format!(
+        "Failed to fetch streams after {} retries: {}",
+        max_retries, last_error
+    ))
 }
 
 pub fn group_streams(streams: Vec<RemoteStream>) -> Vec<GroupedStreams> {
@@ -280,130 +317,4 @@ pub fn format_file_size(bytes: i64) -> String {
         unit_idx += 1;
     }
     format!("{:.2} {}", size, UNITS[unit_idx])
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamVerification {
-    pub url: String,
-    pub active: bool,
-}
-
-fn is_video_content_type(ct: &str) -> bool {
-    ct.starts_with("video/")
-        || ct.starts_with("application/octet-stream")
-        || ct.starts_with("application/x-mpegURL")
-        || ct.starts_with("application/vnd.apple.mpegurl")
-        || ct.starts_with("binary/")
-        || ct.contains("mp4")
-        || ct.contains("matroska")
-        || ct.contains("webm")
-}
-
-fn try_probe_range_get(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
-    let resp = client
-        .get(url)
-        .header("Range", "bytes=0-1024")
-        .timeout(std::time::Duration::from_secs(6))
-        .send()
-        .ok()?;
-
-    let status = resp.status();
-    if !status.is_success() && status != 206 {
-        return None;
-    }
-
-    let ct = resp.headers().get("content-type")?.to_str().ok()?;
-    if is_video_content_type(ct) {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-fn try_probe_head(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
-    let resp = client
-        .head(url)
-        .timeout(std::time::Duration::from_secs(6))
-        .send()
-        .ok()?;
-
-    if !resp.status().is_success() && resp.status() != 206 {
-        return None;
-    }
-
-    if let Some(ct) = resp.headers().get("content-type") {
-        if let Ok(ct_str) = ct.to_str() {
-            if is_video_content_type(ct_str) {
-                return Some(true);
-            }
-            return None;
-        }
-    }
-
-    None
-}
-
-fn try_probe_get_status(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
-    let resp = client
-        .get(url)
-        .timeout(std::time::Duration::from_secs(6))
-        .send()
-        .ok()?;
-
-    if !resp.status().is_success() && resp.status() != 206 {
-        return None;
-    }
-
-    let ct = resp.headers().get("content-type")?.to_str().ok()?;
-    if is_video_content_type(ct) {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-fn verify_single_url(url: &str) -> bool {
-    let client = crate::http_client::shared_client();
-
-    if let Some(result) = try_probe_range_get(client, url) {
-        return result;
-    }
-
-    if let Some(result) = try_probe_head(client, url) {
-        return result;
-    }
-
-    if let Some(result) = try_probe_get_status(client, url) {
-        return result;
-    }
-
-    false
-}
-
-pub fn verify_streams(urls: &[String]) -> Vec<StreamVerification> {
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-
-    let results = Arc::new(Mutex::new(Vec::with_capacity(urls.len())));
-    let mut handles = Vec::with_capacity(urls.len());
-
-    for url in urls {
-        let url = url.clone();
-        let results = Arc::clone(&results);
-
-        handles.push(thread::spawn(move || {
-            let active = verify_single_url(&url);
-            let mut res = results.lock().expect("verify_streams lock");
-            res.push(StreamVerification { url, active });
-        }));
-    }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
-
-    Arc::try_unwrap(results)
-        .expect("verify_streams arc unwrap")
-        .into_inner()
-        .expect("verify_streams mutex into_inner")
 }

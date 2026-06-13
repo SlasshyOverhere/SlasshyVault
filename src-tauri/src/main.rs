@@ -15101,7 +15101,9 @@ async fn remote_play_with_mpv(
                 speed_bytes_per_second: 0.0,
                 target_path: target_path_str,
             };
-            let _ = app_handle.emit_all("remote-cache-progress", &status);
+            if let Err(e) = app_handle.emit_all("remote-cache-progress", &status) {
+                eprintln!("[REMOTE-MPV] Failed to emit cache-complete event: {}", e);
+            }
         }
     }
 
@@ -15419,15 +15421,6 @@ async fn remote_remove_from_library(
     db.remove_series_episodes(media_id).map_err(|e| e.to_string()).ok();
     db.remove_media(media_id).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-#[tauri::command]
-async fn remote_verify_streams(
-    urls: Vec<String>,
-) -> Result<Vec<remote_source::StreamVerification>, String> {
-    tokio::task::spawn_blocking(move || remote_source::verify_streams(&urls))
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -16007,7 +16000,6 @@ fn main() {
             remote_update_poster,
             remote_get_library,
             remote_remove_from_library,
-            remote_verify_streams,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
