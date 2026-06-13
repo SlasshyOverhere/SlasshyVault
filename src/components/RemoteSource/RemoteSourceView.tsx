@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, memo } from 'react'
+import { useState, useEffect, useCallback, useRef, memo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { listen } from '@tauri-apps/api/event'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -99,7 +99,8 @@ const LibraryPoster = memo(function LibraryPoster({ posterPath, alt }: { posterP
       try {
         const url = await getCachedImageUrl(filename)
         if (!cancelled) setImgUrl(url)
-      } catch {
+      } catch (e) {
+        console.warn('[RemoteSourceView] getCachedImageUrl:', e)
         if (!cancelled) setImgUrl(null)
       }
     }
@@ -117,12 +118,54 @@ const LibraryPoster = memo(function LibraryPoster({ posterPath, alt }: { posterP
   )
 })
 
-export function RemoteSourceView() {
+interface ErrorBoundaryState { hasError: boolean; error: Error | null }
+
+class RemoteSourceErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[RemoteSourceView] Uncaught error:', error, info.componentStack)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex items-center justify-center">
+          <div className="text-center space-y-4 p-8">
+            <div className="size-16 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center mx-auto">
+              <Film className="size-7 text-red-500/60" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-neutral-300">Something went wrong</p>
+              <p className="text-[13px] text-neutral-600 mt-1 max-w-xs">
+                {this.state.error?.message || 'An unexpected error occurred in the remote library.'}
+              </p>
+              <button
+                onClick={() => this.setState({ hasError: false, error: null })}
+                className="mt-4 px-4 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs font-semibold text-neutral-400 hover:text-neutral-200 hover:border-neutral-700 transition-all"
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function RemoteSourceViewInner() {
   const { toast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [remoteLibrary, setRemoteLibrary] = useState<RemoteLibraryItem[]>([])
+  const [libraryLimit, setLibraryLimit] = useState(50)
   const [addonUrlConfigured, setAddonUrlConfigured] = useState<boolean | null>(null)
   const [setupAddonUrl, setSetupAddonUrl] = useState('')
 
@@ -154,6 +197,7 @@ export function RemoteSourceView() {
 
   const imdbIdRef = useRef<string>('')
   const detailReqId = useRef(0)
+  const searchReqIdRef = useRef(0)
 
   // Next episode prompt
   const [nextEpisodePrompt, setNextEpisodePrompt] = useState<{ show: boolean; imdbId: string; season: number; episode: number; title: string }>({ show: false, imdbId: '', season: 0, episode: 0, title: '' })
@@ -164,7 +208,7 @@ export function RemoteSourceView() {
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
-    } catch { return [] }
+    } catch (e) { console.warn('[RemoteSourceView] load search history:', e); return [] }
   })
 
   useEffect(() => {
@@ -196,7 +240,7 @@ export function RemoteSourceView() {
     try {
       const items = await invoke<RemoteLibraryItem[]>('remote_get_library')
       setRemoteLibrary(items)
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[RemoteSourceView] loadRemoteLibrary:', e) }
   }, [])
 
   useEffect(() => {
@@ -212,19 +256,28 @@ export function RemoteSourceView() {
       .catch(() => setAddonUrlConfigured(false))
   }, [])
 
-  // Search
+  // Search (with race condition guard via searchReqIdRef)
   useEffect(() => {
     if (!searchQuery.trim()) { setSearchResults([]); return }
+    const reqId = ++searchReqIdRef.current
     setIsSearching(true)
     setPageState('search')
     invoke<TmdbSearchResponse>('search_tmdb', { query: searchQuery })
       .then((res) => {
+        if (reqId !== searchReqIdRef.current) return
         const results = res.results || []
         if (results.length > 0) addToHistory(searchQuery)
         setSearchResults(results)
       })
-      .catch(() => setSearchResults([]))
-      .finally(() => setIsSearching(false))
+      .catch((e) => {
+        if (reqId !== searchReqIdRef.current) return
+        console.warn('[RemoteSourceView] search_tmdb:', e)
+        setSearchResults([])
+      })
+      .finally(() => {
+        if (reqId !== searchReqIdRef.current) return
+        setIsSearching(false)
+      })
   }, [searchQuery, addToHistory])
 
   // Cache progress events
@@ -306,10 +359,10 @@ export function RemoteSourceView() {
                 pendingStreamRef.current.stream = flat[0]
               }
             }
-          } catch { /* streams will be fetched on demand */ }
+          } catch (e) { console.warn('[RemoteSourceView] handleSelectResult fetch streams:', e) }
         }
       }
-    } catch { /* no resume data */ }
+    } catch (e) { console.warn('[RemoteSourceView] handleSelectResult resume check:', e) }
   }, [currentSeason, currentEpisode])
 
   // Stream verification removed — causes rate limiting against addon servers.
@@ -431,8 +484,8 @@ export function RemoteSourceView() {
         pendingStreamRef.current = { stream, identifier, startPosition: resumeInfo.position, mediaId: resumeInfo.media_id }
         return
       }
-    } catch {
-      // No record found, proceed with fresh play
+    } catch (e) {
+      console.warn('[RemoteSourceView] handleQualitySelect resume check:', e)
     }
 
     launchPlayback(stream, identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
@@ -454,7 +507,7 @@ export function RemoteSourceView() {
         : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
       const flat = streams.flatMap((g) => g.streams)
       return flat.length > 0 ? flat[0] : null
-    } catch { return null }
+    } catch (e) { console.warn('[RemoteSourceView] getStreamForResume:', e); return null }
   }, [currentSeason, currentEpisode])
 
   // Resume dialog handlers
@@ -486,7 +539,7 @@ export function RemoteSourceView() {
       if (pending.mediaId) {
         await invoke('remote_clear_progress', { mediaId: pending.mediaId })
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[RemoteSourceView] handleStartOver clear_progress:', e) }
 
     let stream: RemoteStreamData | null = pending.stream
     if (!stream) {
@@ -569,7 +622,7 @@ export function RemoteSourceView() {
               pendingStreamRef.current.stream = flat[0]
             }
           }
-        } catch { /* streams will be fetched on demand if this fails */ }
+        } catch (e) { console.warn('[RemoteSourceView] handleLibraryCardClick fetch streams:', e) }
       }
     }
 
@@ -580,7 +633,7 @@ export function RemoteSourceView() {
         if (reqId !== detailReqId.current) return
         if (details.poster_path) {
           setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.warn('[RemoteSourceView] remote_update_poster:', e))
         }
         if (details.backdrop_path) {
           setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
@@ -591,12 +644,12 @@ export function RemoteSourceView() {
       } else {
         const [details, extIds] = await Promise.all([
           invoke<any>('get_tv_details', { tvId: searchItem.id }),
-          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch(() => null),
+          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch((e) => { console.warn('[RemoteSourceView] get_imdb_details:', e); return null }),
         ])
         if (reqId !== detailReqId.current) return
         if (details.poster_path) {
           setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch(() => {})
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.warn('[RemoteSourceView] remote_update_poster:', e))
         }
         if (details.backdrop_path) {
           setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } : prev)
@@ -605,7 +658,7 @@ export function RemoteSourceView() {
           setSelectedItem((prev) => prev ? { ...prev, imdb_id: extIds.imdb_id } : prev)
         }
       }
-    } catch { /* use whatever we have */ }
+    } catch (e) { console.warn('[RemoteSourceView] handleLibraryCardClick TMDB details:', e) }
     if (reqId !== detailReqId.current) return
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
@@ -614,6 +667,10 @@ export function RemoteSourceView() {
     setSelectedItem(null)
     setGroupedStreams([])
     setStreamError(null)
+    setQualityOpen(false)
+    setResumeDialog((prev) => ({ ...prev, open: false }))
+    pendingStreamRef.current = null
+    pendingFetchedStreamsRef.current = null
     setPageState(searchQuery ? 'search' : 'library')
   }, [searchQuery])
 
@@ -753,8 +810,8 @@ export function RemoteSourceView() {
           {!searchQuery && remoteLibrary.length > 0 && (
             <div className="px-8 pb-4">
               <h2 className="text-[11px] font-bold uppercase tracking-widest text-neutral-600 mb-4">My Library</h2>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-2.5">
-                {remoteLibrary.map((item) => (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5">
+                {remoteLibrary.slice(0, libraryLimit).map((item) => (
                   <button
                     key={item.id}
                     onClick={() => handleLibraryCardClick(item)}
@@ -799,6 +856,16 @@ export function RemoteSourceView() {
                   </button>
                 ))}
               </div>
+              {remoteLibrary.length > libraryLimit && (
+                <div className="flex justify-center mt-4">
+                  <button
+                    onClick={() => setLibraryLimit((prev) => prev + 50)}
+                    className="px-4 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs font-semibold text-neutral-400 hover:text-neutral-200 hover:border-neutral-700 transition-all"
+                  >
+                    Load More ({remoteLibrary.length - libraryLimit} remaining)
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -888,3 +955,13 @@ export function RemoteSourceView() {
     </div>
   )
 }
+
+export default function RemoteSourceViewExport() {
+  return (
+    <RemoteSourceErrorBoundary>
+      <RemoteSourceViewInner />
+    </RemoteSourceErrorBoundary>
+  )
+}
+
+export { RemoteSourceViewExport as RemoteSourceView }

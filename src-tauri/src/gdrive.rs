@@ -223,12 +223,16 @@ impl GoogleDriveClient {
                 None
             }
         };
+        let http_client = reqwest::Client::builder()
+            .user_agent("SlasshyVault/3.0.40")
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("[GDRIVE] Failed to build reqwest client with user agent, falling back to default: {}", e);
+                reqwest::Client::new()
+            });
         Self {
             tokens: Arc::new(Mutex::new(tokens)),
-            http_client: reqwest::Client::builder()
-                .user_agent("SlasshyVault/3.0.40")
-                .build()
-                .expect("Failed to build reqwest client"),
+            http_client,
         }
     }
 

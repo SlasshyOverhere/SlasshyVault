@@ -7379,6 +7379,7 @@ struct TmdbSearchResultItem {
     release_date: Option<String>,
     first_air_date: Option<String>,
     vote_average: Option<f64>,
+    imdb_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -9886,6 +9887,7 @@ async fn search_tmdb(
             release_date: item.release_date,
             first_air_date: item.first_air_date,
             vote_average: item.vote_average,
+            imdb_id: item.imdb_id,
         })
         .collect::<Vec<_>>();
 
@@ -15095,7 +15097,7 @@ async fn remote_play_with_mpv(
         if already_cached {
             let status = stream_cache::CacheStatus {
                 cache_key: media_identifier.clone(),
-                state: stream_cache::CacheState::Complete,
+                state: stream_cache::CacheState::Cached { path: target_path_str.clone() },
                 downloaded_bytes: video_size.max(1) as u64,
                 total_bytes: video_size.max(1) as u64,
                 speed_bytes_per_second: 0.0,
@@ -15198,9 +15200,9 @@ async fn remote_play_with_mpv(
                         if let Some(entry) = active.get_mut(&cache_key) {
                             entry.status.downloaded_bytes = downloaded;
                             entry.status.speed_bytes_per_second = speed;
-                            entry.status.state = stream_cache::CacheState::Downloading(
-                                (downloaded as f64 / total as f64) * 100.0,
-                            );
+                            entry.status.state = stream_cache::CacheState::Downloading {
+                                progress: (downloaded as f64 / total as f64) * 100.0,
+                            };
                             let s = entry.status.clone();
                             drop(active);
                             let _ = app_clone.emit_all("remote-cache-progress", &s);
@@ -15215,7 +15217,7 @@ async fn remote_play_with_mpv(
         if !is_local_url {
             if let Ok(mut active) = manager.lock_active() {
                 if let Some(entry) = active.get_mut(&cache_key) {
-                    entry.status.state = stream_cache::CacheState::Complete;
+                    entry.status.state = stream_cache::CacheState::Cached { path: entry.status.target_path.clone() };
                     entry.status.downloaded_bytes = entry.status.total_bytes;
                     let s = entry.status.clone();
                     drop(active);
@@ -15446,10 +15448,100 @@ fn get_addon_url(state: State<'_, AppState>) -> Result<Option<String>, String> {
     Ok(config.addon_url.clone())
 }
 
+/// Validate an addon URL against SSRF attacks.
+/// - Only allows http:// and https:// schemes
+/// - Blocks private/internal IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 0.0.0.0)
+/// - Blocks localhost and IPv6 loopback (::1)
+fn validate_addon_url(url_str: &str) -> Result<(), String> {
+    let url_str = url_str.trim();
+    if url_str.is_empty() {
+        return Err("Addon URL cannot be empty".to_string());
+    }
+
+    let url = url::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+
+    // Only allow http and https schemes
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "Scheme '{}' is not allowed. Only http:// and https:// are permitted.",
+                other
+            ));
+        }
+    }
+
+    // Check hostname
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL has no hostname".to_string())?;
+
+    let host_lower = host.to_lowercase();
+
+    // Block localhost and loopback hostnames
+    if host_lower == "localhost"
+        || host_lower == "localhost.localdomain"
+        || host_lower.ends_with(".localhost")
+    {
+        return Err("localhost URLs are not allowed for addon servers.".to_string());
+    }
+
+    // Block IPv6 loopback
+    if host_lower == "::1" || host_lower == "[::1]" {
+        return Err("Loopback IPv6 address is not allowed.".to_string());
+    }
+
+    // Block IPv4 addresses in private/reserved ranges
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        if ip.is_loopback() {
+            return Err("Loopback IP address is not allowed.".to_string());
+        }
+        if ip.is_private() {
+            return Err(
+                "Private IP addresses (10.x, 172.16-31.x, 192.168.x) are not allowed.".to_string(),
+            );
+        }
+        if ip.is_unspecified() {
+            return Err("0.0.0.0 is not allowed.".to_string());
+        }
+        // Block link-local (169.254.x.x)
+        if ip.is_link_local() {
+            return Err("Link-local addresses are not allowed.".to_string());
+        }
+    }
+
+    // Block IPv6 private/loopback
+    if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::<std::net::Ipv6Addr>() {
+        if ip.is_loopback() {
+            return Err("Loopback IPv6 address is not allowed.".to_string());
+        }
+        if segments_are_private_ipv6(ip) {
+            return Err("Private IPv6 addresses are not allowed.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if an IPv6 address is in a private range (fc00::/7, fe80::/10)
+fn segments_are_private_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    // fc00::/7 — unique local addresses
+    if (segments[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+    // fe80::/10 — link-local
+    if (segments[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+    false
+}
+
 #[tauri::command]
 fn set_addon_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    validate_addon_url(&url)?;
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
-    config.addon_url = Some(url);
+    config.addon_url = Some(url.trim().to_string());
     config::save_config(&config).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -15994,7 +16086,7 @@ fn main() {
             remote_get_movie_streams,
             remote_get_series_streams,
             remote_play_with_mpv,
-            remote_play_with_resume,
+            remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,
             remote_get_resume_info,
             remote_update_poster,

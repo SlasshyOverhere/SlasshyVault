@@ -163,8 +163,17 @@ pub fn start_transcode(
     let ffmpeg_path_clone = ffmpeg_path.to_string();
     let start_time_clone = start_time;
 
+    let session_id_for_cleanup = session_id;
     std::thread::spawn(move || {
         run_transcode_server(port, &ffmpeg_path_clone, &file_path_clone, start_time_clone);
+        // Clean up the session entry when the server exits (natural completion or error)
+        let mut sessions = TRANSCODE_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut session) = sessions.remove(&session_id_for_cleanup) {
+            if let Some(ref mut process) = session.ffmpeg_process {
+                let _ = process.kill();
+            }
+            println!("[TRANSCODE] Auto-cleaned session {} after server exit", session_id_for_cleanup);
+        }
     });
 
     // Small delay to let server start

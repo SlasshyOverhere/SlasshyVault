@@ -403,6 +403,9 @@ pub struct NewWatchlistItem<'a> {
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Enable foreign key enforcement so ON DELETE CASCADE works.
+        // SQLite has foreign_keys OFF by default per connection.
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
         let db = Database { conn };
         db.init()?;
         Ok(db)
@@ -3801,7 +3804,7 @@ impl Database {
                     archive_format, is_cloud, cloud_file_id
              FROM media
              WHERE file_path LIKE 'remote://%'
-               AND media_type IN ('movie', 'tvshow')
+               AND media_type IN ('movie', 'tvshow', 'tvepisode')
              ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
         )?;
 
@@ -5062,9 +5065,12 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, backdrop_path: Option<&str>) -> Result<()> {
+    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, _backdrop_path: Option<&str>) -> Result<()> {
+        // Update poster for ALL remote entries matching this tmdb_id (show + episodes),
+        // not just one. backdrop_path is accepted for API compatibility but the media
+        // table has no backdrop_path column yet.
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%' LIMIT 1"
+            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%'"
         )?;
         let ids: Vec<i64> = {
             let mut rows = stmt.query(params![tmdb_id])?;

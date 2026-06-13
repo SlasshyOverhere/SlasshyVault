@@ -105,6 +105,8 @@ pub struct TmdbSearchListItem {
     pub release_date: Option<String>,
     pub first_air_date: Option<String>,
     pub vote_average: Option<f64>,
+    #[serde(default)]
+    pub imdb_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -724,11 +726,22 @@ pub fn search_multi_raw(
                 release_date: item.release_date,
                 first_air_date: item.first_air_date,
                 vote_average: item.vote_average,
+                imdb_id: None, // populated below
             })
+        })
+        .collect::<Vec<_>>();
+
+    // Populate imdb_id for each result via the details/external_ids endpoint.
+    // This is a best-effort enrichment — failures are silently skipped.
+    let enriched: Vec<TmdbSearchListItem> = results
+        .into_iter()
+        .map(|mut item| {
+            item.imdb_id = fetch_imdb_id(api_key, item.id, &item.media_type);
+            item
         })
         .collect();
 
-    Ok(results)
+    Ok(enriched)
 }
 
 /// Fetch top trending movies and TV shows for lightweight UI suggestions.
@@ -2128,4 +2141,31 @@ pub fn fetch_owned_episodes_only(
         result_episodes.len()
     );
     Ok(result_episodes)
+}
+
+/// Lightweight lookup: fetch just the IMDB ID for a given TMDB ID + media type.
+/// Returns None on any failure (non-critical path).
+pub fn fetch_imdb_id(
+    api_key: &str,
+    tmdb_id: i64,
+    media_type: &str,
+) -> Option<String> {
+    let url = build_tmdb_url(
+        &format!("/{}/{}", media_type, tmdb_id),
+        api_key,
+        "language=en-US&append_to_response=external_ids",
+    );
+
+    let client = build_quick_client(8, true).ok()?;
+    let response = tmdb_request(&client, &url, api_key).ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let item: TmdbItem = response.json().ok()?;
+
+    // Movie responses have imdb_id directly, TV responses have it in external_ids
+    item.imdb_id
+        .or_else(|| item.external_ids.as_ref().and_then(|ids| ids.imdb_id.clone()))
 }

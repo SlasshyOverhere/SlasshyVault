@@ -13,10 +13,16 @@ struct CacheEntry {
 
 static STREAM_CACHE: Mutex<Option<HashMap<String, CacheEntry>>> = Mutex::new(None);
 
+fn evict_stale_entries(map: &mut HashMap<String, CacheEntry>) {
+    map.retain(|_, entry| entry.fetched_at.elapsed() < STREAM_CACHE_TTL);
+}
+
 fn get_cached_streams(key: &str) -> Option<Vec<RemoteStream>> {
-    let cache = STREAM_CACHE.lock().ok()?;
-    let cache = cache.as_ref()?;
-    let entry = cache.get(key)?;
+    let mut cache = STREAM_CACHE.lock().ok()?;
+    let map = cache.as_mut()?;
+    // Evict expired entries on every access to prevent unbounded growth
+    evict_stale_entries(map);
+    let entry = map.get(key)?;
     if entry.fetched_at.elapsed() < STREAM_CACHE_TTL {
         Some(entry.streams.clone())
     } else {
@@ -27,6 +33,8 @@ fn get_cached_streams(key: &str) -> Option<Vec<RemoteStream>> {
 fn set_cached_streams(key: &str, streams: Vec<RemoteStream>) {
     let mut cache = STREAM_CACHE.lock().unwrap();
     let map = cache.get_or_insert_with(HashMap::new);
+    // Evict expired entries on every insert to prevent unbounded growth
+    evict_stale_entries(map);
     map.insert(
         key.to_string(),
         CacheEntry {

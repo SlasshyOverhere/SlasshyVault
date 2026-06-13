@@ -624,6 +624,8 @@ export const getConfig = async (): Promise<Config> => {
 export const saveConfig = async (config: Config): Promise<void> => {
   try {
     await invoke("save_config", { newConfig: config, confirmed: true });
+    // Notify other components that config changed (e.g., External tab re-checks addon_url)
+    window.dispatchEvent(new CustomEvent('config-saved', { detail: config }));
   } catch (error) {
     console.error("Failed to save config:", error);
     throw error;

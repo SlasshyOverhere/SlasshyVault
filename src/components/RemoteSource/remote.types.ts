@@ -19,7 +19,7 @@ export interface GroupedStreams {
 export type CacheState =
   | { type: 'idle' }
   | { type: 'downloading'; progress: number }
-  | { type: 'complete' }
+  | { type: 'cached'; path: string }
   | { type: 'cancelled' }
   | { type: 'failed'; error: string }
 
@@ -53,30 +53,5 @@ export interface StreamVerification {
   active: boolean
 }
 
-export function formatFileSize(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = bytes
-  let unitIdx = 0
-  while (size >= 1024 && unitIdx < units.length - 1) {
-    size /= 1024
-    unitIdx++
-  }
-  return `${size.toFixed(2)} ${units[unitIdx]}`
-}
-
-export function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec === 0) return '0 B/s'
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let speed = bytesPerSec
-  let unitIdx = 0
-  while (speed >= 1024 && unitIdx < units.length - 1) {
-    speed /= 1024
-    unitIdx++
-  }
-  return `${speed.toFixed(1)} ${units[unitIdx]}`
-}
-
-export function getYear(dateStr?: string): string {
-  if (!dateStr) return ''
-  return dateStr.substring(0, 4)
-}
+// Re-export from shared utility
+export { formatFileSize, formatSpeed, getYear } from '@/utils/format'

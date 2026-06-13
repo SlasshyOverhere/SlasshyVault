@@ -91,7 +91,7 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
   if (!imgUrl || error) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-neutral-900">
-        <Film className="size-5 text-neutral-600" />
+        <Film className="size-5 text-neutral-400" />
       </div>
     )
   }
@@ -121,6 +121,8 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
   const [fetchedBackdrop, setFetchedBackdrop] = useState<string | null>(null)
   // #91: Poster loading state
   const [posterLoaded, setPosterLoaded] = useState(false)
+  // Metadata loading state for initial detail fetch
+  const [loadingDetails, setLoadingDetails] = useState(true)
   const loadingSeasons = useRef(new Set<number>())
   const imdbId = propImdbId ?? localImdbId
 
@@ -153,6 +155,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
     setFetchedBackdrop(null)
     setLocalImdbId(null)
     setPosterLoaded(false)
+    setLoadingDetails(true)
     loadingSeasons.current.clear()
   }, [item.id])
 
@@ -189,6 +192,8 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
         }
       } catch (e) {
         console.error('Failed to load details:', e)
+      } finally {
+        setLoadingDetails(false)
       }
     }
     load()
@@ -207,11 +212,39 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
   const backdrop = tmdbImage(item.backdrop_path || fetchedBackdrop, 'w1280')
   const displayTitle = item.title || item.name || ''
 
+  // ── Loading skeleton while fetching metadata ──
+  if (loadingDetails) {
+    return (
+      <div className="max-w-4xl space-y-6">
+        <div className="h-5 w-16 bg-neutral-800 rounded animate-pulse" />
+        <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-[#0A0A0A]">
+          <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 p-6 sm:p-8">
+            <div className="shrink-0 w-44 aspect-[2/3] rounded-xl bg-neutral-800 animate-pulse self-center sm:self-auto" />
+            <div className="flex-1 min-w-0 flex flex-col justify-center space-y-4">
+              <div className="space-y-3">
+                <div className="h-8 w-64 bg-neutral-800 rounded animate-pulse" />
+                <div className="h-4 w-40 bg-neutral-800 rounded animate-pulse" />
+              </div>
+              <div className="space-y-2">
+                <div className="h-3 w-full max-w-md bg-neutral-800 rounded animate-pulse" />
+                <div className="h-3 w-3/4 max-w-sm bg-neutral-800 rounded animate-pulse" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <div className="h-11 w-36 bg-neutral-800 rounded-xl animate-pulse" />
+                <div className="h-11 w-11 bg-neutral-800 rounded-xl animate-pulse" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ── Movie view ──
   if (item.media_type === 'movie') {
     return (
       <div className="max-w-4xl">
-        <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-neutral-500 hover:text-neutral-200 transition-colors mb-6 group">
+        <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-neutral-300 hover:text-neutral-100 transition-colors mb-6 group">
           <ChevronLeft className="size-4 transition-transform duration-200 group-hover:-translate-x-0.5" />
           Back
         </button>
@@ -243,7 +276,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 </>
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <Film className="size-8 text-neutral-600" />
+                  <Film className="size-8 text-neutral-400" />
                 </div>
               )}
             </div>
@@ -251,31 +284,31 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
             <div className="flex-1 min-w-0 flex flex-col justify-center space-y-4">
               <div>
                 <h2 className="text-3xl font-bold text-neutral-100 leading-tight">{displayTitle}</h2>
-                <div className="flex items-center gap-3 mt-2 text-sm text-neutral-500">
+                <div className="flex items-center gap-3 mt-2 text-sm text-neutral-300">
                   {item.release_date && (
                     <span className="flex items-center gap-1.5">
-                      <Calendar className="size-3.5 text-neutral-600" />
+                      <Calendar className="size-3.5 text-neutral-400" />
                       {item.release_date}
                     </span>
                   )}
                   {item.vote_average != null && item.vote_average > 0 && (
                     <span className="flex items-center gap-1.5">
-                      <Star className="size-3.5 text-amber-500/70 fill-amber-500/40" />
-                      <span className="text-amber-500/80 font-medium">{item.vote_average.toFixed(1)}</span>
+                      <Star className="size-3.5 text-neutral-300 fill-neutral-400/50" />
+                      <span className="text-neutral-200 font-medium">{item.vote_average.toFixed(1)}</span>
                     </span>
                   )}
                 </div>
               </div>
 
               {item.overview && (
-                <p className="text-sm text-neutral-400 leading-relaxed line-clamp-4 max-w-xl">{item.overview}</p>
+                <p className="text-sm text-neutral-300 leading-relaxed line-clamp-4 max-w-xl">{item.overview}</p>
               )}
 
               <div className="pt-2 flex items-center gap-2">
                 <Button
                   onClick={() => imdbId && onFetchMovieStreams(imdbId)}
                   disabled={!imdbId || fetching}
-                  className="bg-amber-600 hover:bg-amber-500 text-white border border-amber-500/30 shadow-lg shadow-amber-900/30 h-11 px-6 rounded-xl font-semibold transition-all duration-200 active:scale-[0.97]"
+                  className="bg-white hover:bg-neutral-200 text-black border border-neutral-300/20 shadow-lg h-11 px-6 rounded-xl font-semibold transition-all duration-200 active:scale-[0.97]"
                 >
                   {fetching ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Play className="size-4 mr-2 fill-current" />}
                   {fetching ? 'Loading streams...' : 'Find streams'}
@@ -284,7 +317,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                   onClick={() => imdbId && onFetchMovieStreams(imdbId, true)}
                   disabled={!imdbId || fetching}
                   variant="outline"
-                  className="h-11 px-3 rounded-xl border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900 transition-all duration-200"
+                  className="h-11 px-3 rounded-xl border-neutral-800 text-neutral-300 hover:text-neutral-100 hover:bg-neutral-900 transition-all duration-200"
                   title="Refresh streams (bypass cache)"
                 >
                   <RefreshCw className={cn("size-4", fetching && "animate-spin")} />
@@ -300,7 +333,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
   // ── TV Series view ──
   return (
     <div className="max-w-4xl space-y-6">
-      <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-neutral-500 hover:text-neutral-200 transition-colors group">
+      <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-neutral-300 hover:text-neutral-100 transition-colors mb-6 group">
         <ChevronLeft className="size-4 transition-transform duration-200 group-hover:-translate-x-0.5" />
         Back
       </button>
@@ -333,33 +366,33 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
               </>
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <Film className="size-8 text-neutral-600" />
+                <Film className="size-8 text-neutral-400" />
               </div>
             )}
           </div>
 
           <div className="flex-1 min-w-0 space-y-4 flex flex-col justify-center">
             <h2 className="text-3xl font-bold text-neutral-100">{displayTitle}</h2>
-            <div className="flex items-center gap-3 text-sm text-neutral-500 flex-wrap">
+            <div className="flex items-center gap-3 text-sm text-neutral-300 flex-wrap">
               {item.first_air_date && (
                 <span className="flex items-center gap-1.5">
-                  <Calendar className="size-3.5 text-neutral-600" />
+                  <Calendar className="size-3.5 text-neutral-400" />
                   {item.first_air_date.substring(0, 4)}
                 </span>
               )}
               {item.vote_average != null && item.vote_average > 0 && (
                 <span className="flex items-center gap-1.5">
-                  <Star className="size-3.5 text-amber-500/70 fill-amber-500/40" />
-                  <span className="text-amber-500/80 font-medium">{item.vote_average.toFixed(1)}</span>
+                  <Star className="size-3.5 text-neutral-300 fill-neutral-400/50" />
+                  <span className="text-neutral-200 font-medium">{item.vote_average.toFixed(1)}</span>
                 </span>
               )}
               <span className="flex items-center gap-1.5">
-                <ListVideo className="size-3.5 text-neutral-600" />
+                <ListVideo className="size-3.5 text-neutral-400" />
                 {seasons.length} {seasons.length === 1 ? 'season' : 'seasons'}
               </span>
             </div>
             {item.overview && (
-              <p className="text-sm text-neutral-400 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
+              <p className="text-sm text-neutral-300 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
             )}
           </div>
         </div>
@@ -374,13 +407,13 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
             className={cn(
               'shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 border',
               activeSeason === s.season_number
-                ? 'bg-amber-600/15 text-amber-400 border-amber-700/30 shadow-sm'
-                : 'bg-[#0A0A0A] text-neutral-500 border-neutral-800 hover:bg-neutral-900 hover:text-neutral-300 hover:border-neutral-700',
+                ? 'bg-white/10 text-white border-white/20 shadow-sm'
+                : 'bg-[#0A0A0A] text-neutral-300 border-neutral-800 hover:bg-neutral-900 hover:text-neutral-100 hover:border-neutral-700',
             )}
           >
             <span>Season {s.season_number}</span>
             {s.name && s.name !== `Season ${s.season_number}` && (
-              <span className="ml-1.5 text-xs text-neutral-600 font-medium">&middot; {s.name}</span>
+              <span className="ml-1.5 text-xs text-neutral-400 font-medium">&middot; {s.name}</span>
             )}
           </button>
         ))}
@@ -405,7 +438,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
             </div>
           ))
         ) : episodes.length === 0 ? (
-          <div className="text-center py-16 text-sm text-neutral-600 font-medium">No episodes found for this season.</div>
+          <div className="text-center py-16 text-sm text-neutral-400 font-medium">No episodes found for this season.</div>
         ) : (
           episodes.map((ep) => (
             <div
@@ -422,19 +455,19 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
 
               <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-neutral-600 tabular-nums shrink-0">
+                  <span className="text-[11px] font-bold text-neutral-400 tabular-nums shrink-0">
                     S{String(activeSeason).padStart(2, '0')} &middot; E{String(ep.episode_number).padStart(2, '0')}
                   </span>
                   <h3 className="text-sm font-semibold text-neutral-200 truncate">{ep.name}</h3>
                   {ep.vote_average != null && ep.vote_average > 0 && (
-                    <span className="flex items-center gap-1 text-[11px] text-amber-500/70 shrink-0">
-                      <Star className="size-3 fill-amber-500/40" />
+                    <span className="flex items-center gap-1 text-[11px] text-neutral-300 shrink-0">
+                      <Star className="size-3 fill-neutral-400/50" />
                       {ep.vote_average.toFixed(1)}
                     </span>
                   )}
                 </div>
                 {ep.overview && (
-                  <p className="text-xs text-neutral-400 leading-relaxed line-clamp-2">{ep.overview}</p>
+                  <p className="text-xs text-neutral-300 leading-relaxed line-clamp-2">{ep.overview}</p>
                 )}
               </div>
 
@@ -442,7 +475,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 <button
                   onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name)}
                   disabled={!imdbId || fetching}
-                  className="size-10 flex items-center justify-center rounded-xl bg-amber-600/10 border border-amber-700/20 text-amber-500/70 hover:bg-amber-600/20 hover:text-amber-400 hover:border-amber-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+                  className="size-10 flex items-center justify-center rounded-xl bg-white/10 border border-white/15 text-neutral-200 hover:bg-white/20 hover:text-white hover:border-white/25 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
                 >
                   {fetching ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -453,7 +486,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 <button
                   onClick={() => imdbId && onFetchEpisodeStreams(imdbId, activeSeason, ep.episode_number, ep.name, true)}
                   disabled={!imdbId || fetching}
-                  className="size-10 flex items-center justify-center rounded-xl border border-neutral-800 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+                  className="size-10 flex items-center justify-center rounded-xl border border-neutral-800 text-neutral-300 hover:text-neutral-100 hover:bg-neutral-900 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
                   title="Refresh streams (bypass cache)"
                 >
                   <RefreshCw className={cn("size-3.5", fetching && "animate-spin")} />

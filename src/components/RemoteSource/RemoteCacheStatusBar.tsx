@@ -14,25 +14,25 @@ export function RemoteCacheStatusBar({ status }: Props) {
   if (state.type === 'idle') return null
 
   const isDownloading = state.type === 'downloading'
-  const isComplete = state.type === 'complete'
+  const isCached = state.type === 'cached'
   const isFailed = state.type === 'failed'
   const isCancelled = state.type === 'cancelled'
 
-  const progress = isDownloading ? state.progress : (isComplete ? 100 : 0)
+  const progress = isDownloading ? state.progress : (isCached ? 100 : 0)
   const progressPercent = Math.min(Math.round(progress), 100)
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="bg-[#0A0A0A] border border-neutral-800 rounded-2xl px-5 py-3.5 shadow-2xl min-w-[340px] max-w-md shadow-black/50">
+      <div className="bg-[#0A0A0A] border border-neutral-800 rounded-2xl px-5 py-3.5 shadow-2xl min-w-[280px] sm:min-w-[340px] max-w-md shadow-black/50">
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-2.5">
             {isDownloading && <Download className="size-4 text-amber-400 animate-pulse" />}
-            {isComplete && <CheckCircle2 className="size-4 text-green-400" />}
+            {isCached && <CheckCircle2 className="size-4 text-green-400" />}
             {isFailed && <AlertCircle className="size-4 text-red-400" />}
             {isCancelled && <XCircle className="size-4 text-neutral-500" />}
             <span className="text-sm font-semibold text-neutral-200">
               {isDownloading && 'Caching stream...'}
-              {isComplete && 'Cached'}
+              {isCached && 'Cached'}
               {isFailed && 'Cache failed'}
               {isCancelled && 'Cache cancelled'}
             </span>
@@ -62,7 +62,7 @@ export function RemoteCacheStatusBar({ status }: Props) {
           </>
         )}
 
-        {isComplete && (
+        {isCached && (
           <div className="flex justify-between mt-1">
             <span className="text-[11px] text-green-500/80 font-medium">
               {formatFileSize(status.totalBytes)} cached

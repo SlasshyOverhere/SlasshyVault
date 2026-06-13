@@ -845,9 +845,17 @@ mp.observe_property("pause", "bool", function(name, value)
     end
 end)
 
+-- Debounced seek: rapid seeks (e.g. scrubbing) only emit one event after 150ms quiet
+local seek_timer = nil
 mp.register_event("seek", function()
     save_progress()
-    write_event("seek", nil)
+    if seek_timer then
+        seek_timer:kill()
+    end
+    seek_timer = mp.add_timeout(0.15, function()
+        write_event("seek", nil)
+        seek_timer = nil
+    end)
 end)
 
 mp.register_event("shutdown", save_progress)

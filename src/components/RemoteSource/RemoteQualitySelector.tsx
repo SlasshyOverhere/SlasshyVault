@@ -186,10 +186,13 @@ export function RemoteQualitySelector({
             )}
 
             {/* Quality filter chips */}
-            <div className="flex gap-1.5">
+            <div className="flex gap-1.5" role="radiogroup" aria-label="Video quality filter">
               {QUALITY_FILTERS.map((f) => (
                 <button
                   key={f}
+                  role="radio"
+                  aria-checked={qualityFilter === f}
+                  aria-label={f === 'all' ? 'All qualities' : f}
                   onClick={() => setQualityFilter(f)}
                   className={cn(
                     'px-3.5 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-200 border',
@@ -207,6 +210,8 @@ export function RemoteQualitySelector({
             {verificationDone && inactiveCount > 0 && (
               <button
                 onClick={() => setShowInactive(!showInactive)}
+                aria-pressed={showInactive}
+                aria-label={showInactive ? 'Hide inactive sources' : `Show inactive sources (${inactiveCount})`}
                 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-600 hover:text-neutral-300 transition-colors"
               >
                 {showInactive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
@@ -224,7 +229,7 @@ export function RemoteQualitySelector({
 
             {filtered.length > 0 && (
               <ScrollArea className="max-h-[420px]">
-                <div className="space-y-3 pr-3">
+                <div className="space-y-3 pr-3" role="listbox" aria-label="Select video stream">
                   {filtered.map((group) => (
                     <div key={group.quality}>
                       <h4 className="text-[11px] font-bold text-neutral-600 uppercase tracking-widest mb-2.5 px-1">
@@ -238,6 +243,9 @@ export function RemoteQualitySelector({
                           return (
                             <button
                               key={idx}
+                              role="option"
+                              aria-selected={false}
+                              aria-label={`${stream.name}${!active ? ' (unreachable)' : ''}${stream.recommended ? ' (recommended)' : ''}`}
                               onClick={() => active && onSelect(stream)}
                               className={cn(
                                 'w-full text-left p-4 rounded-2xl bg-[#0D0D0D] border group transition-all duration-200',
@@ -290,7 +298,9 @@ export function RemoteQualitySelector({
                                   <div
                                     role="button"
                                     tabIndex={0}
-                                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }) }}
+                                    aria-label="Copy stream URL"
+                                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }).catch(() => { /* clipboard unavailable */ }) }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); navigator.clipboard.writeText(stream.url).then(() => { setCopiedStreamUrl(stream.url); setTimeout(() => setCopiedStreamUrl(null), 2000) }).catch(() => { /* clipboard unavailable */ }) } }}
                                     className="size-9 flex items-center justify-center rounded-xl bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300 transition-all duration-200 cursor-pointer"
                                   >
                                     {copiedStreamUrl === stream.url ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-4" />}

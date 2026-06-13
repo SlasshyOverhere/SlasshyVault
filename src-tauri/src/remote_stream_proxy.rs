@@ -2,7 +2,20 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+/// IMPORTANT LIMITATION: Only one proxy can be active at a time.
+/// Starting a new stream via `set_active_proxy` will stop and replace the
+/// previous one. This is a known design constraint — a concurrent multi-proxy
+/// design would require per-stream routing and is out of scope for now.
 static ACTIVE_PROXY: Mutex<Option<RemoteStreamProxyHandle>> = Mutex::new(None);
+
+/// Allowed Content-Type prefixes for proxied responses.
+const ALLOWED_CONTENT_TYPES: &[&str] = &[
+    "video/",
+    "audio/",
+    "application/octet-stream",
+    "application/x-matroska",
+    "application/vnd.rn-realmedia",
+];
 
 pub fn set_active_proxy(handle: RemoteStreamProxyHandle) {
     if let Ok(mut guard) = ACTIVE_PROXY.lock() {
@@ -25,6 +38,8 @@ pub struct RemoteStreamProxyHandle {
     pub port: u16,
     pub url: String,
     stop_flag: Arc<AtomicBool>,
+    /// Tracks spawned threads so they can be joined on cleanup (P2 fix).
+    thread_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl RemoteStreamProxyHandle {
@@ -39,6 +54,10 @@ impl RemoteStreamProxyHandle {
 impl Drop for RemoteStreamProxyHandle {
     fn drop(&mut self) {
         self.stop();
+        // Join all spawned threads to prevent leaked threads on cleanup.
+        for handle in self.thread_handles.drain(..) {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -106,7 +125,8 @@ pub fn start_proxy(
     let dl_state = state.clone();
     let dl_url = url.clone();
     let dl_stop = stop_flag.clone();
-    std::thread::spawn(move || {
+    let dl_handle = std::thread::spawn(move || {
+        // Polling loop with 50ms sleep to wait for the first request — not a busy-wait.
         while !dl_state.started.load(Ordering::Relaxed) && !dl_stop.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -118,12 +138,12 @@ pub fn start_proxy(
 
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(3600))
-            .redirect(reqwest::redirect::Policy::limited(15))
+            .redirect(reqwest::redirect::Policy::limited(5))
             .build()
         {
             Ok(c) => c,
             Err(e) => {
-                *dl_state.error.write().unwrap() = Some(format!("Client: {}", e));
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Client: {}", e));
                 return;
             }
         };
@@ -131,14 +151,27 @@ pub fn start_proxy(
         let resp = match client.get(&dl_url).send() {
             Ok(r) => r,
             Err(e) => {
-                *dl_state.error.write().unwrap() = Some(format!("Request: {}", e));
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Request: {}", e));
                 return;
             }
         };
 
         if !resp.status().is_success() {
-            *dl_state.error.write().unwrap() = Some(format!("HTTP {}", resp.status()));
+            *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("HTTP {}", resp.status()));
             return;
+        }
+
+        // P1 fix: Validate Content-Type of the upstream response is media.
+        let upstream_ct = resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !ALLOWED_CONTENT_TYPES.iter().any(|allowed| upstream_ct.starts_with(allowed)) {
+            println!(
+                "[REMOTE-PROXY] WARNING: unexpected Content-Type from upstream: '{}'",
+                upstream_ct
+            );
         }
 
         let total = resp.content_length().unwrap_or(0);
@@ -147,7 +180,7 @@ pub fn start_proxy(
         let mut file = match std::fs::File::create(&dl_state.file_path) {
             Ok(f) => f,
             Err(e) => {
-                *dl_state.error.write().unwrap() = Some(format!("File: {}", e));
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("File: {}", e));
                 return;
             }
         };
@@ -161,11 +194,21 @@ pub fn start_proxy(
             match body.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if file.write_all(&buf[..n]).is_err() { return; }
+                    // P0-3 fix: surface write errors to the frontend instead of silently dropping.
+                    if let Err(e) = file.write_all(&buf[..n]) {
+                        *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
+                            Some(format!("Write: {}", e));
+                        return;
+                    }
                     written += n as u64;
                     dl_state.downloaded.store(written, Ordering::Relaxed);
                 }
-                Err(_) => return,
+                // P0-3 fix: surface read errors to the frontend instead of silently returning.
+                Err(e) => {
+                    *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
+                        Some(format!("Read: {}", e));
+                    return;
+                }
             }
         }
 
@@ -179,35 +222,51 @@ pub fn start_proxy(
     let req_state = state.clone();
     let req_stop = stop_flag.clone();
 
-    std::thread::spawn(move || {
+    let server_handle = std::thread::spawn(move || {
         println!("[REMOTE-PROXY] Listening on http://127.0.0.1:{}/stream", port);
         for request in server.incoming_requests() {
             if req_stop.load(Ordering::Relaxed) { break; }
             let path = request.url().split('?').next().unwrap_or("").to_string();
             if path != "/stream" {
-                let _ = request.respond(tiny_http::Response::from_string("Not Found").with_status_code(404));
+                let response = tiny_http::Response::from_string("Not Found")
+                    .with_status_code(404)
+                    .with_header(
+                        tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                    );
+                let _ = request.respond(response);
                 continue;
             }
             req_state.started.store(true, Ordering::Relaxed);
             let s = req_state.clone();
+            // Note: per-request threads are fire-and-forget since they are short-lived
+            // and blocked on I/O. Joining them would require a more complex architecture.
             std::thread::spawn(move || serve_request(request, &s));
         }
     });
 
-    Ok(RemoteStreamProxyHandle { port, url, stop_flag })
+    Ok(RemoteStreamProxyHandle {
+        port,
+        url,
+        stop_flag,
+        thread_handles: vec![dl_handle, server_handle],
+    })
 }
 
 fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
-    // Wait for some data to be available
+    // Wait for some data to be available (polling with 100ms sleep — not a busy-wait)
     let mut waited = 0;
     while state.downloaded.load(Ordering::Relaxed) == 0
         && !state.complete.load(Ordering::Relaxed)
         && waited < 30000
     {
-        if let Some(err) = state.error.read().unwrap().as_ref() {
-            let _ = request.respond(
-                tiny_http::Response::from_string(format!("Error: {}", err)).with_status_code(502),
-            );
+        // P1 fix: use unwrap_or_else to survive poisoned locks without panicking.
+        if let Some(err) = state.error.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let response = tiny_http::Response::from_string(format!("Error: {}", err))
+                .with_status_code(502)
+                .with_header(
+                    tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                );
+            let _ = request.respond(response);
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -215,7 +274,12 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
     }
 
     if state.downloaded.load(Ordering::Relaxed) == 0 {
-        let _ = request.respond(tiny_http::Response::from_string("Timeout").with_status_code(504));
+        let response = tiny_http::Response::from_string("Timeout")
+            .with_status_code(504)
+            .with_header(
+                tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+            );
+        let _ = request.respond(response);
         return;
     }
 
@@ -234,7 +298,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
         .map(|h| h.value.as_str().to_string());
 
     if let Some(range_str) = range_header {
-        // Wait until enough data is available for the requested range
+        // Wait until enough data is available for the requested range (polling with 200ms sleep)
         if let Some((start, end)) = parse_range(&range_str, total_size.max(1)) {
             let needed = end + 1;
             let mut waited = 0;
@@ -248,7 +312,12 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
 
             let available = state.downloaded.load(Ordering::Relaxed);
             if available < start + 1 {
-                let _ = request.respond(tiny_http::Response::from_string("Range Not Satisfiable").with_status_code(416));
+                let response = tiny_http::Response::from_string("Range Not Satisfiable")
+                    .with_status_code(416)
+                    .with_header(
+                        tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                    );
+                let _ = request.respond(response);
                 return;
             }
 
@@ -260,13 +329,23 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
             let mut file = match file {
                 Ok(f) => f,
                 Err(e) => {
-                    let _ = request.respond(tiny_http::Response::from_string(format!("File error: {}", e)).with_status_code(500));
+                    let response = tiny_http::Response::from_string(format!("File error: {}", e))
+                        .with_status_code(500)
+                        .with_header(
+                            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                        );
+                    let _ = request.respond(response);
                     return;
                 }
             };
 
             if file.seek(SeekFrom::Start(start)).is_err() {
-                let _ = request.respond(tiny_http::Response::from_string("Seek error").with_status_code(500));
+                let response = tiny_http::Response::from_string("Seek error")
+                    .with_status_code(500)
+                    .with_header(
+                        tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                    );
+                let _ = request.respond(response);
                 return;
             }
 
@@ -279,6 +358,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
                     tiny_http::Header::from_bytes("Content-Length", length.to_string()).unwrap(),
                     tiny_http::Header::from_bytes("Content-Range", content_range).unwrap(),
                     tiny_http::Header::from_bytes("Accept-Ranges", "bytes").unwrap(),
+                    tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
                 ],
                 file.take(length),
                 Some(length as usize),
@@ -293,7 +373,12 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
     let file = match std::fs::File::open(&read_path) {
         Ok(f) => f,
         Err(e) => {
-            let _ = request.respond(tiny_http::Response::from_string(format!("File error: {}", e)).with_status_code(500));
+            let response = tiny_http::Response::from_string(format!("File error: {}", e))
+                .with_status_code(500)
+                .with_header(
+                    tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+                );
+            let _ = request.respond(response);
             return;
         }
     };
@@ -306,6 +391,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
             tiny_http::Header::from_bytes("Content-Type", ctype).unwrap(),
             tiny_http::Header::from_bytes("Content-Length", file_size.to_string()).unwrap(),
             tiny_http::Header::from_bytes("Accept-Ranges", "bytes").unwrap(),
+            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
         ],
         file,
         Some(file_size as usize),
@@ -365,7 +451,7 @@ fn sanitize_filename(s: &str) -> String {
 pub async fn resolve_redirects(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(15))
+        .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| format!("Client build: {}", e))?;
 
