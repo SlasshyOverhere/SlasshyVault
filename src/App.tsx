@@ -711,7 +711,7 @@ function App() {
 
       await invoke('plugin:autostart|enable')
 
-      const installerPath = await downloadUpdate(updateInfo.download_url)
+      const installerPath = await downloadUpdate(updateInfo.download_url, updateInfo.published_at ?? undefined)
 
       setUpdateGateStatus('installing')
       setUpdateGateMessage('Installing update and restarting...')

@@ -2088,9 +2088,9 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
 };
 
 // Download update to temp directory (returns installer path)
-export const downloadUpdate = async (url: string): Promise<string> => {
+export const downloadUpdate = async (url: string, pubDate?: string): Promise<string> => {
   try {
-    return await invoke<string>("download_update", { url });
+    return await invoke<string>("download_update", { url, pubDate });
   } catch (error) {
     console.error("Failed to download update:", error);
     throw error;

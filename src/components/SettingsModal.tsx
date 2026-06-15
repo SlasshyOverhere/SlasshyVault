@@ -415,7 +415,7 @@ export function SettingsModal({
         },
       );
 
-      const installerPath = await downloadUpdate(updateInfo.download_url);
+      const installerPath = await downloadUpdate(updateInfo.download_url, updateInfo.published_at ?? undefined);
       unlisten();
 
       toast({
