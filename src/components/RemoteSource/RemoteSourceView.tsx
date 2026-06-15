@@ -782,6 +782,26 @@ function RemoteSourceViewInner() {
     }
   }, [loadRemoteLibrary, toast])
 
+  // Listen for window-level file drops (Tauri tauri://file-drop event)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    const setup = async () => {
+      try {
+        unlisten = await listen<{ paths: string[] }>('tauri://file-drop', (event) => {
+          const paths = event.payload.paths
+          if (paths.length > 0) {
+            const filePath = paths[0]
+            if (filePath.endsWith('.exe')) {
+              handleBinaryInstall(filePath)
+            }
+          }
+        })
+      } catch {}
+    }
+    setup()
+    return () => { unlisten?.() }
+  }, [handleBinaryInstall])
+
   // npm package install handler
   const handleNpmInstall = useCallback(async () => {
     if (!npmPackage.trim()) return
