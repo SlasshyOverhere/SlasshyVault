@@ -15563,12 +15563,14 @@ async fn install_npm_addon(
     npx_args.extend(args.clone());
 
     // On Windows, use cmd /c to resolve npx from PATH
+    // --yes auto-accepts npx install prompts; npm_config_yes=true as fallback
     let mut child = if cfg!(target_os = "windows") {
-        let mut cmd_args = vec!["/c".to_string(), "npx".to_string()];
+        let mut cmd_args = vec!["/c".to_string(), "npx".to_string(), "--yes".to_string()];
         cmd_args.extend(npx_args.clone());
         tokio::process::Command::new("cmd")
             .args(&cmd_args)
             .env("PORT", "11470")
+            .env("npm_config_yes", "true")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -15576,8 +15578,10 @@ async fn install_npm_addon(
             .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
     } else {
         tokio::process::Command::new("npx")
+            .arg("--yes")
             .args(&npx_args)
             .env("PORT", "11470")
+            .env("npm_config_yes", "true")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -15585,37 +15589,50 @@ async fn install_npm_addon(
             .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
     };
 
-    // Write "y" to stdin to accept disclaimer
+    // Write "y" to stdin to accept disclaimer (backup for interactive prompts)
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
         let _ = stdin.write_all(b"y\n").await;
     }
 
-    // Read stdout line by line to find the server URL
+    // Merge stdout + stderr for URL detection (Node addons often print to stderr)
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
-    let mut reader = tokio::io::BufReader::new(stdout);
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+    let mut stdout_reader = tokio::io::BufReader::new(stdout);
+    let mut stderr_reader = tokio::io::BufReader::new(stderr);
     let mut found_url: Option<String> = None;
     let url_regex = regex::Regex::new(r"https?://[^\s]+").unwrap();
     let timeout = std::time::Duration::from_secs(30);
     let start = std::time::Instant::now();
 
     use tokio::io::AsyncBufReadExt;
-    let mut line = String::new();
+    let mut stdout_line = String::new();
+    let mut stderr_line = String::new();
     loop {
         if start.elapsed() > timeout {
             break;
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(2), reader.read_line(&mut line)).await {
-            Ok(Ok(0)) => break, // EOF
+        // Read from whichever stream has data first
+        let result = tokio::select! {
+            r = tokio::time::timeout(std::time::Duration::from_secs(2), stdout_reader.read_line(&mut stdout_line)) => Some(("stdout", r)),
+            r = tokio::time::timeout(std::time::Duration::from_secs(2), stderr_reader.read_line(&mut stderr_line)) => Some(("stderr", r)),
+            else => None,
+        };
+        let Some((source, result)) = result else { break };
+        let line = if source == "stdout" { &mut stdout_line } else { &mut stderr_line };
+        match result {
+            Ok(Ok(0)) => {
+                if source == "stdout" { break; } // EOF on stdout = process likely done
+                line.clear();
+                continue;
+            }
             Ok(Ok(_)) => {
-                let trimmed = line.trim();
+                let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() {
-                    println!("[install_npm_addon] {}", trimmed);
+                    println!("[install_npm_addon] [{}] {}", source, trimmed);
                 }
-                // Look for a URL in the output (e.g. "Addon running on http://localhost:51546")
-                if let Some(m) = url_regex.find(trimmed) {
+                if let Some(m) = url_regex.find(&trimmed) {
                     let url = m.as_str().to_string();
-                    // Verify it's actually a server URL (has a port number)
                     if url.contains(':') && url.matches(':').count() >= 2 {
                         found_url = Some(url);
                         break;
@@ -15624,11 +15641,11 @@ async fn install_npm_addon(
                 line.clear();
             }
             Ok(Err(e)) => {
-                println!("[install_npm_addon] stdout read error: {}", e);
-                break;
+                println!("[install_npm_addon] {} read error: {}", source, e);
+                if source == "stdout" { break; }
+                line.clear();
             }
             Err(_) => {
-                // Timeout on this line, keep trying
                 line.clear();
                 continue;
             }
