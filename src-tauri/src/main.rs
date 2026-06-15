@@ -51,6 +51,7 @@ static OAUTH_CODE_CHANNEL: LazyLock<(Mutex<mpsc::Sender<String>>, Mutex<mpsc::Re
 static RECENT_UI_NOTIFICATIONS: LazyLock<Mutex<HashMap<String, std::time::Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static RUNNING_ADDON_PROCESS: LazyLock<Mutex<Option<tokio::process::Child>>> = LazyLock::new(|| Mutex::new(None));
 static ADDON_STDOUT_TASK: LazyLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
+static ADDON_WATCHDOG_RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 
 // MPV session info
 #[derive(Clone, Serialize)]
@@ -3838,9 +3839,11 @@ async fn save_config(
     if merged.addon_sources.is_empty() && !config.addon_sources.is_empty() {
         merged.addon_sources = config.addon_sources.clone();
     }
-    // Preserve addon_url managed by External panel (Settings form has stale copy)
-    if merged.addon_url.as_deref() == Some("") && config.addon_url.is_some() {
-        merged.addon_url = config.addon_url.clone();
+    // If form sent addon_url as empty/None, clear it (user explicitly removed it)
+    // Only preserve existing addon_url when form didn't touch it at all (send null)
+    // The form always sends a string, so empty string = user cleared it intentionally
+    if merged.addon_url.as_deref().unwrap_or("").is_empty() {
+        merged.addon_url = None;
     }
     *config = merged.clone();
     config::save_config(&merged).map_err(|e| e.to_string())?;
@@ -14120,6 +14123,7 @@ async fn ddl_index_archive(
     state: tauri::State<'_, AppState>,
     url: String,
     validation: direct_link_manager::DdlValidationResult,
+    addon_origin: Option<String>,
 ) -> Result<direct_link_manager::DdlSource, String> {
     let emit_ddl_progress = |stage: &str,
                              message: String,
@@ -14183,6 +14187,7 @@ async fn ddl_index_archive(
             result.source.video_count as i64,
             result.source.cd_offset as i64,
             result.source.cd_size as i64,
+            addon_origin.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     }
@@ -14634,6 +14639,123 @@ fn ddl_get_source_media(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_media_by_ddl_source(&source_id)
         .map_err(|e| e.to_string())
+}
+
+/// Index a season pack stream URL into Direct Links, storing addon origin for auto-refresh
+#[tauri::command]
+async fn index_season_pack_to_ddl(
+    window: Window,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    imdb_id: String,
+    season_number: i32,
+    stream_name: String,
+) -> Result<direct_link_manager::DdlSource, String> {
+    let origin = format!("{}:{}:{}", imdb_id, season_number, stream_name);
+
+    // Validate URL — must support HTTP 206 (range requests)
+    let url_clone = url.clone();
+    let validation = tokio::task::spawn_blocking(move || {
+        direct_link_manager::validate_url(&url_clone)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if !validation.supports_range {
+        return Err("This stream URL does not support seeking (HTTP 206). Cannot index to Direct Links.".to_string());
+    }
+
+    // Delegate to ddl_index_archive with addon_origin
+    ddl_index_archive(window, state, url, validation, Some(origin)).await
+}
+
+/// Auto-refresh an expired DDL source by re-querying the addon server
+#[tauri::command]
+async fn auto_refresh_ddl_from_addon(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+) -> Result<Option<String>, String> {
+    let source = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_ddl_source(&source_id).map_err(|e| e.to_string())?
+    };
+
+    let origin = match &source.addon_origin {
+        Some(o) => o.clone(),
+        None => return Ok(None),
+    };
+
+    // Parse "imdb_id:season:stream_name"
+    let parts: Vec<String> = origin.splitn(3, ':').map(|s| s.to_string()).collect();
+    if parts.len() < 2 {
+        return Ok(None);
+    }
+    let imdb_id = parts[0].clone();
+    let season: i32 = parts[1].parse().map_err(|_| "Invalid season in addon_origin".to_string())?;
+
+    // Get addon URL from config
+    let addon_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        if let Some(src) = config.addon_sources.iter().find(|s| s.is_default).or(config.addon_sources.first()) {
+            src.url.clone()
+        } else if let Some(ref url) = config.addon_url {
+            url.clone()
+        } else {
+            return Ok(None);
+        }
+    };
+
+    // Re-query addon for season streams
+    let file_size = source.file_size;
+    let source_for_verify = source.clone();
+    let addon_url_clone = addon_url.clone();
+
+    let stream_name_fallback = parts.get(2).cloned().unwrap_or_default();
+
+    let new_url = tokio::task::spawn_blocking(move || {
+        let streams = remote_source::fetch_season_streams(&imdb_id, season, &addon_url_clone, true)?;
+
+        // Find matching stream by file_size
+        for (_ep, ep_streams) in &streams {
+            for s in ep_streams {
+                if s.video_size > 0 && (s.video_size as u64) == file_size {
+                    return Ok::<String, String>(s.url.clone());
+                }
+            }
+        }
+
+        // Fallback: match by stream name
+        for (_ep, ep_streams) in &streams {
+            for s in ep_streams {
+                if s.name == stream_name_fallback {
+                    return Ok(s.url.clone());
+                }
+            }
+        }
+
+        Err("No matching stream found in addon response".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Validate the new URL matches the original archive structure
+    let url_for_verify = new_url.clone();
+    let refresh_result = tokio::task::spawn_blocking(move || {
+        direct_link_manager::verify_and_refresh_link(&source_for_verify, &url_for_verify)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if refresh_result.accepted {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_ddl_source_url(&source_id, &new_url)
+            .map_err(|e| e.to_string())?;
+        println!("[DDL] Auto-refreshed expired link for source '{}' from addon", source_id);
+        Ok(Some(new_url))
+    } else {
+        println!("[DDL] Auto-refresh failed for source '{}': {}", source_id, refresh_result.message);
+        Ok(None)
+    }
 }
 
 /// Returns the OLD app data directory (pre-rename "StreamVault") respecting dev/prod isolation.
@@ -15499,6 +15621,20 @@ fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), Str
     Ok(())
 }
 
+/// Validate that an addon URL is reachable (server responds to /manifest.json)
+#[tauri::command]
+fn check_addon_server(url: String) -> bool {
+    let client = crate::http_client::shared_client();
+    match client
+        .get(format!("{}/manifest.json", url.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 /// Set a source as the active default
 #[tauri::command]
 fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
@@ -15591,7 +15727,8 @@ async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
 /// Start an npm addon process and store it globally.
 /// Stdin piped (kept alive so Windows cmd doesn't kill the child).
 /// Stdout piped to detect URL; stderr to null.
-async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), String> {
+/// Spawn the addon child process and store it globally. Does NOT create a watchdog.
+async fn spawn_addon_child(package: &str, args: &[String]) -> Result<(), String> {
     let mut npx_args = vec![package.to_string()];
     npx_args.extend(args.iter().cloned());
 
@@ -15607,10 +15744,7 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                println!("[addon:{}] FAILED to spawn: {}", package, e);
-                format!("Failed to start '{}': {}", package, e)
-            })?
+            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
     } else {
         tokio::process::Command::new("npx")
             .arg("--yes")
@@ -15620,20 +15754,15 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                println!("[addon:{}] FAILED to spawn: {}", package, e);
-                format!("Failed to start '{}': {}", package, e)
-            })?
+            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
     };
 
-    // Keep stdin alive so Windows cmd doesn't exit
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Read stdout in background to detect URL and log output
+    // Log stdout/stderr
     let pkg_log = package.to_string();
-    let pkg_log2 = pkg_log.clone();
     if let Some(stdout) = stdout {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stdout);
@@ -15642,14 +15771,13 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
             loop {
                 line.clear();
                 match reader.read_line(&mut line).await {
-                    Ok(0) => break,
-                    Ok(_) => println!("[addon:{}] stdout: {}", pkg_log, line.trim()),
-                    Err(_) => break,
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => println!("[addon:{}] {}", pkg_log, line.trim()),
                 }
             }
-            println!("[addon:{}] stdout closed", pkg_log);
         });
     }
+    let pkg_log2 = package.to_string();
     if let Some(stderr) = stderr {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stderr);
@@ -15658,80 +15786,65 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
             loop {
                 line.clear();
                 match reader.read_line(&mut line).await {
-                    Ok(0) => break,
+                    Ok(0) | Err(_) => break,
                     Ok(_) => println!("[addon:{}] stderr: {}", pkg_log2, line.trim()),
-                    Err(_) => break,
                 }
             }
         });
     }
 
-    // Wait for process to be alive
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    // Check if process is still running
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            println!("[addon:{}] Process exited immediately with status: {}", package, status);
-            return Err(format!("Addon process exited with status: {}", status));
-        }
-        Ok(None) => {
-            println!("[addon:{}] Process is alive (PID: {:?})", package, child.id());
-        }
-        Err(e) => {
-            println!("[addon:{}] Failed to check process status: {}", package, e);
-            return Err(format!("Failed to check process: {}", e));
-        }
-    }
-
-    // Store the child process globally (keep stdin alive by storing it too)
     if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
-        if let Some(mut old) = proc.take() {
-            let _ = old.kill();
-        }
         *proc = Some(child);
     }
-    // Keep stdin alive in a static so it doesn't drop
-    // ponytail: leaked intentionally — lives for app lifetime
     std::mem::forget(stdin);
 
     println!("[addon:{}] Process started and stored globally", package);
+    Ok(())
+}
 
-    // Watchdog: restart addon if it dies
+async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), String> {
+    spawn_addon_child(package, args).await?;
+
+    // Watchdog: restart addon if it dies (only one watchdog thread)
     let pkg_owned = package.to_string();
     let args_owned = args.to_vec();
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            let needs_restart = {
-                if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
-                    match proc.as_mut().map(|c| c.try_wait()) {
-                        Some(Ok(Some(status))) => {
-                            println!("[addon:{}] Process exited with {}, will restart...", pkg_owned, status);
-                            *proc = None;
-                            true
+    let should_spawn_watchdog = ADDON_WATCHDOG_RUNNING.lock().map(|mut guard| {
+        if *guard { false } else { *guard = true; true }
+    }).unwrap_or(true);
+    if should_spawn_watchdog {
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let needs_restart = {
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        match proc.as_mut().map(|c| c.try_wait()) {
+                            Some(Ok(Some(status))) => {
+                                println!("[addon:{}] Process exited with {}, will restart...", pkg_owned, status);
+                                *proc = None;
+                                true
+                            }
+                            Some(Ok(None)) => false,
+                            _ => {
+                                println!("[addon:{}] No process found, will restart...", pkg_owned);
+                                true
+                            }
                         }
-                        Some(Ok(None)) => false,
-                        _ => {
-                            println!("[addon:{}] No process found, will restart...", pkg_owned);
-                            true
-                        }
+                    } else {
+                        false
                     }
-                } else {
-                    false
-                }
-            };
-            if needs_restart {
-                println!("[addon:{}] Restarting in 2s...", pkg_owned);
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                match rt.block_on(start_npm_addon_process(&pkg_owned, &args_owned)) {
-                    Ok(_) => println!("[addon:{}] Restarted successfully", pkg_owned),
-                    Err(e) => println!("[addon:{}] Restart failed: {}", pkg_owned, e),
+                };
+                if needs_restart {
+                    println!("[addon:{}] Restarting in 2s...", pkg_owned);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    match rt.block_on(spawn_addon_child(&pkg_owned, &args_owned)) {
+                        Ok(_) => println!("[addon:{}] Restarted successfully", pkg_owned),
+                        Err(e) => println!("[addon:{}] Restart failed: {}", pkg_owned, e),
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     Ok(())
 }
@@ -16140,12 +16253,15 @@ fn main() {
                     let args = source.npm_args.clone();
                     let url = source.url.clone();
                     println!("[STARTUP] Auto-starting addon from npm package: {} (url: {})", pkg, url);
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        match start_npm_addon_process(&pkg, &args).await {
-                            Ok(_) => println!("[STARTUP] Addon started successfully"),
-                            Err(e) => println!("[STARTUP] Failed to start addon: {}", e),
-                        }
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            match start_npm_addon_process(&pkg, &args).await {
+                                Ok(_) => println!("[STARTUP] Addon started successfully"),
+                                Err(e) => println!("[STARTUP] Failed to start addon: {}", e),
+                            }
+                        });
                     });
                     addon_started = true;
                     break;
@@ -16430,6 +16546,8 @@ fn main() {
             ddl_refresh_link,
             ddl_delete_source,
             ddl_get_source_media,
+            index_season_pack_to_ddl,
+            auto_refresh_ddl_from_addon,
             // Auto-update commands
             check_for_updates,
             download_update,
@@ -16478,6 +16596,7 @@ fn main() {
             get_addon_sources,
             add_addon_source,
             remove_addon_source,
+            check_addon_server,
             set_active_source,
             check_npx_package,
             toggle_addon_source,
