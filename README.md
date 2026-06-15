@@ -1,173 +1,65 @@
-
 # SlasshyVault
 
-SlasshyVault is a cloud-first desktop media library app built with Tauri, Rust, React, and TypeScript.
-
-It indexes video content from Google Drive, enriches it with TMDB metadata, and plays it through MPV with progress tracking, resume support, and archive-aware playback.
+Cloud-first desktop media library. Indexes your Google Drive, enriches with TMDB metadata, plays through MPV.
 
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.52-black?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.53-black?style=flat-square)
 
-## What SlasshyVault Does
+## Features
 
-- Indexes your Google Drive video library into a local SQLite database
-- Fetches posters, thumbnails, episode metadata, and overviews from TMDB
-- Plays media through MPV with resume, history, and progress saving
-- Detects cloud changes in the background and keeps the library updated
-- Supports archive-aware playback for supported cases, including playable `.rar` archives
-- Shows clear frontend warnings when archive media is not directly playable
-
-## Key Features
-
-- Cloud-first library management
-- TV show and episode grouping
-- Watch history and resume playback
-- System tray support
-- Windows notifications when the app is minimized or in the background
-- In-app toast notifications while the app is open and focused
-- Manual metadata correction with Fix Match
-- Archive playback status and compatibility messaging
-
-## Archive Support
-
-SlasshyVault can detect and assess archived media before playback.
-
-- `.zip`: supported where the archive entry can be played or prepared by the backend
-- `.rar`: supported for playable archive cases
-- `.tar`: currently not playable
-
-If SlasshyVault detects a `.tar` file, it informs the user in the UI and explains why it cannot be indexed for playback right now.
-
-## Playback
-
-Playback is powered by [MPV](https://mpv.io/).
-
-SlasshyVault bundles a pre-built MPV binary for hassle-free installation — you don't need to install MPV separately. The bundled binary is downloaded from the official MPV project on first launch.
-- Use either the built-in MPV build or this specific version (20251217) for hassle-free playback. 
-
-> **Acknowledgments:** MPV is released under GPLv2. All rights and credits for MPV belong to the [mpv project](https://mpv.io/) and its contributors. SlasshyVault is not affiliated with or endorsed by the MPV team.
-
-- Native playback for common video formats
-- Resume from previous progress
-- Watch history tracking
-- Better MPV display titles for archived TV episodes, including `SxxExx`
+- Google Drive library indexing with background change detection
+- TMDB metadata, posters, and episode grouping
+- MPV playback with resume and watch history
+- External streaming via addon (direct URL or Go binary)
+- Archive support (`.zip`, `.rar`)
+- System tray, Windows notifications, toast alerts
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, TypeScript, Tailwind CSS, Radix UI, Framer Motion |
+| Frontend | React 18, TypeScript, Tailwind CSS |
 | Backend | Rust, Tauri |
 | Database | SQLite |
 | Playback | MPV |
 | Metadata | TMDB |
 | Cloud | Google Drive API |
 
-## Prerequisites
-
-Before running SlasshyVault locally, install:
-
-1. Node.js 18+
-2. Rust stable
-3. MPV
-
-Windows:
-
-- Install MPV from [mpv.io](https://mpv.io/installation/) or a trusted Windows build
-- Make sure `mpv.exe` is available in your system `PATH`, or configure it in app settings
-
-## Local Development
+## Quick Start
 
 ```bash
+# Prerequisites: Node.js 18+, Rust stable, MPV in PATH
 git clone https://github.com/SlasshyOverhere/SlasshyVault.git
-cd SlasshyVault/slasshyvault
+cd SlasshyVault
 npm install
 npm run tauri dev
 ```
 
-## Production Build
+## Build
 
 ```bash
 npm run tauri build
 ```
 
-Installers are generated under `src-tauri/target/release/bundle/`.
-
-## First-Time Setup
-
-1. Launch SlasshyVault
-2. Complete onboarding
-3. Connect Google Drive
-4. Add your TMDB API key if you want metadata and artwork
-5. Run a library update
-
-## Backend / Self-Hosting
-
-
-
-If you want to use your own backend:
-
-1. Deploy the backend
-2. Set `VITE_AUTH_SERVER_URL` in `.env`
-3. Set backend-related environment variables for Tauri builds as needed
-4. Build the app with those values
-
-## Supported Video Formats
-
-Common supported formats include:
-
-`.mkv` `.mp4` `.avi` `.mov` `.webm` `.m4v` `.wmv` `.flv` `.ts` `.m2ts`
+Installers output to `src-tauri/target/release/bundle/`.
 
 ## Project Structure
 
 ```text
-slasshyvault/
 ├── src/                 React frontend
 ├── src-tauri/           Rust + Tauri backend
-├── package.json
-└── README.md
+└── package.json
 ```
 
 ## Contributing
 
-Pull requests are welcome.
+1. Fork, branch, change, PR.
 
-1. Fork the repo
-2. Create a branch
-3. Make your changes
-4. Open a pull request
+## Disclaimer
 
-# Disclaimer
-
-**External Sources:** The "External" tab provides a search interface to third-party streaming sources. SlasshyVault does not host, store, control, or distribute any media content. All media is sourced from third-party providers, and the app merely indexes and links to publicly available data. Users are responsible for complying with applicable copyright laws in their jurisdiction. If you believe any content infringes your rights, contact the respective source provider directly.
-
----
-
-
-## Testing
-
-### Frontend Tests
-```bash
-npm test
-```
-
-### Backend Tests
-```bash
-cd src-tauri
-cargo test
-```
-
-### Lint
-```bash
-npm run lint
-```
-
-### Type Check
-```bash
-npx tsc --noEmit
-```
+The "External" tab links to third-party streaming sources. SlasshyVault does not host or distribute media. Users are responsible for compliance with local laws.
 
 ## License
 
-[MIT License](LICENSE)
+[MIT](LICENSE)
