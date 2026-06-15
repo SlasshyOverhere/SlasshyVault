@@ -15493,49 +15493,113 @@ async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
 }
 
 /// Start an npm addon process and store it globally.
-/// Uses a fixed PORT env var so the addon always starts on the same port.
-/// Stdin is piped with "y" to accept any disclaimer prompts.
-/// Stdout/stderr go to null so pipes don't close and kill the process.
+/// Stdin piped (kept alive so Windows cmd doesn't kill the child).
+/// Stdout piped to detect URL; stderr to null.
 async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), String> {
     let mut npx_args = vec![package.to_string()];
     npx_args.extend(args.iter().cloned());
 
-    // ponytail: don't force PORT — addon picks its own; URL is stored from detection
+    println!("[addon:{}] Starting npx --yes {} ...", package, npx_args.join(" "));
+
     let mut child = if cfg!(target_os = "windows") {
         let mut cmd_args = vec!["/c".to_string(), "npx".to_string(), "--yes".to_string()];
         cmd_args.extend(npx_args.clone());
         tokio::process::Command::new("cmd")
             .args(&cmd_args)
             .env("npm_config_yes", "true")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
+            .map_err(|e| {
+                println!("[addon:{}] FAILED to spawn: {}", package, e);
+                format!("Failed to start '{}': {}", package, e)
+            })?
     } else {
         tokio::process::Command::new("npx")
             .arg("--yes")
             .args(&npx_args)
             .env("npm_config_yes", "true")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
+            .map_err(|e| {
+                println!("[addon:{}] FAILED to spawn: {}", package, e);
+                format!("Failed to start '{}': {}", package, e)
+            })?
     };
 
-    // Give it a moment to start
+    // Keep stdin alive so Windows cmd doesn't exit
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Read stdout in background to detect URL and log output
+    let pkg_log = package.to_string();
+    let pkg_log2 = pkg_log.clone();
+    if let Some(stdout) = stdout {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut line = String::new();
+        tokio::spawn(async move {
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => println!("[addon:{}] stdout: {}", pkg_log, line.trim()),
+                    Err(_) => break,
+                }
+            }
+            println!("[addon:{}] stdout closed", pkg_log);
+        });
+    }
+    if let Some(stderr) = stderr {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut line = String::new();
+        tokio::spawn(async move {
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => println!("[addon:{}] stderr: {}", pkg_log2, line.trim()),
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    // Wait for process to be alive
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-    // Store the child process globally
+    // Check if process is still running
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            println!("[addon:{}] Process exited immediately with status: {}", package, status);
+            return Err(format!("Addon process exited with status: {}", status));
+        }
+        Ok(None) => {
+            println!("[addon:{}] Process is alive (PID: {:?})", package, child.id());
+        }
+        Err(e) => {
+            println!("[addon:{}] Failed to check process status: {}", package, e);
+            return Err(format!("Failed to check process: {}", e));
+        }
+    }
+
+    // Store the child process globally (keep stdin alive by storing it too)
     if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
         if let Some(mut old) = proc.take() {
             let _ = old.kill();
         }
         *proc = Some(child);
     }
+    // Keep stdin alive in a static so it doesn't drop
+    // ponytail: leaked intentionally — lives for app lifetime
+    std::mem::forget(stdin);
 
-    println!("[addon:{}] Process started on port 11470", package);
+    println!("[addon:{}] Process started and stored globally", package);
 
     // Watchdog: restart addon if it dies
     let pkg_owned = package.to_string();
@@ -15547,24 +15611,27 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
                 if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
                     match proc.as_mut().map(|c| c.try_wait()) {
                         Some(Ok(Some(status))) => {
-                            println!("[addon:{}] Process exited with {}, restarting...", pkg_owned, status);
+                            println!("[addon:{}] Process exited with {}, will restart...", pkg_owned, status);
                             *proc = None;
                             true
                         }
                         Some(Ok(None)) => false,
-                        _ => true,
+                        _ => {
+                            println!("[addon:{}] No process found, will restart...", pkg_owned);
+                            true
+                        }
                     }
                 } else {
                     false
                 }
             };
             if needs_restart {
+                println!("[addon:{}] Restarting in 2s...", pkg_owned);
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                // Spawn a new tokio runtime for the async restart
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 match rt.block_on(start_npm_addon_process(&pkg_owned, &args_owned)) {
                     Ok(_) => println!("[addon:{}] Restarted successfully", pkg_owned),
-                    Err(e) => eprintln!("[addon:{}] Restart failed: {}", pkg_owned, e),
+                    Err(e) => println!("[addon:{}] Restart failed: {}", pkg_owned, e),
                 }
             }
         }
@@ -15970,20 +16037,43 @@ fn main() {
             }
 
             // Auto-start npm addon sources on app launch
+            let mut addon_started = false;
             for source in &config.addon_sources {
                 if let Some(ref pkg) = source.npm_package {
                     let pkg = pkg.clone();
                     let args = source.npm_args.clone();
-                    println!("[STARTUP] Auto-starting addon from npm package: {}", pkg);
+                    let url = source.url.clone();
+                    println!("[STARTUP] Auto-starting addon from npm package: {} (url: {})", pkg, url);
                     tokio::spawn(async move {
-                        // Small delay to let the app fully initialize
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         match start_npm_addon_process(&pkg, &args).await {
                             Ok(_) => println!("[STARTUP] Addon started successfully"),
-                            Err(e) => eprintln!("[STARTUP] Failed to start addon: {}", e),
+                            Err(e) => println!("[STARTUP] Failed to start addon: {}", e),
                         }
                     });
-                    break; // Only start the first npm source
+                    addon_started = true;
+                    break;
+                }
+            }
+            // Fallback: if addon_url is localhost and addon_sources has no npm_package,
+            // probe the port. If down, log a clear message.
+            if !addon_started {
+                if let Some(ref url) = config.addon_url {
+                    if url.contains("localhost") || url.contains("127.0.0.1") {
+                        let url_clone = url.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            let host_port = url_clone.replace("http://", "").replace("https://", "").trim_end_matches('/').to_string();
+                            let addr: std::net::SocketAddr = host_port.parse().unwrap_or_else(|_| {
+                                // Try adding default port
+                                format!("{}:80", host_port).parse().unwrap_or(([127,0,0,1], 51546).into())
+                            });
+                            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
+                                Ok(_) => println!("[STARTUP] Addon server already running at {}", url_clone),
+                                Err(e) => println!("[STARTUP] Addon server NOT running at {} ({}). Install via Settings > External or start manually.", url_clone, e),
+                            }
+                        });
+                    }
                 }
             }
 
