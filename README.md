@@ -58,7 +58,7 @@ Installers output to `src-tauri/target/release/bundle/`.
 
 ## Disclaimer
 
-SlasshyVault does not host, store, or distribute any media content. The "External" tab provides a search interface to third-party streaming sources. All media is sourced from third-party providers and publicly available data. Users are solely responsible for compliance with applicable copyright laws in their jurisdiction. The developers assume no liability for misuse.
+SlasshyVault does not host, store, or distribute any media content. The "External" tab allows users to connect their own self-hosted addon to search and stream from third-party sources. SlasshyVault does not provide, endorse, or control any addon or its content. Users are solely responsible for compliance with applicable copyright laws in their jurisdiction. The developers assume no liability for misuse.
 
 ## License
 
