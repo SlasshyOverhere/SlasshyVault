@@ -12844,6 +12844,22 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     let is_newer = version_compare(&latest_version, current_version);
     println!("[UPDATE] Version comparison result: newer={}", is_newer);
 
+    // When versions match, check if this is a same-version re-release (hotfix)
+    // by comparing the remote pub_date against the last installed pub_date.
+    let is_newer = if !is_newer && latest_version == current_version {
+        if let (Some(remote_date), Some(local_date)) = (&manifest.pub_date, read_installed_pub_date()) {
+            let is_rerelease = remote_date > &local_date;
+            if is_rerelease {
+                println!("[UPDATE] Same version but newer pub_date detected (re-release): remote={} local={}", remote_date, local_date);
+            }
+            is_rerelease
+        } else {
+            false
+        }
+    } else {
+        is_newer
+    };
+
     println!(
         "[UPDATE] Available platforms in metadata: {:?}",
         manifest.platforms.keys().collect::<Vec<_>>()
@@ -12900,7 +12916,7 @@ fn version_compare(latest: &str, current: &str) -> bool {
 
 /// Download update to temp directory
 #[tauri::command]
-async fn download_update(window: tauri::Window, url: String) -> Result<String, String> {
+async fn download_update(window: tauri::Window, url: String, pub_date: Option<String>) -> Result<String, String> {
     use std::io::Write;
 
     println!("[UPDATE] Starting download...");
@@ -13086,7 +13102,35 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     println!("[UPDATE] Saved to: {:?}", file_path);
     println!("[UPDATE] Final size: {} bytes", downloaded);
 
+    // Persist the pub_date so we can detect same-version re-releases next check
+    if let Some(pd) = pub_date {
+        save_installed_pub_date(&pd);
+    }
+
     Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Save the pub_date of a successfully downloaded update so we can detect
+/// same-version re-releases (hotfixes) on the next check.
+fn save_installed_pub_date(pub_date: &str) {
+    let path = database::get_app_data_dir().join("last_update_pub_date.txt");
+    if let Err(e) = std::fs::write(&path, pub_date) {
+        println!("[UPDATE] WARNING: Failed to save installed pub_date: {}", e);
+    } else {
+        println!("[UPDATE] Saved installed pub_date: {}", pub_date);
+    }
+}
+
+/// Read the pub_date of the last installed update, if any.
+fn read_installed_pub_date() -> Option<String> {
+    let path = database::get_app_data_dir().join("last_update_pub_date.txt");
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        }
+        Err(_) => None,
+    }
 }
 
 fn updater_staging_root() -> std::path::PathBuf {
@@ -15594,6 +15638,7 @@ fn add_addon_source(
         config.addon_url = Some(source.url.clone());
     }
     config::save_config(&config).map_err(|e| e.to_string())?;
+
     Ok(source)
 }
 
@@ -15665,7 +15710,9 @@ fn install_addon_binary(
     let dest = bin_dir.join(&dest_name);
     std::fs::copy(src, &dest).map_err(|e| format!("Cannot copy binary: {}", e))?;
 
-    let port_val = port.unwrap_or(7000);
+    let port_val = port.unwrap_or(51546);
+    let port_str = port_val.to_string();
+    let dest_path = dest.to_string_lossy().to_string();
     let source_name = name.unwrap_or_else(|| "Custom Addon Binary".to_string());
     let url = format!("http://127.0.0.1:{}", port_val);
 
@@ -15675,7 +15722,7 @@ fn install_addon_binary(
         url,
         enabled: true,
         is_default: false,
-        binary_path: Some(dest.to_string_lossy().to_string()),
+        binary_path: Some(dest_path.clone()),
     };
 
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -15689,6 +15736,18 @@ fn install_addon_binary(
         config.addon_sources.push(source.clone());
     }
     config::save_config(&config).map_err(|e| e.to_string())?;
+
+    // Spawn the binary immediately with --port
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            match start_addon_process(&dest_path, &["--port".to_string(), port_str]).await {
+                Ok(_) => println!("[addon] Binary started after install"),
+                Err(e) => eprintln!("[addon] Failed to start binary after install: {}", e),
+            }
+        });
+    });
+
     Ok(source)
 }
 
@@ -16168,11 +16227,21 @@ fn main() {
                     let bp = bp.clone();
                     let url = source.url.clone();
                     println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
+                    // Extract port from URL and pass --port arg
+                    let port_arg = url.split(':').last()
+                        .and_then(|p| p.parse::<u16>().ok())
+                        .map(|p| format!("--port"))
+                        .unwrap_or_default();
+                    let port_val = url.split(':').last()
+                        .and_then(|p| p.parse::<u16>().ok())
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "7000".to_string());
+                    let args: Vec<String> = if port_arg.is_empty() { vec![] } else { vec!["--port".to_string(), port_val] };
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async {
-                            match start_addon_process(&bp, &[]).await {
+                            match start_addon_process(&bp, &args).await {
                                 Ok(_) => println!("[STARTUP] Binary addon started successfully"),
                                 Err(e) => println!("[STARTUP] Failed to start binary addon: {}", e),
                             }
