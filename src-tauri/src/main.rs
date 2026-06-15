@@ -19,7 +19,6 @@ mod zip_manager;
 mod zip_parser;
 mod zip_stream_proxy;
 mod remote_stream_proxy;
-mod obfuscator;
 mod remote_source;
 mod stream_cache;
 
@@ -35,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tauri::api::notification::Notification as TauriNotification;
 use tauri::{
@@ -44,19 +43,14 @@ use tauri::{
 };
 use uuid::Uuid;
 
-// Channel for receiving OAuth codes from deep links
-lazy_static::lazy_static! {
-    static ref OAUTH_CODE_CHANNEL: (Mutex<mpsc::Sender<String>>, Mutex<mpsc::Receiver<String>>) = {
-        let (tx, rx) = mpsc::channel();
-        (Mutex::new(tx), Mutex::new(rx))
-    };
-    static ref RECENT_UI_NOTIFICATIONS: Mutex<HashMap<String, std::time::Instant>> =
-        Mutex::new(HashMap::new());
-    // Holds the running npm addon child process so it stays alive
-    static ref RUNNING_ADDON_PROCESS: Mutex<Option<tokio::process::Child>> = Mutex::new(None);
-    // Background task that reads addon stdout to keep the pipe open
-    static ref ADDON_STDOUT_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
-}
+// ponytail: LazyLock replaces lazy_static dependency
+static OAUTH_CODE_CHANNEL: LazyLock<(Mutex<mpsc::Sender<String>>, Mutex<mpsc::Receiver<String>>)> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel();
+    (Mutex::new(tx), Mutex::new(rx))
+});
+static RECENT_UI_NOTIFICATIONS: LazyLock<Mutex<HashMap<String, std::time::Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static RUNNING_ADDON_PROCESS: LazyLock<Mutex<Option<tokio::process::Child>>> = LazyLock::new(|| Mutex::new(None));
+static ADDON_STDOUT_TASK: LazyLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
 
 // MPV session info
 #[derive(Clone, Serialize)]
@@ -13138,25 +13132,15 @@ fn sanitize_update_filename(parsed_url: &url::Url) -> String {
 fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String> {
     let path = std::path::Path::new(path_str);
 
-    // Canonicalize resolves symlinks and ../ sequences, and checks if file exists
-    let mut canonical_path = path
+    // ponytail: dunce removed — \\?\ prefix harmless for Path::starts_with
+    let canonical_path = path
         .canonicalize()
         .map_err(|e| format!("Invalid installer path: {}", e))?;
 
-    #[cfg(windows)]
-    {
-        canonical_path = dunce::canonicalize(&canonical_path).unwrap_or(canonical_path);
-    }
-
     let staging_dir = updater_staging_root();
-    let mut canonical_staging = staging_dir
+    let canonical_staging = staging_dir
         .canonicalize()
         .map_err(|e| format!("Failed to resolve updater staging directory: {}", e))?;
-
-    #[cfg(windows)]
-    {
-        canonical_staging = dunce::canonicalize(&canonical_staging).unwrap_or(canonical_staging);
-    }
 
     // Ensure it's inside the app-owned updater staging directory
     if !canonical_path.starts_with(&canonical_staging) {
@@ -14994,10 +14978,19 @@ async fn remote_play_with_mpv(
     let still_str = still_path.as_deref();
     let ep_title_str = episode_title.as_deref();
 
+    // Normalize media_type: DB stores "tvshow"/"tvepisode", frontend may send those too
+    let normal_media_type = if media_type == "tvshow" || media_type == "tvepisode" {
+        "tv".to_string()
+    } else if media_type == "movie" {
+        "movie".to_string()
+    } else {
+        media_type.clone()
+    };
+
     let (media_id, resume_info) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
 
-        if media_type == "tv" {
+        if normal_media_type == "tv" {
             let show_id = db.insert_or_get_remote_tvshow(
                 &tmdb_str, &title, year, poster_str, overview_str,
             ).map_err(|e| e.to_string())?;
@@ -15039,7 +15032,7 @@ async fn remote_play_with_mpv(
     let folder_name = {
         let sanitized: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect();
         let sanitized = sanitized.trim().to_string();
-        if media_type == "tv" {
+        if normal_media_type == "tv" {
             let s = season_number.unwrap_or(0);
             let e = episode_number.unwrap_or(0);
             format!("{}_S{:02}E{:02}", sanitized, s, e)
@@ -15099,39 +15092,12 @@ async fn remote_play_with_mpv(
         }
     }
 
-    // ── 4. Determine source — local proxy with download-to-disk for seeking ──
-    // Only skip the proxy if the URL is already our own local proxy (contains /stream endpoint).
-    // Localhost addon URLs (e.g. http://localhost:11470) still need the proxy for disk caching.
-    let is_own_proxy = url.contains("/stream") && (url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:"));
-    let source = if already_cached {
-        cache_path.to_string_lossy().to_string()
-    } else if is_own_proxy {
-        println!("[REMOTE-MPV] URL is already our proxy, passing directly to MPV: {}", url);
-        url.clone()
-    } else {
-        // Start a local proxy that downloads the file and serves Range requests.
-        // The addon returns a 302 redirect to Google CDN; the proxy follows it
-        // and downloads to disk while serving from the growing .part file.
-        let proxy_cache_dir = cache_subdir.clone();
-        let proxy_key = media_identifier.clone();
-        let proxy_title = title.clone();
-        let proxy_cache_path = cache_path.clone();
-        match remote_stream_proxy::start_proxy(url.clone(), proxy_cache_dir, proxy_key, proxy_title, Some(proxy_cache_path)) {
-            Ok(handle) => {
-                let local_url = handle.localhost_url();
-                println!("[REMOTE-MPV] Local proxy started: {}", local_url);
-                remote_stream_proxy::set_active_proxy(handle);
-                local_url
-            }
-            Err(e) => {
-                println!("[REMOTE-MPV] Proxy failed ({}), falling back to direct URL", e);
-                url.clone()
-            }
-        }
-    };
-
-    // No stream-record needed — the proxy handles disk caching
+    // ── 4. Pass URL directly to MPV — no proxy, no download, no cache ──
+    // MPV handles the addon proxy's 302 redirect to CDN on its own.
+    // Playback tracking is done via the Lua script (mpv_ipc).
+    let source = url.clone();
     let cache_settings = None;
+    let is_own_proxy = false; // no proxy used
 
     // ── 5. Launch MPV with tracking ──
     let start_pos = start_position.max(0.0);
@@ -15152,78 +15118,22 @@ async fn remote_play_with_mpv(
     )
     .map_err(|e| format!("Failed to launch MPV with tracking: {}", e))?;
 
-    // ── 6. Background threads ──
+    // ── 6. Background: playback progress tracking only (no proxy, no cache) ──
     let title_clone = title.clone();
-    let cache_path_clone = cache_path.clone();
-    let cache_key = media_identifier.clone();
-    let manager = state.cache_manager.clone();
     let app_clone = app_handle.clone();
     let db_path = database::get_app_data_dir()
         .join("slasshyvault.db")
         .to_string_lossy()
         .to_string();
-    let is_tv = media_type == "tv";
+    let is_tv = normal_media_type == "tv";
     let tmdb_id_clone = tmdb_id;
     let season_clone = season_number;
     let episode_clone = episode_number;
 
     std::thread::spawn(move || {
-        // ── Thread A: Cache download monitor (only for proxied downloads, not direct URLs) ──
-        if !already_cached && !is_own_proxy {
-            let total = video_size.max(1) as u64;
-            let started = std::time::Instant::now();
-            loop {
-                match mpv_ipc::is_mpv_running(pid) {
-                    true => {}
-                    false => break,
-                }
-
-                // Watch the proxy's .part file, then fall back to the final path when done
-                let part_path = cache_path_clone.with_extension("part");
-                let watch_path = if part_path.exists() { part_path } else { cache_path_clone.clone() };
-                if let Ok(meta) = watch_path.metadata() {
-                    let downloaded = meta.len();
-                    let elapsed = started.elapsed().as_secs_f64().max(0.001);
-                    let speed = downloaded as f64 / elapsed;
-
-                    if let Ok(mut active) = manager.lock_active() {
-                        if let Some(entry) = active.get_mut(&cache_key) {
-                            entry.status.downloaded_bytes = downloaded;
-                            entry.status.speed_bytes_per_second = speed;
-                            entry.status.state = stream_cache::CacheState::Downloading {
-                                progress: (downloaded as f64 / total as f64) * 100.0,
-                            };
-                            let s = entry.status.clone();
-                            drop(active);
-                            let _ = app_clone.emit_all("remote-cache-progress", &s);
-                        }
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
-
-        // Mark cache as complete (skip for direct local URLs)
-        if !is_own_proxy {
-            if let Ok(mut active) = manager.lock_active() {
-                if let Some(entry) = active.get_mut(&cache_key) {
-                    entry.status.state = stream_cache::CacheState::Cached { path: entry.status.target_path.clone() };
-                    entry.status.downloaded_bytes = entry.status.total_bytes;
-                    let s = entry.status.clone();
-                    drop(active);
-                    let _ = app_clone.emit_all("remote-cache-progress", &s);
-                }
-            }
-        }
-
-        // ── Thread B: Playback progress tracking ──
         if let Ok(db) = database::Database::new(&db_path) {
             let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
 
-            // Stop the local proxy if one was started
-            remote_stream_proxy::clear_active_proxy();
-
-            // Update last_watched if valid progress was recorded
             if result.final_position.is_some()
                 && result.final_duration.is_some()
                 && result.final_duration.unwrap_or(0.0) > 0.0
@@ -15231,7 +15141,6 @@ async fn remote_play_with_mpv(
                 let _ = db.update_last_watched(media_id);
             }
 
-            // Emit playback-ended event for next-episode flow
             let _ = app_clone.emit_all(
                 "mpv-playback-ended",
                 serde_json::json!({
@@ -15431,6 +15340,15 @@ async fn remote_add_to_library(
     } else {
         db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
     }.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_get_episodes(
+    state: State<'_, AppState>,
+    show_id: i64,
+) -> Result<Vec<crate::database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_remote_episodes(show_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -16450,6 +16368,7 @@ fn main() {
             remote_get_resume_info,
             remote_update_poster,
             remote_get_library,
+            remote_get_episodes,
             remote_remove_from_library,
             remote_add_to_library,
             remote_start_cache,

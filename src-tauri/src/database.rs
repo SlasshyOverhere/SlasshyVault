@@ -3804,11 +3804,31 @@ impl Database {
                     archive_format, is_cloud, cloud_file_id
              FROM media
              WHERE file_path LIKE 'remote://%'
-               AND media_type IN ('movie', 'tvshow', 'tvepisode')
+               AND media_type IN ('movie', 'tvshow')
              ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
         )?;
 
         let items = stmt.query_map([], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
+    /// Get remote episodes for a specific TV show, ordered by season/episode.
+    pub fn get_remote_episodes(&self, show_id: i64) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format, is_cloud, cloud_file_id
+             FROM media
+             WHERE parent_id = ? AND media_type = 'tvepisode' AND file_path LIKE 'remote://%'
+             ORDER BY season_number, episode_number",
+        )?;
+        let items = stmt.query_map(params![show_id], Self::map_media_item)?;
         items
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>()

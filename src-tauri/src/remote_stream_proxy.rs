@@ -8,52 +8,6 @@ use std::sync::{Arc, Mutex, RwLock};
 /// design would require per-stream routing and is out of scope for now.
 static ACTIVE_PROXY: Mutex<Option<RemoteStreamProxyHandle>> = Mutex::new(None);
 
-/// Download from a reader into the .part file, tracking progress.
-fn download_from_reader(
-    dl_state: &std::sync::Arc<ProxyState>,
-    dl_stop: &AtomicBool,
-    total: u64,
-    reader: &mut dyn Read,
-) {
-    dl_state.total_size.store(total, Ordering::Relaxed);
-
-    let mut file = match std::fs::File::create(&dl_state.file_path) {
-        Ok(f) => f,
-        Err(e) => {
-            *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("File: {}", e));
-            return;
-        }
-    };
-
-    let mut buf = vec![0u8; 256 * 1024];
-    let mut written: u64 = 0;
-
-    loop {
-        if dl_stop.load(Ordering::Relaxed) { return; }
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                if let Err(e) = file.write_all(&buf[..n]) {
-                    *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
-                        Some(format!("Write: {}", e));
-                    return;
-                }
-                written += n as u64;
-                dl_state.downloaded.store(written, Ordering::Relaxed);
-            }
-            Err(e) => {
-                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!("Read: {}", e));
-                return;
-            }
-        }
-    }
-
-    let _ = file.flush();
-    dl_state.complete.store(true, Ordering::Relaxed);
-    let _ = std::fs::rename(&dl_state.file_path, &dl_state.final_path);
-    println!("[REMOTE-PROXY] Done: {} bytes", written);
-}
 
 /// Allowed Content-Type prefixes for proxied responses.
 const ALLOWED_CONTENT_TYPES: &[&str] = &[
@@ -183,42 +137,23 @@ pub fn start_proxy(
 
         println!("[REMOTE-PROXY] Downloading: {}", dl_url);
 
-        // Check if this is a localhost URL - use raw TCP to bypass reqwest loopback restriction
-        let is_loopback = dl_url.contains("127.0.0.1") || dl_url.contains("localhost") || dl_url.contains("[::1]");
-
-        if is_loopback {
-            // Use raw TCP for localhost URLs
-            match crate::http_client::local_http_get_raw(&dl_url) {
-                Ok((total, mut reader)) => {
-                    dl_state.total_size.store(total, Ordering::Relaxed);
-                    download_from_reader(&dl_state, &dl_stop, total, &mut reader);
-                }
-                Err(e) => {
-                    *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Local HTTP: {}", e));
-                }
-            }
-            return;
-        }
-
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(3600))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Client: {}", e));
-                return;
-            }
-        };
+        let client = crate::http_client::proxy_client();
 
         let resp = match client.get(&dl_url).send() {
             Ok(r) => r,
             Err(e) => {
                 *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Request: {}", e));
+                println!("[REMOTE-PROXY] Download request failed: {}", e);
                 return;
             }
         };
+
+        println!(
+            "[REMOTE-PROXY] Upstream responded: {} {} → {}",
+            resp.status().as_u16(),
+            resp.status().canonical_reason().unwrap_or(""),
+            resp.url()
+        );
 
         if !resp.status().is_success() {
             *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("HTTP {}", resp.status()));
@@ -361,7 +296,9 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
         .find(|h| h.field.as_str().to_ascii_lowercase() == "range")
         .map(|h| h.value.as_str().to_string());
 
-    if let Some(range_str) = range_header {
+    // ponytail: only use Range serving when we know the real total size (upstream sent valid Content-Length).
+    // When total_size is implausibly small (0 or 1 byte for a video), Range would produce wrong values.
+    if let Some(range_str) = range_header.filter(|_| total_size > 1024) {
         // Wait until enough data is available for the requested range (polling with 200ms sleep)
         if let Some((start, end)) = parse_range(&range_str, total_size.max(1)) {
             let needed = end + 1;
@@ -434,6 +371,23 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
     }
 
     // Full request — stream from file
+    // ponytail: when upstream sent no Content-Length (chunked), wait for download to finish
+    // so we can serve the complete file with a correct Content-Length.
+    if total_size <= 1024 {
+        let mut waited = 0;
+        while !state.complete.load(Ordering::Relaxed) && waited < 120000 {
+            if let Some(err) = state.error.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                let response = tiny_http::Response::from_string(format!("Error: {}", err))
+                    .with_status_code(502)
+                    .with_header(tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
+                let _ = request.respond(response);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            waited += 200;
+        }
+    }
+
     let file = match std::fs::File::open(&read_path) {
         Ok(f) => f,
         Err(e) => {

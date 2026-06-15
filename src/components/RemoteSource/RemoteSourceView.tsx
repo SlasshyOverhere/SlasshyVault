@@ -10,7 +10,7 @@ import { RemoteQualitySelector } from './RemoteQualitySelector'
 import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
 import { ResumeDialog } from '@/components/ResumeDialog'
-import { Film, Play, X, Loader2 } from 'lucide-react'
+import { Film, Play, X, Loader2, ArrowLeft, Check, Clock } from 'lucide-react'
 import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
 import { getCachedImageUrl } from '@/services/api'
@@ -37,7 +37,7 @@ interface ResumeDialogState {
   duration: number
 }
 
-type PageState = 'library' | 'search' | 'detail'
+type PageState = 'library' | 'search' | 'detail' | 'episodes'
 
 function getMediaIdentifier(item: TmdbSearchResult, season?: number, episode?: number): string {
   const base = `remote-${item.id}`
@@ -65,11 +65,15 @@ interface RemoteLibraryItem {
 
 function toSearchResult(item: RemoteLibraryItem): TmdbSearchResult {
   const tmdbId = item.tmdb_id ? parseInt(item.tmdb_id) : item.id
+  // DB stores "tvshow"/"tvepisode"/"movie" — normalize to what the app expects
+  const normalType: 'movie' | 'tv' = item.media_type === 'tvshow' || item.media_type === 'tvepisode'
+    ? 'tv'
+    : 'movie'
   return {
     id: Number.isFinite(tmdbId) ? tmdbId : item.id,
-    title: item.media_type === 'movie' ? item.title : undefined,
-    name: item.media_type === 'tv' ? item.title : undefined,
-    media_type: item.media_type as 'movie' | 'tv',
+    title: normalType === 'movie' ? item.title : undefined,
+    name: normalType === 'tv' ? item.title : undefined,
+    media_type: normalType,
     poster_path: item.poster_path ?? undefined,
     overview: item.overview ?? undefined,
     release_date: item.year ? String(item.year) : undefined,
@@ -172,6 +176,9 @@ function RemoteSourceViewInner() {
 
   const [pageState, setPageState] = useState<PageState>('library')
   const [selectedItem, setSelectedItem] = useState<TmdbSearchResult | null>(null)
+  const [selectedShow, setSelectedShow] = useState<RemoteLibraryItem | null>(null)
+  const [showEpisodes, setShowEpisodes] = useState<RemoteLibraryItem[]>([])
+  const [loadingEpisodes, setLoadingEpisodes] = useState(false)
 
   // Stream fetching
   const [fetching, setFetching] = useState(false)
@@ -242,6 +249,52 @@ function RemoteSourceViewInner() {
       const items = await invoke<RemoteLibraryItem[]>('remote_get_library')
       setRemoteLibrary(items)
     } catch (e) { console.warn('[RemoteSourceView] loadRemoteLibrary:', e) }
+  }, [])
+
+  const loadShowEpisodes = useCallback(async (showId: number, tmdbId?: number) => {
+    setLoadingEpisodes(true)
+    try {
+      // Fetch all episodes from TMDB and merge with DB progress
+      if (tmdbId) {
+        const dbEpisodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
+        const dbMap = new Map<string, RemoteLibraryItem>()
+        for (const ep of dbEpisodes) {
+          dbMap.set(`${ep.season_number}x${ep.episode_number}`, ep)
+        }
+        const details = await invoke<any>('get_tv_details', { tvId: tmdbId })
+        const tvSeasons = (details.seasons || []).filter((s: any) => s.season_number > 0)
+        const allEpisodes: RemoteLibraryItem[] = []
+        for (const season of tvSeasons) {
+          try {
+            const seasonData = await invoke<any>('get_tv_season_episodes', { tvId: tmdbId, seasonNumber: season.season_number })
+            for (const ep of (seasonData.episodes || [])) {
+              const key = `${season.season_number}x${ep.episode_number}`
+              const dbEp = dbMap.get(key)
+              allEpisodes.push({
+                id: dbEp?.id ?? 0,
+                title: ep.name || '',
+                year: null,
+                overview: ep.overview ?? null,
+                poster_path: ep.still_path ?? null,
+                media_type: 'tvepisode',
+                tmdb_id: String(tmdbId),
+                last_watched: dbEp?.last_watched ?? null,
+                resume_position_seconds: dbEp?.resume_position_seconds ?? 0,
+                duration_seconds: dbEp?.duration_seconds ?? (ep.runtime ? ep.runtime * 60 : 0),
+                season_number: season.season_number,
+                episode_number: ep.episode_number,
+                episode_title: ep.name ?? null,
+              })
+            }
+          } catch (e) { console.warn(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
+        }
+        setShowEpisodes(allEpisodes)
+      } else {
+        const episodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
+        setShowEpisodes(episodes)
+      }
+    } catch (e) { console.warn('[RemoteSourceView] loadShowEpisodes:', e) }
+    finally { setLoadingEpisodes(false) }
   }, [])
 
   useEffect(() => {
@@ -316,6 +369,8 @@ function RemoteSourceViewInner() {
       const data = event.payload
       // Refresh library to reflect updated progress
       loadRemoteLibrary()
+      // Also refresh episode list if viewing episodes
+      if (selectedShow) loadShowEpisodes(selectedShow.id, selectedShow.tmdb_id ? parseInt(selectedShow.tmdb_id) : undefined)
       if (data.completed && data.media_type === 'tv' && data.season_number != null && data.episode_number != null) {
         const nextEp = data.episode_number + 1
         setNextEpisodePrompt({
@@ -328,7 +383,7 @@ function RemoteSourceViewInner() {
       }
     })
     return () => { unsub.then((fn) => fn()) }
-  }, [loadRemoteLibrary])
+  }, [loadRemoteLibrary, selectedShow, loadShowEpisodes])
 
   const handleDismissNextEpisode = useCallback(() => {
     setNextEpisodePrompt((prev) => ({ ...prev, show: false }))
@@ -439,6 +494,7 @@ function RemoteSourceViewInner() {
       const displayTitle = item.media_type === 'tv' && episodeTitle
         ? `${showName} - S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} - ${episodeTitle}`
         : showName
+      
       await invoke<any>('remote_play_with_mpv', {
         url: stream.url,
         title: displayTitle,
@@ -533,6 +589,7 @@ function RemoteSourceViewInner() {
       if (!stream) {
         toast({ title: 'No streams found', description: 'Could not find streams to resume playback.', variant: 'destructive' })
         pendingStreamRef.current = null
+        pendingFetchedStreamsRef.current = null
         return
       }
     }
@@ -594,8 +651,19 @@ function RemoteSourceViewInner() {
   }, [toast])
 
   const handleLibraryCardClick = useCallback(async (item: RemoteLibraryItem) => {
+    // For TV shows, open episode browser instead of detail view
+    if (item.media_type === 'tvshow') {
+      setSelectedShow(item)
+      setShowEpisodes([])
+      setPageState('episodes')
+      setShowCleanup(false)
+      loadShowEpisodes(item.id, item.tmdb_id ? parseInt(item.tmdb_id) : undefined)
+      return
+    }
+
     const reqId = ++detailReqId.current
     const searchItem = toSearchResult(item)
+
     // Navigate immediately so the user sees feedback right away
     setSelectedItem(searchItem)
     setPageState('detail')
@@ -674,8 +742,61 @@ function RemoteSourceViewInner() {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
+  const handleBackFromEpisodes = useCallback(() => {
+    setSelectedShow(null)
+    setShowEpisodes([])
+    setPageState('library')
+  }, [])
+
+  const handleEpisodeClick = useCallback(async (episode: RemoteLibraryItem) => {
+    if (!selectedShow) return
+    const showSearchItem = toSearchResult(selectedShow)
+    // Set episode context
+    if (episode.season_number != null) setCurrentSeason(episode.season_number)
+    if (episode.episode_number != null) setCurrentEpisode(episode.episode_number)
+    if (episode.episode_title) setCurrentEpisodeTitle(episode.episode_title)
+    setSelectedItem(showSearchItem)
+    setPageState('detail')
+    // If episode has resume progress, show resume dialog
+    const hasProgress = episode.resume_position_seconds > 0 && episode.duration_seconds > 0
+    if (hasProgress) {
+      setResumeDialog({
+        open: true,
+        mediaId: episode.id,
+        title: `${selectedShow.title} S${episode.season_number}E${episode.episode_number}`,
+        position: episode.resume_position_seconds,
+        duration: episode.duration_seconds,
+      })
+      pendingStreamRef.current = {
+        stream: null as any,
+        identifier: getMediaIdentifier(showSearchItem, episode.season_number ?? undefined, episode.episode_number ?? undefined),
+        startPosition: episode.resume_position_seconds,
+        mediaId: episode.id,
+      }
+    }
+    // Fetch streams in background
+    const imdbId = showSearchItem.imdb_id
+    if (imdbId) {
+      try {
+        const streams = await invoke<GroupedStreams[]>('remote_get_series_streams', {
+          imdbId,
+          season: episode.season_number ?? 1,
+          episode: episode.episode_number ?? 1,
+          forceRefresh: false,
+        })
+        const flat = streams.flatMap((g) => g.streams)
+        if (flat.length > 0) {
+          pendingFetchedStreamsRef.current = flat
+          if (pendingStreamRef.current) pendingStreamRef.current.stream = flat[0]
+        }
+      } catch (e) { console.warn('[RemoteSourceView] handleEpisodeClick fetch streams:', e) }
+    }
+  }, [selectedShow])
+
   const handleBackToLibrary = useCallback(() => {
     setSelectedItem(null)
+    setSelectedShow(null)
+    setShowEpisodes([])
     setGroupedStreams([])
     setStreamError(null)
     setQualityOpen(false)
@@ -842,7 +963,98 @@ function RemoteSourceViewInner() {
       <div className="pointer-events-none absolute -top-40 -right-40 size-[600px] rounded-full bg-amber-500/3 blur-[120px]" />
       <div className="pointer-events-none absolute -bottom-40 -left-40 size-[500px] rounded-full bg-sky-500/2 blur-[120px]" />
 
-      {pageState === 'detail' ? (
+      {pageState === 'episodes' && selectedShow ? (
+        /* ── Episode browser ── */
+        <ScrollArea className="flex-1 px-8 pb-8 pt-10 relative z-10">
+          <div className="max-w-4xl mx-auto">
+            <button
+              onClick={handleBackFromEpisodes}
+              className="flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-200 transition-colors mb-6"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back to Library
+            </button>
+            <div className="flex gap-6 mb-8">
+              <div className="w-32 shrink-0">
+                <div className="aspect-[2/3] rounded-lg overflow-hidden bg-neutral-900 border border-neutral-800/60">
+                  <LibraryPoster posterPath={selectedShow.poster_path} alt={selectedShow.title} />
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-2xl font-black text-white tracking-tight">{selectedShow.title}</h2>
+                {selectedShow.year && <p className="text-sm text-neutral-500 mt-1">{selectedShow.year}</p>}
+                <p className="text-xs text-neutral-600 mt-2">{loadingEpisodes ? 'Loading episodes...' : `${showEpisodes.length} episode${showEpisodes.length !== 1 ? 's' : ''}`}</p>
+              </div>
+            </div>
+            {showEpisodes.length === 0 ? (
+              <p className="text-sm text-neutral-600 text-center py-12">No episodes yet</p>
+            ) : loadingEpisodes ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="size-8 rounded-full border-2 border-neutral-800 border-t-amber-700/40 animate-spin" />
+              </div>
+            ) : (
+              (() => {
+                const grouped: Record<number, RemoteLibraryItem[]> = {}
+                for (const ep of showEpisodes) {
+                  const s = ep.season_number ?? 0
+                  if (!grouped[s]) grouped[s] = []
+                  grouped[s].push(ep)
+                }
+                const seasons = Object.keys(grouped).map(Number).sort((a, b) => a - b)
+                return seasons.map((seasonNum) => (
+                  <div key={seasonNum} className="mb-6">
+                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-neutral-500 mb-3">
+                      Season {seasonNum}
+                    </h3>
+                    <div className="space-y-1">
+                      {grouped[seasonNum].map((ep) => {
+                        const progress = ep.duration_seconds > 0 ? Math.min(100, (ep.resume_position_seconds / ep.duration_seconds) * 100) : 0
+                        const isCompleted = progress >= 90
+                        const inProgress = ep.resume_position_seconds > 0 && !isCompleted
+                        return (
+                          <button
+                            key={ep.id}
+                            onClick={() => handleEpisodeClick(ep)}
+                            className="w-full flex items-center gap-4 px-4 py-3 rounded-lg bg-neutral-900/50 border border-neutral-800/40 hover:border-neutral-700/60 hover:bg-neutral-900/80 transition-all text-left group"
+                          >
+                            <div className="shrink-0 w-8 text-center">
+                              {isCompleted ? (
+                                <Check className="size-4 text-emerald-500 mx-auto" />
+                              ) : inProgress ? (
+                                <Clock className="size-4 text-amber-500 mx-auto" />
+                              ) : (
+                                <span className="text-sm font-bold text-neutral-600">{ep.episode_number}</span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm font-medium truncate ${isCompleted ? 'text-neutral-500' : 'text-neutral-200'}`}>
+                                {ep.episode_title || `Episode ${ep.episode_number}`}
+                              </p>
+                              {ep.duration_seconds > 0 && (
+                                <p className="text-[10px] text-neutral-600 mt-0.5">
+                                  {Math.floor(ep.duration_seconds / 60)}m
+                                </p>
+                              )}
+                            </div>
+                            {inProgress && (
+                              <div className="w-20 h-1 rounded-full bg-neutral-800 overflow-hidden">
+                                <div className="h-full bg-amber-500/70 rounded-full" style={{ width: `${progress}%` }} />
+                              </div>
+                            )}
+                            <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Play className="size-4 text-neutral-400" />
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))
+              })()
+            )}
+          </div>
+        </ScrollArea>
+      ) : pageState === 'detail' ? (
         /* ── Detail view ── */
         <ScrollArea className="flex-1 px-8 pb-8 pt-10 relative z-10">
           <div className="max-w-4xl mx-auto">
@@ -928,7 +1140,7 @@ function RemoteSourceViewInner() {
                       <LibraryPoster posterPath={item.poster_path} alt={item.title} />
                       {/* Media type badge */}
                       <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider bg-black/60 text-neutral-400">
-                        {item.media_type === 'movie' ? 'Movie' : 'TV'}
+                        {item.media_type === 'movie' ? 'Movie' : 'Series'}
                       </div>
                       {/* Resume progress bar */}
                       {item.resume_position_seconds > 0 && item.duration_seconds > 0 && (
@@ -947,10 +1159,14 @@ function RemoteSourceViewInner() {
                       >
                         <X className="size-3" />
                       </button>
-                      {/* Play overlay on hover */}
+                      {/* Play/Browse overlay on hover */}
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-300 flex items-center justify-center">
                         <div className="size-8 rounded-full bg-amber-600/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
-                          <Play className="size-3.5 fill-white ml-0.5" />
+                          {item.media_type === 'tvshow' ? (
+                            <Film className="size-3.5" />
+                          ) : (
+                            <Play className="size-3.5 fill-white ml-0.5" />
+                          )}
                         </div>
                       </div>
                     </div>

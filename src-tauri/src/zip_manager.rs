@@ -146,7 +146,7 @@ pub fn analyze_zip_from_drive(
     access_token: &str,
     zip_file_id: &str,
 ) -> Result<AnalyzedZipArchive, ZipError> {
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
     analyze_zip_with_client(&client, access_token, zip_file_id)
 }
 
@@ -308,7 +308,7 @@ pub fn extract_zip_entry_to_cache(
         }
     }
 
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
     let range_end = data_start_offset
         .checked_add(compressed_size)
         .and_then(|value| value.checked_sub(1))
@@ -381,7 +381,7 @@ where
         return Err(ZipError::CorruptedArchive);
     }
 
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
     let range_end = data_start_offset
         .checked_add(compressed_size)
         .and_then(|value| value.checked_sub(1))
@@ -639,10 +639,6 @@ pub fn extract_episode_metadata(entry: &ZipEntry) -> Result<media_manager::Parse
     }
 
     Ok(parsed)
-}
-
-fn build_client() -> Result<Client, ZipError> {
-    Ok(crate::http_client::long_client().clone())
 }
 
 fn fetch_drive_metadata(

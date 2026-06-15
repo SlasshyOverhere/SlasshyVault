@@ -1,66 +1,35 @@
-/// Shared, lazily-initialized HTTP blocking clients.
-///
-/// In reqwest 0.12 the blocking `Client` internally creates a tokio runtime.
-/// When such a client is created *and dropped* inside `tokio::task::spawn_blocking`,
-/// the internal runtime's `Drop` tries to `block_on()` while already inside a
-/// tokio runtime context — and panics.
-///
-/// By keeping the clients in `LazyLock` statics they are:
-///   • built exactly once (on whichever thread first accesses them),
-///   • never dropped (they are `'static`),
-///   • safe to `.clone()` (cheap `Arc` bump) from any thread, including
-///     `spawn_blocking` pool threads.
+// ponytail: base builder avoids 35 lines of builder-chain duplication
 use std::sync::LazyLock;
 
-/// Standard client for general API requests (30 s timeout, HTTP/1.1 only).
-static SHARED_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+fn make_client(timeout: u64, connect: u64, keepalive: u64, label: &str) -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(timeout))
+        .connect_timeout(std::time::Duration::from_secs(connect))
         .redirect(reqwest::redirect::Policy::limited(5))
         .pool_max_idle_per_host(10)
-        .tcp_keepalive(std::time::Duration::from_secs(20))
+        .tcp_keepalive(std::time::Duration::from_secs(keepalive))
         .tcp_nodelay(true)
         .http1_only()
         .user_agent("SlasshyVault/1.0")
         .gzip(true)
         .deflate(true)
         .build()
-        .expect("Failed to build shared HTTP client")
+        .expect(label)
+}
+
+/// Standard client for general API requests (30 s timeout).
+static SHARED_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    make_client(30, 15, 20, "Failed to build shared HTTP client")
 });
 
-/// Quick client for latency-sensitive operations (10 s timeout, HTTP/1.1 only).
+/// Quick client for latency-sensitive operations (10 s timeout).
 static QUICK_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .pool_max_idle_per_host(10)
-        .tcp_keepalive(std::time::Duration::from_secs(15))
-        .tcp_nodelay(true)
-        .http1_only()
-        .user_agent("SlasshyVault/1.0")
-        .gzip(true)
-        .deflate(true)
-        .build()
-        .expect("Failed to build quick HTTP client")
+    make_client(10, 10, 15, "Failed to build quick HTTP client")
 });
 
 /// Long-timeout client for archive / large-file operations (300 s timeout).
 static LONG_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .pool_max_idle_per_host(10)
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .tcp_nodelay(true)
-        .http1_only()
-        .user_agent("SlasshyVault/1.0")
-        .gzip(true)
-        .deflate(true)
-        .build()
-        .expect("Failed to build long HTTP client")
+    make_client(300, 30, 60, "Failed to build long HTTP client")
 });
 
 /// Return a reference to the shared 30 s-timeout client.
@@ -76,6 +45,25 @@ pub fn quick_client() -> &'static reqwest::blocking::Client {
 /// Return a reference to the long 300 s-timeout client.
 pub fn long_client() -> &'static reqwest::blocking::Client {
     &LONG_CLIENT
+}
+
+/// Proxy download client (1-hour timeout, .no_proxy() for Windows system proxy bypass).
+/// ponytail: LazyLock avoids reqwest 0.12 per-build tokio runtime hang.
+static PROXY_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .no_proxy()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(3600))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .gzip(true)
+        .deflate(true)
+        .build()
+        .expect("Failed to build proxy HTTP client")
+});
+
+/// Return a reference to the proxy download client.
+pub fn proxy_client() -> &'static reqwest::blocking::Client {
+    &PROXY_CLIENT
 }
 
 /// Make a raw HTTP GET request to a local server using TCP.

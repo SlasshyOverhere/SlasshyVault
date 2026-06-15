@@ -16,8 +16,7 @@
     "tauri:dev": "tauri dev",
     "tauri:dev:nightly": "node scripts/dev-nightly.mjs",
     "tauri:build": "tauri build",
-    "test": "vitest",
-    "test:toast": "node tests/trigger-toast.js"
+    "test": "vitest"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

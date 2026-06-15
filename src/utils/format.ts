@@ -1,9 +1,8 @@
 /**
  * Format a byte count into a human-readable file size string.
  */
-export function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size'
-  if (bytes === 0) return '0 B'
+export function formatFileSize(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let size = bytes
   let unitIdx = 0
@@ -11,7 +10,8 @@ export function formatFileSize(bytes: number): string {
     size /= 1024
     unitIdx++
   }
-  return `${size.toFixed(2)} ${units[unitIdx]}`
+  const decimals = size >= 100 || unitIdx === 0 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(decimals)} ${units[unitIdx]}`
 }
 
 /**
