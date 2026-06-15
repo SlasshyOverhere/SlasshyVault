@@ -1,4 +1,5 @@
 import { getMpvStatus, type MediaItem } from "@/services/api";
+import { formatFileSize } from "@/utils/format";
 
 export interface ZipPlaybackLoadingState {
   title: string;
@@ -7,23 +8,6 @@ export interface ZipPlaybackLoadingState {
   sizeLabel: string;
   detail: string;
 }
-
-const formatBytesCompact = (bytes?: number) => {
-  if (!bytes || bytes <= 0) return "Unknown size";
-
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision =
-    value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(precision)} ${units[unitIndex]}`;
-};
 
 const estimateZipStartupSeconds = (
   item: MediaItem,
@@ -59,7 +43,7 @@ export const buildZipPlaybackLoadingState = (
   resume: boolean,
 ): ZipPlaybackLoadingState => {
   const estimatedSeconds = estimateZipStartupSeconds(item, resume);
-  const sizeLabel = formatBytesCompact(
+  const sizeLabel = formatFileSize(
     item.zip_uncompressed_size || item.zip_compressed_size,
   );
   const detail =

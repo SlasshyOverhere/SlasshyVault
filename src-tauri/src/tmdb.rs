@@ -105,6 +105,8 @@ pub struct TmdbSearchListItem {
     pub release_date: Option<String>,
     pub first_air_date: Option<String>,
     pub vote_average: Option<f64>,
+    #[serde(default)]
+    pub imdb_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,25 +194,7 @@ struct TmdbFindResult {
     tv_results: Vec<TmdbItem>,
 }
 
-/// Return the shared HTTP client (30 s timeout).
-///
-/// Uses a global `LazyLock` client so it is never created/dropped inside a
-/// tokio context, avoiding the reqwest 0.12 blocking-client panic.
-fn build_client() -> Result<reqwest::blocking::Client, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(crate::http_client::shared_client().clone())
-}
 
-/// Return the shared quick HTTP client (10 s timeout, HTTP/1.1 only).
-///
-/// `timeout_secs` and `http1_only` are kept in the signature for
-/// call-site compatibility but ignored — the global client's
-/// settings are used instead.
-fn build_quick_client(
-    _timeout_secs: u64,
-    _http1_only: bool,
-) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(crate::http_client::quick_client().clone())
-}
 
 /// Check if the given credential is an access token (starts with "eyJ") or API key
 fn is_access_token(credential: &str) -> bool {
@@ -650,7 +634,7 @@ pub fn search_multi_raw(
     let params = format!("query={}&include_adult=false&language=en-US", encoded_query);
     let url = build_tmdb_url("/search/multi", api_key, &params);
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let response = match tmdb_request(&client, &url, api_key) {
         Ok(response) => response,
         Err(primary_error) => {
@@ -724,9 +708,14 @@ pub fn search_multi_raw(
                 release_date: item.release_date,
                 first_air_date: item.first_air_date,
                 vote_average: item.vote_average,
+                imdb_id: None, // populated below
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    // imdb_id is NOT fetched here — it would be N sequential API calls per search
+    // (one per result). Instead, imdb_id is resolved on-demand when the user
+    // selects a result to find streams (single API call at that point).
 
     Ok(results)
 }
@@ -748,7 +737,7 @@ pub fn trending_suggestions_raw(
         name: Option<String>,
     }
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let mut suggestions = Vec::new();
 
     for media_type in ["movie", "tv"] {
@@ -851,7 +840,7 @@ fn do_search(
         title, media_type, year
     );
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
@@ -907,7 +896,7 @@ fn do_multi_search(
 
     println!("[TMDB]   -> Multi-search for '{}'", title);
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
@@ -1354,7 +1343,7 @@ pub fn fetch_metadata_by_id(
     println!("[TMDB] Fetching by ID: {} (source: {})", tmdb_id, source);
 
     // Keep Fix Match responsive: use shorter request timeout and fewer retries.
-    let client = build_quick_client(10, true)?;
+    let client = crate::http_client::quick_client().clone();
     let request_retries = 2;
 
     let final_id = if source == "imdb" {
@@ -1491,7 +1480,7 @@ fn cache_image(
     let image_url = format!("https://image.tmdb.org/t/p/{}{}", size, image_path);
 
     // Image download should fail fast instead of blocking Fix Match for minutes.
-    let client = build_quick_client(8, true)?;
+    let client = crate::http_client::quick_client().clone();
     let response = client.get(&image_url).send()?;
 
     if !response.status().is_success() {
@@ -1521,7 +1510,7 @@ pub fn cache_imdb_image(
 
     println!("[IMDBAPI] Downloading image: {}", url);
 
-    let client = build_quick_client(8, true).ok()?;
+    let client = crate::http_client::quick_client().clone();
 
     // Try different size replacements for m.media-amazon.com URLs
     // Original URL might be like: https://m.media-amazon.com/images/M/MV5B...jpg
@@ -1672,47 +1661,46 @@ pub fn cache_image_organized(
                 std::thread::sleep(std::time::Duration::from_millis(delay));
             }
 
-            if let Ok(client) = build_quick_client(8, true) {
-                match client.get(&image_url).send() {
-                    Ok(response) => {
-                        if response.status().is_success() {
-                            if let Ok(bytes) = response.bytes() {
-                                if bytes.len() > 100 {
-                                    if let Ok(mut file) = fs::File::create(&local_path) {
-                                        if file.write_all(&bytes).is_ok() {
-                                            let result_path = format_image_path(&subfolder, &filename);
-                                            println!(
-                                                "[TMDB] Cached image: {:?} (size: {})",
-                                                local_path, size
-                                            );
-                                            println!("[TMDB] Cached: {}", result_path);
-                                            return Some(result_path);
-                                        }
+            let client = crate::http_client::quick_client().clone();
+            match client.get(&image_url).send() {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        if let Ok(bytes) = response.bytes() {
+                            if bytes.len() > 100 {
+                                if let Ok(mut file) = fs::File::create(&local_path) {
+                                    if file.write_all(&bytes).is_ok() {
+                                        let result_path = format_image_path(&subfolder, &filename);
+                                        println!(
+                                            "[TMDB] Cached image: {:?} (size: {})",
+                                            local_path, size
+                                        );
+                                        println!("[TMDB] Cached: {}", result_path);
+                                        return Some(result_path);
                                     }
                                 }
                             }
                         }
-                        // Non-success status, try next size
+                    }
+                    // Non-success status, try next size
+                    break;
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    let is_retryable = error_str.contains("10054")
+                        || error_str.contains("connection")
+                        || error_str.contains("timeout")
+                        || error_str.contains("timed out")
+                        || error_str.contains("closed")
+                        || error_str.contains("reset");
+                    if !is_retryable {
                         break;
                     }
-                    Err(e) => {
-                        let error_str = e.to_string();
-                        let is_retryable = error_str.contains("10054")
-                            || error_str.contains("connection")
-                            || error_str.contains("timeout")
-                            || error_str.contains("timed out")
-                            || error_str.contains("closed")
-                            || error_str.contains("reset");
-                        if !is_retryable {
-                            break;
-                        }
-                        println!(
-                            "[TMDB] Image download retry {} for {}: {}",
-                            attempt + 1,
-                            size,
-                            error_str
-                        );
-                    }
+                    println!(
+                        "[TMDB] Image download retry {} for {}: {}",
+                        attempt + 1,
+                        size,
+                        error_str
+                    );
                 }
             }
         }
@@ -1746,7 +1734,7 @@ pub fn fetch_tv_show_details(
 
     let url = build_tmdb_url(&format!("/tv/{}", tmdb_id), api_key, "language=en-US");
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
@@ -1804,7 +1792,7 @@ pub fn fetch_season_episodes(
         "language=en-US",
     );
 
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
     let response = tmdb_request(&client, &url, api_key)?;
 
     if !response.status().is_success() {
@@ -1999,7 +1987,7 @@ pub fn fetch_owned_episodes_only(
     println!("[TMDB] Seasons needed: {:?}", seasons_needed);
 
     let mut result_episodes = Vec::new();
-    let client = build_client()?;
+    let client = crate::http_client::shared_client().clone();
 
     for season_num in seasons_needed {
         println!("[TMDB] Fetching season {} data...", season_num);
@@ -2128,4 +2116,31 @@ pub fn fetch_owned_episodes_only(
         result_episodes.len()
     );
     Ok(result_episodes)
+}
+
+/// Lightweight lookup: fetch just the IMDB ID for a given TMDB ID + media type.
+/// Returns None on any failure (non-critical path).
+pub fn fetch_imdb_id(
+    api_key: &str,
+    tmdb_id: i64,
+    media_type: &str,
+) -> Option<String> {
+    let url = build_tmdb_url(
+        &format!("/{}/{}", media_type, tmdb_id),
+        api_key,
+        "language=en-US&append_to_response=external_ids",
+    );
+
+    let client = crate::http_client::quick_client().clone();
+    let response = tmdb_request(&client, &url, api_key).ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let item: TmdbItem = response.json().ok()?;
+
+    // Movie responses have imdb_id directly, TV responses have it in external_ids
+    item.imdb_id
+        .or_else(|| item.external_ids.as_ref().and_then(|ids| ids.imdb_id.clone()))
 }

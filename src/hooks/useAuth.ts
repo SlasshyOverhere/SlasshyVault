@@ -13,18 +13,7 @@ const AUTH_CHECK_TIMEOUT_MS = 8000
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutValue: T): Promise<T> {
   return Promise.race([
     promise,
-    new Promise<T>((resolve) => {
-      setTimeout(() => resolve(timeoutValue), timeoutMs)
-    }),
-  ])
-}
-
-async function withTimeoutOrNull<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
-  return Promise.race([
-    promise,
-    new Promise<null>((resolve) => {
-      setTimeout(() => resolve(null), timeoutMs)
-    }),
+    new Promise<T>((resolve) => setTimeout(() => resolve(timeoutValue), timeoutMs)),
   ])
 }
 
@@ -41,10 +30,9 @@ export function useAuth() {
 
   const autoDetectMpvIfUnconfigured = async () => {
     try {
-      const config = await withTimeoutOrNull(getConfig(), AUTH_CHECK_TIMEOUT_MS)
+      const config = await withTimeout(getConfig(), AUTH_CHECK_TIMEOUT_MS, null)
       if (config && !config.mpv_path) {
-        // First try system auto-detect
-        const mpvPath = await withTimeoutOrNull(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS)
+        const mpvPath = await withTimeout(autoDetectMpv(), AUTH_CHECK_TIMEOUT_MS, null)
         if (mpvPath) {
           await saveConfig({ ...config, mpv_path: mpvPath })
           toast({

@@ -73,6 +73,7 @@ type SettingsSection =
   | "updates"
   | "cloud"
   | "api"
+  | "external"
   | "danger"
   | "dev"
   | "nightly";
@@ -99,6 +100,7 @@ const sections: {
     icon: <Cloud className="size-4" />,
   },
   { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
+  { id: "external", label: "External", icon: <Radio className="size-4" /> },
   {
     id: "danger",
     label: "Factory Reset",
@@ -112,6 +114,163 @@ const sections: {
     ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
     : []),
 ];
+
+// Addon Source interface matching Rust backend
+interface AddonSource {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  is_default: boolean;
+  binary_path?: string;
+}
+
+function AddonSourcesManager() {
+  const { toast } = useToast();
+  const [sources, setSources] = useState<AddonSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+  const loadSources = useCallback(async () => {
+    try {
+      const data = await invoke<AddonSource[]>("get_addon_sources");
+      setSources(data);
+    } catch (e) {
+      console.error("[AddonSourcesManager] loadSources:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSources(); }, [loadSources]);
+
+  const handleAdd = useCallback(async () => {
+    if (!newUrl.trim()) return;
+    setAdding(true);
+    try {
+      await invoke("add_addon_source", { name: newName, url: newUrl });
+      setNewName("");
+      setNewUrl("");
+      await loadSources();
+      toast({ title: "Source added" });
+    } catch (e: any) {
+      toast({ title: "Failed to add source", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      setAdding(false);
+    }
+  }, [newName, newUrl, loadSources, toast]);
+
+  const handleRemove = useCallback(async (id: string) => {
+    try {
+      await invoke("remove_addon_source", { id });
+      await loadSources();
+      window.dispatchEvent(new CustomEvent("config-saved"));
+      toast({ title: "Source removed" });
+    } catch (e: any) {
+      toast({ title: "Failed to remove", description: e?.message || String(e), variant: "destructive" });
+    }
+  }, [loadSources, toast]);
+
+  const handleSetActive = useCallback(async (id: string) => {
+    try {
+      await invoke("set_active_source", { id });
+      await loadSources();
+      window.dispatchEvent(new CustomEvent("config-saved"));
+    } catch (e: any) {
+      toast({ title: "Failed to set active", description: e?.message || String(e), variant: "destructive" });
+    }
+  }, [loadSources, toast]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> Loading sources...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Existing sources */}
+      {sources.length > 0 && (
+        <div className="space-y-2">
+          {sources.map((src) => (
+            <div
+              key={src.id}
+              className={`p-3 rounded-xl border flex items-center gap-3 ${
+                src.is_default
+                  ? "bg-white/5 border-white/10"
+                  : "bg-card border-border"
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">{src.name}</span>
+                  {src.is_default && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/60 uppercase tracking-wider">
+                      Active
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">{src.url}</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {!src.is_default && (
+                  <button
+                    onClick={() => handleSetActive(src.id)}
+                    className="text-xs px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Set Active
+                  </button>
+                )}
+                <button
+                  onClick={() => handleRemove(src.id)}
+                  className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sources.length === 0 && (
+        <div className="text-center py-6">
+          <p className="text-sm text-muted-foreground">No addon sources configured.</p>
+        </div>
+      )}
+
+      {/* Add new source manually */}
+      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+        <Label className="text-sm font-medium">Add Source</Label>
+        <Input
+          placeholder="Source name (optional)"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          className="h-9"
+        />
+        <Input
+          type="url"
+          placeholder="http://127.0.0.1:11470"
+          value={newUrl}
+          onChange={(e) => setNewUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+          className="h-9"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={!newUrl.trim() || adding}
+          className="w-full h-9 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+        >
+          {adding ? "Adding..." : "Add Source"}
+        </button>
+      </div>
+
+    </div>
+  );
+}
 
 export function SettingsModal({
   open,
@@ -142,6 +301,7 @@ export function SettingsModal({
     zip_cache_expiry_days: 7,
     dev_backend_url: "",
     player_mode: "external",
+    addon_url: "",
   });
   const [loading, setLoading] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -255,7 +415,7 @@ export function SettingsModal({
         },
       );
 
-      const installerPath = await downloadUpdate(updateInfo.download_url);
+      const installerPath = await downloadUpdate(updateInfo.download_url, updateInfo.published_at ?? undefined);
       unlisten();
 
       toast({
@@ -341,6 +501,7 @@ export function SettingsModal({
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
         dev_backend_url: data.dev_backend_url || "",
         player_mode: data.player_mode || "external",
+        addon_url: data.addon_url || "",
       });
       // If user already has a custom API key saved, show the custom input
       setUseOwnApiKey(!!data.tmdb_api_key);
@@ -1634,6 +1795,52 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
+                    </m.div>
+                  )}
+
+                  {/* ===== External Sources ===== */}
+                  {activeSection === "external" && (
+                    <m.div
+                      key="external"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h2 className="text-lg font-semibold">External Sources</h2>
+                        <p className="text-sm text-muted-foreground">
+                          Manage addon sources for streaming content in the External tab.
+                        </p>
+                      </div>
+
+                      {/* Addon Sources Manager */}
+                      <AddonSourcesManager />
+
+                      {/* Legacy single URL (collapsed) */}
+                      <details className="group">
+                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+                          Advanced: Manual addon URL override
+                        </summary>
+                        <div className="mt-3 p-4 rounded-xl bg-card border border-border space-y-3">
+                          <div>
+                            <Label htmlFor="addon-url" className="text-sm font-medium">
+                              Addon URL
+                            </Label>
+                            <Input
+                              id="addon-url"
+                              type="url"
+                              value={config.addon_url || ""}
+                              onChange={(e) => setConfig({ ...config, addon_url: e.target.value })}
+                              placeholder="https://your-addon-url.com"
+                              className="mt-1"
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Direct addon URL. Only used as fallback when no source is configured above.
+                            </p>
+                          </div>
+                        </div>
+                      </details>
                     </m.div>
                   )}
 

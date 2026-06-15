@@ -59,10 +59,6 @@ const SOCIAL_SCOPES = [
 
 const TMDB_API_BASE = 'https://api.themoviedb.org/3';
 const TMDB_MAX_KEYS = 5;
-const parseCooldownMs = (rawValue, fallback) => {
-  const parsed = Number(rawValue);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-};
 const parseNonNegativeInt = (rawValue, fallback) => {
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
@@ -70,10 +66,6 @@ const parseNonNegativeInt = (rawValue, fallback) => {
 const parsePositiveInt = (rawValue, fallback) => {
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-};
-const parsePositiveFloat = (rawValue, fallback) => {
-  const parsed = Number(rawValue);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 const CORS_ALLOWED_ORIGINS = new Set(splitEnvList(process.env.CORS_ALLOWED_ORIGINS).flatMap((origin) => { const t = origin.trim(); return t ? [t] : []; }));
 const RUNTIME_METRICS_USERNAME = (process.env.RUNTIME_METRICS_USERNAME || 'runtime').trim();
@@ -84,9 +76,9 @@ const RUNTIME_AUTH_FAIL_WINDOW_MS = parsePositiveInt(process.env.RUNTIME_AUTH_FA
 const RUNTIME_AUTH_MAX_FAILS = parsePositiveInt(process.env.RUNTIME_AUTH_MAX_FAILS, 20);
 const RUNTIME_AUTH_LOCK_MS = parsePositiveInt(process.env.RUNTIME_AUTH_LOCK_MS, 60 * 60 * 1000);
 const RUNTIME_SECURITY_CLEANUP_MS = parsePositiveInt(process.env.RUNTIME_SECURITY_CLEANUP_MS, 10 * 60 * 1000);
-const TMDB_RATE_LIMIT_COOLDOWN_MS = parseCooldownMs(process.env.TMDB_RATE_LIMIT_COOLDOWN_MS, 15000);
-const TMDB_AUTH_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.TMDB_AUTH_FAILURE_COOLDOWN_MS, 60000);
-const TMDB_SERVER_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.TMDB_SERVER_FAILURE_COOLDOWN_MS, 3000);
+const TMDB_RATE_LIMIT_COOLDOWN_MS = parsePositiveInt(process.env.TMDB_RATE_LIMIT_COOLDOWN_MS, 15000);
+const TMDB_AUTH_FAILURE_COOLDOWN_MS = parsePositiveInt(process.env.TMDB_AUTH_FAILURE_COOLDOWN_MS, 60000);
+const TMDB_SERVER_FAILURE_COOLDOWN_MS = parsePositiveInt(process.env.TMDB_SERVER_FAILURE_COOLDOWN_MS, 3000);
 const TMDB_MAX_INFLIGHT_PER_KEY = parseNonNegativeInt(process.env.TMDB_MAX_INFLIGHT_PER_KEY, 0); // 0 = unlimited
 const TMDB_PROXY_LOGS_ENABLED = process.env.TMDB_PROXY_LOGS !== '0';
 const TMDB_PROXY_DEBUG_ENABLED = process.env.TMDB_PROXY_DEBUG === '1';
@@ -97,9 +89,9 @@ const TMDB_PROXY_DEBUG_ENABLED = process.env.TMDB_PROXY_DEBUG === '1';
 
 const OMDB_API_BASE = 'https://www.omdbapi.com';
 // No limit on OMDb keys - users can add as many as they want
-const OMDB_RATE_LIMIT_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_RATE_LIMIT_COOLDOWN_MS, 15000);
-const OMDB_AUTH_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_AUTH_FAILURE_COOLDOWN_MS, 60000);
-const OMDB_SERVER_FAILURE_COOLDOWN_MS = parseCooldownMs(process.env.OMDB_SERVER_FAILURE_COOLDOWN_MS, 3000);
+const OMDB_RATE_LIMIT_COOLDOWN_MS = parsePositiveInt(process.env.OMDB_RATE_LIMIT_COOLDOWN_MS, 15000);
+const OMDB_AUTH_FAILURE_COOLDOWN_MS = parsePositiveInt(process.env.OMDB_AUTH_FAILURE_COOLDOWN_MS, 60000);
+const OMDB_SERVER_FAILURE_COOLDOWN_MS = parsePositiveInt(process.env.OMDB_SERVER_FAILURE_COOLDOWN_MS, 3000);
 const OMDB_MAX_INFLIGHT_PER_KEY = parseNonNegativeInt(process.env.OMDB_MAX_INFLIGHT_PER_KEY, 0);
 const OMDB_PROXY_LOGS_ENABLED = process.env.OMDB_PROXY_LOGS !== '0';
 const OMDB_PROXY_DEBUG_ENABLED = process.env.OMDB_PROXY_DEBUG === '1';
@@ -1422,11 +1414,7 @@ async function removeRoomParticipantFromRedis(roomCode, participantId) {
   return redis.setRoomParticipant(roomCode, participantId, false);
 }
 
-// Disabled to preserve free Upstash Redis quota.
-// Enable via WT_EVENT_LOGGING=true if needed.
-async function logRoomEvent(roomCode, event) {
-  return false;
-}
+const logRoomEvent = async () => {}; // ponytail: disabled (was saving Upstash Redis quota)
 
 async function deletePersistedRoom(roomCode) {
   if (!redis.isConnected() || !roomCode) return false;

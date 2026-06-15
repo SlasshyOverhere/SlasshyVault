@@ -16,13 +16,13 @@ const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
 const CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum CacheState {
     Idle,
-    Downloading(f64),
-    Complete,
+    Downloading { progress: f64 },
+    Cached { path: String },
     Cancelled,
-    Failed(String),
+    Failed { error: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,13 +137,13 @@ impl CacheManager {
             {
                 let mut active = manager.active.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = active.get_mut(&cache_key_clone) {
-                    entry.status.state = CacheState::Failed(e.clone());
+                    entry.status.state = CacheState::Failed { error: e.clone() };
                     entry.status.downloaded_bytes = entry.status.total_bytes;
                 }
                 drop(active);
                 let _ = app_handle.emit_all(CACHE_EVENT, &CacheStatus {
                     cache_key: cache_key_clone,
-                    state: CacheState::Failed(e),
+                    state: CacheState::Failed { error: e },
                     downloaded_bytes: 0,
                     total_bytes: total_bytes as u64,
                     speed_bytes_per_second: 0.0,
@@ -159,7 +159,7 @@ impl CacheManager {
         let active = self.active.lock().map_err(|e| e.to_string())?;
         if let Some(entry) = active.get(cache_key) {
             entry.cancel_flag.store(true, Ordering::Relaxed);
-            if let CacheState::Downloading(_) = entry.status.state {
+            if let CacheState::Downloading { .. } = entry.status.state {
                 // will be picked up by the task loop
             }
             Ok(())
@@ -342,7 +342,7 @@ async fn run_cache_job(
                 if let Some(entry) = active.get_mut(&key) {
                     entry.status.downloaded_bytes = total_dl;
                     entry.status.speed_bytes_per_second = speed;
-                    entry.status.state = CacheState::Downloading((total_dl as f64 / total.max(1) as f64) * 100.0);
+                    entry.status.state = CacheState::Downloading { progress: (total_dl as f64 / total.max(1) as f64) * 100.0 };
                     let status = entry.status.clone();
                     drop(active);
                     let _ = app.emit_all(CACHE_EVENT, &status);
@@ -387,12 +387,14 @@ async fn run_cache_job(
 
     if let Ok(mut active) = manager.active.lock() {
         if let Some(entry) = active.get_mut(cache_key) {
-            entry.status.state = CacheState::Complete;
+            let path = entry.status.target_path.clone();
+            entry.status.state = CacheState::Cached { path: path.clone() };
             entry.status.downloaded_bytes = total_bytes;
             entry.status.speed_bytes_per_second = speed;
             let status = entry.status.clone();
             drop(active);
             let _ = app_handle.emit_all(CACHE_EVENT, &status);
+            let _ = app_handle.emit_all("remote-cache-complete", &status);
         }
     }
 

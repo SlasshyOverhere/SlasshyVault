@@ -28,6 +28,8 @@ pub struct DdlSource {
     pub created_at: String,
     pub last_verified_at: String,
     pub is_expired: bool,
+    /// Set for sources indexed from addon season packs. Format: "imdb_id:season:stream_name"
+    pub addon_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +95,7 @@ pub fn validate_url(url: &str) -> Result<DdlValidationResult, String> {
         }
     }
 
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
 
     let response = client
         .head(url)
@@ -174,7 +176,7 @@ pub fn index_archive(
 
 /// Check if a direct link is still accessible.
 pub fn check_link_health(url: &str) -> Result<bool, String> {
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
 
     match client.head(url).send() {
         Ok(response) => {
@@ -204,7 +206,7 @@ pub fn verify_and_refresh_link(
     }
 
     // Verify the EOCD/CD structure matches
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
     let tail_len = validation.file_size.min(DDL_TAIL_BYTES);
     let tail_start = validation.file_size.saturating_sub(tail_len);
     let tail = fetch_range(&client, new_url, tail_start, validation.file_size - 1)?;
@@ -229,7 +231,7 @@ fn index_zip_archive(
     url: &str,
     validation: &DdlValidationResult,
 ) -> Result<DdlIndexResult, String> {
-    let client = build_client()?;
+    let client = crate::http_client::long_client().clone();
     let file_size = validation.file_size;
 
     // 1. Fetch tail to find EOCD
@@ -343,6 +345,7 @@ fn index_zip_archive(
         created_at: now.clone(),
         last_verified_at: now,
         is_expired: false,
+        addon_origin: None,
     };
 
     println!(
@@ -357,10 +360,6 @@ fn index_zip_archive(
         source,
         entries: indexed_entries,
     })
-}
-
-fn build_client() -> Result<Client, String> {
-    Ok(crate::http_client::long_client().clone())
 }
 
 fn fetch_range(client: &Client, url: &str, start: u64, end: u64) -> Result<Vec<u8>, String> {
@@ -720,6 +719,7 @@ mod tests {
             created_at: "2026-01-01 00:00:00".to_string(),
             last_verified_at: "2026-01-01 00:00:00".to_string(),
             is_expired: false,
+            addon_origin: None,
         };
 
         let result = verify_and_refresh_link(&source, &refreshed_server.base_url).unwrap();

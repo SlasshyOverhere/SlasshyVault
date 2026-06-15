@@ -176,7 +176,7 @@ fn create_lua_script(media_id: i64) -> Result<PathBuf, String> {
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
-            eprintln!("[MPV] Warning: Failed to set Lua script permissions: {}", e);
+            println!("[MPV] Warning: Failed to set Lua script permissions: {}", e);
         }
     }
 
@@ -323,6 +323,8 @@ pub fn launch_mpv_with_tracking(
     };
     let is_local_zip_proxy =
         actual_source.starts_with("http://127.0.0.1:") && actual_source.ends_with("/stream");
+    let is_local_url_proxy =
+        actual_source.starts_with("http://127.0.0.1:") || actual_source.starts_with("http://localhost:");
 
     // Create the Lua tracking script
     let script_path = create_lua_script(media_id)?;
@@ -430,7 +432,8 @@ pub fn launch_mpv_with_tracking(
     // For URLs (not cached), add streaming/caching options
     if is_url && !use_cached {
         cmd.arg("--keep-open=yes");
-        if is_local_zip_proxy {
+        // Longer timeout for any localhost-backed proxy (remote proxy, ZIP proxy, or direct local proxy URL)
+        if is_local_zip_proxy || is_local_url_proxy {
             cmd.arg("--network-timeout=120");
         } else {
             cmd.arg("--network-timeout=30");
@@ -486,6 +489,16 @@ pub fn launch_mpv_with_tracking(
             cmd.arg("--demuxer-max-bytes=500MiB");
             cmd.arg("--demuxer-max-back-bytes=100MiB");
         }
+    }
+
+    // For .part files (progressive download), enable cache so MPV can handle the growing file
+    if !is_url && file_or_url.ends_with(".part") {
+        cmd.arg("--cache=yes");
+        cmd.arg("--demuxer-max-bytes=150MiB");
+        cmd.arg("--demuxer-max-back-bytes=30MiB");
+        cmd.arg("--demuxer-readahead-secs=180");
+        cmd.arg("--cache-pause=no");
+        println!("[MPV] Progressive playback mode: caching enabled for .part file");
     }
 
     // Security enhancement: Add the -- separator to prevent argument injection
@@ -570,8 +583,10 @@ pub fn monitor_mpv_and_save_progress(
         // Periodically check progress and save to database
         if let Some(progress) = read_mpv_progress(media_id) {
             if progress.duration > 0.0 {
-                // Save to database silently
-                let _ = db.update_progress(media_id, progress.position, progress.duration);
+                // Save to database
+                if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
+                    println!("[MPV] Failed to update progress during playback: {}", e);
+                }
             }
         }
     }
@@ -591,7 +606,9 @@ pub fn monitor_mpv_and_save_progress(
         // Save final progress to database, but ONLY if we have a valid duration
         // This prevents overwriting valid progress with 0s if MPV crashed or didn't load the file
         if progress.duration > 0.0 {
-            let _ = db.update_progress(media_id, progress.position, progress.duration);
+            if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
+                println!("[MPV] Failed to save final progress: {}", e);
+            }
         } else {
             println!("[MPV] Warning: Invalid duration (0.0), skipping final DB update to preserve existing data");
         }
@@ -832,9 +849,17 @@ mp.observe_property("pause", "bool", function(name, value)
     end
 end)
 
+-- Debounced seek: rapid seeks (e.g. scrubbing) only emit one event after 150ms quiet
+local seek_timer = nil
 mp.register_event("seek", function()
     save_progress()
-    write_event("seek", nil)
+    if seek_timer then
+        seek_timer:kill()
+    end
+    seek_timer = mp.add_timeout(0.15, function()
+        write_event("seek", nil)
+        seek_timer = nil
+    end)
 end)
 
 mp.register_event("shutdown", save_progress)
@@ -878,7 +903,7 @@ fn create_sync_lua_script(media_id: i64, session_id: &str) -> Result<PathBuf, St
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
-            eprintln!("[MPV] Warning: Failed to set sync Lua script permissions: {}", e);
+            println!("[MPV] Warning: Failed to set sync Lua script permissions: {}", e);
         }
     }
 

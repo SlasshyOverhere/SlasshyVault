@@ -9,7 +9,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -108,9 +108,11 @@ impl DownloadManager {
 
         startup_cleanup_orphaned_parts();
 
-        Self {
+        let manager = Self {
             jobs: Arc::new(Mutex::new(jobs)),
-        }
+        };
+        manager.cleanup_terminal_jobs();
+        manager
     }
 
     pub fn list_jobs(&self) -> Vec<DownloadJobSnapshot> {
@@ -217,6 +219,31 @@ impl DownloadManager {
         drop(jobs);
         self.persist_jobs();
         Some(snapshot)
+    }
+
+    /// Remove terminal jobs (completed/failed/cancelled) older than 7 days to prevent unbounded memory growth.
+    fn cleanup_terminal_jobs(&self) {
+        let now = chrono::Utc::now();
+        let max_age = Duration::from_secs(7 * 24 * 60 * 60);
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let before = jobs.len();
+        jobs.retain(|_, record| {
+            if !matches!(record.snapshot.status.as_str(), "completed" | "failed" | "cancelled") {
+                return true;
+            }
+            match chrono::DateTime::parse_from_rfc3339(&record.snapshot.updated_at) {
+                Ok(updated) => {
+                    now.signed_duration_since(updated).to_std().unwrap_or(Duration::ZERO) < max_age
+                }
+                Err(_) => true, // keep if we can't parse the date
+            }
+        });
+        let removed = before.saturating_sub(jobs.len());
+        if removed > 0 {
+            drop(jobs);
+            self.persist_jobs();
+            println!("[DOWNLOAD] Cleaned up {} stale terminal jobs on startup", removed);
+        }
     }
 
     fn persist_jobs(&self) {

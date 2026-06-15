@@ -21,7 +21,7 @@ tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-wo
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
-reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "gzip", "deflate"] }
 tokio = { version = "1", features = ["full"] }
 regex = "1.10"
 walkdir = "2.4"
@@ -42,10 +42,8 @@ open = { version = "5", features = ["shellexecute-on-windows"] }
 dotenvy = "0.15"
 tiny_http = "0.12"
 http = "1"
-lazy_static = "1.4"
 tokio-tungstenite = { version = "0.24", features = ["native-tls", "handshake"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
-dunce = "1.0.5"
 socket2 = "0.5"
 thiserror = "1.0"
 flate2 = "1.0"
@@ -73,6 +71,3 @@ name = "wt_tauri_wan_test"
 path = "src/bin/wt_tauri_wan_test.rs"
 required-features = ["wan-test"]
 
-[[bin]]
-name = "test_autoupdate"
-path = "src/bin/test_autoupdate.rs"

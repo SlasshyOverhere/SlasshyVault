@@ -352,6 +352,25 @@ pub struct Config {
     // Player mode: "external" (mpv.exe spawned, default)
     #[serde(default)]
     pub player_mode: PlayerMode,
+    // User-configured addon/proxy URL for External tab streaming (legacy, kept for migration)
+    #[serde(default)]
+    pub addon_url: Option<String>,
+    // Multiple addon sources for External tab
+    #[serde(default)]
+    pub addon_sources: Vec<AddonSource>,
+}
+
+/// A configured addon source for the External tab
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddonSource {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub enabled: bool,
+    pub is_default: bool,
+    /// Path to a local addon binary (Go binary with -H=windowsgui).
+    #[serde(default)]
+    pub binary_path: Option<String>,
 }
 
 /// Which MPV engine to use
@@ -416,6 +435,8 @@ impl Default for Config {
             notifications_enabled: true,
             dev_backend_url: None,
             player_mode: PlayerMode::default(),
+            addon_url: None,
+            addon_sources: Vec::new(),
         }
     }
 }
@@ -456,6 +477,23 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     config.cloud_cache_max_mb = config.cloud_cache_max_mb.min(100000);
     config.zip_cache_max_gb = config.zip_cache_max_gb.min(500);
     config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
+    // Migrate legacy addon_url into addon_sources if needed
+    // Clear addon_url after migration to prevent re-migration on every load
+    if config.addon_sources.is_empty() {
+        if let Some(ref url) = config.addon_url {
+            if !url.is_empty() {
+                config.addon_sources.push(AddonSource {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: "Default".to_string(),
+                    url: url.clone(),
+                    enabled: true,
+                    is_default: true,
+                    binary_path: None,
+                });
+                config.addon_url = None;
+            }
+        }
+    }
     Ok(config)
 }
 
