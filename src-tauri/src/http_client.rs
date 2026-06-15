@@ -85,7 +85,7 @@ pub fn local_http_get(url: &str) -> Result<String, String> {
         .map_err(|e| format!("Failed to set timeout: {}", e))?;
 
     let request = format!(
-        "GET {}{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n\r\n",
+        "GET {}{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\nAccept-Encoding: identity\r\n\r\n",
         path, query, if port == 80 { host.to_string() } else { format!("{}:{}", host, port) }
     );
 
@@ -99,7 +99,7 @@ pub fn local_http_get(url: &str) -> Result<String, String> {
     let response_str = String::from_utf8_lossy(&response);
     let body_start = response_str.find("\r\n\r\n")
         .ok_or("Invalid HTTP response")?;
-    let body = &response_str[body_start + 4..];
+    let raw_body = &response_str[body_start + 4..];
 
     // Check status code
     let status_line = response_str.lines().next().unwrap_or("");
@@ -107,7 +107,53 @@ pub fn local_http_get(url: &str) -> Result<String, String> {
         return Err(format!("HTTP error: {}", status_line));
     }
 
-    Ok(body.to_string())
+    // Handle chunked transfer encoding
+    let is_chunked = response_str.to_lowercase().contains("transfer-encoding: chunked");
+    let body = if is_chunked {
+        decode_chunked_body(raw_body)
+    } else {
+        raw_body.to_string()
+    };
+
+    Ok(body)
+}
+
+/// Decode HTTP chunked transfer encoding body
+fn decode_chunked_body(input: &str) -> String {
+    let mut result = String::new();
+    let mut remaining = input;
+    while !remaining.is_empty() {
+        // Find the chunk size line (hex number followed by \r\n)
+        let line_end = match remaining.find("\r\n") {
+            Some(pos) => pos,
+            None => break,
+        };
+        let size_str = remaining[..line_end].trim();
+        if size_str.is_empty() {
+            remaining = &remaining[line_end + 2..];
+            continue;
+        }
+        let chunk_size = match usize::from_str_radix(size_str, 16) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        if chunk_size == 0 {
+            break; // Last chunk
+        }
+        let chunk_start = line_end + 2;
+        let chunk_end = chunk_start + chunk_size;
+        if chunk_end > remaining.len() {
+            break;
+        }
+        result.push_str(&remaining[chunk_start..chunk_end]);
+        // Skip chunk data + trailing \r\n
+        remaining = if chunk_end + 2 <= remaining.len() {
+            &remaining[chunk_end + 2..]
+        } else {
+            ""
+        };
+    }
+    result
 }
 
 /// Make a raw HTTP GET request to a local server using TCP, returning a streaming reader.
