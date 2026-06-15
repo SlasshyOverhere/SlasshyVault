@@ -277,6 +277,13 @@ function App() {
     localStorage.setItem('slasshyvault_migration_done', 'true');
   }, [])
 
+  // Navigate to Direct Links tab when season pack is indexed
+  useEffect(() => {
+    const handler = () => setView('directlinks')
+    window.addEventListener('navigate-to-ddl', handler)
+    return () => window.removeEventListener('navigate-to-ddl', handler)
+  }, [])
+
   // Search and View state
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [view, setView] = useState<string>('home')
@@ -704,7 +711,7 @@ function App() {
 
       await invoke('plugin:autostart|enable')
 
-      const installerPath = await downloadUpdate(updateInfo.download_url)
+      const installerPath = await downloadUpdate(updateInfo.download_url, updateInfo.published_at ?? undefined)
 
       setUpdateGateStatus('installing')
       setUpdateGateMessage('Installing update and restarting...')
@@ -1669,6 +1676,15 @@ function App() {
     } catch (e) {
       const msg = String(e)
       if (msg.includes("Link expired") && item.ddl_source_id) {
+        // Try auto-refresh from addon before showing manual dialog
+        try {
+          const newUrl = await invoke<string | null>('auto_refresh_ddl_from_addon', { sourceId: item.ddl_source_id })
+          if (newUrl) {
+            toast({ title: "Link refreshed", description: "Auto-refreshed from addon. Retrying playback..." })
+            await startPlaybackFlow(item)
+            return
+          }
+        } catch { /* auto-refresh failed, fall through to manual dialog */ }
         setDdlExpiredSourceId(item.ddl_source_id)
         setDdlExpiredItem(item)
         setDdlExpiredNewUrl('')

@@ -403,6 +403,9 @@ pub struct NewWatchlistItem<'a> {
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Enable foreign key enforcement so ON DELETE CASCADE works.
+        // SQLite has foreign_keys OFF by default per connection.
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
         let db = Database { conn };
         db.init()?;
         Ok(db)
@@ -579,6 +582,12 @@ impl Database {
         if !columns.contains(&"file_size_bytes".to_string()) {
             self.conn.execute(
                 "ALTER TABLE media ADD COLUMN file_size_bytes INTEGER DEFAULT NULL",
+                [],
+            )?;
+        }
+        if !columns.contains(&"is_remote_library".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN is_remote_library INTEGER DEFAULT 0",
                 [],
             )?;
         }
@@ -846,6 +855,20 @@ impl Database {
             )",
             [],
         )?;
+
+        // Migrate ddl_sources: add addon_origin column for season pack auto-refresh
+        let ddl_columns: Vec<String> = self
+            .conn
+            .prepare("PRAGMA table_info(ddl_sources)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !ddl_columns.contains(&"addon_origin".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE ddl_sources ADD COLUMN addon_origin TEXT DEFAULT NULL",
+                [],
+            )?;
+        }
 
         // Add ddl_source_id column to media table for linking to DDL sources
         if !columns.contains(&"ddl_source_id".to_string()) {
@@ -2558,10 +2581,11 @@ impl Database {
         video_count: i64,
         cd_offset: i64,
         cd_size: i64,
+        addon_origin: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ddl_sources (id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size, created_at, last_verified_at, is_expired)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            "INSERT INTO ddl_sources (id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size, addon_origin, created_at, last_verified_at, is_expired)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
              ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url,
                 filename = excluded.filename,
@@ -2571,9 +2595,10 @@ impl Database {
                 video_count = excluded.video_count,
                 cd_offset = excluded.cd_offset,
                 cd_size = excluded.cd_size,
+                addon_origin = excluded.addon_origin,
                 last_verified_at = CURRENT_TIMESTAMP,
                 is_expired = 0",
-            params![id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size],
+            params![id, url, filename, file_size, archive_format, entry_count, video_count, cd_offset, cd_size, addon_origin],
         )?;
         Ok(())
     }
@@ -2581,7 +2606,7 @@ impl Database {
     pub fn get_ddl_sources(&self) -> Result<Vec<crate::direct_link_manager::DdlSource>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, url, filename, file_size, archive_format, entry_count, video_count,
-                    cd_offset, cd_size, created_at, last_verified_at, is_expired
+                    cd_offset, cd_size, created_at, last_verified_at, is_expired, addon_origin
              FROM ddl_sources ORDER BY created_at DESC",
         )?;
         let sources = stmt
@@ -2599,6 +2624,7 @@ impl Database {
                     created_at: row.get(9)?,
                     last_verified_at: row.get(10)?,
                     is_expired: row.get::<_, i64>(11)? != 0,
+                    addon_origin: row.get(12)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2609,7 +2635,7 @@ impl Database {
     pub fn get_ddl_source(&self, source_id: &str) -> Result<crate::direct_link_manager::DdlSource> {
         self.conn.query_row(
             "SELECT id, url, filename, file_size, archive_format, entry_count, video_count,
-                    cd_offset, cd_size, created_at, last_verified_at, is_expired
+                    cd_offset, cd_size, created_at, last_verified_at, is_expired, addon_origin
              FROM ddl_sources WHERE id = ?",
             params![source_id],
             |row| {
@@ -2626,6 +2652,7 @@ impl Database {
                     created_at: row.get(9)?,
                     last_verified_at: row.get(10)?,
                     is_expired: row.get::<_, i64>(11)? != 0,
+                    addon_origin: row.get(12)?,
                 })
             },
         )
@@ -3802,6 +3829,7 @@ impl Database {
              FROM media
              WHERE file_path LIKE 'remote://%'
                AND media_type IN ('movie', 'tvshow')
+               AND is_remote_library = 1
              ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
         )?;
 
@@ -3812,6 +3840,35 @@ impl Database {
             .into_iter()
             .map(Ok)
             .collect()
+    }
+
+    /// Get remote episodes for a specific TV show, ordered by season/episode.
+    pub fn get_remote_episodes(&self, show_id: i64) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
+                    archive_format, is_cloud, cloud_file_id
+             FROM media
+             WHERE parent_id = ? AND media_type = 'tvepisode' AND file_path LIKE 'remote://%'
+             ORDER BY season_number, episode_number",
+        )?;
+        let items = stmt.query_map(params![show_id], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
+    /// Set the is_remote_library flag for a media item.
+    pub fn set_remote_library_flag(&self, media_id: i64, in_library: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET is_remote_library = ?1 WHERE id = ?2",
+            params![if in_library { 1 } else { 0 }, media_id],
+        )?;
+        Ok(())
     }
 
     /// Get all poster paths currently in use (including still_paths and cached episode images)
@@ -5062,9 +5119,12 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, backdrop_path: Option<&str>) -> Result<()> {
+    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, _backdrop_path: Option<&str>) -> Result<()> {
+        // Update poster for ALL remote entries matching this tmdb_id (show + episodes),
+        // not just one. backdrop_path is accepted for API compatibility but the media
+        // table has no backdrop_path column yet.
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%' LIMIT 1"
+            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%'"
         )?;
         let ids: Vec<i64> = {
             let mut rows = stmt.query(params![tmdb_id])?;

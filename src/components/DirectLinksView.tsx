@@ -19,6 +19,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { formatFileSize } from "@/utils/format"
 import { useToast } from "@/components/ui/use-toast"
 import type { MediaItem as ApiMediaItem } from "@/services/api"
 import { DdlMediaLibrary } from "./DdlMediaLibrary"
@@ -82,14 +83,6 @@ function formatSeasonEpisode(season?: number | null, episode?: number | null): s
 }
 
 type Step = "idle" | "validating" | "indexing" | "done" | "error"
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B"
-  const k = 1024
-  const sizes = ["B", "KB", "MB", "GB", "TB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i]
-}
 
 function prettifyFilename(filename: string): { display: string; extension: string } {
   const dotIndex = filename.lastIndexOf(".")
@@ -231,7 +224,7 @@ export default function DirectLinksView({
       const validation = await invoke<DdlValidationResult>("ddl_validate_url", { url: addUrl.trim() })
       setAddValidation(validation)
       setAddStep("indexing")
-      const indexedSource = await invoke<DdlSource>("ddl_index_archive", { url: addUrl.trim(), validation })
+      const indexedSource = await invoke<DdlSource>("ddl_index_archive", { url: addUrl.trim(), validation, addonOrigin: null })
       setAddStep("done")
       await fetchSources()
       let indexedMediaIds: number[] = []
@@ -449,7 +442,7 @@ export default function DirectLinksView({
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                          <span>{formatBytes(source.fileSize)}</span>
+                          <span>{formatFileSize(source.fileSize)}</span>
                           <span className="size-0.5 rounded-full bg-border" />
                           <span>{source.videoCount} videos</span>
                           <span className="size-0.5 rounded-full bg-border" />
@@ -555,7 +548,7 @@ export default function DirectLinksView({
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{addValidation.filename}</p>
-                      <p className="text-xs text-muted-foreground">{formatBytes(addValidation.fileSize)}</p>
+                      <p className="text-xs text-muted-foreground">{formatFileSize(addValidation.fileSize)}</p>
                     </div>
                   </div>
 

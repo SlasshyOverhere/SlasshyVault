@@ -14,14 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EpisodeDeleteInfo, getEpisodesForDelete, deleteMediaFiles, deleteSeriesCloudFolder } from "@/services/api";
 
-const formatFileSize = (bytes: number): string => {
-    if (!Number.isFinite(bytes) || bytes < 0) return "Unknown size";
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
-};
+import { formatFileSize } from "@/utils/format";
 
 interface DeleteEpisodesModalProps {
     isOpen: boolean;

@@ -112,6 +112,18 @@ export interface Config {
   dev_backend_url?: string;
   // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
   player_mode?: "native" | "external";
+  // User-configured addon URL for External tab streaming
+  addon_url?: string;
+  // Multiple addon sources for External tab
+  addon_sources?: AddonSource[];
+}
+
+export interface AddonSource {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  is_default: boolean;
 }
 
 export interface ResumeInfo {
@@ -622,6 +634,8 @@ export const getConfig = async (): Promise<Config> => {
 export const saveConfig = async (config: Config): Promise<void> => {
   try {
     await invoke("save_config", { newConfig: config, confirmed: true });
+    // Notify other components that config changed (e.g., External tab re-checks addon_url)
+    window.dispatchEvent(new CustomEvent('config-saved', { detail: config }));
   } catch (error) {
     console.error("Failed to save config:", error);
     throw error;
@@ -2074,9 +2088,9 @@ export const checkForUpdates = async (): Promise<UpdateInfo> => {
 };
 
 // Download update to temp directory (returns installer path)
-export const downloadUpdate = async (url: string): Promise<string> => {
+export const downloadUpdate = async (url: string, pubDate?: string): Promise<string> => {
   try {
-    return await invoke<string>("download_update", { url });
+    return await invoke<string>("download_update", { url, pubDate });
   } catch (error) {
     console.error("Failed to download update:", error);
     throw error;

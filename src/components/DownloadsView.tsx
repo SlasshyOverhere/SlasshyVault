@@ -1,4 +1,5 @@
 import { DownloadJob } from "@/services/api";
+import { formatFileSize } from "@/utils/format";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -32,23 +33,9 @@ interface DownloadsViewProps {
   onClearHistory: () => void | Promise<void>;
 }
 
-const formatBytes = (bytes?: number | null) => {
-  if (!bytes || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let index = 0;
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024;
-    index += 1;
-  }
-  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(decimals)} ${units[index]}`;
-};
-
 const formatSpeed = (bytesPerSecond?: number | null) => {
-  if (!bytesPerSecond || bytesPerSecond === null) return "0 B/s";
-  if (bytesPerSecond <= 0) return "0 B/s";
-  return `${formatBytes(bytesPerSecond)}/s`;
+  if (!bytesPerSecond) return "0 B/s";
+  return `${formatFileSize(bytesPerSecond)}/s`;
 };
 
 const formatTimeRemaining = (job: DownloadJob): string | null => {
@@ -653,7 +640,7 @@ const DownloadRow = memo(function DownloadRow({
           )}>
             <div className="flex items-center gap-1.5">
               <span className="text-white/30">Size</span>
-              <span className="text-white/70">{formatBytes(job.downloadedBytes)} / {formatBytes(job.totalBytes)}</span>
+              <span className="text-white/70">{formatFileSize(job.downloadedBytes)} / {formatFileSize(job.totalBytes)}</span>
             </div>
             {job.status === "downloading" && (
               <div className="flex items-center gap-1.5">

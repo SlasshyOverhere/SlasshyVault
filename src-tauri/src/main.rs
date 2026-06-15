@@ -18,7 +18,7 @@ mod watch_together_mpv;
 mod zip_manager;
 mod zip_parser;
 mod zip_stream_proxy;
-mod obfuscator;
+mod remote_stream_proxy;
 mod remote_source;
 mod stream_cache;
 
@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tauri::api::notification::Notification as TauriNotification;
 use tauri::{
@@ -43,15 +43,20 @@ use tauri::{
 };
 use uuid::Uuid;
 
-// Channel for receiving OAuth codes from deep links
-lazy_static::lazy_static! {
-    static ref OAUTH_CODE_CHANNEL: (Mutex<mpsc::Sender<String>>, Mutex<mpsc::Receiver<String>>) = {
-        let (tx, rx) = mpsc::channel();
-        (Mutex::new(tx), Mutex::new(rx))
-    };
-    static ref RECENT_UI_NOTIFICATIONS: Mutex<HashMap<String, std::time::Instant>> =
-        Mutex::new(HashMap::new());
-}
+// ponytail: LazyLock replaces lazy_static dependency
+static OAUTH_CODE_CHANNEL: LazyLock<(Mutex<mpsc::Sender<String>>, Mutex<mpsc::Receiver<String>>)> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel();
+    (Mutex::new(tx), Mutex::new(rx))
+});
+static RECENT_UI_NOTIFICATIONS: LazyLock<Mutex<HashMap<String, std::time::Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static RUNNING_ADDON_PROCESS: LazyLock<Mutex<Option<tokio::process::Child>>> = LazyLock::new(|| Mutex::new(None));
+static ADDON_STDOUT_TASK: LazyLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
+static ADDON_WATCHDOG_RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+static ADDON_LOG_HISTORY: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+// Retry counter for the watchdog — resets on successful health check
+static ADDON_RESTART_COUNT: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0));
+// Global app handle for emitting events from background threads
+static GLOBAL_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> = LazyLock::new(|| Mutex::new(None));
 
 // MPV session info
 #[derive(Clone, Serialize)]
@@ -3834,8 +3839,17 @@ async fn save_config(
         return Err("Operation cancelled by user".to_string());
     }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
-    *config = new_config.clone();
-    config::save_config(&new_config).map_err(|e| e.to_string())?;
+    let mut merged = new_config.clone();
+    // Always preserve addon_sources from backend (Settings form doesn't manage them)
+    if merged.addon_sources.is_empty() && !config.addon_sources.is_empty() {
+        merged.addon_sources = config.addon_sources.clone();
+    }
+    // Derive addon_url from the default source — never trust the form's stale addon_url
+    merged.addon_url = merged.addon_sources.iter()
+        .find(|s| s.is_default && s.enabled)
+        .map(|s| s.url.clone());
+    *config = merged.clone();
+    config::save_config(&merged).map_err(|e| e.to_string())?;
     apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
@@ -7378,6 +7392,7 @@ struct TmdbSearchResultItem {
     release_date: Option<String>,
     first_air_date: Option<String>,
     vote_average: Option<f64>,
+    imdb_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -7534,6 +7549,76 @@ async fn get_movie_details(
     .await
     .map_err(|e| e.to_string())??;
 
+    Ok(result)
+}
+
+#[tauri::command]
+async fn validate_hubdrive_url(url: String) -> Result<serde_json::Value, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        remote_source::validate_hubdrive_url(&url)
+    }).await.map_err(|e| e.to_string())??;
+    Ok(serde_json::json!({ "isValid": result.0, "title": result.1 }))
+}
+
+/// Verify a single stream URL via HEAD request (fast, no body download)
+#[tauri::command]
+async fn verify_stream_url(url: String) -> Result<bool, String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        match client.head(&url).send() {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                Ok((200..400).contains(&status))
+            }
+            Err(_) => Ok(false),
+        }
+    }).await.map_err(|e| e.to_string())?;
+    result
+}
+
+/// Verify multiple stream URLs with staggered delays to avoid rate limiting.
+/// Returns a map of url -> isAlive.
+#[tauri::command]
+async fn verify_stream_urls(urls: Vec<String>) -> Result<std::collections::HashMap<String, bool>, String> {
+    let mut results = std::collections::HashMap::new();
+    for (i, url) in urls.iter().enumerate() {
+        // Stagger requests: 150ms between each to avoid rate limiting
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+        let url_clone = url.clone();
+        let alive = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .redirect(reqwest::redirect::Policy::limited(5))
+                .build()
+                .map_err(|e| e.to_string())?;
+            match client.head(&url_clone).send() {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    Ok((200..400).contains(&status))
+                }
+                Err(_) => Ok(false),
+            }
+        }).await.map_err(|e| e.to_string())??;
+        results.insert(url.clone(), alive);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+async fn resolve_imdb_id(state: State<'_, AppState>, tmdb_id: i64, media_type: String) -> Result<Option<String>, String> {
+    let api_key = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        config.tmdb_api_key.clone().unwrap_or_default()
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        tmdb::fetch_imdb_id(&api_key, tmdb_id, &media_type)
+    }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
 
@@ -9885,6 +9970,7 @@ async fn search_tmdb(
             release_date: item.release_date,
             first_air_date: item.first_air_date,
             vote_average: item.vote_average,
+            imdb_id: item.imdb_id,
         })
         .collect::<Vec<_>>();
 
@@ -12813,6 +12899,22 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     let is_newer = version_compare(&latest_version, current_version);
     println!("[UPDATE] Version comparison result: newer={}", is_newer);
 
+    // When versions match, check if this is a same-version re-release (hotfix)
+    // by comparing the remote pub_date against the last installed pub_date.
+    let is_newer = if !is_newer && latest_version == current_version {
+        if let (Some(remote_date), Some(local_date)) = (&manifest.pub_date, read_installed_pub_date()) {
+            let is_rerelease = remote_date > &local_date;
+            if is_rerelease {
+                println!("[UPDATE] Same version but newer pub_date detected (re-release): remote={} local={}", remote_date, local_date);
+            }
+            is_rerelease
+        } else {
+            false
+        }
+    } else {
+        is_newer
+    };
+
     println!(
         "[UPDATE] Available platforms in metadata: {:?}",
         manifest.platforms.keys().collect::<Vec<_>>()
@@ -12869,7 +12971,7 @@ fn version_compare(latest: &str, current: &str) -> bool {
 
 /// Download update to temp directory
 #[tauri::command]
-async fn download_update(window: tauri::Window, url: String) -> Result<String, String> {
+async fn download_update(window: tauri::Window, url: String, pub_date: Option<String>) -> Result<String, String> {
     use std::io::Write;
 
     println!("[UPDATE] Starting download...");
@@ -13055,7 +13157,35 @@ async fn download_update(window: tauri::Window, url: String) -> Result<String, S
     println!("[UPDATE] Saved to: {:?}", file_path);
     println!("[UPDATE] Final size: {} bytes", downloaded);
 
+    // Persist the pub_date so we can detect same-version re-releases next check
+    if let Some(pd) = pub_date {
+        save_installed_pub_date(&pd);
+    }
+
     Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Save the pub_date of a successfully downloaded update so we can detect
+/// same-version re-releases (hotfixes) on the next check.
+fn save_installed_pub_date(pub_date: &str) {
+    let path = database::get_app_data_dir().join("last_update_pub_date.txt");
+    if let Err(e) = std::fs::write(&path, pub_date) {
+        println!("[UPDATE] WARNING: Failed to save installed pub_date: {}", e);
+    } else {
+        println!("[UPDATE] Saved installed pub_date: {}", pub_date);
+    }
+}
+
+/// Read the pub_date of the last installed update, if any.
+fn read_installed_pub_date() -> Option<String> {
+    let path = database::get_app_data_dir().join("last_update_pub_date.txt");
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        }
+        Err(_) => None,
+    }
 }
 
 fn updater_staging_root() -> std::path::PathBuf {
@@ -13131,25 +13261,15 @@ fn sanitize_update_filename(parsed_url: &url::Url) -> String {
 fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String> {
     let path = std::path::Path::new(path_str);
 
-    // Canonicalize resolves symlinks and ../ sequences, and checks if file exists
-    let mut canonical_path = path
+    // ponytail: dunce removed — \\?\ prefix harmless for Path::starts_with
+    let canonical_path = path
         .canonicalize()
         .map_err(|e| format!("Invalid installer path: {}", e))?;
 
-    #[cfg(windows)]
-    {
-        canonical_path = dunce::canonicalize(&canonical_path).unwrap_or(canonical_path);
-    }
-
     let staging_dir = updater_staging_root();
-    let mut canonical_staging = staging_dir
+    let canonical_staging = staging_dir
         .canonicalize()
         .map_err(|e| format!("Failed to resolve updater staging directory: {}", e))?;
-
-    #[cfg(windows)]
-    {
-        canonical_staging = dunce::canonicalize(&canonical_staging).unwrap_or(canonical_staging);
-    }
 
     // Ensure it's inside the app-owned updater staging directory
     if !canonical_path.starts_with(&canonical_staging) {
@@ -14100,6 +14220,7 @@ async fn ddl_index_archive(
     state: tauri::State<'_, AppState>,
     url: String,
     validation: direct_link_manager::DdlValidationResult,
+    addon_origin: Option<String>,
 ) -> Result<direct_link_manager::DdlSource, String> {
     let emit_ddl_progress = |stage: &str,
                              message: String,
@@ -14163,6 +14284,7 @@ async fn ddl_index_archive(
             result.source.video_count as i64,
             result.source.cd_offset as i64,
             result.source.cd_size as i64,
+            addon_origin.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     }
@@ -14616,6 +14738,123 @@ fn ddl_get_source_media(
         .map_err(|e| e.to_string())
 }
 
+/// Index a season pack stream URL into Direct Links, storing addon origin for auto-refresh
+#[tauri::command]
+async fn index_season_pack_to_ddl(
+    window: Window,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    imdb_id: String,
+    season_number: i32,
+    stream_name: String,
+) -> Result<direct_link_manager::DdlSource, String> {
+    let origin = format!("{}:{}:{}", imdb_id, season_number, stream_name);
+
+    // Validate URL — must support HTTP 206 (range requests)
+    let url_clone = url.clone();
+    let validation = tokio::task::spawn_blocking(move || {
+        direct_link_manager::validate_url(&url_clone)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if !validation.supports_range {
+        return Err("This stream URL does not support seeking (HTTP 206). Cannot index to Direct Links.".to_string());
+    }
+
+    // Delegate to ddl_index_archive with addon_origin
+    ddl_index_archive(window, state, url, validation, Some(origin)).await
+}
+
+/// Auto-refresh an expired DDL source by re-querying the addon server
+#[tauri::command]
+async fn auto_refresh_ddl_from_addon(
+    state: tauri::State<'_, AppState>,
+    source_id: String,
+) -> Result<Option<String>, String> {
+    let source = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_ddl_source(&source_id).map_err(|e| e.to_string())?
+    };
+
+    let origin = match &source.addon_origin {
+        Some(o) => o.clone(),
+        None => return Ok(None),
+    };
+
+    // Parse "imdb_id:season:stream_name"
+    let parts: Vec<String> = origin.splitn(3, ':').map(|s| s.to_string()).collect();
+    if parts.len() < 2 {
+        return Ok(None);
+    }
+    let imdb_id = parts[0].clone();
+    let season: i32 = parts[1].parse().map_err(|_| "Invalid season in addon_origin".to_string())?;
+
+    // Get addon URL from config
+    let addon_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        if let Some(src) = config.addon_sources.iter().find(|s| s.is_default).or(config.addon_sources.first()) {
+            src.url.clone()
+        } else if let Some(ref url) = config.addon_url {
+            url.clone()
+        } else {
+            return Ok(None);
+        }
+    };
+
+    // Re-query addon for season streams
+    let file_size = source.file_size;
+    let source_for_verify = source.clone();
+    let addon_url_clone = addon_url.clone();
+
+    let stream_name_fallback = parts.get(2).cloned().unwrap_or_default();
+
+    let new_url = tokio::task::spawn_blocking(move || {
+        let streams = remote_source::fetch_season_streams(&imdb_id, season, &addon_url_clone, true)?;
+
+        // Find matching stream by file_size
+        for (_ep, ep_streams) in &streams {
+            for s in ep_streams {
+                if s.video_size > 0 && (s.video_size as u64) == file_size {
+                    return Ok::<String, String>(s.url.clone());
+                }
+            }
+        }
+
+        // Fallback: match by stream name
+        for (_ep, ep_streams) in &streams {
+            for s in ep_streams {
+                if s.name == stream_name_fallback {
+                    return Ok(s.url.clone());
+                }
+            }
+        }
+
+        Err("No matching stream found in addon response".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Validate the new URL matches the original archive structure
+    let url_for_verify = new_url.clone();
+    let refresh_result = tokio::task::spawn_blocking(move || {
+        direct_link_manager::verify_and_refresh_link(&source_for_verify, &url_for_verify)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if refresh_result.accepted {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_ddl_source_url(&source_id, &new_url)
+            .map_err(|e| e.to_string())?;
+        println!("[DDL] Auto-refreshed expired link for source '{}' from addon", source_id);
+        Ok(Some(new_url))
+    } else {
+        println!("[DDL] Auto-refresh failed for source '{}': {}", source_id, refresh_result.message);
+        Ok(None)
+    }
+}
+
 /// Returns the OLD app data directory (pre-rename "StreamVault") respecting dev/prod isolation.
 /// Dev builds target "StreamVault-Dev", production targets "StreamVault".
 fn get_old_app_data_dir() -> std::path::PathBuf {
@@ -14719,6 +14958,107 @@ fn migrate_app_data() {
     }
 }
 
+// ── Progressive Download Helpers ─────────────────────────────────────
+
+/// Download the first `buffer_bytes` from `url` to `dest_path` using an HTTP Range request.
+async fn progressive_download(url: &str, dest_path: &std::path::Path, buffer_bytes: u64) -> Result<(), String> {
+    use reqwest::header;
+
+    // Ensure parent directory exists
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create_dir: {}", e))?;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+
+    // Try Range request first; fall back to full download if server doesn't support it
+    let range_end = buffer_bytes.saturating_sub(1);
+    let range_header = format!("bytes=0-{}", range_end);
+
+    let resp = client
+        .get(url)
+        .header(header::RANGE, &range_header)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 206 {
+        return Err(format!("HTTP {}", status));
+    }
+
+    let mut file = std::fs::File::create(dest_path).map_err(|e| format!("file create: {}", e))?;
+    let mut bytes_written: u64 = 0;
+
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("chunk read: {}", e))?;
+        use std::io::Write;
+        file.write_all(&chunk).map_err(|e| format!("file write: {}", e))?;
+        bytes_written += chunk.len() as u64;
+        if bytes_written >= buffer_bytes {
+            break;
+        }
+    }
+
+    use std::io::Write as _;
+    file.flush().map_err(|e| format!("file flush: {}", e))?;
+    println!("[PROGRESSIVE-DL] Downloaded {} bytes to {}", bytes_written, dest_path.display());
+    Ok(())
+}
+
+/// Continue downloading from `buffer_bytes` offset to the end of the file.
+async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, total_bytes: u64) -> Result<(), String> {
+    use reqwest::header;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600)) // 1 hour for large files
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+
+    let range_header = format!("bytes={}-", start_offset);
+
+    let resp = client
+        .get(url)
+        .header(header::RANGE, &range_header)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 206 {
+        return Err(format!("HTTP {}", status));
+    }
+
+    // Open file in append mode
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dest_path)
+        .map_err(|e| format!("file open: {}", e))?;
+    use std::io::Seek;
+    file.seek(std::io::SeekFrom::Start(start_offset))
+        .map_err(|e| format!("file seek: {}", e))?;
+
+    let mut bytes_written: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("chunk read: {}", e))?;
+        use std::io::Write;
+        file.write_all(&chunk).map_err(|e| format!("file write: {}", e))?;
+        bytes_written += chunk.len() as u64;
+    }
+
+    use std::io::Write as _;
+    file.flush().map_err(|e| format!("file flush: {}", e))?;
+    println!("[PROGRESSIVE-DL] Downloaded remaining {} bytes (total offset {})", bytes_written, start_offset + bytes_written);
+    Ok(())
+}
+
 // ── Remote Source Commands ──────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -14733,6 +15073,8 @@ struct RemoteStreamResponse {
     parsed_source: String,
     #[serde(default)]
     recommended: bool,
+    #[serde(default)]
+    is_hubdrive: bool,
 }
 
 #[derive(Serialize)]
@@ -14744,10 +15086,18 @@ struct GroupedStreamsResponse {
 
 #[tauri::command]
 async fn remote_get_movie_streams(
+    state: State<'_, AppState>,
     imdb_id: String,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        get_active_addon_url_from_config(&config)?
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
     let streams = tokio::task::spawn_blocking(move || {
-        remote_source::fetch_movie_streams(&imdb_id)
+        remote_source::fetch_movie_streams(&imdb_id, &base_url, refresh)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -14769,6 +15119,7 @@ async fn remote_get_movie_streams(
                     parsed_quality: s.parsed_quality,
                     parsed_source: s.parsed_source,
                     recommended: s.recommended,
+                    is_hubdrive: s.is_hubdrive,
                 })
                 .collect(),
         })
@@ -14779,12 +15130,20 @@ async fn remote_get_movie_streams(
 
 #[tauri::command]
 async fn remote_get_series_streams(
+    state: State<'_, AppState>,
     imdb_id: String,
     season: i32,
     episode: i32,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<GroupedStreamsResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        get_active_addon_url_from_config(&config)?
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
     let streams = tokio::task::spawn_blocking(move || {
-        remote_source::fetch_series_streams(&imdb_id, season, episode)
+        remote_source::fetch_series_streams(&imdb_id, season, episode, &base_url, refresh)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -14806,12 +15165,74 @@ async fn remote_get_series_streams(
                     parsed_quality: s.parsed_quality,
                     parsed_source: s.parsed_source,
                     recommended: s.recommended,
+                    is_hubdrive: s.is_hubdrive,
                 })
                 .collect(),
         })
         .collect();
 
     Ok(response)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeasonStreamsEpisodeResponse {
+    episode: i32,
+    grouped_streams: Vec<GroupedStreamsResponse>,
+}
+
+#[tauri::command]
+async fn remote_get_season_streams(
+    state: State<'_, AppState>,
+    imdb_id: String,
+    season: i32,
+    force_refresh: Option<bool>,
+) -> Result<Vec<SeasonStreamsEpisodeResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        get_active_addon_url_from_config(&config)?
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
+    let ep_map = tokio::task::spawn_blocking(move || {
+        remote_source::fetch_season_streams(&imdb_id, season, &base_url, refresh)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let mut result: Vec<SeasonStreamsEpisodeResponse> = ep_map
+        .into_iter()
+        .map(|(ep, streams)| {
+            let grouped = remote_source::group_streams(streams);
+            SeasonStreamsEpisodeResponse {
+                episode: ep,
+                grouped_streams: grouped
+                    .into_iter()
+                    .map(|g| GroupedStreamsResponse {
+                        quality: g.quality,
+                        streams: g
+                            .streams
+                            .into_iter()
+                            .map(|s| RemoteStreamResponse {
+                                name: s.name,
+                                description: s.description,
+                                url: s.url,
+                                video_size: s.video_size,
+                                not_web_ready: s.not_web_ready,
+                                parsed_quality: s.parsed_quality,
+                                parsed_source: s.parsed_source,
+                                recommended: s.recommended,
+                                is_hubdrive: s.is_hubdrive,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.episode.cmp(&b.episode));
+    Ok(result)
 }
 
 #[derive(Serialize)]
@@ -14863,239 +15284,53 @@ async fn remote_play_with_mpv(
         title, quality_label, media_type, tmdb_id
     );
 
-    // ── 1. Create/get DB records ──
-    let tmdb_str = tmdb_id.to_string();
-    let poster_str = poster_path.as_deref();
-    let overview_str = overview.as_deref();
-    let still_str = still_path.as_deref();
-    let ep_title_str = episode_title.as_deref();
+    // ponytail: external sources are HTTP 200 (no range/seek), so no resume, no tracking, no DB, no cache
+    // Just fire MPV and emit ended event when it exits
 
-    let (media_id, resume_info) = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
+    // Launch MPV with the URL directly — no Lua script, no progress tracking
+    let mut cmd = std::process::Command::new(mpv_path);
+    cmd.arg(&url);
+    cmd.arg(format!("--force-media-title={}", title));
+    cmd.arg("--cache=yes");
+    cmd.arg("--demuxer-max-bytes=500MiB");
+    cmd.arg("--network-timeout=30");
+    cmd.arg("--save-position-on-quit=no");
+    cmd.arg("--keep-open=no");
+    cmd.arg("--");
 
-        if media_type == "tv" {
-            let show_id = db.insert_or_get_remote_tvshow(
-                &tmdb_str, &title, year, poster_str, overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let ep_id = db.insert_or_get_remote_episode(
-                show_id,
-                season_number.unwrap_or(1),
-                episode_number.unwrap_or(1),
-                &title,
-                ep_title_str,
-                still_str,
-                overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let info = db.get_resume_info(ep_id).map_err(|e| e.to_string())?;
-            (ep_id, info)
-        } else {
-            let movie_id = db.insert_or_get_remote_movie(
-                &tmdb_str, &title, year, poster_str, overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let info = db.get_resume_info(movie_id).map_err(|e| e.to_string())?;
-            (movie_id, info)
-        }
-    };
-
-    println!(
-        "[REMOTE-MPV] DB media_id={}, resume={}, position={:.1}s / {:.1}s",
-        media_id, resume_info.has_progress, resume_info.position, resume_info.duration
-    );
-
-    // ── 2. Cache path ──
-    let cache_root = match config.zip_cache_dir.as_deref() {
-        Some(d) if !d.is_empty() => std::path::PathBuf::from(d),
-        _ => database::get_app_data_dir().join("stream_cache"),
-    };
-
-    let cache_subdir = cache_root.join(format!("remote_{}", media_identifier));
-    std::fs::create_dir_all(&cache_subdir)
-        .map_err(|e| format!("Failed to create cache dir: {}", e))?;
-
-    let cache_path = cache_subdir.join("video.mp4");
-    let already_cached = cache_path.exists();
-
-    println!(
-        "[REMOTE-MPV] Cache path: {} (exists: {})",
-        cache_path.display(),
-        already_cached
-    );
-
-    // ── 3. Track with CacheManager ──
+    #[cfg(target_os = "windows")]
     {
-        let mut active = state.cache_manager.lock_active()?;
-        let target_path_str = cache_path.to_string_lossy().to_string();
-        active.insert(
-            media_identifier.clone(),
-            stream_cache::ActiveCache {
-                cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                status: stream_cache::CacheStatus {
-                    cache_key: media_identifier.clone(),
-                    state: stream_cache::CacheState::Idle,
-                    downloaded_bytes: if already_cached {
-                        cache_path.metadata().map(|m| m.len()).unwrap_or(0)
-                    } else {
-                        0
-                    },
-                    total_bytes: video_size.max(1) as u64,
-                    speed_bytes_per_second: 0.0,
-                    target_path: target_path_str.clone(),
-                },
-            },
-        );
-        drop(active);
-
-        if already_cached {
-            let status = stream_cache::CacheStatus {
-                cache_key: media_identifier.clone(),
-                state: stream_cache::CacheState::Complete,
-                downloaded_bytes: video_size.max(1) as u64,
-                total_bytes: video_size.max(1) as u64,
-                speed_bytes_per_second: 0.0,
-                target_path: target_path_str,
-            };
-            let _ = app_handle.emit_all("remote-cache-progress", &status);
-        }
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    // ── 4. Determine source & build CloudCacheSettings ──
-    let source = if already_cached {
-        cache_path.to_string_lossy().to_string()
-    } else {
-        url.clone()
-    };
+    let mut child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to launch MPV: {}", e))?;
 
-    let cache_settings = if already_cached {
-        None
-    } else {
-        Some(mpv_ipc::CloudCacheSettings {
-            enabled: true,
-            cache_dir: cache_subdir.to_string_lossy().to_string(),
-            max_size_mb: 102400, // 100 GB — effectively unlimited for single-file cache
-        })
-    };
+    println!("[REMOTE-MPV] Launched MPV (PID: {}) for '{}'", child.id(), title);
 
-    // ── 5. Launch MPV with tracking ──
-    let start_pos = start_position.max(0.0);
-
-    let pid = mpv_ipc::launch_mpv_with_tracking(
-        mpv_path,
-        &source,
-        media_id,
-        Some(&title),
-        start_pos,
-        None, // no auth header
-        cache_settings.as_ref(),
-        None, // no audio language
-        None, // no subtitle language
-        None, // no ipc server
-        Some(video_size),
-        None, // no duration override
-    )
-    .map_err(|e| format!("Failed to launch MPV with tracking: {}", e))?;
-
-    // ── 6. Background threads ──
+    // Background thread: wait for MPV to exit, emit ended event
     let title_clone = title.clone();
-    let cache_path_clone = cache_path.clone();
-    let cache_key = media_identifier.clone();
-    let manager = state.cache_manager.clone();
     let app_clone = app_handle.clone();
-    let db_path = database::get_app_data_dir()
-        .join("slasshyvault.db")
-        .to_string_lossy()
-        .to_string();
-    let is_tv = media_type == "tv";
-    let tmdb_id_clone = tmdb_id;
-    let season_clone = season_number;
-    let episode_clone = episode_number;
-
     std::thread::spawn(move || {
-        // ── Thread A: Cache download monitor ──
-        if !already_cached {
-            let total = video_size.max(1) as u64;
-            let started = std::time::Instant::now();
-            loop {
-                match mpv_ipc::is_mpv_running(pid) {
-                    true => {}
-                    false => break,
-                }
-
-                if let Ok(meta) = cache_path_clone.metadata() {
-                    let downloaded = meta.len();
-                    let elapsed = started.elapsed().as_secs_f64().max(0.001);
-                    let speed = downloaded as f64 / elapsed;
-
-                    if let Ok(mut active) = manager.lock_active() {
-                        if let Some(entry) = active.get_mut(&cache_key) {
-                            entry.status.downloaded_bytes = downloaded;
-                            entry.status.speed_bytes_per_second = speed;
-                            entry.status.state = stream_cache::CacheState::Downloading(
-                                (downloaded as f64 / total as f64) * 100.0,
-                            );
-                            let s = entry.status.clone();
-                            drop(active);
-                            let _ = app_clone.emit_all("remote-cache-progress", &s);
-                        }
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
-
-        // Mark cache as complete
-        if let Ok(mut active) = manager.lock_active() {
-            if let Some(entry) = active.get_mut(&cache_key) {
-                entry.status.state = stream_cache::CacheState::Complete;
-                entry.status.downloaded_bytes = entry.status.total_bytes;
-                let s = entry.status.clone();
-                drop(active);
-                let _ = app_clone.emit_all("remote-cache-progress", &s);
-            }
-        }
-
-        // ── Thread B: Playback progress tracking ──
-        if let Ok(db) = database::Database::new(&db_path) {
-            let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
-
-            // Update last_watched if valid progress was recorded
-            if result.final_position.is_some()
-                && result.final_duration.is_some()
-                && result.final_duration.unwrap_or(0.0) > 0.0
-            {
-                let _ = db.update_last_watched(media_id);
-            }
-
-            // Emit playback-ended event for next-episode flow
-            let _ = app_clone.emit_all(
-                "mpv-playback-ended",
-                serde_json::json!({
-                    "media_id": media_id,
-                    "completed": result.completed,
-                    "final_position": result.final_position,
-                    "final_duration": result.final_duration,
-                    "media_type": if is_tv { "tv" } else { "movie" },
-                    "tmdb_id": tmdb_id_clone,
-                    "season_number": season_clone,
-                    "episode_number": episode_clone,
-                    "title": title_clone,
-                }),
-            );
-        } else {
-            println!("[REMOTE-MPV] Failed to open database for progress tracking");
-        }
-
+        let _ = child.wait();
         println!("[REMOTE-MPV] Playback ended for '{}'", title_clone);
+        let _ = app_clone.emit_all("mpv-playback-ended", serde_json::json!({
+            "completed": false,
+            "title": title_clone,
+        }));
     });
 
     Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: resume_info.has_progress,
-        position: resume_info.position,
-        duration: resume_info.duration,
-        progress_percent: resume_info.progress_percent,
+        media_id: 0,
+        has_resume: false,
+        position: 0.0,
+        duration: 0.0,
+        progress_percent: 0.0,
     })
 }
 
@@ -15142,16 +15377,25 @@ async fn remote_get_resume_info(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let media_id = if media_type == "tv" {
         // Find the show first, then the episode
-        let show_id = db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
+        let show_id = match db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?;
-        db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        };
+        match db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        }
     } else {
-        db.find_media_by_tmdb_id(&tmdb_str, "movie")
+        match db.find_media_by_tmdb_id(&tmdb_str, "movie")
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        }
     };
     let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
     Ok(RemotePlaybackResponse {
@@ -15241,12 +15485,44 @@ async fn remote_get_library(
 }
 
 #[tauri::command]
-async fn remote_verify_streams(
-    urls: Vec<String>,
-) -> Result<Vec<remote_source::StreamVerification>, String> {
-    tokio::task::spawn_blocking(move || remote_source::verify_streams(&urls))
-        .await
-        .map_err(|e| e.to_string())
+async fn remote_remove_from_library(
+    state: State<'_, AppState>,
+    media_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    // Remove episodes first if this is a TV show parent
+    db.remove_series_episodes(media_id).map_err(|e| e.to_string()).ok();
+    db.remove_media(media_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn remote_add_to_library(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+    title: String,
+    media_type: String,
+    year: Option<i32>,
+    poster_path: Option<String>,
+    overview: Option<String>,
+) -> Result<i64, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let id = if media_type == "movie" {
+        db.insert_or_get_remote_movie(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
+    } else {
+        db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
+    }.map_err(|e| e.to_string())?;
+    db.set_remote_library_flag(id, true).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+async fn remote_get_episodes(
+    state: State<'_, AppState>,
+    show_id: i64,
+) -> Result<Vec<crate::database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_remote_episodes(show_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -15264,6 +15540,656 @@ async fn remote_get_cache_dir(
     let config = state.config.lock().map_err(|e| e.to_string())?;
     let dir = stream_cache::CacheManager::cache_dir(&config);
     Ok(dir.to_string_lossy().to_string())
+}
+
+/// Resolve the active addon URL from addon_sources (default source first, then first enabled).
+/// Falls back to legacy addon_url if no sources configured.
+fn get_active_addon_url_from_config(config: &config::Config) -> Result<String, String> {
+    // Try addon_sources first
+    if !config.addon_sources.is_empty() {
+        // Find default source
+        if let Some(src) = config.addon_sources.iter().find(|s| s.is_default && s.enabled) {
+            return Ok(src.url.clone());
+        }
+        // Fall back to first enabled source
+        if let Some(src) = config.addon_sources.iter().find(|s| s.enabled) {
+            return Ok(src.url.clone());
+        }
+        return Err("All addon sources are disabled. Enable at least one source.".to_string());
+    }
+    // Legacy fallback
+    config
+        .addon_url
+        .as_ref()
+        .filter(|u| !u.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            "No addon URL configured. Please add your addon URL in Settings > External.".to_string()
+        })
+}
+
+#[tauri::command]
+fn get_addon_url(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.addon_url.clone())
+}
+
+/// Validate an addon URL against SSRF attacks.
+/// - Only allows http:// and https:// schemes
+/// - Blocks private/internal IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 0.0.0.0)
+/// - Blocks localhost and IPv6 loopback (::1)
+fn validate_addon_url(url_str: &str) -> Result<(), String> {
+    let url_str = url_str.trim();
+    if url_str.is_empty() {
+        return Err("Addon URL cannot be empty".to_string());
+    }
+
+    let url = url::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+
+    // Only allow http and https schemes
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "Scheme '{}' is not allowed. Only http:// and https:// are permitted.",
+                other
+            ));
+        }
+    }
+
+    // Check hostname
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL has no hostname".to_string())?;
+
+    let host_lower = host.to_lowercase();
+
+    // Allow localhost, loopback, and private IPs for local addon servers
+    // Only block truly dangerous patterns
+    if host_lower == "localhost.localdomain"
+        || host_lower.ends_with(".localhost")
+    {
+        return Err("Invalid hostname.".to_string());
+    }
+
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        if ip.is_unspecified() {
+            return Err("0.0.0.0 is not allowed.".to_string());
+        }
+        // Block link-local (169.254.x.x)
+        if ip.is_link_local() {
+            return Err("Link-local addresses are not allowed.".to_string());
+        }
+    }
+
+    // Block IPv6 private/loopback
+    if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::<std::net::Ipv6Addr>() {
+        if ip.is_loopback() {
+            return Err("Loopback IPv6 address is not allowed.".to_string());
+        }
+        if segments_are_private_ipv6(ip) {
+            return Err("Private IPv6 addresses are not allowed.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if an IPv6 address is in a private range (fc00::/7, fe80::/10)
+fn segments_are_private_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    // fc00::/7 — unique local addresses
+    if (segments[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+    // fe80::/10 — link-local
+    if (segments[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+    false
+}
+
+#[tauri::command]
+fn set_addon_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    validate_addon_url(&url)?;
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    config.addon_url = Some(url.trim().to_string());
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Get all configured addon sources
+#[tauri::command]
+fn get_addon_sources(state: State<'_, AppState>) -> Result<Vec<config::AddonSource>, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.addon_sources.clone())
+}
+
+/// Add a new addon source
+#[tauri::command]
+fn add_addon_source(
+    state: State<'_, AppState>,
+    name: String,
+    url: String,
+    binary_path: Option<String>,
+) -> Result<config::AddonSource, String> {
+    validate_addon_url(&url)?;
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    // Dedup: prevent adding a source with the same URL
+    if config.addon_sources.iter().any(|s| s.url == url.trim()) {
+        return Err("A source with this URL already exists".to_string());
+    }
+    let source = config::AddonSource {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.trim().to_string(),
+        url: url.trim().to_string(),
+        enabled: true,
+        is_default: config.addon_sources.is_empty(), // first source becomes default
+        binary_path,
+    };
+    config.addon_sources.push(source.clone());
+    // Also set legacy addon_url for backward compat with remote_source
+    if source.is_default {
+        config.addon_url = Some(source.url.clone());
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+
+    Ok(source)
+}
+
+/// Remove an addon source by ID
+#[tauri::command]
+fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let source = config.addon_sources.iter().find(|s| s.id == id);
+    let has_binary = source.map(|s| s.binary_path.is_some()).unwrap_or(false);
+    let was_default = source.map(|s| s.is_default).unwrap_or(false);
+    config.addon_sources.retain(|s| s.id != id);
+    // If this was a binary source, kill the running process and watchdog
+    if has_binary {
+        if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+            if let Some(mut child) = proc.take() {
+                let _ = child.kill();
+            }
+        }
+        if ADDON_WATCHDOG_RUNNING.lock().map(|mut g| { *g = false; }).is_err() {
+            eprintln!("[remove_addon_source] Watchdog lock poisoned");
+        }
+    }
+    // If we removed the default, promote the first remaining source
+    if was_default {
+        if let Some(first) = config.addon_sources.first_mut() {
+            first.is_default = true;
+            config.addon_url = Some(first.url.clone());
+        } else {
+            config.addon_url = None;
+        }
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Install a custom addon binary (e.g. Go binary). Copies the file to the app data directory
+/// and creates an AddonSource with binary_path set.
+#[tauri::command]
+async fn install_addon_binary(
+    state: State<'_, AppState>,
+    file_path: String,
+    name: Option<String>,
+) -> Result<config::AddonSource, String> {
+    let src = std::path::Path::new(&file_path);
+    if !src.exists() {
+        return Err("File does not exist".to_string());
+    }
+    // Validate size (< 50MB)
+    let metadata = std::fs::metadata(src).map_err(|e| format!("Cannot read file: {}", e))?;
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err("File too large (max 50MB)".to_string());
+    }
+    // Validate extension
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if cfg!(target_os = "windows") && ext != "exe" {
+        return Err("On Windows, the binary must be an .exe file".to_string());
+    }
+
+    // Validate binary by running --version
+    let mut version_cmd = tokio::process::Command::new(src);
+    version_cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        version_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = version_cmd.output()
+        .await
+        .map_err(|e| format!("Failed to run binary: {}", e))?;
+    if !output.status.success() {
+        return Err("Invalid addon binary (failed --version check). Please drop a valid vault-addon .exe file.".to_string());
+    }
+
+    // Find a free port
+    let port = find_free_port().await?;
+    let url = format!("http://127.0.0.1:{}", port);
+
+    let app_dir = database::get_app_data_dir();
+    let bin_dir = app_dir.join("addon-binaries");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("Cannot create bin dir: {}", e))?;
+
+    let dest_name = if cfg!(target_os = "windows") {
+        format!("addon-proxy-{}.exe", uuid::Uuid::new_v4().to_string()[..8].to_string())
+    } else {
+        format!("addon-proxy-{}", uuid::Uuid::new_v4().to_string()[..8].to_string())
+    };
+    let dest = bin_dir.join(&dest_name);
+    std::fs::copy(src, &dest).map_err(|e| format!("Cannot copy binary: {}", e))?;
+
+    let dest_path = dest.to_string_lossy().to_string();
+    let source_name = name.unwrap_or_else(|| "Custom Addon Binary".to_string());
+
+    let source = config::AddonSource {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: source_name,
+        url: url.clone(),
+        enabled: true,
+        is_default: false,
+        binary_path: Some(dest_path.clone()),
+    };
+
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    if config.addon_sources.is_empty() {
+        // First source becomes default
+        let mut src = source.clone();
+        src.is_default = true;
+        config.addon_url = Some(src.url.clone());
+        config.addon_sources.push(src);
+    } else {
+        config.addon_sources.push(source.clone());
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+
+    // Spawn the binary immediately with --yes (auto-accept disclaimer) and dynamic port
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            match start_addon_process(&dest_path, &["--yes".to_string(), "--port".to_string(), port.to_string()]).await {
+                Ok(_) => println!("[addon] Binary started after install on port {}", port),
+                Err(e) => eprintln!("[addon] Failed to start binary after install: {}", e),
+            }
+        });
+    });
+
+    Ok(source)
+}
+
+/// Remove a custom addon binary file and clear its binary_path from config.
+#[tauri::command]
+fn remove_addon_binary(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    if let Some(source) = config.addon_sources.iter().find(|s| s.id == source_id) {
+        if let Some(ref bp) = source.binary_path {
+            let _ = std::fs::remove_file(bp);
+        }
+    }
+    config.addon_sources.retain(|s| s.id != source_id);
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Find a free TCP port on localhost
+async fn find_free_port() -> Result<u16, String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Cannot bind to free port: {}", e))?;
+    let port = listener.local_addr()
+        .map_err(|e| format!("Cannot get port: {}", e))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+/// Fetch addon version from its /version endpoint
+async fn get_addon_version_from_url(url: &str) -> Option<String> {
+    let trimmed = url.trim_end_matches('/');
+    let version_url = format!("{}/version", trimmed);
+    let is_loopback = trimmed.contains("127.0.0.1") || trimmed.contains("localhost");
+
+    if is_loopback {
+        // Use raw TCP for loopback to bypass reqwest loopback restrictions
+        match http_client::local_http_get_raw(&version_url) {
+            Ok((status, mut reader)) if (200..300).contains(&status) => {
+                use std::io::Read;
+                let mut body = String::new();
+                let _ = reader.read_to_string(&mut body);
+                serde_json::from_str::<serde_json::Value>(&body).ok()
+                    .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            }
+            _ => None,
+        }
+    } else {
+        let client = crate::http_client::shared_client();
+        match client.get(&version_url).timeout(std::time::Duration::from_secs(2)).send() {
+            Ok(resp) if resp.status().is_success() => {
+                resp.json::<serde_json::Value>().ok()
+                    .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Validate that an addon URL is reachable (server responds to /manifest.json)
+/// Uses raw TCP for loopback addresses to bypass reqwest loopback restrictions.
+#[tauri::command]
+fn check_addon_server(url: String) -> bool {
+    let trimmed = url.trim_end_matches('/').to_string();
+    let is_loopback = trimmed.contains("127.0.0.1") || trimmed.contains("localhost");
+    if is_loopback {
+        match http_client::local_http_get_raw(&format!("{}/manifest.json", trimmed)) {
+            Ok((status, _body)) => (200..300).contains(&status),
+            Err(_) => false,
+        }
+    } else {
+        let client = crate::http_client::shared_client();
+        match client
+            .get(format!("{}/manifest.json", trimmed))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+        {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Get the addon log history (last 200 lines)
+#[tauri::command]
+fn get_addon_logs() -> Vec<String> {
+    ADDON_LOG_HISTORY.lock().map(|h| h.clone()).unwrap_or_default()
+}
+
+/// Get addon version from its /version endpoint
+#[tauri::command]
+async fn get_addon_version(url: String) -> Option<String> {
+    get_addon_version_from_url(&url).await
+}
+
+/// Set a source as the active default
+#[tauri::command]
+fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let mut found = false;
+    let mut active_url = None;
+    for source in &mut config.addon_sources {
+        if source.id == id {
+            source.is_default = true;
+            active_url = Some(source.url.clone());
+            found = true;
+        } else {
+            source.is_default = false;
+        }
+    }
+    if !found {
+        return Err("Source not found".to_string());
+    }
+    if let Some(url) = active_url {
+        config.addon_url = Some(url);
+    }
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+
+/// Enable/disable an addon source
+#[tauri::command]
+fn toggle_addon_source(
+    state: State<'_, AppState>,
+    source_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    let src = config
+        .addon_sources
+        .iter_mut()
+        .find(|s| s.id == source_id)
+        .ok_or("Source not found")?;
+    src.enabled = enabled;
+    // Keep legacy addon_url in sync with the default source
+    config.addon_url = config.addon_sources.iter()
+        .find(|s| s.is_default && s.enabled)
+        .map(|s| s.url.clone());
+    config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Auto-detect a running addon server on common ports via TCP connect.
+#[tauri::command]
+async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
+    let ports = [51546, 3000, 8080, 12345, 4000, 5000, 7000, 9000];
+
+    for port in &ports {
+        let addr = format!("127.0.0.1:{}", port);
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            return Ok(Some(config::AddonSource {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "Local Addon".to_string(),
+                url: format!("http://127.0.0.1:{}", port),
+                enabled: true,
+                is_default: true,
+                binary_path: None,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+
+/// Start an addon binary process and store it globally.
+/// Spawns the binary directly with CREATE_NO_WINDOW.
+async fn spawn_addon_child(binary_path: &str, args: &[String]) -> Result<(), String> {
+    println!("[addon] Starting binary: {} {:?} ...", binary_path, args);
+    let mut cmd = tokio::process::Command::new(binary_path);
+    cmd.args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to start binary '{}': {}", binary_path, e))?;
+
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Log stdout + emit to frontend
+    if let Some(stdout) = stdout {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut line = String::new();
+        tokio::spawn(async move {
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim().to_string();
+                        println!("[addon] stdout: {}", trimmed);
+                        // Store in log history
+                        if let Ok(mut hist) = ADDON_LOG_HISTORY.lock() {
+                            hist.push(format!("[stdout] {}", trimmed));
+                            if hist.len() > 200 { hist.remove(0); }
+                        }
+                        // Emit to frontend
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    // Log stderr + emit to frontend
+    if let Some(stderr) = stderr {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut line = String::new();
+        tokio::spawn(async move {
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim().to_string();
+                        println!("[addon] stderr: {}", trimmed);
+                        // Store in log history
+                        if let Ok(mut hist) = ADDON_LOG_HISTORY.lock() {
+                            hist.push(format!("[stderr] {}", trimmed));
+                            if hist.len() > 200 { hist.remove(0); }
+                        }
+                        // Emit to frontend
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+        *proc = Some(child);
+    }
+    std::mem::forget(stdin);
+    println!("[addon] Binary process started");
+    Ok(())
+}
+
+async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), String> {
+    spawn_addon_child(binary_path, args).await?;
+
+    // Watchdog: restart addon if it dies (only one watchdog thread)
+    let bp_owned = binary_path.to_string();
+    let args_owned = args.to_vec();
+    let should_spawn_watchdog = ADDON_WATCHDOG_RUNNING.lock().map(|mut guard| {
+        if *guard { false } else { *guard = true; true }
+    }).unwrap_or_else(|e| {
+        eprintln!("[addon] Watchdog lock poisoned: {}", e);
+        true
+    });
+    if should_spawn_watchdog {
+        // Extract port from args for health checks (args contain "--port", "NNNNN")
+        let addon_port: u16 = args_owned.windows(2)
+            .find(|w| w[0] == "--port")
+            .and_then(|w| w[1].parse().ok())
+            .unwrap_or(51546);
+
+        std::thread::spawn(move || {
+            const MAX_RESTARTS: u32 = 10;
+            const BACKOFF_BASE: u64 = 2; // seconds
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let needs_restart = {
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        match proc.as_mut().map(|c| c.try_wait()) {
+                            Some(Ok(Some(status))) => {
+                                println!("[addon] Process exited with {}, checking server...", status);
+                                *proc = None;
+                                true
+                            }
+                            Some(Ok(None)) => {
+                                // Healthy — reset restart counter
+                                if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                false
+                            }
+                            Some(Err(e)) => {
+                                // try_wait() error — DO NOT blindly restart.
+                                // Check if the addon server is actually responding via TCP.
+                                println!("[addon] try_wait error: {}, checking if server is alive...", e);
+                                let addr = format!("127.0.0.1:{}", addon_port);
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+                                    std::time::Duration::from_secs(2),
+                                ).is_ok() {
+                                    // Server is still responding — don't restart, just reset counter
+                                    println!("[addon] Server is alive on port {}, skipping restart", addon_port);
+                                    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                    false
+                                } else {
+                                    println!("[addon] Server not responding, will restart...");
+                                    true
+                                }
+                            }
+                            None => {
+                                // No process handle stored
+                                let addr = format!("127.0.0.1:{}", addon_port);
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+                                    std::time::Duration::from_secs(2),
+                                ).is_ok() {
+                                    println!("[addon] No handle but server alive on port {}, skipping restart", addon_port);
+                                    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                    false
+                                } else {
+                                    println!("[addon] No process found and server not responding, will restart...");
+                                    true
+                                }
+                            }
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if needs_restart {
+                    let restart_count = {
+                        let mut cnt = ADDON_RESTART_COUNT.lock().unwrap_or_else(|e| e.into_inner());
+                        *cnt += 1;
+                        *cnt
+                    };
+                    if restart_count > MAX_RESTARTS {
+                        println!("[addon] Max restarts ({}) exceeded. Giving up. Restart the app to retry.", MAX_RESTARTS);
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &"[FATAL] Addon crashed too many times. Please restart the app.");
+                                let _ = handle.emit_all("addon-crashed", &restart_count);
+                            }
+                        }
+                        break;
+                    }
+                    // Kill any zombie process that might be holding the port
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        if let Some(mut child) = proc.take() {
+                            let _ = child.kill();
+                        }
+                    }
+                    // Exponential backoff: 2s, 4s, 8s, 16s, ... capped at 60s
+                    let delay = std::cmp::min(BACKOFF_BASE.pow(restart_count), 60);
+                    println!("[addon] Restart attempt {}/{} in {}s...", restart_count, MAX_RESTARTS, delay);
+                    std::thread::sleep(std::time::Duration::from_secs(delay));
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    match rt.block_on(spawn_addon_child(&bp_owned, &args_owned)) {
+                        Ok(_) => println!("[addon] Restarted successfully"),
+                        Err(e) => println!("[addon] Restart failed: {}", e),
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
+
+#[tauri::command]
+fn remote_clear_streams_cache() -> Result<(), String> {
+    // No-op: stream cache removed — addon handles caching now
+    Ok(())
 }
 
 fn main() {
@@ -15453,6 +16379,11 @@ fn main() {
 
             apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
 
+            // Store global app handle for background thread event emission
+            if let Ok(mut h) = GLOBAL_APP_HANDLE.lock() {
+                *h = Some(app.handle());
+            }
+
             // Register deep link handler for OAuth callback
             // The callback page redirects to the runtime-specific scheme.
             let handle = app.handle();
@@ -15515,6 +16446,50 @@ fn main() {
                     if deleted > 0 {
                         println!("[STARTUP] Cleaned up {} expired cache files ({:.1} MB)",
                             deleted, freed as f64 / (1024.0 * 1024.0));
+                    }
+                }
+            }
+
+            // Auto-start binary addon sources on app launch
+            let mut addon_started = false;
+            for source in &config.addon_sources {
+                if let Some(ref bp) = source.binary_path {
+                    let bp = bp.clone();
+                    let url = source.url.clone();
+                    println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
+                    let args: Vec<String> = vec!["--yes".to_string()];
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            match start_addon_process(&bp, &args).await {
+                                Ok(_) => println!("[STARTUP] Binary addon started successfully"),
+                                Err(e) => println!("[STARTUP] Failed to start binary addon: {}", e),
+                            }
+                        });
+                    });
+                    addon_started = true;
+                    break;
+                }
+            }
+            // Fallback: if addon_url is localhost and no binary source was started,
+            // probe the port. If down, log a clear message.
+            if !addon_started {
+                if let Some(ref url) = config.addon_url {
+                    if url.contains("localhost") || url.contains("127.0.0.1") {
+                        let url_clone = url.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            let host_port = url_clone.replace("http://", "").replace("https://", "").trim_end_matches('/').to_string();
+                            let addr: std::net::SocketAddr = host_port.parse().unwrap_or_else(|_| {
+                                // Try adding default port
+                                format!("{}:80", host_port).parse().unwrap_or(([127,0,0,1], 51546).into())
+                            });
+                            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
+                                Ok(_) => println!("[STARTUP] Addon server already running at {}", url_clone),
+                                Err(e) => println!("[STARTUP] Addon server NOT running at {} ({}). Install via Settings > External or start manually.", url_clone, e),
+                            }
+                        });
                     }
                 }
             }
@@ -15776,6 +16751,8 @@ fn main() {
             ddl_refresh_link,
             ddl_delete_source,
             ddl_get_source_media,
+            index_season_pack_to_ddl,
+            auto_refresh_ddl_from_addon,
             // Auto-update commands
             check_for_updates,
             download_update,
@@ -15799,13 +16776,20 @@ fn main() {
             // Remote Source commands
             remote_get_movie_streams,
             remote_get_series_streams,
+            remote_get_season_streams,
+            resolve_imdb_id,
+            validate_hubdrive_url,
+            verify_stream_url,
+            verify_stream_urls,
             remote_play_with_mpv,
-            remote_play_with_resume,
+            remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,
             remote_get_resume_info,
             remote_update_poster,
             remote_get_library,
-            remote_verify_streams,
+            remote_get_episodes,
+            remote_remove_from_library,
+            remote_add_to_library,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
@@ -15814,15 +16798,39 @@ fn main() {
             remote_cleanup_all_cache,
             remote_is_cache_dir_set,
             remote_get_cache_dir,
+            get_addon_url,
+            set_addon_url,
+            get_addon_sources,
+            add_addon_source,
+            remove_addon_source,
+            check_addon_server,
+            get_addon_version,
+            get_addon_logs,
+            set_active_source,
+            toggle_addon_source,
+            auto_setup_addon,
+            install_addon_binary,
+            remove_addon_binary,
+            remote_clear_streams_cache,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Prevent app from exiting when last window closes
-            // This keeps the backend running so we can recreate the window from tray
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
-                println!("[TRAY] Exit prevented. App running in background. Click tray to reopen.");
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                    println!("[TRAY] Exit prevented. App running in background. Click tray to reopen.");
+                }
+                tauri::RunEvent::Exit => {
+                    // Kill the running addon process on app exit
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        if let Some(mut child) = proc.take() {
+                            println!("[EXIT] Killing addon server process...");
+                            let _ = child.kill();
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }

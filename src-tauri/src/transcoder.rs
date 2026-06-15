@@ -2,14 +2,12 @@ use std::collections::HashMap;
 use std::io::BufReader;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use tiny_http::{Header, Response, Server};
 
-// Store active transcoding sessions
-lazy_static::lazy_static! {
-    static ref TRANSCODE_SESSIONS: Arc<Mutex<HashMap<u64, TranscodeSession>>> = Arc::new(Mutex::new(HashMap::new()));
-    static ref SESSION_COUNTER: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
-}
+// ponytail: LazyLock replaces lazy_static
+static TRANSCODE_SESSIONS: LazyLock<Arc<Mutex<HashMap<u64, TranscodeSession>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+static SESSION_COUNTER: LazyLock<Arc<Mutex<u64>>> = LazyLock::new(|| Arc::new(Mutex::new(0)));
 
 pub struct TranscodeSession {
     pub ffmpeg_process: Option<Child>,
@@ -163,8 +161,17 @@ pub fn start_transcode(
     let ffmpeg_path_clone = ffmpeg_path.to_string();
     let start_time_clone = start_time;
 
+    let session_id_for_cleanup = session_id;
     std::thread::spawn(move || {
         run_transcode_server(port, &ffmpeg_path_clone, &file_path_clone, start_time_clone);
+        // Clean up the session entry when the server exits (natural completion or error)
+        let mut sessions = TRANSCODE_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut session) = sessions.remove(&session_id_for_cleanup) {
+            if let Some(ref mut process) = session.ffmpeg_process {
+                let _ = process.kill();
+            }
+            println!("[TRANSCODE] Auto-cleaned session {} after server exit", session_id_for_cleanup);
+        }
     });
 
     // Small delay to let server start

@@ -73,6 +73,17 @@ impl ZipStreamProxyHandle {
             let _ = handle.join();
         }
     }
+
+    /// Clean up any partial temp files left on disk after the proxy stops.
+    pub fn cleanup_temp_files(&self, cache_spec: &ProxyCacheSpec) {
+        let temp = &cache_spec.cache_paths.temp_path;
+        if temp.exists() {
+            // Only remove if the final cache file doesn't exist (i.e. download was incomplete)
+            if !cache_spec.cache_paths.cache_path.exists() {
+                let _ = fs::remove_file(temp);
+            }
+        }
+    }
 }
 
 impl Drop for ZipStreamProxyHandle {
@@ -390,7 +401,11 @@ impl TurboProxyState {
                 } else if inner.max_parallel > TURBO_MIN_CONNECTIONS {
                     inner.max_parallel -= 1;
                 }
-                inner.chunks.insert(chunk_index, ChunkState::Failed(error.message));
+                // Remove the chunk entry instead of storing Failed state permanently.
+                // This prevents unbounded accumulation of failed entries and allows
+                // the chunk to be re-fetched on next request.
+                inner.chunks.remove(&chunk_index);
+                dev_elog!("[ZIP PROXY] Chunk {} fetch failed (removed from cache): {}", chunk_index, error.message);
             }
         }
 
