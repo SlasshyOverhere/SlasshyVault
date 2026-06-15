@@ -374,6 +374,9 @@ pub struct AddonSource {
     /// Arguments passed to the npm package (e.g. ["--yes"])
     #[serde(default)]
     pub npm_args: Vec<String>,
+    /// Path to a local addon binary (Go binary). Takes priority over npm_package.
+    #[serde(default)]
+    pub binary_path: Option<String>,
 }
 
 /// Which MPV engine to use
@@ -493,6 +496,7 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
                     is_default: true,
                     npm_package: None,
                     npm_args: vec![],
+                    binary_path: None,
                 });
                 config.addon_url = None;
             }

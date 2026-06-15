@@ -763,6 +763,24 @@ function RemoteSourceViewInner() {
   const [npmPackage, setNpmPackage] = useState('')
   const [npmArgs, setNpmArgs] = useState('--yes')
   const [npmInstalling, setNpmInstalling] = useState(false)
+  const [binaryInstalling, setBinaryInstalling] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Binary install handler (Go binary drag-and-drop)
+  const handleBinaryInstall = useCallback(async (filePath: string) => {
+    setBinaryInstalling(true)
+    try {
+      const result = await invoke<any>('install_addon_binary', { filePath, name: 'Custom Addon Binary' })
+      setAddonUrlConfigured(true)
+      loadRemoteLibrary()
+      window.dispatchEvent(new CustomEvent('config-saved'))
+      toast({ title: 'Binary installed', description: `Addon binary installed and running at ${result.url}` })
+    } catch (e: any) {
+      toast({ title: 'Installation failed', description: e?.message || String(e), variant: 'destructive' })
+    } finally {
+      setBinaryInstalling(false)
+    }
+  }, [loadRemoteLibrary, toast])
 
   // npm package install handler
   const handleNpmInstall = useCallback(async () => {
@@ -827,6 +845,53 @@ function RemoteSourceViewInner() {
                   </>
                 ) : (
                   "Install & Run"
+                )}
+              </button>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-neutral-800" />
+                <span className="text-xs text-neutral-600">or use a binary</span>
+                <div className="flex-1 h-px bg-neutral-800" />
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".exe"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) {
+                    // Tauri file input gives us the full path via webkitRelativePath or tauri://file-drop
+                    // Use the file name to construct path — Tauri's file dialog returns full paths
+                    const path = (file as any).path || file.name
+                    handleBinaryInstall(path)
+                  }
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={binaryInstalling}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const file = e.dataTransfer.files[0]
+                  if (file) {
+                    const path = (file as any).path || file.name
+                    handleBinaryInstall(path)
+                  }
+                }}
+                className="w-full h-16 rounded-xl border-2 border-dashed border-neutral-700 hover:border-neutral-500 disabled:opacity-40 disabled:cursor-not-allowed bg-white/[0.02] hover:bg-white/[0.04] text-neutral-400 hover:text-neutral-200 text-sm transition-all duration-200 flex flex-col items-center justify-center gap-1"
+              >
+                {binaryInstalling ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Installing binary...
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs">Drop addon binary here or click to browse</span>
+                    <span className="text-[10px] text-neutral-600">.exe file — no console window</span>
+                  </>
                 )}
               </button>
               <div className="flex items-center gap-3">
