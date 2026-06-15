@@ -166,6 +166,7 @@ function AddonSourcesManager() {
     try {
       await invoke("remove_addon_source", { id });
       await loadSources();
+      window.dispatchEvent(new CustomEvent("config-saved"));
       toast({ title: "Source removed" });
     } catch (e: any) {
       toast({ title: "Failed to remove", description: e?.message || String(e), variant: "destructive" });
@@ -290,7 +291,7 @@ function NpmAddonInstaller({ onInstalled }: { onInstalled: () => void }) {
         args,
       });
       // Add the detected source to config
-      await invoke("add_addon_source", { name: source.name, url: source.url });
+      await invoke("add_addon_source", { name: source.name, url: source.url, npmPackage: source.npm_package, npmArgs: source.npm_args });
       onInstalled();
       toast({
         title: "Addon installed & running",

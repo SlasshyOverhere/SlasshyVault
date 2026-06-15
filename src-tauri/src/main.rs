@@ -3833,8 +3833,17 @@ async fn save_config(
         return Err("Operation cancelled by user".to_string());
     }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
-    *config = new_config.clone();
-    config::save_config(&new_config).map_err(|e| e.to_string())?;
+    let mut merged = new_config.clone();
+    // Preserve addon_sources managed by AddonSourcesManager (not in Settings form state)
+    if merged.addon_sources.is_empty() && !config.addon_sources.is_empty() {
+        merged.addon_sources = config.addon_sources.clone();
+    }
+    // Preserve addon_url managed by External panel (Settings form has stale copy)
+    if merged.addon_url.as_deref() == Some("") && config.addon_url.is_some() {
+        merged.addon_url = config.addon_url.clone();
+    }
+    *config = merged.clone();
+    config::save_config(&merged).map_err(|e| e.to_string())?;
     apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
@@ -7534,6 +7543,26 @@ async fn get_movie_details(
     .await
     .map_err(|e| e.to_string())??;
 
+    Ok(result)
+}
+
+#[tauri::command]
+async fn validate_hubdrive_url(url: String) -> Result<serde_json::Value, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        remote_source::validate_hubdrive_url(&url)
+    }).await.map_err(|e| e.to_string())??;
+    Ok(serde_json::json!({ "isValid": result.0, "title": result.1 }))
+}
+
+#[tauri::command]
+async fn resolve_imdb_id(state: State<'_, AppState>, tmdb_id: i64, media_type: String) -> Result<Option<String>, String> {
+    let api_key = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        config.tmdb_api_key.clone().unwrap_or_default()
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        tmdb::fetch_imdb_id(&api_key, tmdb_id, &media_type)
+    }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
 
@@ -14825,6 +14854,8 @@ struct RemoteStreamResponse {
     parsed_source: String,
     #[serde(default)]
     recommended: bool,
+    #[serde(default)]
+    is_hubdrive: bool,
 }
 
 #[derive(Serialize)]
@@ -14869,6 +14900,7 @@ async fn remote_get_movie_streams(
                     parsed_quality: s.parsed_quality,
                     parsed_source: s.parsed_source,
                     recommended: s.recommended,
+                    is_hubdrive: s.is_hubdrive,
                 })
                 .collect(),
         })
@@ -14914,12 +14946,74 @@ async fn remote_get_series_streams(
                     parsed_quality: s.parsed_quality,
                     parsed_source: s.parsed_source,
                     recommended: s.recommended,
+                    is_hubdrive: s.is_hubdrive,
                 })
                 .collect(),
         })
         .collect();
 
     Ok(response)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeasonStreamsEpisodeResponse {
+    episode: i32,
+    grouped_streams: Vec<GroupedStreamsResponse>,
+}
+
+#[tauri::command]
+async fn remote_get_season_streams(
+    state: State<'_, AppState>,
+    imdb_id: String,
+    season: i32,
+    force_refresh: Option<bool>,
+) -> Result<Vec<SeasonStreamsEpisodeResponse>, String> {
+    let base_url = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        get_active_addon_url_from_config(&config)?
+    };
+
+    let refresh = force_refresh.unwrap_or(false);
+    let ep_map = tokio::task::spawn_blocking(move || {
+        remote_source::fetch_season_streams(&imdb_id, season, &base_url, refresh)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let mut result: Vec<SeasonStreamsEpisodeResponse> = ep_map
+        .into_iter()
+        .map(|(ep, streams)| {
+            let grouped = remote_source::group_streams(streams);
+            SeasonStreamsEpisodeResponse {
+                episode: ep,
+                grouped_streams: grouped
+                    .into_iter()
+                    .map(|g| GroupedStreamsResponse {
+                        quality: g.quality,
+                        streams: g
+                            .streams
+                            .into_iter()
+                            .map(|s| RemoteStreamResponse {
+                                name: s.name,
+                                description: s.description,
+                                url: s.url,
+                                video_size: s.video_size,
+                                not_web_ready: s.not_web_ready,
+                                parsed_quality: s.parsed_quality,
+                                parsed_source: s.parsed_source,
+                                recommended: s.recommended,
+                                is_hubdrive: s.is_hubdrive,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.episode.cmp(&b.episode));
+    Ok(result)
 }
 
 #[derive(Serialize)]
@@ -15358,6 +15452,8 @@ fn add_addon_source(
     state: State<'_, AppState>,
     name: String,
     url: String,
+    npm_package: Option<String>,
+    npm_args: Option<Vec<String>>,
 ) -> Result<config::AddonSource, String> {
     validate_addon_url(&url)?;
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -15367,8 +15463,8 @@ fn add_addon_source(
         url: url.trim().to_string(),
         enabled: true,
         is_default: config.addon_sources.is_empty(), // first source becomes default
-        npm_package: None,
-        npm_args: vec![],
+        npm_package,
+        npm_args: npm_args.unwrap_or_default(),
     };
     config.addon_sources.push(source.clone());
     // Also set legacy addon_url for backward compat with remote_source
@@ -16357,6 +16453,9 @@ fn main() {
             // Remote Source commands
             remote_get_movie_streams,
             remote_get_series_streams,
+            remote_get_season_streams,
+            resolve_imdb_id,
+            validate_hubdrive_url,
             remote_play_with_mpv,
             remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,

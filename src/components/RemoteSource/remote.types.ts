@@ -7,6 +7,7 @@ export interface RemoteStreamData {
   parsedQuality: string
   parsedSource: string
   recommended: boolean
+  isHubdrive: boolean
 }
 
 export type QualityFilter = 'all' | '4K' | '1080p' | '720p'

@@ -12,6 +12,8 @@ interface Props {
   onBack: () => void
   onFetchMovieStreams: (imdbId: string, forceRefresh?: boolean) => void
   onFetchEpisodeStreams: (imdbId: string, season: number, episode: number, episodeTitle: string, forceRefresh?: boolean) => void
+  onFetchSeasonStreams?: (imdbId: string, season: number) => void
+  onFetchSeasonPack?: (imdbId: string, season: number) => void
   fetching?: boolean
   isInLibrary?: boolean
   onAddToLibrary?: () => void
@@ -116,7 +118,7 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
   )
 })
 
-export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMovieStreams, onFetchEpisodeStreams, fetching, isInLibrary, onAddToLibrary, addingToLibrary }: Props) {
+export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMovieStreams, onFetchEpisodeStreams, onFetchSeasonStreams, onFetchSeasonPack, fetching, isInLibrary, onAddToLibrary, addingToLibrary }: Props) {
   const [localImdbId, setLocalImdbId] = useState<string | null>(null)
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
@@ -205,7 +207,9 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
   useEffect(() => {
     if (seasonData.has(activeSeason)) return
     fetchSeason(activeSeason)
-  }, [activeSeason, seasonData, fetchSeason])
+    // Prefetch all streams for this season
+    if (imdbId) onFetchSeasonStreams?.(imdbId, activeSeason)
+  }, [activeSeason, seasonData, fetchSeason, imdbId, onFetchSeasonStreams])
 
   const episodes = seasonData.get(activeSeason) || []
   const activeSeasonInfo = seasons.find(s => s.season_number === activeSeason)
@@ -413,8 +417,8 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
             {item.overview && (
               <p className="text-sm text-neutral-300 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
             )}
-            {onAddToLibrary && (
-              <div className="pt-1">
+            <div className="pt-1 flex items-center gap-2">
+              {onAddToLibrary && (
                 <Button
                   onClick={onAddToLibrary}
                   disabled={isInLibrary || addingToLibrary}
@@ -430,8 +434,22 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                   <Bookmark className={cn("size-4 mr-2", isInLibrary && "fill-current", addingToLibrary && "animate-pulse")} />
                   {isInLibrary ? "In Library" : "Add to Library"}
                 </Button>
-              </div>
-            )}
+              )}
+              {onFetchSeasonPack && imdbId && seasons.length > 0 && (
+                <Button
+                  onClick={() => {
+                    const seasonNum = activeSeason || (seasons.length > 0 ? seasons[0].season_number : 1)
+                    onFetchSeasonPack(imdbId, seasonNum)
+                  }}
+                  variant="outline"
+                  className="h-10 px-4 rounded-xl border-neutral-800 text-neutral-300 hover:text-neutral-100 hover:bg-neutral-900 transition-all duration-200 text-sm font-medium"
+                  title={`Season ${activeSeason || 1} pack — all episodes at once`}
+                >
+                  <ListVideo className="size-4 mr-2" />
+                  Season Pack S{activeSeason || 1}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -441,7 +459,7 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
         {seasons.map((s) => (
           <button
             key={s.season_number}
-            onClick={() => setActiveSeason(s.season_number)}
+            onClick={() => { setActiveSeason(s.season_number); if (imdbId) onFetchSeasonStreams?.(imdbId, s.season_number) }}
             className={cn(
               'shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 border',
               activeSeason === s.season_number

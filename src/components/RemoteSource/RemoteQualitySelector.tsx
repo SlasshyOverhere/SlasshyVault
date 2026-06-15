@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/tauri'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -87,6 +88,7 @@ interface Props {
   title: string
   groupedStreams: GroupedStreams[]
   onSelect: (stream: RemoteStreamData) => void
+  onOpenUrl?: (url: string) => void
   loading?: boolean
   error?: string | null
   verifying?: boolean
@@ -94,11 +96,13 @@ interface Props {
 }
 
 export function RemoteQualitySelector({
-  open, onOpenChange, title, groupedStreams, onSelect, loading, error, verifying, streamStatus = {},
+  open, onOpenChange, title, groupedStreams, onSelect, onOpenUrl, loading, error, verifying, streamStatus = {},
 }: Props) {
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
   const [copiedStreamUrl, setCopiedStreamUrl] = useState<string | null>(null)
   const [showInactive, setShowInactive] = useState(false)
+  // HubDrive validation: url -> { valid: boolean, title: string } | null (null = pending)
+  const [hubdriveStatus, setHubdriveStatus] = useState<Record<string, { valid: boolean; title: string } | 'loading'>>({})
 
   const verificationDone = !verifying && Object.keys(streamStatus).length > 0
 
@@ -131,11 +135,42 @@ export function RemoteQualitySelector({
     return streamStatus[url] !== false
   }
 
+  const [showHubdrive, setShowHubdrive] = useState(false)
+  const hubdriveStreams = useMemo(() => {
+    const hd: RemoteStreamData[] = []
+    for (const g of groupedStreams) {
+      if (qualityFilter !== 'all' && g.quality !== qualityFilter) continue
+      for (const s of g.streams) {
+        if (s.isHubdrive) hd.push(s)
+      }
+    }
+    return hd
+  }, [groupedStreams, qualityFilter])
+
+  // Validate hubdrive URLs when section is expanded
+  useEffect(() => {
+    if (!showHubdrive || hubdriveStreams.length === 0) return
+    for (const stream of hubdriveStreams) {
+      if (hubdriveStatus[stream.url]) continue
+      setHubdriveStatus(prev => ({ ...prev, [stream.url]: 'loading' }))
+      invoke<{ isValid: boolean; title: string }>('validate_hubdrive_url', { url: stream.url })
+        .then(res => setHubdriveStatus(prev => ({ ...prev, [stream.url]: { valid: res.isValid, title: res.title } })))
+        .catch(() => setHubdriveStatus(prev => ({ ...prev, [stream.url]: { valid: false, title: 'Validation failed' } })))
+    }
+  }, [showHubdrive, hubdriveStreams])
+
   const filtered = useMemo(() => {
     let groups = groupedStreams
     if (qualityFilter !== 'all') {
       groups = groups.filter((g) => g.quality === qualityFilter)
     }
+    // Exclude hubdrive from regular list
+    groups = groups
+      .map((g) => ({
+        ...g,
+        streams: g.streams.filter((s) => !s.isHubdrive),
+      }))
+      .filter((g) => g.streams.length > 0)
     if (!showInactive && verificationDone) {
       groups = groups
         .map((g) => ({
@@ -219,11 +254,61 @@ export function RemoteQualitySelector({
               </button>
             )}
 
-            {filtered.length === 0 && (
+            {filtered.length === 0 && hubdriveStreams.length === 0 && (
               <div className="text-sm text-neutral-600 text-center py-10 font-medium">
                 {verificationDone && inactiveCount === totalUrls
                   ? 'No active streams available. Toggle "Show inactive sources" above to try anyway.'
                   : `No ${qualityFilter} streams available`}
+              </div>
+            )}
+
+            {hubdriveStreams.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-neutral-800/50">
+                <button
+                  onClick={() => setShowHubdrive(!showHubdrive)}
+                  className="w-full text-left text-[11px] font-bold text-neutral-500 uppercase tracking-widest mb-2.5 px-1 flex items-center gap-2 hover:text-neutral-400 transition-colors"
+                >
+                  <ExternalLink className="size-3.5" />
+                  HubDrive (Login Required) — {hubdriveStreams.length}
+                  <span className="ml-auto text-[10px]">{showHubdrive ? '▲' : '▼'}</span>
+                </button>
+                {showHubdrive && (<>
+                <p className="text-[10px] text-neutral-600 mb-2 px-1">These require logging in on the hosting site. Opens in your browser.</p>
+
+                <div className="space-y-2">
+                  {hubdriveStreams.map((stream, idx) => {
+                    const status = hubdriveStatus[stream.url]
+                    const isValid = status && status !== 'loading' ? status.valid : null
+                    const isLoading = status === 'loading'
+                    return (
+                      <button
+                        key={`hd-${idx}`}
+                        onClick={() => onOpenUrl?.(stream.url)}
+                        className="w-full text-left p-3 rounded-xl bg-[#0D0D0D] border border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700/60 transition-all duration-200 group"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-medium text-neutral-300 truncate">{stream.name}</span>
+                          <span className="shrink-0 flex items-center gap-1.5">
+                            {isLoading && <Loader2 className="size-3 animate-spin text-neutral-500" />}
+                            {isValid === true && <span className="text-[10px] font-bold text-emerald-400">Active</span>}
+                            {isValid === false && <span className="text-[10px] font-bold text-red-400">Expired</span>}
+                            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-blue-600/10 text-blue-400/80 border border-blue-700/20">
+                              <ExternalLink className="size-3" />
+                              Open
+                            </span>
+                          </span>
+                        </div>
+                        {stream.description && (
+                          <div className="mt-1.5 border-t border-neutral-800/50 pt-1.5">
+                            <StreamMetaTags description={stream.description} videoSize={stream.videoSize} />
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                </>
+                )}
               </div>
             )}
 

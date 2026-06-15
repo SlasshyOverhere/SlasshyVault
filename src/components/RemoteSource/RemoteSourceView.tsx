@@ -176,6 +176,8 @@ function RemoteSourceViewInner() {
   const [groupedStreams, setGroupedStreams] = useState<GroupedStreams[]>([])
   const [streamError, setStreamError] = useState<string | null>(null)
   const [qualityOpen, setQualityOpen] = useState(false)
+  // ponytail: season stream cache, keyed by "imdbId:season"
+  const seasonStreamsCache = useRef<Map<string, Map<number, GroupedStreams[]>>>(new Map())
 
   // Current episode context (for TV)
   const [currentSeason, setCurrentSeason] = useState<number>(1)
@@ -239,6 +241,23 @@ function RemoteSourceViewInner() {
     } catch (e) { console.warn('[RemoteSourceView] loadRemoteLibrary:', e) }
   }, [])
 
+  // Pre-fetch all streams for a season (tt{imdb}:{season}:full)
+  const handleFetchSeasonStreams = useCallback(async (imdbId: string, season: number) => {
+    const cacheKey = `${imdbId}:${season}`
+    if (seasonStreamsCache.current.has(cacheKey)) return
+    try {
+      type SeasonEpisodeResponse = { episode: number; groupedStreams: GroupedStreams[] }
+      const result = await invoke<SeasonEpisodeResponse[]>('remote_get_season_streams', { imdbId, season })
+      const epMap = new Map<number, GroupedStreams[]>()
+      for (const ep of result) {
+        epMap.set(ep.episode, ep.groupedStreams)
+      }
+      seasonStreamsCache.current.set(cacheKey, epMap)
+    } catch (e) {
+      console.warn('[RemoteSourceView] season streams fetch failed:', e)
+    }
+  }, [])
+
   const loadShowEpisodes = useCallback(async (showId: number, tmdbId?: number) => {
     setLoadingEpisodes(true)
     try {
@@ -277,36 +296,56 @@ function RemoteSourceViewInner() {
           } catch (e) { console.warn(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
         }
         setShowEpisodes(allEpisodes)
+        // Pre-fetch season streams in background for instant episode playback
+        if (tmdbId) {
+          const imdbId = await invoke<string | null>('resolve_imdb_id', { tmdbId, mediaType: 'tv' }).catch(() => null)
+          if (imdbId) {
+            for (const season of tvSeasons) {
+              handleFetchSeasonStreams(imdbId, season.season_number).catch(() => {})
+            }
+          }
+        }
       } else {
         const episodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
         setShowEpisodes(episodes)
       }
     } catch (e) { console.warn('[RemoteSourceView] loadShowEpisodes:', e) }
     finally { setLoadingEpisodes(false) }
-  }, [])
+  }, [handleFetchSeasonStreams])
 
   useEffect(() => {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
   // Check if addon URL is configured (sources or legacy URL)
-  useEffect(() => {
-    invoke<string | null>('get_config')
-      .then((config: any) => {
-        const hasSources = config?.addon_sources?.length > 0
-        const hasLegacyUrl = !!config?.addon_url
-        setAddonUrlConfigured(hasSources || hasLegacyUrl)
-        // Get the active source info
-        if (hasSources) {
-          const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
-          const src = defaultSrc || config.addon_sources[0]
-          setActiveSource({ name: src.name, url: src.url })
-        } else if (hasLegacyUrl) {
-          setActiveSource({ name: 'Addon', url: config.addon_url })
-        }
-      })
-      .catch(() => setAddonUrlConfigured(false))
+  const checkAddonConfig = useCallback(async () => {
+    try {
+      const config = await invoke<any>('get_config')
+      const hasSources = config?.addon_sources?.length > 0
+      const hasLegacyUrl = !!config?.addon_url
+      setAddonUrlConfigured(hasSources || hasLegacyUrl)
+      if (hasSources) {
+        const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
+        const src = defaultSrc || config.addon_sources[0]
+        setActiveSource({ name: src.name, url: src.url })
+      } else if (hasLegacyUrl) {
+        setActiveSource({ name: 'Addon', url: config.addon_url })
+      } else {
+        setActiveSource(null)
+      }
+    } catch {
+      setAddonUrlConfigured(false)
+    }
   }, [])
+
+  useEffect(() => { checkAddonConfig() }, [checkAddonConfig])
+
+  // Re-check when config changes (e.g. source removed in Settings)
+  useEffect(() => {
+    const handler = () => checkAddonConfig()
+    window.addEventListener('config-saved', handler)
+    return () => window.removeEventListener('config-saved', handler)
+  }, [checkAddonConfig])
 
   // Search (with race condition guard via searchReqIdRef)
   useEffect(() => {
@@ -414,11 +453,52 @@ function RemoteSourceViewInner() {
     setCurrentEpisode(episode)
     setCurrentEpisodeTitle(episodeTitle)
     imdbIdRef.current = imdbId
+
+    // Check season cache first
+    const cacheKey = `${imdbId}:${season}`
+    const cached = seasonStreamsCache.current.get(cacheKey)
+    if (cached && !forceRefresh) {
+      const epStreams = cached.get(episode) || []
+      setGroupedStreams(epStreams)
+      setFetching(false)
+      return
+    }
+
     try {
       const streams = await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season, episode, forceRefresh })
       setGroupedStreams(streams)
     } catch (e: any) {
       setStreamError(typeof e === 'string' ? e : 'Failed to load streams')
+    }
+    setFetching(false)
+  }, [])
+
+  // Season pack: fetch all episode streams for a season and show in quality selector
+  const handleFetchSeasonPack = useCallback(async (imdbId: string, season: number) => {
+    setFetching(true)
+    setStreamError(null)
+    setGroupedStreams([])
+    setQualityOpen(true)
+    setCurrentSeason(season)
+    imdbIdRef.current = imdbId
+    try {
+      type SeasonEpisodeResponse = { episode: number; groupedStreams: GroupedStreams[] }
+      const result = await invoke<SeasonEpisodeResponse[]>('remote_get_season_streams', { imdbId, season })
+      // Merge all episode streams into a single flat list grouped by quality
+      const allStreams: GroupedStreams[] = []
+      for (const ep of result) {
+        for (const group of ep.groupedStreams) {
+          const existing = allStreams.find(g => g.quality === group.quality)
+          if (existing) {
+            existing.streams.push(...group.streams)
+          } else {
+            allStreams.push({ ...group, streams: [...group.streams] })
+          }
+        }
+      }
+      setGroupedStreams(allStreams)
+    } catch (e: any) {
+      setStreamError(typeof e === 'string' ? e : 'Failed to load season pack')
     }
     setFetching(false)
   }, [])
@@ -680,7 +760,7 @@ function RemoteSourceViewInner() {
     try {
       const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
       const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
-      await invoke('add_addon_source', { name: result.name, url: result.url })
+      await invoke('add_addon_source', { name: result.name, url: result.url, npmPackage: result.npm_package, npmArgs: result.npm_args })
       setAddonUrlConfigured(true)
       loadRemoteLibrary()
       window.dispatchEvent(new CustomEvent('config-saved'))
@@ -896,6 +976,8 @@ function RemoteSourceViewInner() {
               onBack={handleBackToLibrary}
               onFetchMovieStreams={handleFetchMovieStreams}
               onFetchEpisodeStreams={handleFetchEpisodeStreams}
+              onFetchSeasonStreams={handleFetchSeasonStreams}
+              onFetchSeasonPack={handleFetchSeasonPack}
               fetching={fetching}
               isInLibrary={isInLibrary(selectedItem!)}
               onAddToLibrary={handleAddToLibrary}
@@ -1059,6 +1141,7 @@ function RemoteSourceViewInner() {
         title={selectedItem?.title || selectedItem?.name || 'Unknown'}
         groupedStreams={groupedStreams}
         onSelect={handleQualitySelect}
+        onOpenUrl={(url) => window.open(url, '_blank')}
         loading={fetching}
         error={streamError}
         verifying={false}

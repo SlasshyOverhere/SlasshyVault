@@ -65,10 +65,70 @@ pub struct RemoteStream {
     pub parsed_source: String,
     #[serde(default)]
     pub recommended: bool,
+    #[serde(skip)]
+    pub is_hubdrive: bool,
+    #[serde(skip)]
+    pub episode_number: Option<i32>,
 }
 
 fn is_recommended_url(url: &str) -> bool {
     url.contains("r2.dev")
+}
+
+fn is_hubdrive_url(url: &str) -> bool {
+    // Only flag actual hubdrive download pages, not hubcloud CDN streams
+    // ponytail: substring match, upgrade to URL parsing if false positives persist
+    let lower = url.to_lowercase();
+    lower.contains("://hubdrive.") || lower.contains("://hubstream.")
+}
+
+/// Validate a hubdrive URL by checking page title.
+/// Expired: title contains generic "G-Drive File Sharing" text.
+/// Working: title contains actual content name.
+/// Returns (is_valid, title).
+pub fn validate_hubdrive_url(url: &str) -> Result<(bool, String), String> {
+    let client = crate::http_client::shared_client();
+    let resp = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .map_err(|e| format!("Request failed: {}", e))?;
+    let body = resp.text().map_err(|e| e.to_string())?;
+    let title = if let Some(s) = body.find("<title>") {
+        let after = &body[s + 7..];
+        after.find("</title>").map(|e| after[..e].trim().to_string()).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let lower = title.to_lowercase();
+    let expired = lower.contains("g-drive file sharing") || lower.contains("g=drive") || lower.contains("shorten your google drive");
+    Ok((!expired, title))
+}
+
+// ponytail: naive regex-free ep number extraction, works for "E01", "Episode 1", "Ep 01"
+fn extract_episode_number(name: &str, description: &str) -> Option<i32> {
+    let combined = format!("{} {}", name, description);
+    // Try "E01" or "E1" pattern first
+    for cap in combined.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if cap.len() >= 2 && (cap.starts_with('E') || cap.starts_with('e')) {
+            if let Ok(n) = cap[1..].parse::<i32>() {
+                if n > 0 && n < 1000 { return Some(n); }
+            }
+        }
+    }
+    // Try "Episode N" or "Ep N"
+    let lower = combined.to_lowercase();
+    for prefix in &["episode ", "ep "] {
+        if let Some(pos) = lower.find(prefix) {
+            let rest = &combined[pos + prefix.len()..];
+            let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = num_str.parse::<i32>() {
+                if n > 0 && n < 1000 { return Some(n); }
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +241,45 @@ pub fn fetch_series_streams(
     Ok(streams)
 }
 
+/// Fetch all streams for an entire season using the `tt{imdb}:{season}:full` endpoint.
+/// Returns a map of episode_number -> streams.
+pub fn fetch_season_streams(
+    imdb_id: &str,
+    season: i32,
+    base_url: &str,
+    force_refresh: bool,
+) -> Result<HashMap<i32, Vec<RemoteStream>>, String> {
+    let cache_key = format!("season:{}:{}", imdb_id, season);
+
+    if !force_refresh {
+        if let Some(cached) = get_cached_streams(&cache_key) {
+            println!("[REMOTE] Cache hit for season {}", cache_key);
+            let mut by_ep: HashMap<i32, Vec<RemoteStream>> = HashMap::new();
+            for s in cached {
+                let ep = s.episode_number.unwrap_or(0);
+                by_ep.entry(ep).or_default().push(s);
+            }
+            return Ok(by_ep);
+        }
+    }
+
+    let url = format!(
+        "{}/stream/series/{}:{}:full.json",
+        base_url.trim_end_matches('/'),
+        imdb_id,
+        season
+    );
+    let streams = fetch_and_parse_streams(&url)?;
+    set_cached_streams(&cache_key, streams.clone());
+
+    let mut by_ep: HashMap<i32, Vec<RemoteStream>> = HashMap::new();
+    for s in streams {
+        let ep = s.episode_number.unwrap_or(0);
+        by_ep.entry(ep).or_default().push(s);
+    }
+    Ok(by_ep)
+}
+
 pub fn clear_streams_cache() {
     clear_stream_cache();
 }
@@ -262,15 +361,19 @@ fn parse_streams_body(body: &str) -> Result<Vec<RemoteStream>, String> {
         .map(|s| {
             let quality = parse_quality(&s.name);
             let source = parse_source(&s.name);
+            let desc = s.description.or(s.title).unwrap_or_default();
+            let ep = extract_episode_number(&s.name, &desc);
             RemoteStream {
-                name: s.name,
-                description: s.description.or(s.title).unwrap_or_default(),
+                name: s.name.clone(),
+                description: desc,
                 url: s.url.clone(),
                 video_size: s.behavior_hints.video_size,
                 not_web_ready: s.behavior_hints.not_web_ready,
                 parsed_quality: quality,
                 parsed_source: source,
                 recommended: is_recommended_url(&s.url),
+                is_hubdrive: is_hubdrive_url(&s.url),
+                episode_number: ep,
             }
         })
         .collect();
