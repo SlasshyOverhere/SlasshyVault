@@ -317,21 +317,32 @@ function RemoteSourceViewInner() {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
-  // Check if addon URL is configured (sources or legacy URL)
+  // Check if addon URL is configured AND addon server is actually running
   const checkAddonConfig = useCallback(async () => {
     try {
       const config = await invoke<any>('get_config')
       const hasSources = config?.addon_sources?.length > 0
       const hasLegacyUrl = !!config?.addon_url
-      setAddonUrlConfigured(hasSources || hasLegacyUrl)
+      if (!hasSources && !hasLegacyUrl) {
+        setAddonUrlConfigured(false)
+        setActiveSource(null)
+        return
+      }
       if (hasSources) {
+        // Sources are validated at install time — trust them
         const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
         const src = defaultSrc || config.addon_sources[0]
         setActiveSource({ name: src.name, url: src.url })
-      } else if (hasLegacyUrl) {
-        setActiveSource({ name: 'Addon', url: config.addon_url })
+        setAddonUrlConfigured(true)
       } else {
-        setActiveSource(null)
+        // Manual URL — validate server is actually responding
+        setActiveSource({ name: 'Addon', url: config.addon_url })
+        try {
+          const ok = await invoke<boolean>('check_addon_server', { url: config.addon_url })
+          setAddonUrlConfigured(ok)
+        } catch {
+          setAddonUrlConfigured(false)
+        }
       }
     } catch {
       setAddonUrlConfigured(false)
@@ -760,7 +771,6 @@ function RemoteSourceViewInner() {
     try {
       const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
       const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
-      await invoke('add_addon_source', { name: result.name, url: result.url, npmPackage: result.npm_package, npmArgs: result.npm_args })
       setAddonUrlConfigured(true)
       loadRemoteLibrary()
       window.dispatchEvent(new CustomEvent('config-saved'))
@@ -1146,6 +1156,7 @@ function RemoteSourceViewInner() {
         error={streamError}
         verifying={false}
         streamStatus={{}}
+        addonContext={imdbIdRef.current && currentSeason ? { imdbId: imdbIdRef.current, season: currentSeason } : null}
       />
 
 

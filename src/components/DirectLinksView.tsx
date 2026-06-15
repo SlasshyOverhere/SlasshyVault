@@ -224,7 +224,7 @@ export default function DirectLinksView({
       const validation = await invoke<DdlValidationResult>("ddl_validate_url", { url: addUrl.trim() })
       setAddValidation(validation)
       setAddStep("indexing")
-      const indexedSource = await invoke<DdlSource>("ddl_index_archive", { url: addUrl.trim(), validation })
+      const indexedSource = await invoke<DdlSource>("ddl_index_archive", { url: addUrl.trim(), validation, addonOrigin: null })
       setAddStep("done")
       await fetchSources()
       let indexedMediaIds: number[] = []

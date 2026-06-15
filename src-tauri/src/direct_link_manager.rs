@@ -28,6 +28,8 @@ pub struct DdlSource {
     pub created_at: String,
     pub last_verified_at: String,
     pub is_expired: bool,
+    /// Set for sources indexed from addon season packs. Format: "imdb_id:season:stream_name"
+    pub addon_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +345,7 @@ fn index_zip_archive(
         created_at: now.clone(),
         last_verified_at: now,
         is_expired: false,
+        addon_origin: None,
     };
 
     println!(
@@ -716,6 +719,7 @@ mod tests {
             created_at: "2026-01-01 00:00:00".to_string(),
             last_verified_at: "2026-01-01 00:00:00".to_string(),
             is_expired: false,
+            addon_origin: None,
         };
 
         let result = verify_and_refresh_link(&source, &refreshed_server.base_url).unwrap();

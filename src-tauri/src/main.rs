@@ -3835,16 +3835,14 @@ async fn save_config(
     }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     let mut merged = new_config.clone();
-    // Preserve addon_sources managed by AddonSourcesManager (not in Settings form state)
+    // Always preserve addon_sources from backend (Settings form doesn't manage them)
     if merged.addon_sources.is_empty() && !config.addon_sources.is_empty() {
         merged.addon_sources = config.addon_sources.clone();
     }
-    // If form sent addon_url as empty/None, clear it (user explicitly removed it)
-    // Only preserve existing addon_url when form didn't touch it at all (send null)
-    // The form always sends a string, so empty string = user cleared it intentionally
-    if merged.addon_url.as_deref().unwrap_or("").is_empty() {
-        merged.addon_url = None;
-    }
+    // Derive addon_url from the default source — never trust the form's stale addon_url
+    merged.addon_url = merged.addon_sources.iter()
+        .find(|s| s.is_default && s.enabled)
+        .map(|s| s.url.clone());
     *config = merged.clone();
     config::save_config(&merged).map_err(|e| e.to_string())?;
     apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
@@ -15579,6 +15577,10 @@ fn add_addon_source(
 ) -> Result<config::AddonSource, String> {
     validate_addon_url(&url)?;
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
+    // Dedup: prevent adding a source with the same URL
+    if config.addon_sources.iter().any(|s| s.url == url.trim()) {
+        return Err("A source with this URL already exists".to_string());
+    }
     let source = config::AddonSource {
         id: uuid::Uuid::new_v4().to_string(),
         name: name.trim().to_string(),
@@ -15601,13 +15603,21 @@ fn add_addon_source(
 #[tauri::command]
 fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
-    let was_default = config
-        .addon_sources
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.is_default)
-        .unwrap_or(false);
+    let source = config.addon_sources.iter().find(|s| s.id == id);
+    let is_npm = source.map(|s| s.npm_package.is_some()).unwrap_or(false);
+    let was_default = source.map(|s| s.is_default).unwrap_or(false);
     config.addon_sources.retain(|s| s.id != id);
+    // If this was an npm source, kill the running process and watchdog
+    if is_npm {
+        if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+            if let Some(mut child) = proc.take() {
+                let _ = child.kill();
+            }
+        }
+        if ADDON_WATCHDOG_RUNNING.lock().map(|mut g| { *g = false; }).is_err() {
+            eprintln!("[remove_addon_source] Watchdog lock poisoned");
+        }
+    }
     // If we removed the default, promote the first remaining source
     if was_default {
         if let Some(first) = config.addon_sources.first_mut() {
@@ -15697,6 +15707,10 @@ fn toggle_addon_source(
         .find(|s| s.id == source_id)
         .ok_or("Source not found")?;
     src.enabled = enabled;
+    // Keep legacy addon_url in sync with the default source
+    config.addon_url = config.addon_sources.iter()
+        .find(|s| s.is_default && s.enabled)
+        .map(|s| s.url.clone());
     config::save_config(&config).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -15704,7 +15718,7 @@ fn toggle_addon_source(
 /// Auto-detect a running addon server on common ports via TCP connect.
 #[tauri::command]
 async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
-    let ports = [11470, 3000, 8080, 12345, 4000, 5000, 7000, 9000];
+    let ports = [51546, 3000, 8080, 12345, 4000, 5000, 7000, 9000];
 
     for port in &ports {
         let addr = format!("127.0.0.1:{}", port);
@@ -15810,7 +15824,10 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
     let args_owned = args.to_vec();
     let should_spawn_watchdog = ADDON_WATCHDOG_RUNNING.lock().map(|mut guard| {
         if *guard { false } else { *guard = true; true }
-    }).unwrap_or(true);
+    }).unwrap_or_else(|e| {
+        eprintln!("[addon:{}] Watchdog lock poisoned: {}", package, e);
+        true
+    });
     if should_spawn_watchdog {
         std::thread::spawn(move || {
             loop {
@@ -15854,6 +15871,7 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
 /// Reads stdout to find the URL the server started on.
 #[tauri::command]
 async fn install_npm_addon(
+    state: State<'_, AppState>,
     package: String,
     args: Vec<String>,
 ) -> Result<config::AddonSource, String> {
@@ -15874,7 +15892,6 @@ async fn install_npm_addon(
         cmd_args.extend(npx_args.clone());
         tokio::process::Command::new("cmd")
             .args(&cmd_args)
-            .env("PORT", "11470")
             .env("npm_config_yes", "true")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -15885,7 +15902,6 @@ async fn install_npm_addon(
         tokio::process::Command::new("npx")
             .arg("--yes")
             .args(&npx_args)
-            .env("PORT", "11470")
             .env("npm_config_yes", "true")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -15966,15 +15982,25 @@ async fn install_npm_addon(
             let _ = child.kill().await;
             // Restart the addon with null stdio so it stays alive
             start_npm_addon_process(&package, &args).await?;
-            Ok(config::AddonSource {
+            // Save source to config immediately (atomic install+save)
+            let source = config::AddonSource {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: package.clone(),
-                url,
+                url: url.clone(),
                 enabled: true,
                 is_default: true,
-                npm_package: Some(package),
-                npm_args: args,
-            })
+                npm_package: Some(package.clone()),
+                npm_args: args.clone(),
+            };
+            {
+                let mut config = state.config.lock().map_err(|e| e.to_string())?;
+                // Remove any existing source with the same npm_package to prevent duplicates
+                config.addon_sources.retain(|s| s.npm_package.as_deref() != Some(&package));
+                config.addon_sources.push(source.clone());
+                config.addon_url = Some(url);
+                config::save_config(&config).map_err(|e| e.to_string())?;
+            }
+            Ok(source)
         }
         None => {
             let _ = child.kill().await;
