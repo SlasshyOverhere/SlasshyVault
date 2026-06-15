@@ -760,10 +760,6 @@ function RemoteSourceViewInner() {
     }
   }, [setupAddonUrl, loadRemoteLibrary, toast])
 
-  // npm install handler
-  const [npmPackage, setNpmPackage] = useState('')
-  const [npmArgs, setNpmArgs] = useState('--yes')
-  const [npmInstalling, setNpmInstalling] = useState(false)
   const [binaryInstalling, setBinaryInstalling] = useState(false)
 
   // Binary install handler (Go binary drag-and-drop)
@@ -802,24 +798,6 @@ function RemoteSourceViewInner() {
     return () => { unlisten?.() }
   }, [handleBinaryInstall])
 
-  // npm package install handler
-  const handleNpmInstall = useCallback(async () => {
-    if (!npmPackage.trim()) return
-    setNpmInstalling(true)
-    try {
-      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
-      const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
-      setAddonUrlConfigured(true)
-      loadRemoteLibrary()
-      window.dispatchEvent(new CustomEvent('config-saved'))
-      toast({ title: 'Addon installed & running', description: `Connected to ${result.url}` })
-    } catch (e: any) {
-      toast({ title: 'Installation failed', description: e?.message || String(e), variant: 'destructive' })
-    } finally {
-      setNpmInstalling(false)
-    }
-  }, [npmPackage, npmArgs, loadRemoteLibrary, toast])
-
   // Show setup wizard if addon URL is not configured
   if (addonUrlConfigured === false) {
     return (
@@ -838,40 +816,6 @@ function RemoteSourceViewInner() {
               </p>
             </div>
             <div className="space-y-3">
-              <input
-                type="text"
-                value={npmPackage}
-                onChange={(e) => setNpmPackage(e.target.value)}
-                placeholder="npm package name"
-                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
-              />
-              <input
-                type="text"
-                value={npmArgs}
-                onChange={(e) => setNpmArgs(e.target.value)}
-                placeholder="arguments (e.g. --yes)"
-                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
-                onKeyDown={(e) => { if (e.key === 'Enter') handleNpmInstall() }}
-              />
-              <button
-                onClick={handleNpmInstall}
-                disabled={!npmPackage.trim() || npmInstalling}
-                className="w-full h-11 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2"
-              >
-                {npmInstalling ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Installing & starting...
-                  </>
-                ) : (
-                  "Install & Run"
-                )}
-              </button>
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-neutral-800" />
-                <span className="text-xs text-neutral-600">or use a binary</span>
-                <div className="flex-1 h-px bg-neutral-800" />
-              </div>
               <button
                 onClick={async () => {
                   const selected = await open({

@@ -368,13 +368,7 @@ pub struct AddonSource {
     pub url: String,
     pub enabled: bool,
     pub is_default: bool,
-    /// If set, this source was started from an npm package
-    #[serde(default)]
-    pub npm_package: Option<String>,
-    /// Arguments passed to the npm package (e.g. ["--yes"])
-    #[serde(default)]
-    pub npm_args: Vec<String>,
-    /// Path to a local addon binary (Go binary). Takes priority over npm_package.
+    /// Path to a local addon binary (Go binary with -H=windowsgui).
     #[serde(default)]
     pub binary_path: Option<String>,
 }
@@ -494,8 +488,6 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
                     url: url.clone(),
                     enabled: true,
                     is_default: true,
-                    npm_package: None,
-                    npm_args: vec![],
                     binary_path: None,
                 });
                 config.addon_url = None;

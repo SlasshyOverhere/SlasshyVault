@@ -15572,8 +15572,6 @@ fn add_addon_source(
     state: State<'_, AppState>,
     name: String,
     url: String,
-    npm_package: Option<String>,
-    npm_args: Option<Vec<String>>,
     binary_path: Option<String>,
 ) -> Result<config::AddonSource, String> {
     validate_addon_url(&url)?;
@@ -15588,8 +15586,6 @@ fn add_addon_source(
         url: url.trim().to_string(),
         enabled: true,
         is_default: config.addon_sources.is_empty(), // first source becomes default
-        npm_package,
-        npm_args: npm_args.unwrap_or_default(),
         binary_path,
     };
     config.addon_sources.push(source.clone());
@@ -15606,11 +15602,11 @@ fn add_addon_source(
 fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     let source = config.addon_sources.iter().find(|s| s.id == id);
-    let is_npm = source.map(|s| s.npm_package.is_some()).unwrap_or(false);
+    let has_binary = source.map(|s| s.binary_path.is_some()).unwrap_or(false);
     let was_default = source.map(|s| s.is_default).unwrap_or(false);
     config.addon_sources.retain(|s| s.id != id);
-    // If this was an npm source, kill the running process and watchdog
-    if is_npm {
+    // If this was a binary source, kill the running process and watchdog
+    if has_binary {
         if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
             if let Some(mut child) = proc.take() {
                 let _ = child.kill();
@@ -15679,8 +15675,6 @@ fn install_addon_binary(
         url,
         enabled: true,
         is_default: false,
-        npm_package: None,
-        npm_args: Vec::new(),
         binary_path: Some(dest.to_string_lossy().to_string()),
     };
 
@@ -15752,31 +15746,6 @@ fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), Strin
     Ok(())
 }
 
-/// Check if npx/node is available on the system
-#[tauri::command]
-fn check_npx_package() -> Result<bool, String> {
-    let npx_path = if cfg!(target_os = "windows") {
-        find_npx_path().unwrap_or_else(|| "npx".to_string())
-    } else {
-        "npx".to_string()
-    };
-    let npx_check = {
-        let mut cmd = std::process::Command::new(&npx_path);
-        cmd.arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        cmd.status()
-    };
-    match npx_check {
-        Ok(status) => Ok(status.success()),
-        Err(_) => Ok(false),
-    }
-}
 
 /// Enable/disable an addon source
 #[tauri::command]
@@ -15814,8 +15783,6 @@ async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
                 url: format!("http://127.0.0.1:{}", port),
                 enabled: true,
                 is_default: true,
-                npm_package: None,
-                npm_args: vec![],
                 binary_path: None,
             }));
         }
@@ -15824,138 +15791,29 @@ async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
     Ok(None)
 }
 
-/// Find the npx executable path on Windows by searching npm's bin directory.
-fn find_npx_path() -> Option<String> {
-    // Try `where npx` first
-    if let Ok(output) = std::process::Command::new("where").arg("npx").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout);
-            for line in path.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
+
+/// Start an addon binary process and store it globally.
+/// Spawns the binary directly with CREATE_NO_WINDOW.
+async fn spawn_addon_child(binary_path: &str, args: &[String]) -> Result<(), String> {
+    println!("[addon] Starting binary: {} {:?} ...", binary_path, args);
+    let mut cmd = tokio::process::Command::new(binary_path);
+    cmd.args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    // Fallback: check common npm prefix
-    if let Ok(output) = std::process::Command::new("npm").args(["config", "get", "prefix"]).output() {
-        if output.status.success() {
-            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let npx_cmd = std::path::Path::new(&prefix).join("npx.cmd");
-            if npx_cmd.exists() {
-                return Some(npx_cmd.to_string_lossy().to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Start an addon process (binary or npm) and store it globally.
-/// If binary_path is set, spawn the binary directly with CREATE_NO_WINDOW.
-/// Otherwise, fall back to npx spawning.
-async fn spawn_addon_child(package: &str, args: &[String]) -> Result<(), String> {
-    spawn_addon_child_with_binary(package, args, None).await
-}
-
-async fn spawn_addon_child_with_binary(package: &str, args: &[String], binary_path: Option<&str>) -> Result<(), String> {
-    let mut npx_args = vec![package.to_string()];
-    npx_args.extend(args.iter().cloned());
-
-    println!("[addon:{}] Starting npx --yes {} ...", package, npx_args.join(" "));
-
-    // If a binary path is provided, spawn it directly with CREATE_NO_WINDOW
-    if let Some(bp) = binary_path {
-        println!("[addon:{}] Using binary: {}", package, bp);
-        let mut cmd = tokio::process::Command::new(bp);
-        cmd.args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let mut child = cmd.spawn()
-            .map_err(|e| format!("Failed to start binary '{}': {}", bp, e))?;
-
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        // Log stdout
-        let pkg_log = package.to_string();
-        if let Some(stdout) = stdout {
-            use tokio::io::AsyncBufReadExt;
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut line = String::new();
-            tokio::spawn(async move {
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => println!("[addon:{}] stdout: {}", pkg_log, line.trim()),
-                    }
-                }
-            });
-        }
-        // Log stderr
-        let pkg_log2 = package.to_string();
-        if let Some(stderr) = stderr {
-            use tokio::io::AsyncBufReadExt;
-            let mut reader = tokio::io::BufReader::new(stderr);
-            let mut line = String::new();
-            tokio::spawn(async move {
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => println!("[addon:{}] stderr: {}", pkg_log2, line.trim()),
-                    }
-                }
-            });
-        }
-        if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
-            *proc = Some(child);
-        }
-        std::mem::forget(stdin);
-        println!("[addon:{}] Binary process started", package);
-        return Ok(());
-    }
-
-    // On Windows, find npx.cmd path and spawn directly (no cmd.exe wrapper)
-    // to avoid CREATE_NO_WINDOW breaking cmd.exe's pipe forwarding to Node
-    let npx_path = if cfg!(target_os = "windows") {
-        find_npx_path().unwrap_or_else(|| "npx".to_string())
-    } else {
-        "npx".to_string()
-    };
-
-    let mut child = {
-        use std::process::Stdio;
-        let mut cmd = tokio::process::Command::new(&npx_path);
-        cmd.arg("--yes")
-            .args(&npx_args)
-            .env("npm_config_yes", "true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        cmd.spawn()
-            .map_err(|e| format!("Failed to start '{}': {}", package, e))?
-    };
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to start binary '{}': {}", binary_path, e))?;
 
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Log stdout/stderr
-    let pkg_log = package.to_string();
+    // Log stdout
     if let Some(stdout) = stdout {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stdout);
@@ -15965,12 +15823,12 @@ async fn spawn_addon_child_with_binary(package: &str, args: &[String], binary_pa
                 line.clear();
                 match reader.read_line(&mut line).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => println!("[addon:{}] {}", pkg_log, line.trim()),
+                    Ok(_) => println!("[addon] stdout: {}", line.trim()),
                 }
             }
         });
     }
-    let pkg_log2 = package.to_string();
+    // Log stderr
     if let Some(stderr) = stderr {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stderr);
@@ -15980,32 +15838,29 @@ async fn spawn_addon_child_with_binary(package: &str, args: &[String], binary_pa
                 line.clear();
                 match reader.read_line(&mut line).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => println!("[addon:{}] stderr: {}", pkg_log2, line.trim()),
+                    Ok(_) => println!("[addon] stderr: {}", line.trim()),
                 }
             }
         });
     }
-
     if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
         *proc = Some(child);
     }
     std::mem::forget(stdin);
-
-    println!("[addon:{}] Process started and stored globally", package);
+    println!("[addon] Binary process started");
     Ok(())
 }
 
-async fn start_npm_addon_process(package: &str, args: &[String], binary_path: Option<String>) -> Result<(), String> {
-    spawn_addon_child_with_binary(package, args, binary_path.as_deref()).await?;
+async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), String> {
+    spawn_addon_child(binary_path, args).await?;
 
     // Watchdog: restart addon if it dies (only one watchdog thread)
-    let pkg_owned = package.to_string();
+    let bp_owned = binary_path.to_string();
     let args_owned = args.to_vec();
-    let bp_owned = binary_path.clone();
     let should_spawn_watchdog = ADDON_WATCHDOG_RUNNING.lock().map(|mut guard| {
         if *guard { false } else { *guard = true; true }
     }).unwrap_or_else(|e| {
-        eprintln!("[addon:{}] Watchdog lock poisoned: {}", package, e);
+        eprintln!("[addon] Watchdog lock poisoned: {}", e);
         true
     });
     if should_spawn_watchdog {
@@ -16016,13 +15871,13 @@ async fn start_npm_addon_process(package: &str, args: &[String], binary_path: Op
                     if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
                         match proc.as_mut().map(|c| c.try_wait()) {
                             Some(Ok(Some(status))) => {
-                                println!("[addon:{}] Process exited with {}, will restart...", pkg_owned, status);
+                                println!("[addon] Process exited with {}, will restart...", status);
                                 *proc = None;
                                 true
                             }
                             Some(Ok(None)) => false,
                             _ => {
-                                println!("[addon:{}] No process found, will restart...", pkg_owned);
+                                println!("[addon] No process found, will restart...");
                                 true
                             }
                         }
@@ -16031,12 +15886,12 @@ async fn start_npm_addon_process(package: &str, args: &[String], binary_path: Op
                     }
                 };
                 if needs_restart {
-                    println!("[addon:{}] Restarting in 2s...", pkg_owned);
+                    println!("[addon] Restarting in 2s...");
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     let rt = tokio::runtime::Runtime::new().unwrap();
-                    match rt.block_on(spawn_addon_child_with_binary(&pkg_owned, &args_owned, bp_owned.as_deref())) {
-                        Ok(_) => println!("[addon:{}] Restarted successfully", pkg_owned),
-                        Err(e) => println!("[addon:{}] Restart failed: {}", pkg_owned, e),
+                    match rt.block_on(spawn_addon_child(&bp_owned, &args_owned)) {
+                        Ok(_) => println!("[addon] Restarted successfully"),
+                        Err(e) => println!("[addon] Restart failed: {}", e),
                     }
                 }
             }
@@ -16046,152 +15901,6 @@ async fn start_npm_addon_process(package: &str, args: &[String], binary_path: Op
     Ok(())
 }
 
-/// Install an npm package and run it as an addon server.
-/// Accepts any npm package name and optional arguments.
-/// Reads stdout to find the URL the server started on.
-#[tauri::command]
-async fn install_npm_addon(
-    state: State<'_, AppState>,
-    package: String,
-    args: Vec<String>,
-) -> Result<config::AddonSource, String> {
-    if package.trim().is_empty() {
-        return Err("Package name cannot be empty".to_string());
-    }
-
-    let package = package.trim().to_string();
-
-    // Build npx args: <package> <args...>
-    let mut npx_args = vec![package.clone()];
-    npx_args.extend(args.clone());
-
-    // On Windows, find npx.cmd and spawn directly (no cmd.exe wrapper)
-    let npx_path = if cfg!(target_os = "windows") {
-        find_npx_path().unwrap_or_else(|| "npx".to_string())
-    } else {
-        "npx".to_string()
-    };
-
-    let mut child = {
-        use std::process::Stdio;
-        let mut cmd = tokio::process::Command::new(&npx_path);
-        cmd.arg("--yes")
-            .args(&npx_args)
-            .env("npm_config_yes", "true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        cmd.spawn()
-            .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
-    };
-
-    // Write "y" to stdin to accept disclaimer (backup for interactive prompts)
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(b"y\n").await;
-    }
-
-    // Merge stdout + stderr for URL detection (Node addons often print to stderr)
-    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
-    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
-    let mut stdout_reader = tokio::io::BufReader::new(stdout);
-    let mut stderr_reader = tokio::io::BufReader::new(stderr);
-    let mut found_url: Option<String> = None;
-    let url_regex = regex::Regex::new(r"https?://[^\s]+").unwrap();
-    let timeout = std::time::Duration::from_secs(30);
-    let start = std::time::Instant::now();
-
-    use tokio::io::AsyncBufReadExt;
-    let mut stdout_line = String::new();
-    let mut stderr_line = String::new();
-    loop {
-        if start.elapsed() > timeout {
-            break;
-        }
-        // Read from whichever stream has data first
-        let result = tokio::select! {
-            r = tokio::time::timeout(std::time::Duration::from_secs(2), stdout_reader.read_line(&mut stdout_line)) => Some(("stdout", r)),
-            r = tokio::time::timeout(std::time::Duration::from_secs(2), stderr_reader.read_line(&mut stderr_line)) => Some(("stderr", r)),
-            else => None,
-        };
-        let Some((source, result)) = result else { break };
-        let line = if source == "stdout" { &mut stdout_line } else { &mut stderr_line };
-        match result {
-            Ok(Ok(0)) => {
-                if source == "stdout" { break; } // EOF on stdout = process likely done
-                line.clear();
-                continue;
-            }
-            Ok(Ok(_)) => {
-                let trimmed = line.trim().to_string();
-                if !trimmed.is_empty() {
-                    println!("[install_npm_addon] [{}] {}", source, trimmed);
-                }
-                if let Some(m) = url_regex.find(&trimmed) {
-                    let url = m.as_str().to_string();
-                    if url.contains(':') && url.matches(':').count() >= 2 {
-                        found_url = Some(url);
-                        break;
-                    }
-                }
-                line.clear();
-            }
-            Ok(Err(e)) => {
-                println!("[install_npm_addon] {} read error: {}", source, e);
-                if source == "stdout" { break; }
-                line.clear();
-            }
-            Err(_) => {
-                line.clear();
-                continue;
-            }
-        }
-    }
-
-    match found_url {
-        Some(url) => {
-            // Clean up trailing chars (periods, commas, etc.)
-            let url = url.trim_end_matches(|c: char| c == '.' || c == ',' || c == ')').to_string();
-            println!("[install_npm_addon] Server detected at {}", url);
-            // Kill the discovery process (stdout pipe will close and kill it anyway)
-            let _ = child.kill().await;
-            // Restart the addon with null stdio so it stays alive
-            start_npm_addon_process(&package, &args, None).await?;
-            // Save source to config immediately (atomic install+save)
-            let source = config::AddonSource {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: package.clone(),
-                url: url.clone(),
-                enabled: true,
-                is_default: true,
-                npm_package: Some(package.clone()),
-                npm_args: args.clone(),
-                binary_path: None,
-            };
-            {
-                let mut config = state.config.lock().map_err(|e| e.to_string())?;
-                // Remove any existing source with the same npm_package to prevent duplicates
-                config.addon_sources.retain(|s| s.npm_package.as_deref() != Some(&package));
-                config.addon_sources.push(source.clone());
-                config.addon_url = Some(url);
-                config::save_config(&config).map_err(|e| e.to_string())?;
-            }
-            Ok(source)
-        }
-        None => {
-            let _ = child.kill().await;
-            Err(format!(
-                "Package '{}' started but no server URL detected in output after 30 seconds.",
-                package
-            ))
-        }
-    }
-}
 
 #[tauri::command]
 fn remote_clear_streams_cache() -> Result<(), String> {
@@ -16452,38 +16161,18 @@ fn main() {
                 }
             }
 
-            // Auto-start npm addon sources on app launch
+            // Auto-start binary addon sources on app launch
             let mut addon_started = false;
             for source in &config.addon_sources {
-                if let Some(ref pkg) = source.npm_package {
-                    let pkg = pkg.clone();
-                    let args = source.npm_args.clone();
-                    let url = source.url.clone();
-                    let bp = source.binary_path.clone();
-                    println!("[STARTUP] Auto-starting addon from npm package: {} (url: {})", pkg, url);
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async {
-                            match start_npm_addon_process(&pkg, &args, bp).await {
-                                Ok(_) => println!("[STARTUP] Addon started successfully"),
-                                Err(e) => println!("[STARTUP] Failed to start addon: {}", e),
-                            }
-                        });
-                    });
-                    addon_started = true;
-                    break;
-                }
-                // Also handle binary_path-only sources (Go binary, no npm_package)
-                if source.binary_path.is_some() && source.npm_package.is_none() {
-                    let bp = source.binary_path.clone().unwrap();
+                if let Some(ref bp) = source.binary_path {
+                    let bp = bp.clone();
                     let url = source.url.clone();
                     println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async {
-                            match start_npm_addon_process("addon-binary", &[], Some(bp)).await {
+                            match start_addon_process(&bp, &[]).await {
                                 Ok(_) => println!("[STARTUP] Binary addon started successfully"),
                                 Err(e) => println!("[STARTUP] Failed to start binary addon: {}", e),
                             }
@@ -16493,7 +16182,7 @@ fn main() {
                     break;
                 }
             }
-            // Fallback: if addon_url is localhost and addon_sources has no npm_package,
+            // Fallback: if addon_url is localhost and no binary source was started,
             // probe the port. If down, log a clear message.
             if !addon_started {
                 if let Some(ref url) = config.addon_url {
@@ -16824,10 +16513,8 @@ fn main() {
             remove_addon_source,
             check_addon_server,
             set_active_source,
-            check_npx_package,
             toggle_addon_source,
             auto_setup_addon,
-            install_npm_addon,
             install_addon_binary,
             remove_addon_binary,
             remote_clear_streams_cache,

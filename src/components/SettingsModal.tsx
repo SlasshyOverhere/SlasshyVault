@@ -122,8 +122,7 @@ interface AddonSource {
   url: string;
   enabled: boolean;
   is_default: boolean;
-  npm_package?: string;
-  npm_args?: string[];
+  binary_path?: string;
 }
 
 function AddonSourcesManager() {
@@ -269,85 +268,6 @@ function AddonSourcesManager() {
         </button>
       </div>
 
-      {/* Install from npm */}
-      <NpmAddonInstaller onInstalled={loadSources} />
-    </div>
-  );
-}
-
-function NpmAddonInstaller({ onInstalled }: { onInstalled: () => void }) {
-  const { toast } = useToast();
-  const [npmPackage, setNpmPackage] = useState("");
-  const [npmArgs, setNpmArgs] = useState("--yes");
-  const [installing, setInstalling] = useState(false);
-
-  const handleInstall = useCallback(async () => {
-    if (!npmPackage.trim()) return;
-    setInstalling(true);
-    try {
-      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : [];
-      const source = await invoke<any>("install_npm_addon", {
-        package: npmPackage.trim(),
-        args,
-      });
-      // Add the detected source to config
-      await invoke("add_addon_source", { name: source.name, url: source.url, npmPackage: source.npm_package, npmArgs: source.npm_args });
-      onInstalled();
-      toast({
-        title: "Addon installed & running",
-        description: `${source.name} is running at ${source.url}`,
-      });
-      setNpmPackage("");
-    } catch (e: any) {
-      toast({
-        title: "Installation failed",
-        description: e?.message || String(e),
-        variant: "destructive",
-      });
-    } finally {
-      setInstalling(false);
-    }
-  }, [npmPackage, npmArgs, onInstalled, toast]);
-
-  return (
-    <div className="p-4 rounded-xl bg-card border border-border space-y-3">
-      <div className="flex items-center gap-2">
-        <Label className="text-sm font-medium">Install from npm</Label>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 uppercase tracking-wider">
-          Auto-start
-        </span>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Enter an npm package name. The app will install and run it automatically.
-      </p>
-      <Input
-        placeholder="npm package name"
-        value={npmPackage}
-        onChange={(e) => setNpmPackage(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") handleInstall(); }}
-        className="h-9"
-      />
-      <Input
-        placeholder="Arguments (e.g. --yes)"
-        value={npmArgs}
-        onChange={(e) => setNpmArgs(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") handleInstall(); }}
-        className="h-9"
-      />
-      <button
-        onClick={handleInstall}
-        disabled={!npmPackage.trim() || installing}
-        className="w-full h-9 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors flex items-center justify-center gap-2"
-      >
-        {installing ? (
-          <>
-            <Loader2 className="size-3.5 animate-spin" />
-            Installing & starting...
-          </>
-        ) : (
-          "Install & Run"
-        )}
-      </button>
     </div>
   );
 }
