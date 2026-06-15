@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, memo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
+import { open } from '@tauri-apps/api/dialog'
 import { listen } from '@tauri-apps/api/event'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
@@ -764,7 +765,6 @@ function RemoteSourceViewInner() {
   const [npmArgs, setNpmArgs] = useState('--yes')
   const [npmInstalling, setNpmInstalling] = useState(false)
   const [binaryInstalling, setBinaryInstalling] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Binary install handler (Go binary drag-and-drop)
   const handleBinaryInstall = useCallback(async (filePath: string) => {
@@ -852,23 +852,16 @@ function RemoteSourceViewInner() {
                 <span className="text-xs text-neutral-600">or use a binary</span>
                 <div className="flex-1 h-px bg-neutral-800" />
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".exe"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) {
-                    // Tauri file input gives us the full path via webkitRelativePath or tauri://file-drop
-                    // Use the file name to construct path — Tauri's file dialog returns full paths
-                    const path = (file as any).path || file.name
-                    handleBinaryInstall(path)
+              <button
+                onClick={async () => {
+                  const selected = await open({
+                    multiple: false,
+                    filters: [{ name: 'Executable', extensions: ['exe'] }]
+                  })
+                  if (selected && typeof selected === 'string') {
+                    handleBinaryInstall(selected)
                   }
                 }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
                 disabled={binaryInstalling}
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => {
