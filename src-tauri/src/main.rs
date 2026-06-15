@@ -15500,34 +15500,29 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
     let mut npx_args = vec![package.to_string()];
     npx_args.extend(args.iter().cloned());
 
+    // ponytail: don't force PORT — addon picks its own; URL is stored from detection
     let mut child = if cfg!(target_os = "windows") {
-        let mut cmd_args = vec!["/c".to_string(), "npx".to_string()];
+        let mut cmd_args = vec!["/c".to_string(), "npx".to_string(), "--yes".to_string()];
         cmd_args.extend(npx_args.clone());
         tokio::process::Command::new("cmd")
             .args(&cmd_args)
-            .env("PORT", "11470")
-            .stdin(std::process::Stdio::piped())
+            .env("npm_config_yes", "true")
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to start '{}': {}", package, e))?
     } else {
         tokio::process::Command::new("npx")
+            .arg("--yes")
             .args(&npx_args)
-            .env("PORT", "11470")
-            .stdin(std::process::Stdio::piped())
+            .env("npm_config_yes", "true")
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to start '{}': {}", package, e))?
     };
-
-    // Write "y" to stdin to accept any disclaimer, then close stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(b"y\n").await;
-        // stdin drops here, closing the pipe (sends EOF)
-    }
 
     // Give it a moment to start
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -15541,6 +15536,40 @@ async fn start_npm_addon_process(package: &str, args: &[String]) -> Result<(), S
     }
 
     println!("[addon:{}] Process started on port 11470", package);
+
+    // Watchdog: restart addon if it dies
+    let pkg_owned = package.to_string();
+    let args_owned = args.to_vec();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let needs_restart = {
+                if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                    match proc.as_mut().map(|c| c.try_wait()) {
+                        Some(Ok(Some(status))) => {
+                            println!("[addon:{}] Process exited with {}, restarting...", pkg_owned, status);
+                            *proc = None;
+                            true
+                        }
+                        Some(Ok(None)) => false,
+                        _ => true,
+                    }
+                } else {
+                    false
+                }
+            };
+            if needs_restart {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                // Spawn a new tokio runtime for the async restart
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(start_npm_addon_process(&pkg_owned, &args_owned)) {
+                    Ok(_) => println!("[addon:{}] Restarted successfully", pkg_owned),
+                    Err(e) => eprintln!("[addon:{}] Restart failed: {}", pkg_owned, e),
+                }
+            }
+        }
+    });
+
     Ok(())
 }
 
@@ -15659,10 +15688,8 @@ async fn install_npm_addon(
             println!("[install_npm_addon] Server detected at {}", url);
             // Kill the discovery process (stdout pipe will close and kill it anyway)
             let _ = child.kill().await;
-            // Restart the addon with null stdio so it stays alive on port 11470
+            // Restart the addon with null stdio so it stays alive
             start_npm_addon_process(&package, &args).await?;
-            // Use fixed port 11470 since PORT env var is set
-            let url = "http://127.0.0.1:11470".to_string();
             Ok(config::AddonSource {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: package.clone(),
