@@ -585,6 +585,12 @@ impl Database {
                 [],
             )?;
         }
+        if !columns.contains(&"is_remote_library".to_string()) {
+            self.conn.execute(
+                "ALTER TABLE media ADD COLUMN is_remote_library INTEGER DEFAULT 0",
+                [],
+            )?;
+        }
 
         // Create cached_episode_metadata table for pre-fetched episode info from TMDB
         self.conn.execute(
@@ -3805,6 +3811,7 @@ impl Database {
              FROM media
              WHERE file_path LIKE 'remote://%'
                AND media_type IN ('movie', 'tvshow')
+               AND is_remote_library = 1
              ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
         )?;
 
@@ -3835,6 +3842,15 @@ impl Database {
             .into_iter()
             .map(Ok)
             .collect()
+    }
+
+    /// Set the is_remote_library flag for a media item.
+    pub fn set_remote_library_flag(&self, media_id: i64, in_library: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE media SET is_remote_library = ?1 WHERE id = ?2",
+            params![if in_library { 1 } else { 0 }, media_id],
+        )?;
+        Ok(())
     }
 
     /// Get all poster paths currently in use (including still_paths and cached episode images)

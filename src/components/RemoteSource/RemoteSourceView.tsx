@@ -9,7 +9,6 @@ import { RemoteMediaDetail } from './RemoteMediaDetail'
 import { RemoteQualitySelector } from './RemoteQualitySelector'
 import { RemoteCacheStatusBar } from './RemoteCacheStatusBar'
 import { RemoteCleanupDialog } from './RemoteCleanupDialog'
-import { ResumeDialog } from '@/components/ResumeDialog'
 import { Film, Play, X, Loader2, ArrowLeft, Check, Clock } from 'lucide-react'
 import type { TmdbSearchResult, GroupedStreams, RemoteStreamData, CacheStatus } from './remote.types'
 import { getYear } from './remote.types'
@@ -27,14 +26,6 @@ interface PlaybackEndedEvent {
   season_number: number | null
   episode_number: number | null
   title: string
-}
-
-interface ResumeDialogState {
-  open: boolean
-  mediaId: number
-  title: string
-  position: number
-  duration: number
 }
 
 type PageState = 'library' | 'search' | 'detail' | 'episodes'
@@ -192,9 +183,6 @@ function RemoteSourceViewInner() {
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState('')
 
   // Resume dialog
-  const [resumeDialog, setResumeDialog] = useState<ResumeDialogState>({ open: false, mediaId: 0, title: '', position: 0, duration: 0 })
-  const pendingStreamRef = useRef<{ stream: RemoteStreamData; identifier: string; startPosition: number; mediaId?: number } | null>(null)
-  const pendingFetchedStreamsRef = useRef<RemoteStreamData[] | null>(null)
 
   // Cache
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null)
@@ -392,44 +380,7 @@ function RemoteSourceViewInner() {
   const handleSelectResult = useCallback(async (item: TmdbSearchResult) => {
     setSelectedItem(item)
     setPageState('detail')
-    // Check for existing resume progress when selecting from search results
-    try {
-      const resumeInfo = await invoke<any>('remote_get_resume_info', {
-        tmdbId: item.id,
-        mediaType: item.media_type,
-        seasonNumber: item.media_type === 'tv' ? currentSeason : null,
-        episodeNumber: item.media_type === 'tv' ? currentEpisode : null,
-      })
-      if (resumeInfo.has_resume) {
-        const identifier = getMediaIdentifier(item, currentSeason, currentEpisode)
-        setResumeDialog({
-          open: true,
-          mediaId: resumeInfo.media_id,
-          title: item.title || item.name || 'Unknown',
-          position: resumeInfo.position,
-          duration: resumeInfo.duration,
-        })
-        pendingStreamRef.current = { stream: null as any, identifier, startPosition: resumeInfo.position, mediaId: resumeInfo.media_id }
-        // Fetch streams in background
-        const imdbId = item.imdb_id
-        if (imdbId) {
-          try {
-            const isTv = item.media_type === 'tv'
-            const streams = isTv
-              ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: currentSeason, episode: currentEpisode, forceRefresh: false })
-              : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
-            const flat = streams.flatMap((g) => g.streams)
-            if (flat.length > 0) {
-              pendingFetchedStreamsRef.current = flat
-              if (pendingStreamRef.current) {
-                pendingStreamRef.current.stream = flat[0]
-              }
-            }
-          } catch (e) { console.warn('[RemoteSourceView] handleSelectResult fetch streams:', e) }
-        }
-      }
-    } catch (e) { console.warn('[RemoteSourceView] handleSelectResult resume check:', e) }
-  }, [currentSeason, currentEpisode])
+  }, [])
 
   // Stream verification removed — causes rate limiting against addon servers.
   // All streams are shown as available without probing.
@@ -527,102 +478,31 @@ function RemoteSourceViewInner() {
   }, [toast, loadRemoteLibrary])
 
   // User selects a quality => check resume, maybe show dialog, then play
+  const isInLibrary = useCallback((item: TmdbSearchResult) => {
+    const tmdbId = String(item.id)
+    return remoteLibrary.some(lib => lib.tmdb_id === tmdbId && lib.media_type === (item.media_type === 'tv' ? 'tvshow' : 'movie'))
+  }, [remoteLibrary])
+
   const handleQualitySelect = useCallback(async (stream: RemoteStreamData) => {
     if (!selectedItem) return
     const identifier = getMediaIdentifier(selectedItem, currentSeason, currentEpisode)
     setQualityOpen(false)
-
-    // Check if there's existing resume progress for this content
-    try {
-      const resumeInfo = await invoke<any>('remote_get_resume_info', {
-        tmdbId: selectedItem.id,
-        mediaType: selectedItem.media_type,
-        seasonNumber: selectedItem.media_type === 'tv' ? currentSeason : null,
-        episodeNumber: selectedItem.media_type === 'tv' ? currentEpisode : null,
-      })
-      if (resumeInfo.has_resume) {
-        setResumeDialog({
-          open: true,
-          mediaId: resumeInfo.media_id,
-          title: selectedItem.title || selectedItem.name || 'Unknown',
-          position: resumeInfo.position,
-          duration: resumeInfo.duration,
+    // Auto-add to library if not already there
+    if (!isInLibrary(selectedItem)) {
+      try {
+        await invoke('remote_add_to_library', {
+          tmdbId: String(selectedItem.id),
+          title: selectedItem.title || selectedItem.name || '',
+          mediaType: selectedItem.media_type === 'tv' ? 'tv' : 'movie',
+          year: getYear(selectedItem.release_date || selectedItem.first_air_date) ? parseInt(getYear(selectedItem.release_date || selectedItem.first_air_date)) : null,
+          posterPath: selectedItem.poster_path || null,
+          overview: selectedItem.overview || null,
         })
-        pendingStreamRef.current = { stream, identifier, startPosition: resumeInfo.position, mediaId: resumeInfo.media_id }
-        return
-      }
-    } catch (e) {
-      console.warn('[RemoteSourceView] handleQualitySelect resume check:', e)
+        await loadRemoteLibrary()
+      } catch (e) { console.warn('[RemoteSourceView] auto-add to library:', e) }
     }
-
     launchPlayback(stream, identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
-  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, toast])
-
-  // Helper to get a stream for resume — uses cached streams or fetches on demand
-  const getStreamForResume = useCallback(async (item: TmdbSearchResult): Promise<RemoteStreamData | null> => {
-    // Check already-fetched streams first
-    if (pendingFetchedStreamsRef.current && pendingFetchedStreamsRef.current.length > 0) {
-      return pendingFetchedStreamsRef.current[0]
-    }
-    // Fetch streams on demand
-    try {
-      const imdbId = item.imdb_id
-      if (!imdbId) return null
-      const isTv = item.media_type === 'tv'
-      const streams = isTv
-        ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: currentSeason, episode: currentEpisode, forceRefresh: false })
-        : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
-      const flat = streams.flatMap((g) => g.streams)
-      return flat.length > 0 ? flat[0] : null
-    } catch (e) { console.warn('[RemoteSourceView] getStreamForResume:', e); return null }
-  }, [currentSeason, currentEpisode])
-
-  // Resume dialog handlers
-  const handleResume = useCallback(async () => {
-    const pending = pendingStreamRef.current
-    if (!pending || !selectedItem) return
-    setResumeDialog((prev) => ({ ...prev, open: false }))
-
-    let stream: RemoteStreamData | null = pending.stream
-    if (!stream) {
-      stream = await getStreamForResume(selectedItem)
-      if (!stream) {
-        toast({ title: 'No streams found', description: 'Could not find streams to resume playback.', variant: 'destructive' })
-        pendingStreamRef.current = null
-        pendingFetchedStreamsRef.current = null
-        return
-      }
-    }
-    launchPlayback(stream, pending.identifier, pending.startPosition, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
-    pendingStreamRef.current = null
-    pendingFetchedStreamsRef.current = null
-  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, getStreamForResume, toast])
-
-  const handleStartOver = useCallback(async () => {
-    const pending = pendingStreamRef.current
-    if (!pending || !selectedItem) return
-    setResumeDialog((prev) => ({ ...prev, open: false }))
-
-    try {
-      if (pending.mediaId) {
-        await invoke('remote_clear_progress', { mediaId: pending.mediaId })
-      }
-    } catch (e) { console.warn('[RemoteSourceView] handleStartOver clear_progress:', e) }
-
-    let stream: RemoteStreamData | null = pending.stream
-    if (!stream) {
-      stream = await getStreamForResume(selectedItem)
-      if (!stream) {
-        toast({ title: 'No streams found', description: 'Could not find streams to start playback.', variant: 'destructive' })
-        pendingStreamRef.current = null
-        pendingFetchedStreamsRef.current = null
-        return
-      }
-    }
-    launchPlayback(stream, pending.identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
-    pendingStreamRef.current = null
-    pendingFetchedStreamsRef.current = null
-  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, getStreamForResume, toast])
+  }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, isInLibrary, loadRemoteLibrary])
 
   const handleCleanup = useCallback(async () => {
     try {
@@ -668,42 +548,6 @@ function RemoteSourceViewInner() {
     setSelectedItem(searchItem)
     setPageState('detail')
     setShowCleanup(false) // Dismiss cleanup dialog if open
-
-    // If item has resume progress, show resume dialog immediately
-    const hasProgress = item.resume_position_seconds > 0 && item.duration_seconds > 0
-    if (hasProgress) {
-      const identifier = getMediaIdentifier(searchItem, item.season_number ?? undefined, item.episode_number ?? undefined)
-      // Set episode context so title formatting works
-      if (item.season_number != null) setCurrentSeason(item.season_number)
-      if (item.episode_number != null) setCurrentEpisode(item.episode_number)
-      if (item.episode_title) setCurrentEpisodeTitle(item.episode_title)
-      setResumeDialog({
-        open: true,
-        mediaId: item.id,
-        title: item.title || 'Unknown',
-        position: item.resume_position_seconds,
-        duration: item.duration_seconds,
-      })
-      pendingStreamRef.current = { stream: null as any, identifier, startPosition: item.resume_position_seconds, mediaId: item.id }
-      // Fetch streams in background so handleResume can use them
-      const imdbId = searchItem.imdb_id
-      if (imdbId) {
-        try {
-          const isTv = item.media_type === 'tvshow' || item.media_type === 'tv'
-          const streams = isTv
-            ? await invoke<GroupedStreams[]>('remote_get_series_streams', { imdbId, season: item.season_number ?? 1, episode: item.episode_number ?? 1, forceRefresh: false })
-            : await invoke<GroupedStreams[]>('remote_get_movie_streams', { imdbId, forceRefresh: false })
-          const flat = streams.flatMap((g) => g.streams)
-          if (flat.length > 0) {
-            pendingFetchedStreamsRef.current = flat
-            // Update the pending ref with the best stream
-            if (pendingStreamRef.current) {
-              pendingStreamRef.current.stream = flat[0]
-            }
-          }
-        } catch (e) { console.warn('[RemoteSourceView] handleLibraryCardClick fetch streams:', e) }
-      }
-    }
 
     // Fetch fresh TMDB details in the background to enrich poster/backdrop
     try {
@@ -757,23 +601,6 @@ function RemoteSourceViewInner() {
     if (episode.episode_title) setCurrentEpisodeTitle(episode.episode_title)
     setSelectedItem(showSearchItem)
     setPageState('detail')
-    // If episode has resume progress, show resume dialog
-    const hasProgress = episode.resume_position_seconds > 0 && episode.duration_seconds > 0
-    if (hasProgress) {
-      setResumeDialog({
-        open: true,
-        mediaId: episode.id,
-        title: `${selectedShow.title} S${episode.season_number}E${episode.episode_number}`,
-        position: episode.resume_position_seconds,
-        duration: episode.duration_seconds,
-      })
-      pendingStreamRef.current = {
-        stream: null as any,
-        identifier: getMediaIdentifier(showSearchItem, episode.season_number ?? undefined, episode.episode_number ?? undefined),
-        startPosition: episode.resume_position_seconds,
-        mediaId: episode.id,
-      }
-    }
     // Fetch streams in background
     const imdbId = showSearchItem.imdb_id
     if (imdbId) {
@@ -786,8 +613,6 @@ function RemoteSourceViewInner() {
         })
         const flat = streams.flatMap((g) => g.streams)
         if (flat.length > 0) {
-          pendingFetchedStreamsRef.current = flat
-          if (pendingStreamRef.current) pendingStreamRef.current.stream = flat[0]
         }
       } catch (e) { console.warn('[RemoteSourceView] handleEpisodeClick fetch streams:', e) }
     }
@@ -800,17 +625,10 @@ function RemoteSourceViewInner() {
     setGroupedStreams([])
     setStreamError(null)
     setQualityOpen(false)
-    setResumeDialog((prev) => ({ ...prev, open: false }))
-    pendingStreamRef.current = null
-    pendingFetchedStreamsRef.current = null
     setPageState(searchQuery ? 'search' : 'library')
   }, [searchQuery])
 
   // Check if a TMDB item is already in the library
-  const isInLibrary = useCallback((item: TmdbSearchResult) => {
-    const tmdbId = String(item.id)
-    return remoteLibrary.some(lib => lib.tmdb_id === tmdbId && lib.media_type === (item.media_type === 'tv' ? 'tvshow' : 'movie'))
-  }, [remoteLibrary])
 
   // Add content to library without playing
   const [addingToLibrary, setAddingToLibrary] = useState(false)
@@ -1006,43 +824,57 @@ function RemoteSourceViewInner() {
                     <h3 className="text-[11px] font-bold uppercase tracking-widest text-neutral-500 mb-3">
                       Season {seasonNum}
                     </h3>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {grouped[seasonNum].map((ep) => {
                         const progress = ep.duration_seconds > 0 ? Math.min(100, (ep.resume_position_seconds / ep.duration_seconds) * 100) : 0
                         const isCompleted = progress >= 90
                         const inProgress = ep.resume_position_seconds > 0 && !isCompleted
+                        const stillUrl = ep.poster_path
+                          ? ep.poster_path.startsWith('http') ? ep.poster_path
+                          : ep.poster_path.startsWith('/') ? `https://image.tmdb.org/t/p/w185${ep.poster_path}`
+                          : null : null
                         return (
                           <button
                             key={ep.id}
                             onClick={() => handleEpisodeClick(ep)}
-                            className="w-full flex items-center gap-4 px-4 py-3 rounded-lg bg-neutral-900/50 border border-neutral-800/40 hover:border-neutral-700/60 hover:bg-neutral-900/80 transition-all text-left group"
+                            className="w-full flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all text-left group"
                           >
-                            <div className="shrink-0 w-8 text-center">
-                              {isCompleted ? (
-                                <Check className="size-4 text-emerald-500 mx-auto" />
-                              ) : inProgress ? (
-                                <Clock className="size-4 text-amber-500 mx-auto" />
+                            <div className="shrink-0 w-full sm:w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
+                              {stillUrl ? (
+                                <img src={stillUrl} alt={ep.episode_title || ''} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                               ) : (
-                                <span className="text-sm font-bold text-neutral-600">{ep.episode_number}</span>
+                                <div className="w-full h-full flex items-center justify-center"><Film className="size-5 text-neutral-400" /></div>
                               )}
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-sm font-medium truncate ${isCompleted ? 'text-neutral-500' : 'text-neutral-200'}`}>
-                                {ep.episode_title || `Episode ${ep.episode_number}`}
-                              </p>
-                              {ep.duration_seconds > 0 && (
-                                <p className="text-[10px] text-neutral-600 mt-0.5">
-                                  {Math.floor(ep.duration_seconds / 60)}m
-                                </p>
-                              )}
-                            </div>
-                            {inProgress && (
-                              <div className="w-20 h-1 rounded-full bg-neutral-800 overflow-hidden">
-                                <div className="h-full bg-amber-500/70 rounded-full" style={{ width: `${progress}%` }} />
+                            <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-bold text-neutral-400 tabular-nums shrink-0">
+                                  S{String(seasonNum).padStart(2, '0')} &middot; E{String(ep.episode_number ?? 0).padStart(2, '0')}
+                                </span>
+                                <h3 className={`text-sm font-semibold truncate ${isCompleted ? 'text-neutral-500' : 'text-neutral-200'}`}>
+                                  {ep.episode_title || `Episode ${ep.episode_number}`}
+                                </h3>
+                                {isCompleted && <Check className="size-3.5 text-emerald-500 shrink-0" />}
+                                {inProgress && <Clock className="size-3.5 text-amber-500 shrink-0" />}
                               </div>
-                            )}
-                            <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Play className="size-4 text-neutral-400" />
+                              {ep.overview && (
+                                <p className="text-xs text-neutral-300 leading-relaxed line-clamp-2">{ep.overview}</p>
+                              )}
+                              <div className="flex items-center gap-3 mt-0.5">
+                                {ep.duration_seconds > 0 && (
+                                  <span className="text-[10px] text-neutral-600">{Math.floor(ep.duration_seconds / 60)}m</span>
+                                )}
+                                {inProgress && (
+                                  <div className="flex-1 max-w-32 h-1 rounded-full bg-neutral-800 overflow-hidden">
+                                    <div className="h-full bg-amber-500/70 rounded-full" style={{ width: `${progress}%` }} />
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="shrink-0 flex items-center">
+                              <div className="size-10 flex items-center justify-center rounded-xl bg-white/10 border border-white/15 text-neutral-200 hover:bg-white/20 hover:text-white hover:border-white/25 transition-all opacity-0 group-hover:opacity-100">
+                                <Play className="size-4 fill-current" />
+                              </div>
                             </div>
                           </button>
                         )
@@ -1233,19 +1065,6 @@ function RemoteSourceViewInner() {
         streamStatus={{}}
       />
 
-      {/* Resume Dialog */}
-      <ResumeDialog
-        open={resumeDialog.open}
-        onOpenChange={(open) => setResumeDialog((prev) => ({ ...prev, open }))}
-        title={resumeDialog.title}
-        mediaType={selectedItem?.media_type === 'tv' ? 'tvepisode' : 'movie'}
-        seasonEpisode={selectedItem?.media_type === 'tv' ? `S${currentSeason}E${currentEpisode}` : undefined}
-        currentPosition={resumeDialog.position}
-        duration={resumeDialog.duration}
-        posterUrl={selectedItem?.poster_path ? `https://image.tmdb.org/t/p/w154${selectedItem.poster_path}` : undefined}
-        onResume={handleResume}
-        onStartOver={handleStartOver}
-      />
 
       {/* Next Episode Prompt */}
       {nextEpisodePrompt.show && selectedItem && (

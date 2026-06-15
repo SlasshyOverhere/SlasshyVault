@@ -176,7 +176,7 @@ fn create_lua_script(media_id: i64) -> Result<PathBuf, String> {
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
-            eprintln!("[MPV] Warning: Failed to set Lua script permissions: {}", e);
+            println!("[MPV] Warning: Failed to set Lua script permissions: {}", e);
         }
     }
 
@@ -583,8 +583,10 @@ pub fn monitor_mpv_and_save_progress(
         // Periodically check progress and save to database
         if let Some(progress) = read_mpv_progress(media_id) {
             if progress.duration > 0.0 {
-                // Save to database silently
-                let _ = db.update_progress(media_id, progress.position, progress.duration);
+                // Save to database
+                if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
+                    println!("[MPV] Failed to update progress during playback: {}", e);
+                }
             }
         }
     }
@@ -604,7 +606,9 @@ pub fn monitor_mpv_and_save_progress(
         // Save final progress to database, but ONLY if we have a valid duration
         // This prevents overwriting valid progress with 0s if MPV crashed or didn't load the file
         if progress.duration > 0.0 {
-            let _ = db.update_progress(media_id, progress.position, progress.duration);
+            if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
+                println!("[MPV] Failed to save final progress: {}", e);
+            }
         } else {
             println!("[MPV] Warning: Invalid duration (0.0), skipping final DB update to preserve existing data");
         }
@@ -899,7 +903,7 @@ fn create_sync_lua_script(media_id: i64, session_id: &str) -> Result<PathBuf, St
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) = fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o600)) {
-            eprintln!("[MPV] Warning: Failed to set sync Lua script permissions: {}", e);
+            println!("[MPV] Warning: Failed to set sync Lua script permissions: {}", e);
         }
     }
 

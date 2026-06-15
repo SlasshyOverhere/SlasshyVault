@@ -14971,203 +14971,53 @@ async fn remote_play_with_mpv(
         title, quality_label, media_type, tmdb_id
     );
 
-    // ── 1. Create/get DB records ──
-    let tmdb_str = tmdb_id.to_string();
-    let poster_str = poster_path.as_deref();
-    let overview_str = overview.as_deref();
-    let still_str = still_path.as_deref();
-    let ep_title_str = episode_title.as_deref();
+    // ponytail: external sources are HTTP 200 (no range/seek), so no resume, no tracking, no DB, no cache
+    // Just fire MPV and emit ended event when it exits
 
-    // Normalize media_type: DB stores "tvshow"/"tvepisode", frontend may send those too
-    let normal_media_type = if media_type == "tvshow" || media_type == "tvepisode" {
-        "tv".to_string()
-    } else if media_type == "movie" {
-        "movie".to_string()
-    } else {
-        media_type.clone()
-    };
+    // Launch MPV with the URL directly — no Lua script, no progress tracking
+    let mut cmd = std::process::Command::new(mpv_path);
+    cmd.arg(&url);
+    cmd.arg(format!("--force-media-title={}", title));
+    cmd.arg("--cache=yes");
+    cmd.arg("--demuxer-max-bytes=500MiB");
+    cmd.arg("--network-timeout=30");
+    cmd.arg("--save-position-on-quit=no");
+    cmd.arg("--keep-open=no");
+    cmd.arg("--");
 
-    let (media_id, resume_info) = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-
-        if normal_media_type == "tv" {
-            let show_id = db.insert_or_get_remote_tvshow(
-                &tmdb_str, &title, year, poster_str, overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let ep_id = db.insert_or_get_remote_episode(
-                show_id,
-                season_number.unwrap_or(1),
-                episode_number.unwrap_or(1),
-                &title,
-                ep_title_str,
-                still_str,
-                overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let info = db.get_resume_info(ep_id).map_err(|e| e.to_string())?;
-            (ep_id, info)
-        } else {
-            let movie_id = db.insert_or_get_remote_movie(
-                &tmdb_str, &title, year, poster_str, overview_str,
-            ).map_err(|e| e.to_string())?;
-
-            let info = db.get_resume_info(movie_id).map_err(|e| e.to_string())?;
-            (movie_id, info)
-        }
-    };
-
-    println!(
-        "[REMOTE-MPV] DB media_id={}, resume={}, position={:.1}s / {:.1}s",
-        media_id, resume_info.has_progress, resume_info.position, resume_info.duration
-    );
-
-    // ── 2. Cache path ──
-    let cache_root = match config.zip_cache_dir.as_deref() {
-        Some(d) if !d.is_empty() => std::path::PathBuf::from(d),
-        _ => database::get_app_data_dir().join("stream_cache"),
-    };
-
-    // Human-readable folder name: "Movie Name" or "Show Name S01E03"
-    let folder_name = {
-        let sanitized: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect();
-        let sanitized = sanitized.trim().to_string();
-        if normal_media_type == "tv" {
-            let s = season_number.unwrap_or(0);
-            let e = episode_number.unwrap_or(0);
-            format!("{}_S{:02}E{:02}", sanitized, s, e)
-        } else {
-            sanitized
-        }
-    };
-    let cache_subdir = cache_root.join(format!("remote_{}", folder_name));
-    std::fs::create_dir_all(&cache_subdir)
-        .map_err(|e| format!("Failed to create cache dir: {}", e))?;
-
-    let cache_path = cache_subdir.join("video.mp4");
-    let already_cached = cache_path.exists();
-
-    println!(
-        "[REMOTE-MPV] Cache path: {} (exists: {})",
-        cache_path.display(),
-        already_cached
-    );
-
-    // ── 3. Track with CacheManager ──
+    #[cfg(target_os = "windows")]
     {
-        let mut active = state.cache_manager.lock_active()?;
-        let target_path_str = cache_path.to_string_lossy().to_string();
-        active.insert(
-            media_identifier.clone(),
-            stream_cache::ActiveCache {
-                cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                status: stream_cache::CacheStatus {
-                    cache_key: media_identifier.clone(),
-                    state: stream_cache::CacheState::Idle,
-                    downloaded_bytes: if already_cached {
-                        cache_path.metadata().map(|m| m.len()).unwrap_or(0)
-                    } else {
-                        0
-                    },
-                    total_bytes: video_size.max(1) as u64,
-                    speed_bytes_per_second: 0.0,
-                    target_path: target_path_str.clone(),
-                },
-            },
-        );
-        drop(active);
-
-        if already_cached {
-            let status = stream_cache::CacheStatus {
-                cache_key: media_identifier.clone(),
-                state: stream_cache::CacheState::Cached { path: target_path_str.clone() },
-                downloaded_bytes: video_size.max(1) as u64,
-                total_bytes: video_size.max(1) as u64,
-                speed_bytes_per_second: 0.0,
-                target_path: target_path_str,
-            };
-            if let Err(e) = app_handle.emit_all("remote-cache-progress", &status) {
-                eprintln!("[REMOTE-MPV] Failed to emit cache-complete event: {}", e);
-            }
-        }
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    // ── 4. Pass URL directly to MPV — no proxy, no download, no cache ──
-    // MPV handles the addon proxy's 302 redirect to CDN on its own.
-    // Playback tracking is done via the Lua script (mpv_ipc).
-    let source = url.clone();
-    let cache_settings = None;
-    let is_own_proxy = false; // no proxy used
+    let mut child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to launch MPV: {}", e))?;
 
-    // ── 5. Launch MPV with tracking ──
-    let start_pos = start_position.max(0.0);
+    println!("[REMOTE-MPV] Launched MPV (PID: {}) for '{}'", child.id(), title);
 
-    let pid = mpv_ipc::launch_mpv_with_tracking(
-        mpv_path,
-        &source,
-        media_id,
-        Some(&title),
-        start_pos,
-        None, // no auth header
-        cache_settings.as_ref(),
-        None, // no audio language
-        None, // no subtitle language
-        None, // no ipc server
-        Some(video_size),
-        None, // no duration override
-    )
-    .map_err(|e| format!("Failed to launch MPV with tracking: {}", e))?;
-
-    // ── 6. Background: playback progress tracking only (no proxy, no cache) ──
+    // Background thread: wait for MPV to exit, emit ended event
     let title_clone = title.clone();
     let app_clone = app_handle.clone();
-    let db_path = database::get_app_data_dir()
-        .join("slasshyvault.db")
-        .to_string_lossy()
-        .to_string();
-    let is_tv = normal_media_type == "tv";
-    let tmdb_id_clone = tmdb_id;
-    let season_clone = season_number;
-    let episode_clone = episode_number;
-
     std::thread::spawn(move || {
-        if let Ok(db) = database::Database::new(&db_path) {
-            let result = mpv_ipc::monitor_mpv_and_save_progress(&db, media_id, pid);
-
-            if result.final_position.is_some()
-                && result.final_duration.is_some()
-                && result.final_duration.unwrap_or(0.0) > 0.0
-            {
-                let _ = db.update_last_watched(media_id);
-            }
-
-            let _ = app_clone.emit_all(
-                "mpv-playback-ended",
-                serde_json::json!({
-                    "media_id": media_id,
-                    "completed": result.completed,
-                    "final_position": result.final_position,
-                    "final_duration": result.final_duration,
-                    "media_type": if is_tv { "tv" } else { "movie" },
-                    "tmdb_id": tmdb_id_clone,
-                    "season_number": season_clone,
-                    "episode_number": episode_clone,
-                    "title": title_clone,
-                }),
-            );
-        } else {
-            println!("[REMOTE-MPV] Failed to open database for progress tracking");
-        }
-
+        let _ = child.wait();
         println!("[REMOTE-MPV] Playback ended for '{}'", title_clone);
+        let _ = app_clone.emit_all("mpv-playback-ended", serde_json::json!({
+            "completed": false,
+            "title": title_clone,
+        }));
     });
 
     Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: resume_info.has_progress,
-        position: resume_info.position,
-        duration: resume_info.duration,
-        progress_percent: resume_info.progress_percent,
+        media_id: 0,
+        has_resume: false,
+        position: 0.0,
+        duration: 0.0,
+        progress_percent: 0.0,
     })
 }
 
@@ -15214,16 +15064,25 @@ async fn remote_get_resume_info(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let media_id = if media_type == "tv" {
         // Find the show first, then the episode
-        let show_id = db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
+        let show_id = match db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?;
-        db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        };
+        match db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        }
     } else {
-        db.find_media_by_tmdb_id(&tmdb_str, "movie")
+        match db.find_media_by_tmdb_id(&tmdb_str, "movie")
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "No record found".to_string())?
+        {
+            Some(id) => id,
+            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+        }
     };
     let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
     Ok(RemotePlaybackResponse {
@@ -15335,11 +15194,13 @@ async fn remote_add_to_library(
     overview: Option<String>,
 ) -> Result<i64, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    if media_type == "movie" {
+    let id = if media_type == "movie" {
         db.insert_or_get_remote_movie(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
     } else {
         db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
-    }.map_err(|e| e.to_string())
+    }.map_err(|e| e.to_string())?;
+    db.set_remote_library_flag(id, true).map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
 #[tauri::command]
