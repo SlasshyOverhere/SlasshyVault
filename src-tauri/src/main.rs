@@ -15681,7 +15681,6 @@ fn install_addon_binary(
     state: State<'_, AppState>,
     file_path: String,
     name: Option<String>,
-    port: Option<u16>,
 ) -> Result<config::AddonSource, String> {
     let src = std::path::Path::new(&file_path);
     if !src.exists() {
@@ -15710,11 +15709,10 @@ fn install_addon_binary(
     let dest = bin_dir.join(&dest_name);
     std::fs::copy(src, &dest).map_err(|e| format!("Cannot copy binary: {}", e))?;
 
-    let port_val = port.unwrap_or(51546);
-    let port_str = port_val.to_string();
     let dest_path = dest.to_string_lossy().to_string();
     let source_name = name.unwrap_or_else(|| "Custom Addon Binary".to_string());
-    let url = format!("http://127.0.0.1:{}", port_val);
+    // Go binary hardcodes port 51546
+    let url = "http://127.0.0.1:51546".to_string();
 
     let source = config::AddonSource {
         id: uuid::Uuid::new_v4().to_string(),
@@ -15737,11 +15735,11 @@ fn install_addon_binary(
     }
     config::save_config(&config).map_err(|e| e.to_string())?;
 
-    // Spawn the binary immediately with --port
+    // Spawn the binary immediately with --yes (auto-accept disclaimer)
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            match start_addon_process(&dest_path, &["--port".to_string(), port_str]).await {
+            match start_addon_process(&dest_path, &["--yes".to_string()]).await {
                 Ok(_) => println!("[addon] Binary started after install"),
                 Err(e) => eprintln!("[addon] Failed to start binary after install: {}", e),
             }
@@ -16227,16 +16225,7 @@ fn main() {
                     let bp = bp.clone();
                     let url = source.url.clone();
                     println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
-                    // Extract port from URL and pass --port arg
-                    let port_arg = url.split(':').last()
-                        .and_then(|p| p.parse::<u16>().ok())
-                        .map(|p| format!("--port"))
-                        .unwrap_or_default();
-                    let port_val = url.split(':').last()
-                        .and_then(|p| p.parse::<u16>().ok())
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "7000".to_string());
-                    let args: Vec<String> = if port_arg.is_empty() { vec![] } else { vec!["--port".to_string(), port_val] };
+                    let args: Vec<String> = vec!["--yes".to_string()];
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let rt = tokio::runtime::Runtime::new().unwrap();
