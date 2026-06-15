@@ -15762,8 +15762,7 @@ async fn spawn_addon_child(package: &str, args: &[String]) -> Result<(), String>
                 .env("npm_config_yes", "true")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .creation_flags(0x08000000); // CREATE_NO_WINDOW
+                .stderr(std::process::Stdio::piped());
             cmd.spawn()
                 .map_err(|e| format!("Failed to start '{}': {}", package, e))?
         }
@@ -15905,8 +15904,7 @@ async fn install_npm_addon(
                 .env("npm_config_yes", "true")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .creation_flags(0x08000000); // CREATE_NO_WINDOW
+                .stderr(std::process::Stdio::piped());
             cmd.spawn()
                 .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
         }
