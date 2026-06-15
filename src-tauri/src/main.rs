@@ -15674,22 +15674,22 @@ fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), Strin
 /// Check if npx/node is available on the system
 #[tauri::command]
 fn check_npx_package() -> Result<bool, String> {
-    let npx_check = if cfg!(target_os = "windows") {
+    let npx_path = if cfg!(target_os = "windows") {
+        find_npx_path().unwrap_or_else(|| "npx".to_string())
+    } else {
+        "npx".to_string()
+    };
+    let npx_check = {
+        let mut cmd = std::process::Command::new(&npx_path);
+        cmd.arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            let mut cmd = std::process::Command::new("cmd");
-            cmd.args(["/c", "npx", "--version"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .creation_flags(0x08000000); // CREATE_NO_WINDOW
-            cmd.status()
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-    } else {
-        std::process::Command::new("npx")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+        cmd.status()
     };
     match npx_check {
         Ok(status) => Ok(status.success()),
@@ -15742,6 +15742,33 @@ async fn auto_setup_addon() -> Result<Option<config::AddonSource>, String> {
     Ok(None)
 }
 
+/// Find the npx executable path on Windows by searching npm's bin directory.
+fn find_npx_path() -> Option<String> {
+    // Try `where npx` first
+    if let Ok(output) = std::process::Command::new("where").arg("npx").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout);
+            for line in path.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    // Fallback: check common npm prefix
+    if let Ok(output) = std::process::Command::new("npm").args(["config", "get", "prefix"]).output() {
+        if output.status.success() {
+            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let npx_cmd = std::path::Path::new(&prefix).join("npx.cmd");
+            if npx_cmd.exists() {
+                return Some(npx_cmd.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Start an npm addon process and store it globally.
 /// Stdin piped (kept alive so Windows cmd doesn't kill the child).
 /// Stdout piped to detect URL; stderr to null.
@@ -15752,29 +15779,29 @@ async fn spawn_addon_child(package: &str, args: &[String]) -> Result<(), String>
 
     println!("[addon:{}] Starting npx --yes {} ...", package, npx_args.join(" "));
 
-    let mut child = if cfg!(target_os = "windows") {
-        let mut cmd_args = vec!["/c".to_string(), "npx".to_string(), "--yes".to_string()];
-        cmd_args.extend(npx_args.clone());
-        {
-            use std::os::windows::process::CommandExt;
-            let mut cmd = tokio::process::Command::new("cmd");
-            cmd.args(&cmd_args)
-                .env("npm_config_yes", "true")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            cmd.spawn()
-                .map_err(|e| format!("Failed to start '{}': {}", package, e))?
-        }
+    // On Windows, find npx.cmd path and spawn directly (no cmd.exe wrapper)
+    // to avoid CREATE_NO_WINDOW breaking cmd.exe's pipe forwarding to Node
+    let npx_path = if cfg!(target_os = "windows") {
+        find_npx_path().unwrap_or_else(|| "npx".to_string())
     } else {
-        tokio::process::Command::new("npx")
-            .arg("--yes")
+        "npx".to_string()
+    };
+
+    let mut child = {
+        use std::process::Stdio;
+        let mut cmd = tokio::process::Command::new(&npx_path);
+        cmd.arg("--yes")
             .args(&npx_args)
             .env("npm_config_yes", "true")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd.spawn()
             .map_err(|e| format!("Failed to start '{}': {}", package, e))?
     };
 
@@ -15892,31 +15919,28 @@ async fn install_npm_addon(
     let mut npx_args = vec![package.clone()];
     npx_args.extend(args.clone());
 
-    // On Windows, use cmd /c to resolve npx from PATH
-    // --yes auto-accepts npx install prompts; npm_config_yes=true as fallback
-    let mut child = if cfg!(target_os = "windows") {
-        let mut cmd_args = vec!["/c".to_string(), "npx".to_string(), "--yes".to_string()];
-        cmd_args.extend(npx_args.clone());
-        {
-            use std::os::windows::process::CommandExt;
-            let mut cmd = tokio::process::Command::new("cmd");
-            cmd.args(&cmd_args)
-                .env("npm_config_yes", "true")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            cmd.spawn()
-                .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
-        }
+    // On Windows, find npx.cmd and spawn directly (no cmd.exe wrapper)
+    let npx_path = if cfg!(target_os = "windows") {
+        find_npx_path().unwrap_or_else(|| "npx".to_string())
     } else {
-        tokio::process::Command::new("npx")
-            .arg("--yes")
+        "npx".to_string()
+    };
+
+    let mut child = {
+        use std::process::Stdio;
+        let mut cmd = tokio::process::Command::new(&npx_path);
+        cmd.arg("--yes")
             .args(&npx_args)
             .env("npm_config_yes", "true")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd.spawn()
             .map_err(|e| format!("Failed to start npm package '{}': {}. Make sure Node.js and npm are installed.", package, e))?
     };
 
