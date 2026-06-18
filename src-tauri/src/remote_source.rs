@@ -358,3 +358,111 @@ pub fn format_file_size(bytes: i64) -> String {
     }
     format!("{:.2} {}", size, UNITS[unit_idx])
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamVerification {
+    pub url: String,
+    pub active: bool,
+}
+
+fn try_probe_range_get(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .get(url)
+        .header("Range", "bytes=0-1024")
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    let status = resp.status();
+    if !status.is_success() && status != 206 {
+        return None;
+    }
+
+    let ct = resp.headers().get("content-type")?.to_str().ok()?;
+    if ct.starts_with("video/")
+        || ct.starts_with("application/octet-stream")
+        || ct.starts_with("application/x-mpegURL")
+        || ct.starts_with("binary/")
+        || ct.contains("mp4")
+        || ct.contains("matroska")
+        || ct.contains("webm")
+    {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn try_probe_head(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .head(url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    if resp.status().is_success() || resp.status() == 206 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn try_probe_get_status(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    if resp.status().is_success() || resp.status() == 206 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn verify_single_url(url: &str) -> bool {
+    let client = crate::http_client::shared_client();
+
+    if let Some(result) = try_probe_range_get(client, url) {
+        return result;
+    }
+
+    if let Some(result) = try_probe_head(client, url) {
+        return result;
+    }
+
+    if let Some(result) = try_probe_get_status(client, url) {
+        return result;
+    }
+
+    false
+}
+
+pub fn verify_streams(urls: &[String]) -> Vec<StreamVerification> {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    let results = Arc::new(Mutex::new(Vec::with_capacity(urls.len())));
+    let mut handles = Vec::with_capacity(urls.len());
+
+    for url in urls {
+        let url = url.clone();
+        let results = Arc::clone(&results);
+
+        handles.push(thread::spawn(move || {
+            let active = verify_single_url(&url);
+            let mut res = results.lock().expect("verify_streams lock");
+            res.push(StreamVerification { url, active });
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    Arc::try_unwrap(results)
+        .expect("verify_streams arc unwrap")
+        .into_inner()
+        .expect("verify_streams mutex into_inner")
+}

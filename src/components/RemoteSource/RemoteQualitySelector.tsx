@@ -1,10 +1,8 @@
 import { useState, useMemo, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
-import { listen } from '@tauri-apps/api/event'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { useToast } from '@/components/ui/use-toast'
-import { HardDrive, Film, Subtitles, AudioLines, Monitor, Database, Plus, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
+import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -84,8 +82,6 @@ function parseStreamDescription(desc: string): ParsedMeta {
 
 const QUALITY_FILTERS: QualityFilter[] = ['all', '4K', '1080p', '720p']
 
-type SortMode = 'default' | 'size-desc' | 'size-asc'
-
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -97,55 +93,18 @@ interface Props {
   error?: string | null
   verifying?: boolean
   streamStatus?: Record<string, boolean>
-  /** Called when user clicks "Verify" button */
-  onVerify?: () => void
-  /** If set, shows "Index to Direct Links" button on streams */
-  addonContext?: { imdbId: string; season: number } | null
 }
 
 export function RemoteQualitySelector({
-  open, onOpenChange, title, groupedStreams, onSelect, onOpenUrl, loading, error, verifying, streamStatus = {}, onVerify, addonContext,
+  open, onOpenChange, title, groupedStreams, onSelect, onOpenUrl, loading, error, verifying, streamStatus = {},
 }: Props) {
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
-  const [sortMode, setSortMode] = useState<SortMode>('default')
-  const { toast } = useToast()
   const [copiedStreamUrl, setCopiedStreamUrl] = useState<string | null>(null)
   const [showInactive, setShowInactive] = useState(false)
-  const [indexingStream, setIndexingStream] = useState<string | null>(null)
-  const [indexedStreams, setIndexedStreams] = useState<Set<string>>(new Set())
-  const [indexProgress, setIndexProgress] = useState<string | null>(null)
   // HubDrive validation: url -> { valid: boolean, title: string } | null (null = pending)
   const [hubdriveStatus, setHubdriveStatus] = useState<Record<string, { valid: boolean; title: string } | 'loading'>>({})
 
   const verificationDone = !verifying && Object.keys(streamStatus).length > 0
-
-  const handleIndexToDdl = async (stream: RemoteStreamData) => {
-    if (!addonContext) return
-    onOpenChange(false)
-    setIndexingStream(stream.url)
-    setIndexProgress('Validating stream...')
-    const unlisten = await listen<{ stage: string; message: string; filename?: string }>('ddl-index-progress', (event) => {
-      setIndexProgress(event.payload.message)
-    })
-    try {
-      await invoke('index_season_pack_to_ddl', {
-        url: stream.url,
-        imdbId: addonContext.imdbId,
-        seasonNumber: addonContext.season,
-        streamName: stream.name,
-      })
-      setIndexedStreams(prev => new Set(prev).add(stream.url))
-      setIndexProgress('Done!')
-      window.dispatchEvent(new CustomEvent('navigate-to-ddl'))
-    } catch (e: any) {
-      setIndexProgress(null)
-      toast({ title: 'Indexing failed', description: String(e), variant: 'destructive' })
-    } finally {
-      unlisten()
-      setIndexingStream(null)
-      setTimeout(() => setIndexProgress(null), 1000)
-    }
-  }
 
   const totalUrls = useMemo(() => {
     const urls = new Set<string>()
@@ -155,14 +114,6 @@ export function RemoteQualitySelector({
       }
     }
     return urls.size
-  }, [groupedStreams])
-
-  const totalStreams = useMemo(() => {
-    let count = 0
-    for (const g of groupedStreams) {
-      count += g.streams.length
-    }
-    return count
   }, [groupedStreams])
 
   const verifiedCount = useMemo(() => {
@@ -228,22 +179,10 @@ export function RemoteQualitySelector({
         }))
         .filter((g) => g.streams.length > 0)
     }
-    // Sort streams within each group
-    if (sortMode !== 'default') {
-      groups = groups.map((g) => ({
-        ...g,
-        streams: [...g.streams].sort((a, b) => {
-          const sizeA = a.videoSize || 0
-          const sizeB = b.videoSize || 0
-          return sortMode === 'size-desc' ? sizeB - sizeA : sizeA - sizeB
-        }),
-      }))
-    }
     return groups
-  }, [groupedStreams, qualityFilter, showInactive, verificationDone, streamStatus, sortMode])
+  }, [groupedStreams, qualityFilter, showInactive, verificationDone, streamStatus])
 
   return (
-    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl bg-[#0A0A0A] border-neutral-800 text-neutral-100 shadow-2xl">
         <DialogHeader>
@@ -281,67 +220,25 @@ export function RemoteQualitySelector({
               </div>
             )}
 
-            {/* Quality filter chips + stream count + verify + sort */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex gap-1.5" role="radiogroup" aria-label="Video quality filter">
-                {QUALITY_FILTERS.map((f) => (
-                  <button
-                    key={f}
-                    role="radio"
-                    aria-checked={qualityFilter === f}
-                    aria-label={f === 'all' ? 'All qualities' : f}
-                    onClick={() => setQualityFilter(f)}
-                    className={cn(
-                      'px-3.5 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-200 border',
-                      qualityFilter === f
-                        ? 'bg-amber-600/15 text-amber-400 border-amber-700/30'
-                        : 'bg-[#0D0D0D] text-neutral-500 border-neutral-800 hover:bg-neutral-900 hover:text-neutral-300 hover:border-neutral-700',
-                    )}
-                  >
-                    {f === 'all' ? 'All' : f}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-1.5">
-                {/* Sort toggle */}
+            {/* Quality filter chips */}
+            <div className="flex gap-1.5" role="radiogroup" aria-label="Video quality filter">
+              {QUALITY_FILTERS.map((f) => (
                 <button
-                  onClick={() => setSortMode(sortMode === 'default' ? 'size-desc' : sortMode === 'size-desc' ? 'size-asc' : 'default')}
-                  className="px-2 py-1 rounded-lg text-[10px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-300 bg-[#0D0D0D] border border-neutral-800 hover:border-neutral-700 transition-all"
-                  title={sortMode === 'default' ? 'Sort by size (largest)' : sortMode === 'size-desc' ? 'Sort by size (smallest)' : 'Default sort'}
+                  key={f}
+                  role="radio"
+                  aria-checked={qualityFilter === f}
+                  aria-label={f === 'all' ? 'All qualities' : f}
+                  onClick={() => setQualityFilter(f)}
+                  className={cn(
+                    'px-3.5 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-200 border',
+                    qualityFilter === f
+                      ? 'bg-amber-600/15 text-amber-400 border-amber-700/30'
+                      : 'bg-[#0D0D0D] text-neutral-500 border-neutral-800 hover:bg-neutral-900 hover:text-neutral-300 hover:border-neutral-700',
+                  )}
                 >
-                  {sortMode === 'default' ? '↕ Sort' : sortMode === 'size-desc' ? '↓ Largest' : '↑ Smallest'}
+                  {f === 'all' ? 'All' : f}
                 </button>
-                {/* Verify button */}
-                {onVerify && (
-                  <button
-                    onClick={onVerify}
-                    disabled={verifying}
-                    className="px-2 py-1 rounded-lg text-[10px] font-semibold uppercase tracking-wider text-neutral-500 hover:text-neutral-300 bg-[#0D0D0D] border border-neutral-800 hover:border-neutral-700 transition-all disabled:opacity-40 flex items-center gap-1"
-                  >
-                    {verifying ? <Loader2 className="size-3 animate-spin" /> : null}
-                    {verifying ? 'Verifying' : '✓ Verify'}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Stream count summary */}
-            <div className="flex items-center gap-2 text-[10px] text-neutral-600 font-medium">
-              <span>{totalStreams} stream{totalStreams !== 1 ? 's' : ''}</span>
-              {verificationDone && <>
-                <span>·</span>
-                <span className="text-emerald-500/70">{verifiedCount - inactiveCount} verified</span>
-                {inactiveCount > 0 && <>
-                  <span>·</span>
-                  <span className="text-red-400/60">{inactiveCount} inactive</span>
-                </>}
-              </>}
-              {!verificationDone && onVerify && !verifying && (
-                <>
-                  <span>·</span>
-                  <button onClick={onVerify} className="text-amber-500/60 hover:text-amber-400 transition-colors underline underline-offset-2">verify links</button>
-                </>
-              )}
+              ))}
             </div>
 
             {/* Show inactive toggle */}
@@ -474,28 +371,15 @@ export function RemoteQualitySelector({
                                     </span>
                                   )}
 
+                                  {stream.recommended && active && (
+                                    <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-600/10 text-amber-500/80 border border-amber-700/20">
+                                      <ThumbsUp className="size-3" />
+                                      Recommended
+                                    </span>
+                                  )}
                                 </div>
 
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  {addonContext && (
-                                    <div
-                                      role="button"
-                                      tabIndex={0}
-                                      aria-label={indexedStreams.has(stream.url) ? "Indexed to Direct Links" : "Index to Direct Links"}
-                                      onClick={(e) => { e.stopPropagation(); if (!indexedStreams.has(stream.url) && !indexingStream) handleIndexToDdl(stream) }}
-                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (!indexedStreams.has(stream.url) && !indexingStream) handleIndexToDdl(stream) } }}
-                                      className={cn(
-                                        'size-9 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer',
-                                        indexedStreams.has(stream.url)
-                                          ? 'bg-emerald-600/10 text-emerald-500'
-                                          : indexingStream === stream.url
-                                          ? 'bg-neutral-800/50 text-neutral-400'
-                                          : 'bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300'
-                                      )}
-                                    >
-                                      {indexedStreams.has(stream.url) ? <Check className="size-4" /> : indexingStream === stream.url ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                                    </div>
-                                  )}
+                                <div className="flex items-center gap-3 shrink-0">
                                   <div
                                     role="button"
                                     tabIndex={0}
@@ -541,16 +425,5 @@ export function RemoteQualitySelector({
         )}
       </DialogContent>
     </Dialog>
-
-    {/* Indexing progress overlay */}
-    {indexProgress && (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <div className="flex flex-col items-center gap-4 px-8 py-6 rounded-2xl bg-[#0D0D0D] border border-neutral-800">
-          <div className="size-8 rounded-full border-2 border-neutral-700 border-t-amber-600/60 animate-spin" />
-          <div className="text-sm text-neutral-300 font-medium text-center max-w-[280px]">{indexProgress}</div>
-        </div>
-      </div>
-    )}
-  </>
   )
 }

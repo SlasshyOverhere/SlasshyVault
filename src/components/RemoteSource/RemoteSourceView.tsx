@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
-import { open } from '@tauri-apps/api/dialog'
 import { listen } from '@tauri-apps/api/event'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
@@ -166,12 +165,6 @@ function RemoteSourceViewInner() {
   const [setupAddonUrl, setSetupAddonUrl] = useState('')
   const [activeSource, setActiveSource] = useState<{ name: string; url: string } | null>(null)
 
-  // Addon version and logs
-  const [addonVersion, setAddonVersion] = useState<string | null>(null)
-  const [addonLogs, setAddonLogs] = useState<string[]>([])
-  const [showAddonLogs, setShowAddonLogs] = useState(false)
-  const [addonCrashed, setAddonCrashed] = useState(false)
-
   const [pageState, setPageState] = useState<PageState>('library')
   const [selectedItem, setSelectedItem] = useState<TmdbSearchResult | null>(null)
   const [selectedShow, setSelectedShow] = useState<RemoteLibraryItem | null>(null)
@@ -324,49 +317,24 @@ function RemoteSourceViewInner() {
     loadRemoteLibrary()
   }, [loadRemoteLibrary])
 
-  // Check if addon URL is configured AND addon server is actually running
+  // Check if addon URL is configured (sources or legacy URL)
   const checkAddonConfig = useCallback(async () => {
     try {
       const config = await invoke<any>('get_config')
       const hasSources = config?.addon_sources?.length > 0
       const hasLegacyUrl = !!config?.addon_url
-      if (!hasSources && !hasLegacyUrl) {
-        setAddonUrlConfigured(false)
-        setActiveSource(null)
-        setAddonVersion(null)
-        return
-      }
+      setAddonUrlConfigured(hasSources || hasLegacyUrl)
       if (hasSources) {
-        // Sources are validated at install time — trust them
         const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
         const src = defaultSrc || config.addon_sources[0]
         setActiveSource({ name: src.name, url: src.url })
-        setAddonUrlConfigured(true)
-        // Fetch addon version
-        try {
-          const ver = await invoke<string | null>('get_addon_version', { url: src.url })
-          setAddonVersion(ver)
-        } catch { setAddonVersion(null) }
-      } else {
-        // Manual URL — validate server is actually responding
+      } else if (hasLegacyUrl) {
         setActiveSource({ name: 'Addon', url: config.addon_url })
-        try {
-          const ok = await invoke<boolean>('check_addon_server', { url: config.addon_url })
-          setAddonUrlConfigured(ok)
-          if (ok) {
-            const ver = await invoke<string | null>('get_addon_version', { url: config.addon_url })
-            setAddonVersion(ver)
-          } else {
-            setAddonVersion(null)
-          }
-        } catch {
-          setAddonUrlConfigured(false)
-          setAddonVersion(null)
-        }
+      } else {
+        setActiveSource(null)
       }
     } catch {
       setAddonUrlConfigured(false)
-      setAddonVersion(null)
     }
   }, [])
 
@@ -378,50 +346,6 @@ function RemoteSourceViewInner() {
     window.addEventListener('config-saved', handler)
     return () => window.removeEventListener('config-saved', handler)
   }, [checkAddonConfig])
-
-  // Periodically re-fetch addon version (in case addon starts after the app)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (activeSource && !addonVersion) {
-        invoke<string | null>('get_addon_version', { url: activeSource.url })
-          .then(setAddonVersion)
-          .catch(() => {})
-      }
-    }, 15000)
-    return () => clearInterval(interval)
-  }, [activeSource, addonVersion])
-
-  // Listen for addon log events and crash notifications
-  useEffect(() => {
-    let unlistenLog: (() => void) | undefined
-    let unlistenCrash: (() => void) | undefined
-    const setup = async () => {
-      try {
-        unlistenLog = await listen<string>('addon-log', (event) => {
-          setAddonLogs((prev) => [...prev.slice(-199), event.payload])
-          // If we're getting logs, addon is alive — fetch version if missing
-          if (!addonVersion && activeSource) {
-            invoke<string | null>('get_addon_version', { url: activeSource.url })
-              .then(setAddonVersion)
-              .catch(() => {})
-          }
-        })
-        unlistenCrash = await listen<number>('addon-crashed', () => {
-          setAddonCrashed(true)
-          toast({ title: 'Addon crashed', description: 'The addon binary has crashed too many times. Please restart the app.', variant: 'destructive' })
-        })
-      } catch {}
-    }
-    setup()
-    return () => { unlistenLog?.(); unlistenCrash?.() }
-  }, [toast, addonVersion, activeSource])
-
-  // Load existing addon logs on mount
-  useEffect(() => {
-    invoke<string[]>('get_addon_logs').then((logs) => {
-      if (logs.length > 0) setAddonLogs(logs)
-    }).catch(() => {})
-  }, [])
 
   // Search (with race condition guard via searchReqIdRef)
   useEffect(() => {
@@ -497,40 +421,8 @@ function RemoteSourceViewInner() {
     setPageState('detail')
   }, [])
 
-  // Stream verification: on-demand via "Verify" button in quality selector
-  const [streamStatus, setStreamStatus] = useState<Record<string, boolean>>({})
-  const [verifying, setVerifying] = useState(false)
-
-  const handleVerifyStreams = useCallback(async () => {
-    if (groupedStreams.length === 0) return
-    // Only verify direct CDN links — skip /proxy/ and /extract/ links (addon-internal)
-    const urls = groupedStreams.flatMap(g =>
-      g.streams
-        .filter(s => !s.isHubdrive && !s.url.includes('/proxy/') && !s.url.includes('/extract/'))
-        .map(s => s.url)
-    )
-    if (urls.length === 0) return
-    setVerifying(true)
-    setStreamStatus({})
-    try {
-      const results = await invoke<Record<string, boolean>>('verify_stream_urls', { urls })
-      // Mark proxy/extract URLs as "active" (skip verification — they're resolved at play time)
-      const fullResults: Record<string, boolean> = { ...results }
-      for (const g of groupedStreams) {
-        for (const s of g.streams) {
-          if (s.url.includes('/proxy/') || s.url.includes('/extract/')) {
-            fullResults[s.url] = true
-          }
-        }
-      }
-      setStreamStatus(fullResults)
-    } catch (e) {
-      console.warn('[RemoteSourceView] verify_stream_urls:', e)
-    }
-    setVerifying(false)
-  }, [groupedStreams])
-
-  // Stream verification is on-demand only (user clicks "Verify" button).
+  // Stream verification removed — causes rate limiting against addon servers.
+  // All streams are shown as available without probing.
 
   // Movie: fetch streams and open quality selector
   const handleFetchMovieStreams = useCallback(async (imdbId: string, forceRefresh = false) => {
@@ -856,57 +748,29 @@ function RemoteSourceViewInner() {
     }
   }, [setupAddonUrl, loadRemoteLibrary, toast])
 
-  const [binaryInstalling, setBinaryInstalling] = useState(false)
+  // npm install handler
+  const [npmPackage, setNpmPackage] = useState('')
+  const [npmArgs, setNpmArgs] = useState('--yes')
+  const [npmInstalling, setNpmInstalling] = useState(false)
 
-  // Binary install handler (Go binary drag-and-drop)
-  const handleBinaryInstall = useCallback(async (filePath: string) => {
-    setBinaryInstalling(true)
-    setAddonCrashed(false)
+  // npm package install handler
+  const handleNpmInstall = useCallback(async () => {
+    if (!npmPackage.trim()) return
+    setNpmInstalling(true)
     try {
-      const result = await invoke<any>('install_addon_binary', { filePath, name: 'Custom Addon Binary' })
+      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
+      const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
+      await invoke('add_addon_source', { name: result.name, url: result.url, npmPackage: result.npm_package, npmArgs: result.npm_args })
       setAddonUrlConfigured(true)
       loadRemoteLibrary()
       window.dispatchEvent(new CustomEvent('config-saved'))
-      // Fetch version after install
-      try {
-        const ver = await invoke<string | null>('get_addon_version', { url: result.url })
-        setAddonVersion(ver)
-      } catch {}
-      toast({ title: 'Binary installed', description: `Addon running at ${result.url}${addonVersion ? ` (v${addonVersion})` : ''}` })
+      toast({ title: 'Addon installed & running', description: `Connected to ${result.url}` })
     } catch (e: any) {
-      const msg = String(e?.message || e)
-      let description = msg
-      if (msg.includes('--version')) description = 'The dropped file is not a valid addon binary. Please drop a vault-addon compatible .exe file.'
-      else if (msg.includes('too large')) description = 'File is too large. Addon binaries should be under 50MB.'
-      else if (msg.includes('.exe')) description = 'On Windows, the file must have an .exe extension.'
-      else if (msg.includes('Failed to start')) description = 'The binary failed to start. Check that no other instance is running and the port is not in use.'
-      toast({ title: 'Installation failed', description, variant: 'destructive' })
+      toast({ title: 'Installation failed', description: e?.message || String(e), variant: 'destructive' })
     } finally {
-      setBinaryInstalling(false)
+      setNpmInstalling(false)
     }
-  }, [loadRemoteLibrary, toast])
-
-  // Listen for window-level file drops (Tauri tauri://file-drop event)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-    const setup = async () => {
-      try {
-        unlisten = await listen<{ paths: string[] }>('tauri://file-drop', (event) => {
-          const paths = event.payload.paths
-          if (paths.length > 0) {
-            const filePath = paths[0]
-            if (filePath.endsWith('.exe')) {
-              handleBinaryInstall(filePath)
-            } else {
-              toast({ title: 'Invalid file', description: 'Please drop an .exe addon binary file.', variant: 'destructive' })
-            }
-          }
-        })
-      } catch {}
-    }
-    setup()
-    return () => { unlisten?.() }
-  }, [handleBinaryInstall, toast])
+  }, [npmPackage, npmArgs, loadRemoteLibrary, toast])
 
   // Show setup wizard if addon URL is not configured
   if (addonUrlConfigured === false) {
@@ -916,11 +780,6 @@ function RemoteSourceViewInner() {
         <div className="pointer-events-none absolute -bottom-40 -left-40 size-[500px] rounded-full bg-sky-500/2 blur-[120px]" />
         <div className="flex-1 flex items-center justify-center relative z-10">
           <div className="max-w-md w-full space-y-6 p-8">
-            {addonCrashed && (
-              <div className="rounded-lg bg-red-950/40 border border-red-900/40 px-3 py-2 text-xs text-red-400 text-center">
-                Addon binary crashed too many times. Please restart the app to retry.
-              </div>
-            )}
             <div className="space-y-2 text-center">
               <div className="mx-auto size-16 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center">
                 <Film className="size-8 text-neutral-500" />
@@ -931,39 +790,33 @@ function RemoteSourceViewInner() {
               </p>
             </div>
             <div className="space-y-3">
+              <input
+                type="text"
+                value={npmPackage}
+                onChange={(e) => setNpmPackage(e.target.value)}
+                placeholder="npm package name"
+                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
+              />
+              <input
+                type="text"
+                value={npmArgs}
+                onChange={(e) => setNpmArgs(e.target.value)}
+                placeholder="arguments (e.g. --yes)"
+                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleNpmInstall() }}
+              />
               <button
-                onClick={async () => {
-                  const selected = await open({
-                    multiple: false,
-                    filters: [{ name: 'Executable', extensions: ['exe'] }]
-                  })
-                  if (selected && typeof selected === 'string') {
-                    handleBinaryInstall(selected)
-                  }
-                }}
-                disabled={binaryInstalling}
-                onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  const file = e.dataTransfer.files[0]
-                  if (file) {
-                    const path = (file as any).path || file.name
-                    handleBinaryInstall(path)
-                  }
-                }}
-                className="w-full h-16 rounded-xl border-2 border-dashed border-neutral-700 hover:border-neutral-500 disabled:opacity-40 disabled:cursor-not-allowed bg-white/[0.02] hover:bg-white/[0.04] text-neutral-400 hover:text-neutral-200 text-sm transition-all duration-200 flex flex-col items-center justify-center gap-1"
+                onClick={handleNpmInstall}
+                disabled={!npmPackage.trim() || npmInstalling}
+                className="w-full h-11 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2"
               >
-                {binaryInstalling ? (
+                {npmInstalling ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Installing binary...
+                    Installing & starting...
                   </>
                 ) : (
-                  <>
-                    <span className="text-xs">Drop addon binary here or click to browse</span>
-                    <span className="text-[10px] text-neutral-600">.exe file — no console window</span>
-                  </>
+                  "Install & Run"
                 )}
               </button>
               <div className="flex items-center gap-3">
@@ -1144,38 +997,12 @@ function RemoteSourceViewInner() {
                   <span>External Sources</span>
                   <span className="h-px w-6 bg-neutral-800" />
                 </div>
-                {addonCrashed && (
-                  <div className="mx-auto max-w-md rounded-lg bg-red-950/40 border border-red-900/40 px-3 py-2 text-xs text-red-400 text-center">
-                    Addon binary crashed too many times. Please restart the app to retry.
-                  </div>
-                )}
                 {activeSource && (
                   <div className="flex items-center justify-center gap-2">
-                    <div className={`size-1.5 rounded-full ${addonCrashed ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
+                    <div className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     <span className="text-xs text-neutral-400">{activeSource.name}</span>
-                    {addonVersion && <span className="text-[10px] text-neutral-600">v{addonVersion}</span>}
                     <span className="text-[10px] text-neutral-600 truncate max-w-[200px]">{activeSource.url}</span>
-                    <button
-                      onClick={() => setShowAddonLogs(!showAddonLogs)}
-                      className="text-[10px] text-neutral-700 hover:text-neutral-400 transition-colors"
-                      title="Toggle addon logs"
-                    >
-                      {showAddonLogs ? '▾ logs' : '▸ logs'}
-                    </button>
                   </div>
-                )}
-                {showAddonLogs && (
-                  addonLogs.length > 0 ? (
-                    <div className="mx-auto max-w-xl max-h-40 overflow-auto rounded-lg bg-black/60 border border-neutral-800/60 px-3 py-2 text-[10px] font-mono text-neutral-500 space-y-0.5">
-                      {addonLogs.slice(-50).map((line, i) => (
-                        <div key={i} className={line.includes('error') || line.includes('fatal') ? 'text-red-400' : ''}>{line}</div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mx-auto max-w-md text-center text-[10px] text-neutral-700 py-2">
-                      No addon logs available. Logs appear when the addon binary is managed by the app.
-                    </div>
-                  )
                 )}
                 <h1 className="text-3xl font-black tracking-tight text-white leading-none">Stream fuckin anything.</h1>
                 <p className="text-[10px] text-neutral-700 leading-relaxed max-w-md mx-auto">
@@ -1317,10 +1144,8 @@ function RemoteSourceViewInner() {
         onOpenUrl={(url) => window.open(url, '_blank')}
         loading={fetching}
         error={streamError}
-        verifying={verifying}
-        streamStatus={streamStatus}
-        onVerify={handleVerifyStreams}
-        addonContext={imdbIdRef.current && currentSeason ? { imdbId: imdbIdRef.current, season: currentSeason } : null}
+        verifying={false}
+        streamStatus={{}}
       />
 
 

@@ -13284,8 +13284,8 @@ fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String
         .unwrap_or_default();
 
     #[cfg(target_os = "windows")]
-    if ext != "exe" && ext != "msi" && ext != "zip" {
-        return Err("Only .exe, .msi, or .zip installers are allowed".to_string());
+    if ext != "exe" && ext != "msi" && ext != "nsis" && ext != "zip" {
+        return Err("Only .exe, .msi, .nsis, or .zip installers are allowed".to_string());
     }
 
     #[cfg(target_os = "macos")]
@@ -13328,7 +13328,7 @@ fn resolve_windows_installer_from_package(
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
 
-    if ext == "exe" || ext == "msi" {
+    if ext == "exe" || ext == "msi" || ext == "nsis" {
         return Ok(package_path.to_path_buf());
     }
 
@@ -13338,6 +13338,16 @@ fn resolve_windows_installer_from_package(
             package_path.display()
         ));
     }
+
+    // Log ZIP file diagnostics before extraction
+    let zip_size = std::fs::metadata(package_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "[UPDATE] Extracting updater ZIP: path={}, size={} bytes",
+        package_path.display(),
+        zip_size
+    );
 
     let extract_dir = package_path
         .parent()
@@ -13377,28 +13387,66 @@ fn resolve_windows_installer_from_package(
         ));
     }
 
+    // Walk extracted directory: log every entry with size/type, and collect installer candidates
+    let mut all_extracted_entries = Vec::new();
     let mut installer_candidates = Vec::new();
+
     for entry in walkdir::WalkDir::new(&extract_dir) {
-        let entry =
-            entry.map_err(|e| format!("Failed while scanning extracted updater ZIP: {}", e))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.into_path();
-        let Some(found_ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                println!("[UPDATE] WARNING: Error walking extracted directory: {}", e);
+                continue;
+            }
         };
-        let found_ext = found_ext.to_ascii_lowercase();
-        if found_ext == "exe" || found_ext == "msi" {
-            installer_candidates.push(path);
+        let file_size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
+        let is_file = entry.file_type().is_file();
+        let is_dir = entry.file_type().is_dir();
+        let path = entry.into_path();
+
+        let type_tag = if is_dir {
+            "DIR"
+        } else if is_file {
+            "FILE"
+        } else {
+            "OTHER"
+        };
+        println!(
+            "[UPDATE] Extracted content: [{}] {} ({} bytes)",
+            type_tag,
+            path.display(),
+            file_size
+        );
+
+        all_extracted_entries.push((path.clone(), file_size, type_tag.to_string()));
+
+        if is_file {
+            if let Some(found_ext) = path.extension().and_then(|e| e.to_str()) {
+                let found_ext = found_ext.to_ascii_lowercase();
+                if found_ext == "exe" || found_ext == "msi" || found_ext == "nsis" {
+                    installer_candidates.push(path);
+                }
+            }
         }
     }
+
+    println!(
+        "[UPDATE] Extracted {} entries from updater ZIP, found {} installer candidates",
+        all_extracted_entries.len(),
+        installer_candidates.len()
+    );
 
     installer_candidates.sort();
     installer_candidates
         .into_iter()
         .next()
-        .ok_or_else(|| "No .exe or .msi installer found inside updater ZIP".to_string())
+        .ok_or_else(|| {
+            let mut details = String::from("No .exe, .msi, or .nsis installer found inside updater ZIP. Contents:\n");
+            for (path, size, type_tag) in &all_extracted_entries {
+                details.push_str(&format!("  [{}] {} ({} bytes)\n", type_tag, path.display(), size));
+            }
+            details
+        })
 }
 
 /// Install update and restart app
