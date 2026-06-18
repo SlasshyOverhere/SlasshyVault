@@ -93,3 +93,36 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.notes }}
           releaseDraft: false
           prerelease: false
+
+      - name: Verify updater artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle"
+          Write-Host "=== Full bundle tree ==="
+          Get-ChildItem -Path $bundleDir -Recurse -ErrorAction SilentlyContinue
+
+          $nsisZip = Get-ChildItem -Path $bundleDir -Recurse -Filter "*.nsis.zip" -ErrorAction SilentlyContinue
+          if ($nsisZip) {
+            Write-Host "=== NSIS ZIP contents ==="
+            foreach ($zip in $nsisZip) {
+              Write-Host "`n--- $($zip.FullName) ---"
+              $zipFile = $zip.FullName
+              $tempDir = Join-Path $env:TEMP "nsis_verify_$([System.IO.Path]::GetRandomFileName())"
+              try {
+                Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
+                Get-ChildItem -Path $tempDir -Recurse | ForEach-Object {
+                  Write-Host "$($_.FullName)  $($_.Length) bytes"
+                }
+              } finally {
+                Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+              }
+            }
+          } else {
+            Write-Host "=== No .nsis.zip found ==="
+          }
+
+          Write-Host "=== Installer artifact sizes ==="
+          Get-ChildItem -Path $bundleDir -Recurse -Include "*.exe", "*.msi", "*.zip", "*.tar.gz", "*.rpm", "*.deb", "*.AppImage" -ErrorAction SilentlyContinue |
+            Sort-Object Length -Descending |
+            ForEach-Object { Write-Host "$($_.Length.ToString('N0')) bytes  $($_.FullName)" }

@@ -132,14 +132,45 @@ function AddonSourcesManager() {
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<Record<string, { online: boolean; version: string | null; checking: boolean }>>({});
+
+  // Load sources immediately — no blocking on version checks
   const loadSources = useCallback(async () => {
     try {
       const data = await invoke<AddonSource[]>("get_addon_sources");
       setSources(data);
+      setLoading(false);
+      // Fire-and-forget health checks per source
+      for (const src of data) {
+        checkSourceHealth(src.id, src.url);
+      }
     } catch (e) {
       console.error("[AddonSourcesManager] loadSources:", e);
-    } finally {
       setLoading(false);
+    }
+  }, []);
+
+  // Check a single source's health + version (with timeout)
+  const checkSourceHealth = useCallback(async (id: string, url: string) => {
+    setSourceStatus(prev => ({ ...prev, [id]: { ...prev[id], online: false, version: null, checking: true } }));
+    try {
+      // Check online with 2s timeout
+      const online = await Promise.race([
+        invoke<boolean>("check_addon_server", { url }),
+        new Promise<boolean>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000))
+      ]);
+      let version: string | null = null;
+      if (online) {
+        try {
+          version = await Promise.race([
+            invoke<string | null>("get_addon_version", { url }),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))
+          ]);
+        } catch {}
+      }
+      setSourceStatus(prev => ({ ...prev, [id]: { online, version, checking: false } }));
+    } catch {
+      setSourceStatus(prev => ({ ...prev, [id]: { online: false, version: null, checking: false } }));
     }
   }, []);
 
@@ -153,6 +184,7 @@ function AddonSourcesManager() {
       setNewName("");
       setNewUrl("");
       await loadSources();
+      window.dispatchEvent(new CustomEvent("config-saved"));
       toast({ title: "Source added" });
     } catch (e: any) {
       toast({ title: "Failed to add source", description: e?.message || String(e), variant: "destructive" });
@@ -164,13 +196,14 @@ function AddonSourcesManager() {
   const handleRemove = useCallback(async (id: string) => {
     try {
       await invoke("remove_addon_source", { id });
-      await loadSources();
+      setSources(prev => prev.filter(s => s.id !== id));
+      setSourceStatus(prev => { const next = { ...prev }; delete next[id]; return next; });
       window.dispatchEvent(new CustomEvent("config-saved"));
       toast({ title: "Source removed" });
     } catch (e: any) {
       toast({ title: "Failed to remove", description: e?.message || String(e), variant: "destructive" });
     }
-  }, [loadSources, toast]);
+  }, [toast]);
 
   const handleSetActive = useCallback(async (id: string) => {
     try {
@@ -195,44 +228,67 @@ function AddonSourcesManager() {
       {/* Existing sources */}
       {sources.length > 0 && (
         <div className="space-y-2">
-          {sources.map((src) => (
-            <div
-              key={src.id}
-              className={`p-3 rounded-xl border flex items-center gap-3 ${
-                src.is_default
-                  ? "bg-white/5 border-white/10"
-                  : "bg-card border-border"
-              }`}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium truncate">{src.name}</span>
-                  {src.is_default && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/60 uppercase tracking-wider">
-                      Active
-                    </span>
-                  )}
+          {sources.map((src) => {
+            const status = sourceStatus[src.id];
+            const isOnline = status?.online ?? false;
+            const version = status?.version;
+            const checking = status?.checking ?? false;
+            return (
+              <div
+                key={src.id}
+                className={`p-3 rounded-xl border flex items-center gap-3 ${
+                  src.is_default
+                    ? "bg-white/5 border-white/10"
+                    : "bg-card border-border"
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {/* Online/offline indicator */}
+                    <div className={`size-2 rounded-full shrink-0 ${checking ? 'bg-yellow-500 animate-pulse' : isOnline ? 'bg-emerald-500' : 'bg-red-500/60'}`}
+                      title={checking ? 'Checking...' : isOnline ? 'Online' : 'Offline'} />
+                    <span className="text-sm font-medium truncate">{src.name}</span>
+                    {version && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/40">v{version}</span>
+                    )}
+                    {src.is_default && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/60 uppercase tracking-wider">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">
+                    {src.url}{src.binary_path ? ' · binary' : ''}
+                    {!checking && !isOnline && <span className="text-red-400/60 ml-2">· not responding</span>}
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground truncate mt-0.5">{src.url}</p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {!src.is_default && (
+                <div className="flex items-center gap-1.5">
                   <button
-                    onClick={() => handleSetActive(src.id)}
-                    className="text-xs px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => checkSourceHealth(src.id, src.url)}
+                    disabled={checking}
+                    className="p-1.5 rounded-lg hover:bg-white/5 text-muted-foreground hover:text-foreground transition-colors"
+                    title="Re-check"
                   >
-                    Set Active
+                    <Loader2 className={`size-3.5 ${checking ? 'animate-spin' : ''}`} />
                   </button>
-                )}
-                <button
-                  onClick={() => handleRemove(src.id)}
-                  className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                  {!src.is_default && (
+                    <button
+                      onClick={() => handleSetActive(src.id)}
+                      className="text-xs px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Set Active
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleRemove(src.id)}
+                    className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

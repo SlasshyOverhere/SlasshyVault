@@ -2367,6 +2367,7 @@ impl Database {
     // ==================== CLOUD MEDIA METHODS ====================
 
     /// Insert a cloud movie
+    /// Uses cloud_file_id as unique file_path to avoid collisions across folders
     pub fn insert_cloud_movie(
         &self,
         title: &str,
@@ -2381,10 +2382,22 @@ impl Database {
         duration: f64,
         tmdb_id: Option<&str>,
     ) -> Result<i64> {
+        // Use cloud_file_id as file_path for unique identification across folders
+        let unique_path = format!("gdrive:{}", cloud_file_id);
         self.conn.execute(
             "INSERT INTO media (title, year, overview, cast_names, director, poster_path, file_path, media_type, duration_seconds, tmdb_id, is_cloud, cloud_file_id, cloud_folder_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'movie', ?, ?, 1, ?, ?)",
-            params![title, year, overview, cast_names, director, poster_path, file_name, duration, tmdb_id, cloud_file_id, cloud_folder_id],
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'movie', ?, ?, 1, ?, ?)
+             ON CONFLICT(file_path) DO UPDATE SET
+                title = excluded.title,
+                year = excluded.year,
+                overview = excluded.overview,
+                cast_names = excluded.cast_names,
+                director = excluded.director,
+                poster_path = excluded.poster_path,
+                duration_seconds = excluded.duration_seconds,
+                tmdb_id = excluded.tmdb_id,
+                cloud_folder_id = excluded.cloud_folder_id",
+            params![title, year, overview, cast_names, director, poster_path, unique_path, duration, tmdb_id, cloud_file_id, cloud_folder_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -2403,13 +2416,22 @@ impl Database {
     ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO media (title, year, overview, cast_names, poster_path, file_path, media_type, tmdb_id, is_cloud, cloud_folder_id)
-             VALUES (?, ?, ?, ?, ?, ?, 'tvshow', ?, 1, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, 'tvshow', ?, 1, ?)
+             ON CONFLICT(file_path) DO UPDATE SET
+                title = excluded.title,
+                year = excluded.year,
+                overview = excluded.overview,
+                cast_names = excluded.cast_names,
+                poster_path = excluded.poster_path,
+                tmdb_id = excluded.tmdb_id,
+                cloud_folder_id = excluded.cloud_folder_id",
             params![title, year, overview, cast_names, poster_path, folder_name, tmdb_id, cloud_folder_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
 
     /// Insert a cloud episode
+    /// Uses cloud_file_id as unique file_path to avoid collisions across folders
     pub fn insert_cloud_episode(
         &self,
         title: &str,
@@ -2424,11 +2446,22 @@ impl Database {
         still_path: Option<&str>,
         file_size_bytes: Option<i64>,
     ) -> Result<i64> {
+        let unique_path = format!("gdrive:{}", cloud_file_id);
         self.conn.execute(
             "INSERT INTO media (title, file_path, media_type, parent_id, season_number, episode_number,
                                is_cloud, cloud_file_id, cloud_folder_id, episode_title, overview, still_path, file_size_bytes)
-              VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
-            params![title, file_name, parent_id, season, episode, cloud_file_id, cloud_folder_id,
+              VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(file_path) DO UPDATE SET
+                 title = excluded.title,
+                 parent_id = excluded.parent_id,
+                 season_number = excluded.season_number,
+                 episode_number = excluded.episode_number,
+                 cloud_folder_id = excluded.cloud_folder_id,
+                 episode_title = excluded.episode_title,
+                 overview = excluded.overview,
+                 still_path = excluded.still_path,
+                 file_size_bytes = excluded.file_size_bytes",
+            params![title, unique_path, parent_id, season, episode, cloud_file_id, cloud_folder_id,
                    episode_title, overview, still_path, file_size_bytes],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -2518,7 +2551,25 @@ impl Database {
                 archive_format,
                 parent_zip_id, zip_entry_path, zip_local_header_offset, zip_data_start_offset,
                 zip_compressed_size, zip_uncompressed_size, zip_crc32, zip_compression_method
-            ) VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, 'tvepisode', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET
+                title = excluded.title,
+                parent_id = excluded.parent_id,
+                season_number = excluded.season_number,
+                episode_number = excluded.episode_number,
+                cloud_folder_id = excluded.cloud_folder_id,
+                episode_title = excluded.episode_title,
+                overview = excluded.overview,
+                still_path = excluded.still_path,
+                archive_format = excluded.archive_format,
+                parent_zip_id = excluded.parent_zip_id,
+                zip_entry_path = excluded.zip_entry_path,
+                zip_local_header_offset = excluded.zip_local_header_offset,
+                zip_data_start_offset = excluded.zip_data_start_offset,
+                zip_compressed_size = excluded.zip_compressed_size,
+                zip_uncompressed_size = excluded.zip_uncompressed_size,
+                zip_crc32 = excluded.zip_crc32,
+                zip_compression_method = excluded.zip_compression_method",
             params![
                 title,
                 virtual_path,
@@ -2923,7 +2974,11 @@ impl Database {
     /// Add a cloud folder to track
     pub fn add_cloud_folder(&self, folder_id: &str, folder_name: &str) -> Result<i64> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO cloud_folders (folder_id, folder_name, auto_scan) VALUES (?, ?, 1)",
+            "INSERT INTO cloud_folders (folder_id, folder_name, auto_scan)
+             VALUES (?, ?, 1)
+             ON CONFLICT(folder_id) DO UPDATE SET
+                folder_name = excluded.folder_name,
+                auto_scan = excluded.auto_scan",
             params![folder_id, folder_name],
         )?;
         Ok(self.conn.last_insert_rowid())

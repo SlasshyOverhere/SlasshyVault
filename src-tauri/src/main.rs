@@ -52,6 +52,11 @@ static RECENT_UI_NOTIFICATIONS: LazyLock<Mutex<HashMap<String, std::time::Instan
 static RUNNING_ADDON_PROCESS: LazyLock<Mutex<Option<tokio::process::Child>>> = LazyLock::new(|| Mutex::new(None));
 static ADDON_STDOUT_TASK: LazyLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
 static ADDON_WATCHDOG_RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+static ADDON_LOG_HISTORY: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+// Retry counter for the watchdog — resets on successful health check
+static ADDON_RESTART_COUNT: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0));
+// Global app handle for emitting events from background threads
+static GLOBAL_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> = LazyLock::new(|| Mutex::new(None));
 
 // MPV session info
 #[derive(Clone, Serialize)]
@@ -7555,6 +7560,56 @@ async fn validate_hubdrive_url(url: String) -> Result<serde_json::Value, String>
     Ok(serde_json::json!({ "isValid": result.0, "title": result.1 }))
 }
 
+/// Verify a single stream URL via HEAD request (fast, no body download)
+#[tauri::command]
+async fn verify_stream_url(url: String) -> Result<bool, String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        match client.head(&url).send() {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                Ok((200..400).contains(&status))
+            }
+            Err(_) => Ok(false),
+        }
+    }).await.map_err(|e| e.to_string())?;
+    result
+}
+
+/// Verify multiple stream URLs with staggered delays to avoid rate limiting.
+/// Returns a map of url -> isAlive.
+#[tauri::command]
+async fn verify_stream_urls(urls: Vec<String>) -> Result<std::collections::HashMap<String, bool>, String> {
+    let mut results = std::collections::HashMap::new();
+    for (i, url) in urls.iter().enumerate() {
+        // Stagger requests: 150ms between each to avoid rate limiting
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+        let url_clone = url.clone();
+        let alive = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .redirect(reqwest::redirect::Policy::limited(5))
+                .build()
+                .map_err(|e| e.to_string())?;
+            match client.head(&url_clone).send() {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    Ok((200..400).contains(&status))
+                }
+                Err(_) => Ok(false),
+            }
+        }).await.map_err(|e| e.to_string())??;
+        results.insert(url.clone(), alive);
+    }
+    Ok(results)
+}
+
 #[tauri::command]
 async fn resolve_imdb_id(state: State<'_, AppState>, tmdb_id: i64, media_type: String) -> Result<Option<String>, String> {
     let api_key = {
@@ -13229,8 +13284,8 @@ fn get_valid_installer_path(path_str: &str) -> Result<std::path::PathBuf, String
         .unwrap_or_default();
 
     #[cfg(target_os = "windows")]
-    if ext != "exe" && ext != "msi" && ext != "zip" {
-        return Err("Only .exe, .msi, or .zip installers are allowed".to_string());
+    if ext != "exe" && ext != "msi" && ext != "nsis" && ext != "zip" {
+        return Err("Only .exe, .msi, .nsis, or .zip installers are allowed".to_string());
     }
 
     #[cfg(target_os = "macos")]
@@ -13273,7 +13328,7 @@ fn resolve_windows_installer_from_package(
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
 
-    if ext == "exe" || ext == "msi" {
+    if ext == "exe" || ext == "msi" || ext == "nsis" {
         return Ok(package_path.to_path_buf());
     }
 
@@ -13283,6 +13338,16 @@ fn resolve_windows_installer_from_package(
             package_path.display()
         ));
     }
+
+    // Log ZIP file diagnostics before extraction
+    let zip_size = std::fs::metadata(package_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "[UPDATE] Extracting updater ZIP: path={}, size={} bytes",
+        package_path.display(),
+        zip_size
+    );
 
     let extract_dir = package_path
         .parent()
@@ -13322,28 +13387,66 @@ fn resolve_windows_installer_from_package(
         ));
     }
 
+    // Walk extracted directory: log every entry with size/type, and collect installer candidates
+    let mut all_extracted_entries = Vec::new();
     let mut installer_candidates = Vec::new();
+
     for entry in walkdir::WalkDir::new(&extract_dir) {
-        let entry =
-            entry.map_err(|e| format!("Failed while scanning extracted updater ZIP: {}", e))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.into_path();
-        let Some(found_ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                println!("[UPDATE] WARNING: Error walking extracted directory: {}", e);
+                continue;
+            }
         };
-        let found_ext = found_ext.to_ascii_lowercase();
-        if found_ext == "exe" || found_ext == "msi" {
-            installer_candidates.push(path);
+        let file_size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
+        let is_file = entry.file_type().is_file();
+        let is_dir = entry.file_type().is_dir();
+        let path = entry.into_path();
+
+        let type_tag = if is_dir {
+            "DIR"
+        } else if is_file {
+            "FILE"
+        } else {
+            "OTHER"
+        };
+        println!(
+            "[UPDATE] Extracted content: [{}] {} ({} bytes)",
+            type_tag,
+            path.display(),
+            file_size
+        );
+
+        all_extracted_entries.push((path.clone(), file_size, type_tag.to_string()));
+
+        if is_file {
+            if let Some(found_ext) = path.extension().and_then(|e| e.to_str()) {
+                let found_ext = found_ext.to_ascii_lowercase();
+                if found_ext == "exe" || found_ext == "msi" || found_ext == "nsis" {
+                    installer_candidates.push(path);
+                }
+            }
         }
     }
+
+    println!(
+        "[UPDATE] Extracted {} entries from updater ZIP, found {} installer candidates",
+        all_extracted_entries.len(),
+        installer_candidates.len()
+    );
 
     installer_candidates.sort();
     installer_candidates
         .into_iter()
         .next()
-        .ok_or_else(|| "No .exe or .msi installer found inside updater ZIP".to_string())
+        .ok_or_else(|| {
+            let mut details = String::from("No .exe, .msi, or .nsis installer found inside updater ZIP. Contents:\n");
+            for (path, size, type_tag) in &all_extracted_entries {
+                details.push_str(&format!("  [{}] {} ({} bytes)\n", type_tag, path.display(), size));
+            }
+            details
+        })
 }
 
 /// Install update and restart app
@@ -15677,7 +15780,7 @@ fn remove_addon_source(state: State<'_, AppState>, id: String) -> Result<(), Str
 /// Install a custom addon binary (e.g. Go binary). Copies the file to the app data directory
 /// and creates an AddonSource with binary_path set.
 #[tauri::command]
-fn install_addon_binary(
+async fn install_addon_binary(
     state: State<'_, AppState>,
     file_path: String,
     name: Option<String>,
@@ -15697,6 +15800,25 @@ fn install_addon_binary(
         return Err("On Windows, the binary must be an .exe file".to_string());
     }
 
+    // Validate binary by running --version
+    let mut version_cmd = tokio::process::Command::new(src);
+    version_cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        version_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = version_cmd.output()
+        .await
+        .map_err(|e| format!("Failed to run binary: {}", e))?;
+    if !output.status.success() {
+        return Err("Invalid addon binary (failed --version check). Please drop a valid vault-addon .exe file.".to_string());
+    }
+
+    // Find a free port
+    let port = find_free_port().await?;
+    let url = format!("http://127.0.0.1:{}", port);
+
     let app_dir = database::get_app_data_dir();
     let bin_dir = app_dir.join("addon-binaries");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("Cannot create bin dir: {}", e))?;
@@ -15711,13 +15833,11 @@ fn install_addon_binary(
 
     let dest_path = dest.to_string_lossy().to_string();
     let source_name = name.unwrap_or_else(|| "Custom Addon Binary".to_string());
-    // Go binary hardcodes port 51546
-    let url = "http://127.0.0.1:51546".to_string();
 
     let source = config::AddonSource {
         id: uuid::Uuid::new_v4().to_string(),
         name: source_name,
-        url,
+        url: url.clone(),
         enabled: true,
         is_default: false,
         binary_path: Some(dest_path.clone()),
@@ -15735,12 +15855,12 @@ fn install_addon_binary(
     }
     config::save_config(&config).map_err(|e| e.to_string())?;
 
-    // Spawn the binary immediately with --yes (auto-accept disclaimer)
+    // Spawn the binary immediately with --yes (auto-accept disclaimer) and dynamic port
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            match start_addon_process(&dest_path, &["--yes".to_string()]).await {
-                Ok(_) => println!("[addon] Binary started after install"),
+            match start_addon_process(&dest_path, &["--yes".to_string(), "--port".to_string(), port.to_string()]).await {
+                Ok(_) => println!("[addon] Binary started after install on port {}", port),
                 Err(e) => eprintln!("[addon] Failed to start binary after install: {}", e),
             }
         });
@@ -15763,18 +15883,82 @@ fn remove_addon_binary(state: State<'_, AppState>, source_id: String) -> Result<
     Ok(())
 }
 
+/// Find a free TCP port on localhost
+async fn find_free_port() -> Result<u16, String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Cannot bind to free port: {}", e))?;
+    let port = listener.local_addr()
+        .map_err(|e| format!("Cannot get port: {}", e))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+/// Fetch addon version from its /version endpoint
+async fn get_addon_version_from_url(url: &str) -> Option<String> {
+    let trimmed = url.trim_end_matches('/');
+    let version_url = format!("{}/version", trimmed);
+    let is_loopback = trimmed.contains("127.0.0.1") || trimmed.contains("localhost");
+
+    if is_loopback {
+        // Use raw TCP for loopback to bypass reqwest loopback restrictions
+        match http_client::local_http_get_raw(&version_url) {
+            Ok((status, mut reader)) if (200..300).contains(&status) => {
+                use std::io::Read;
+                let mut body = String::new();
+                let _ = reader.read_to_string(&mut body);
+                serde_json::from_str::<serde_json::Value>(&body).ok()
+                    .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            }
+            _ => None,
+        }
+    } else {
+        let client = crate::http_client::shared_client();
+        match client.get(&version_url).timeout(std::time::Duration::from_secs(2)).send() {
+            Ok(resp) if resp.status().is_success() => {
+                resp.json::<serde_json::Value>().ok()
+                    .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Validate that an addon URL is reachable (server responds to /manifest.json)
+/// Uses raw TCP for loopback addresses to bypass reqwest loopback restrictions.
 #[tauri::command]
 fn check_addon_server(url: String) -> bool {
-    let client = crate::http_client::shared_client();
-    match client
-        .get(format!("{}/manifest.json", url.trim_end_matches('/')))
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-    {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+    let trimmed = url.trim_end_matches('/').to_string();
+    let is_loopback = trimmed.contains("127.0.0.1") || trimmed.contains("localhost");
+    if is_loopback {
+        match http_client::local_http_get_raw(&format!("{}/manifest.json", trimmed)) {
+            Ok((status, _body)) => (200..300).contains(&status),
+            Err(_) => false,
+        }
+    } else {
+        let client = crate::http_client::shared_client();
+        match client
+            .get(format!("{}/manifest.json", trimmed))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+        {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
     }
+}
+
+/// Get the addon log history (last 200 lines)
+#[tauri::command]
+fn get_addon_logs() -> Vec<String> {
+    ADDON_LOG_HISTORY.lock().map(|h| h.clone()).unwrap_or_default()
+}
+
+/// Get addon version from its /version endpoint
+#[tauri::command]
+async fn get_addon_version(url: String) -> Option<String> {
+    get_addon_version_from_url(&url).await
 }
 
 /// Set a source as the active default
@@ -15798,7 +15982,6 @@ fn set_active_source(state: State<'_, AppState>, id: String) -> Result<(), Strin
     if let Some(url) = active_url {
         config.addon_url = Some(url);
     }
-    remote_source::clear_streams_cache();
     config::save_config(&config).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -15870,7 +16053,7 @@ async fn spawn_addon_child(binary_path: &str, args: &[String]) -> Result<(), Str
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Log stdout
+    // Log stdout + emit to frontend
     if let Some(stdout) = stdout {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stdout);
@@ -15880,12 +16063,26 @@ async fn spawn_addon_child(binary_path: &str, args: &[String]) -> Result<(), Str
                 line.clear();
                 match reader.read_line(&mut line).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => println!("[addon] stdout: {}", line.trim()),
+                    Ok(_) => {
+                        let trimmed = line.trim().to_string();
+                        println!("[addon] stdout: {}", trimmed);
+                        // Store in log history
+                        if let Ok(mut hist) = ADDON_LOG_HISTORY.lock() {
+                            hist.push(format!("[stdout] {}", trimmed));
+                            if hist.len() > 200 { hist.remove(0); }
+                        }
+                        // Emit to frontend
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &trimmed);
+                            }
+                        }
+                    }
                 }
             }
         });
     }
-    // Log stderr
+    // Log stderr + emit to frontend
     if let Some(stderr) = stderr {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(stderr);
@@ -15895,7 +16092,21 @@ async fn spawn_addon_child(binary_path: &str, args: &[String]) -> Result<(), Str
                 line.clear();
                 match reader.read_line(&mut line).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => println!("[addon] stderr: {}", line.trim()),
+                    Ok(_) => {
+                        let trimmed = line.trim().to_string();
+                        println!("[addon] stderr: {}", trimmed);
+                        // Store in log history
+                        if let Ok(mut hist) = ADDON_LOG_HISTORY.lock() {
+                            hist.push(format!("[stderr] {}", trimmed));
+                            if hist.len() > 200 { hist.remove(0); }
+                        }
+                        // Emit to frontend
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &trimmed);
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -15921,21 +16132,62 @@ async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), S
         true
     });
     if should_spawn_watchdog {
+        // Extract port from args for health checks (args contain "--port", "NNNNN")
+        let addon_port: u16 = args_owned.windows(2)
+            .find(|w| w[0] == "--port")
+            .and_then(|w| w[1].parse().ok())
+            .unwrap_or(51546);
+
         std::thread::spawn(move || {
+            const MAX_RESTARTS: u32 = 10;
+            const BACKOFF_BASE: u64 = 2; // seconds
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 let needs_restart = {
                     if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
                         match proc.as_mut().map(|c| c.try_wait()) {
                             Some(Ok(Some(status))) => {
-                                println!("[addon] Process exited with {}, will restart...", status);
+                                println!("[addon] Process exited with {}, checking server...", status);
                                 *proc = None;
                                 true
                             }
-                            Some(Ok(None)) => false,
-                            _ => {
-                                println!("[addon] No process found, will restart...");
-                                true
+                            Some(Ok(None)) => {
+                                // Healthy — reset restart counter
+                                if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                false
+                            }
+                            Some(Err(e)) => {
+                                // try_wait() error — DO NOT blindly restart.
+                                // Check if the addon server is actually responding via TCP.
+                                println!("[addon] try_wait error: {}, checking if server is alive...", e);
+                                let addr = format!("127.0.0.1:{}", addon_port);
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+                                    std::time::Duration::from_secs(2),
+                                ).is_ok() {
+                                    // Server is still responding — don't restart, just reset counter
+                                    println!("[addon] Server is alive on port {}, skipping restart", addon_port);
+                                    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                    false
+                                } else {
+                                    println!("[addon] Server not responding, will restart...");
+                                    true
+                                }
+                            }
+                            None => {
+                                // No process handle stored
+                                let addr = format!("127.0.0.1:{}", addon_port);
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+                                    std::time::Duration::from_secs(2),
+                                ).is_ok() {
+                                    println!("[addon] No handle but server alive on port {}, skipping restart", addon_port);
+                                    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+                                    false
+                                } else {
+                                    println!("[addon] No process found and server not responding, will restart...");
+                                    true
+                                }
                             }
                         }
                     } else {
@@ -15943,8 +16195,31 @@ async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), S
                     }
                 };
                 if needs_restart {
-                    println!("[addon] Restarting in 2s...");
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let restart_count = {
+                        let mut cnt = ADDON_RESTART_COUNT.lock().unwrap_or_else(|e| e.into_inner());
+                        *cnt += 1;
+                        *cnt
+                    };
+                    if restart_count > MAX_RESTARTS {
+                        println!("[addon] Max restarts ({}) exceeded. Giving up. Restart the app to retry.", MAX_RESTARTS);
+                        if let Ok(h) = GLOBAL_APP_HANDLE.lock() {
+                            if let Some(ref handle) = *h {
+                                let _ = handle.emit_all("addon-log", &"[FATAL] Addon crashed too many times. Please restart the app.");
+                                let _ = handle.emit_all("addon-crashed", &restart_count);
+                            }
+                        }
+                        break;
+                    }
+                    // Kill any zombie process that might be holding the port
+                    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+                        if let Some(mut child) = proc.take() {
+                            let _ = child.kill();
+                        }
+                    }
+                    // Exponential backoff: 2s, 4s, 8s, 16s, ... capped at 60s
+                    let delay = std::cmp::min(BACKOFF_BASE.pow(restart_count), 60);
+                    println!("[addon] Restart attempt {}/{} in {}s...", restart_count, MAX_RESTARTS, delay);
+                    std::thread::sleep(std::time::Duration::from_secs(delay));
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     match rt.block_on(spawn_addon_child(&bp_owned, &args_owned)) {
                         Ok(_) => println!("[addon] Restarted successfully"),
@@ -15961,7 +16236,7 @@ async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), S
 
 #[tauri::command]
 fn remote_clear_streams_cache() -> Result<(), String> {
-    remote_source::clear_streams_cache();
+    // No-op: stream cache removed — addon handles caching now
     Ok(())
 }
 
@@ -16151,6 +16426,11 @@ fn main() {
             }
 
             apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
+
+            // Store global app handle for background thread event emission
+            if let Ok(mut h) = GLOBAL_APP_HANDLE.lock() {
+                *h = Some(app.handle());
+            }
 
             // Register deep link handler for OAuth callback
             // The callback page redirects to the runtime-specific scheme.
@@ -16547,6 +16827,8 @@ fn main() {
             remote_get_season_streams,
             resolve_imdb_id,
             validate_hubdrive_url,
+            verify_stream_url,
+            verify_stream_urls,
             remote_play_with_mpv,
             remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,
@@ -16570,6 +16852,8 @@ fn main() {
             add_addon_source,
             remove_addon_source,
             check_addon_server,
+            get_addon_version,
+            get_addon_logs,
             set_active_source,
             toggle_addon_source,
             auto_setup_addon,

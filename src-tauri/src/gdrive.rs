@@ -411,41 +411,58 @@ impl GoogleDriveClient {
             .map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    /// List only folders
+    /// List only folders (with pagination support)
     pub async fn list_folders(&self, parent_id: Option<&str>) -> Result<Vec<DriveItem>, String> {
-        let access_token = self.get_access_token().await?;
-
         let parent = parent_id.unwrap_or("root");
         let query = format!(
             "'{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
             parent
         );
 
-        let url = format!(
-            "{}/files?q={}&fields=files(id,name,mimeType,modifiedTime,parents)&pageSize=100&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true",
-            DRIVE_API_BASE,
-            urlencoding::encode(&query)
-        );
+        let mut all_folders = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        let response = self
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await
-            .map_err(|e| format!("Failed to list folders: {}", e))?;
+        loop {
+            let access_token = self.get_access_token().await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Drive API error: {}", error_text));
+            let mut url = format!(
+                "{}/files?q={}&fields=files(id,name,mimeType,modifiedTime,parents),nextPageToken&pageSize=100&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true",
+                DRIVE_API_BASE,
+                urlencoding::encode(&query)
+            );
+
+            if let Some(ref token) = page_token {
+                url.push_str(&format!("&pageToken={}", token));
+            }
+
+            let response = self
+                .http_client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .send()
+                .await
+                .map_err(|e| format!("Failed to list folders: {}", e))?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_default();
+                return Err(format!("Drive API error: {}", error_text));
+            }
+
+            let result: DriveListResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+            all_folders.extend(result.files);
+
+            if let Some(next_token) = result.next_page_token {
+                page_token = Some(next_token);
+            } else {
+                break;
+            }
         }
 
-        let result: DriveListResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        Ok(result.files)
+        Ok(all_folders)
     }
 
     /// List video files in a folder (recursive option)
@@ -454,8 +471,6 @@ impl GoogleDriveClient {
         folder_id: &str,
         recursive: bool,
     ) -> Result<Vec<DriveItem>, String> {
-        let access_token = self.get_access_token().await?;
-
         let mime_conditions: Vec<String> = VIDEO_MIME_TYPES
             .iter()
             .chain(ARCHIVE_MIME_TYPES.iter())
@@ -472,6 +487,8 @@ impl GoogleDriveClient {
         let mut page_token: Option<String> = None;
 
         loop {
+            let access_token = self.get_access_token().await?;
+
             let mut url = format!(
                 "{}/files?q={}&fields=files(id,name,mimeType,size,modifiedTime,parents,webContentLink),nextPageToken&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true",
                 DRIVE_API_BASE,
@@ -520,6 +537,7 @@ impl GoogleDriveClient {
 
         Ok(all_files)
     }
+
 
     /// Get a streaming URL for a file (with auth header)
     pub async fn get_stream_url(&self, file_id: &str) -> Result<(String, String), String> {

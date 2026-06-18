@@ -1,53 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
-// In-memory cache for stream results (5 minute TTL)
-const STREAM_CACHE_TTL: Duration = Duration::from_secs(300);
-
-struct CacheEntry {
-    streams: Vec<RemoteStream>,
-    fetched_at: Instant,
-}
-
-static STREAM_CACHE: Mutex<Option<HashMap<String, CacheEntry>>> = Mutex::new(None);
-
-fn evict_stale_entries(map: &mut HashMap<String, CacheEntry>) {
-    map.retain(|_, entry| entry.fetched_at.elapsed() < STREAM_CACHE_TTL);
-}
-
-fn get_cached_streams(key: &str) -> Option<Vec<RemoteStream>> {
-    let mut cache = STREAM_CACHE.lock().ok()?;
-    let map = cache.as_mut()?;
-    // Evict expired entries on every access to prevent unbounded growth
-    evict_stale_entries(map);
-    let entry = map.get(key)?;
-    if entry.fetched_at.elapsed() < STREAM_CACHE_TTL {
-        Some(entry.streams.clone())
-    } else {
-        None
-    }
-}
-
-fn set_cached_streams(key: &str, streams: Vec<RemoteStream>) {
-    let mut cache = STREAM_CACHE.lock().unwrap();
-    let map = cache.get_or_insert_with(HashMap::new);
-    // Evict expired entries on every insert to prevent unbounded growth
-    evict_stale_entries(map);
-    map.insert(
-        key.to_string(),
-        CacheEntry {
-            streams,
-            fetched_at: Instant::now(),
-        },
-    );
-}
-
-fn clear_stream_cache() {
-    let mut cache = STREAM_CACHE.lock().unwrap();
-    *cache = None;
-}
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,19 +150,9 @@ pub fn parse_source(name: &str) -> String {
     }
 }
 
-pub fn fetch_movie_streams(imdb_id: &str, base_url: &str, force_refresh: bool) -> Result<Vec<RemoteStream>, String> {
-    let cache_key = format!("movie:{}", imdb_id);
-
-    if !force_refresh {
-        if let Some(cached) = get_cached_streams(&cache_key) {
-            println!("[REMOTE] Cache hit for {}", cache_key);
-            return Ok(cached);
-        }
-    }
-
+pub fn fetch_movie_streams(imdb_id: &str, base_url: &str, _force_refresh: bool) -> Result<Vec<RemoteStream>, String> {
     let url = format!("{}/stream/movie/{}.json", base_url.trim_end_matches('/'), imdb_id);
     let streams = fetch_and_parse_streams(&url)?;
-    set_cached_streams(&cache_key, streams.clone());
     Ok(streams)
 }
 
@@ -218,17 +161,8 @@ pub fn fetch_series_streams(
     season: i32,
     episode: i32,
     base_url: &str,
-    force_refresh: bool,
+    _force_refresh: bool,
 ) -> Result<Vec<RemoteStream>, String> {
-    let cache_key = format!("series:{}:{}:{}", imdb_id, season, episode);
-
-    if !force_refresh {
-        if let Some(cached) = get_cached_streams(&cache_key) {
-            println!("[REMOTE] Cache hit for {}", cache_key);
-            return Ok(cached);
-        }
-    }
-
     let url = format!(
         "{}/stream/series/{}:{}:{}.json",
         base_url.trim_end_matches('/'),
@@ -237,7 +171,6 @@ pub fn fetch_series_streams(
         episode
     );
     let streams = fetch_and_parse_streams(&url)?;
-    set_cached_streams(&cache_key, streams.clone());
     Ok(streams)
 }
 
@@ -247,22 +180,8 @@ pub fn fetch_season_streams(
     imdb_id: &str,
     season: i32,
     base_url: &str,
-    force_refresh: bool,
+    _force_refresh: bool,
 ) -> Result<HashMap<i32, Vec<RemoteStream>>, String> {
-    let cache_key = format!("season:{}:{}", imdb_id, season);
-
-    if !force_refresh {
-        if let Some(cached) = get_cached_streams(&cache_key) {
-            println!("[REMOTE] Cache hit for season {}", cache_key);
-            let mut by_ep: HashMap<i32, Vec<RemoteStream>> = HashMap::new();
-            for s in cached {
-                let ep = s.episode_number.unwrap_or(0);
-                by_ep.entry(ep).or_default().push(s);
-            }
-            return Ok(by_ep);
-        }
-    }
-
     let url = format!(
         "{}/stream/series/{}:{}:full.json",
         base_url.trim_end_matches('/'),
@@ -270,7 +189,6 @@ pub fn fetch_season_streams(
         season
     );
     let streams = fetch_and_parse_streams(&url)?;
-    set_cached_streams(&cache_key, streams.clone());
 
     let mut by_ep: HashMap<i32, Vec<RemoteStream>> = HashMap::new();
     for s in streams {
@@ -278,10 +196,6 @@ pub fn fetch_season_streams(
         by_ep.entry(ep).or_default().push(s);
     }
     Ok(by_ep)
-}
-
-pub fn clear_streams_cache() {
-    clear_stream_cache();
 }
 
 fn is_loopback_url(url: &str) -> bool {
@@ -443,4 +357,112 @@ pub fn format_file_size(bytes: i64) -> String {
         unit_idx += 1;
     }
     format!("{:.2} {}", size, UNITS[unit_idx])
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamVerification {
+    pub url: String,
+    pub active: bool,
+}
+
+fn try_probe_range_get(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .get(url)
+        .header("Range", "bytes=0-1024")
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    let status = resp.status();
+    if !status.is_success() && status != 206 {
+        return None;
+    }
+
+    let ct = resp.headers().get("content-type")?.to_str().ok()?;
+    if ct.starts_with("video/")
+        || ct.starts_with("application/octet-stream")
+        || ct.starts_with("application/x-mpegURL")
+        || ct.starts_with("binary/")
+        || ct.contains("mp4")
+        || ct.contains("matroska")
+        || ct.contains("webm")
+    {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn try_probe_head(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .head(url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    if resp.status().is_success() || resp.status() == 206 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn try_probe_get_status(client: &reqwest::blocking::Client, url: &str) -> Option<bool> {
+    let resp = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .ok()?;
+
+    if resp.status().is_success() || resp.status() == 206 {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+fn verify_single_url(url: &str) -> bool {
+    let client = crate::http_client::shared_client();
+
+    if let Some(result) = try_probe_range_get(client, url) {
+        return result;
+    }
+
+    if let Some(result) = try_probe_head(client, url) {
+        return result;
+    }
+
+    if let Some(result) = try_probe_get_status(client, url) {
+        return result;
+    }
+
+    false
+}
+
+pub fn verify_streams(urls: &[String]) -> Vec<StreamVerification> {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    let results = Arc::new(Mutex::new(Vec::with_capacity(urls.len())));
+    let mut handles = Vec::with_capacity(urls.len());
+
+    for url in urls {
+        let url = url.clone();
+        let results = Arc::clone(&results);
+
+        handles.push(thread::spawn(move || {
+            let active = verify_single_url(&url);
+            let mut res = results.lock().expect("verify_streams lock");
+            res.push(StreamVerification { url, active });
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    Arc::try_unwrap(results)
+        .expect("verify_streams arc unwrap")
+        .into_inner()
+        .expect("verify_streams mutex into_inner")
 }
