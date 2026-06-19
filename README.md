@@ -4,7 +4,7 @@ Cloud-first desktop media library. Indexes your Google Drive, enriches with TMDB
 
 ![Tauri](https://img.shields.io/badge/Tauri-v1-blue?style=flat-square)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square)
-![Version](https://img.shields.io/badge/version-3.0.53-black?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.55-black?style=flat-square)
 
 ## Features
 

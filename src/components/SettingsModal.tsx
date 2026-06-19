@@ -1778,6 +1778,7 @@ export function SettingsModal({
                           </Button>
                         </div>
                       </div>
+
                     </m.div>
                   )}
 

@@ -20,6 +20,7 @@ mod zip_parser;
 mod zip_stream_proxy;
 mod remote_stream_proxy;
 mod remote_source;
+mod sentry;
 mod stream_cache;
 
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -12772,10 +12773,13 @@ fn open_latest_release_page_for_manual_install(context: &str) {
 }
 
 fn manual_update_error(context: &str, details: impl std::fmt::Display) -> String {
+    let details_str = details.to_string();
+    // Report to Sentry — captures the exact error with context tag
+    crate::sentry::capture_error(context, &details_str);
     open_latest_release_page_for_manual_install(context);
     format!(
         "Auto updater issue, please install manually. Opening latest release page. {}",
-        details
+        details_str
     )
 }
 
@@ -13358,15 +13362,24 @@ fn resolve_windows_installer_from_package(
 
     let mut extract_cmd = std::process::Command::new("powershell");
     config::apply_hidden_process_flags(&mut extract_cmd);
+
+    // Build the zip path and dest as PowerShell strings — \\?\ prefix confuses Expand-Archive
+    let zip_str = package_path.to_string_lossy().replace(r"\\?\", "");
+    let dest_str = extract_dir.to_string_lossy().replace(r"\\?\", "");
+
+    let ps_script = format!(
+        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+        zip_str.replace('\'', "''"),
+        dest_str.replace('\'', "''"),
+    );
+
     let output = extract_cmd
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "& { param([string]$zipPath, [string]$destinationPath) Expand-Archive -LiteralPath $zipPath -DestinationPath $destinationPath -Force }",
+            &ps_script,
         ])
-        .arg(package_path)
-        .arg(&extract_dir)
         .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
 
@@ -16240,6 +16253,13 @@ fn remote_clear_streams_cache() -> Result<(), String> {
     Ok(())
 }
 
+// ── Frontend-to-backend error reporting ──
+#[tauri::command]
+fn sentry_report_error(context: String, details: String) -> Result<(), String> {
+    crate::sentry::capture_error(&context, &details);
+    Ok(())
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -16266,8 +16286,12 @@ fn main() {
     };
 
     // Load .env file from project root (for development)
-    // This allows setting GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET
+    // This allows setting VITE_SENTRY_DSN, GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, etc.
     dotenvy::dotenv().ok();
+
+    // Initialize Sentry crash reporting (reads SENTRY_DSN from env).
+    // No-op if SENTRY_DSN is not set. 10% sampling, consent-gated.
+    let _sentry_guard = crate::sentry::init();
 
     // Migrate app data from old StreamVault directory to new SlasshyVault directory.
     // Dev builds use StreamVault-Dev → SlasshyVault-Dev (isolated from production).
@@ -16860,6 +16884,7 @@ fn main() {
             install_addon_binary,
             remove_addon_binary,
             remote_clear_streams_cache,
+            sentry_report_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
