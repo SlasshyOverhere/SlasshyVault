@@ -96,6 +96,8 @@ plan/
 
 # AI/editor config
 .claudeignore
+.omc/
+.serena/
 
 # Design docs
 DESIGN.md
