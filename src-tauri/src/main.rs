@@ -16253,6 +16253,15 @@ fn remote_clear_streams_cache() -> Result<(), String> {
     Ok(())
 }
 
+// ── Frontend-to-backend error reporting ──
+// Called by the frontend's global error reporter to forward any JS/Tauri
+// command error to the Rust Sentry client.
+#[tauri::command]
+fn sentry_report_error(context: String, details: String) -> Result<(), String> {
+    crate::sentry::capture_error(&context, &details);
+    Ok(())
+}
+
 // ── Test Command (Sentry verification) ──
 #[tauri::command]
 fn sentry_test_panic() -> String {
@@ -16994,6 +17003,7 @@ fn main() {
             install_addon_binary,
             remove_addon_binary,
             remote_clear_streams_cache,
+            sentry_report_error,
             sentry_test_panic,
             sentry_test_update_error,
         ])
