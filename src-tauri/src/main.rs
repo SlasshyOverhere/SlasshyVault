@@ -16254,114 +16254,10 @@ fn remote_clear_streams_cache() -> Result<(), String> {
 }
 
 // ── Frontend-to-backend error reporting ──
-// Called by the frontend's global error reporter to forward any JS/Tauri
-// command error to the Rust Sentry client.
 #[tauri::command]
 fn sentry_report_error(context: String, details: String) -> Result<(), String> {
     crate::sentry::capture_error(&context, &details);
     Ok(())
-}
-
-// ── Test Command (Sentry verification) ──
-#[tauri::command]
-fn sentry_test_panic() -> String {
-    panic!("[SENTRY-TEST] Intentional panic — verifying Sentry crash reporting works");
-}
-
-// ── Test Command (Simulate "ZIP has no installer" update error) ──
-#[tauri::command]
-fn sentry_test_update_error() -> Result<String, String> {
-    // 1. Create a dummy ZIP in the updater staging dir with zero installer files
-    let staging_dir = updater_staging_root().join(format!("sentry-test-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&staging_dir)
-        .map_err(|e| format!("Failed to create test staging dir: {}", e))?;
-
-    let zip_path = staging_dir.join("SlasshyVault_3.0.55_x64-setup.zip");
-
-    // 2. Write a minimal ZIP that contains only a README (no .exe / .msi / .nsis)
-    //    Minimal valid ZIP: PK\x03\x04 local file header + data + central dir + EOCD
-    let content = b"This is a corrupted/broken updater package. No installer found.";
-    let filename = "README.txt";
-
-    // Build a minimal ZIP by hand (no external crate needed)
-    use std::io::Write;
-    let mut zip_bytes = Vec::new();
-
-    // Local file header
-    let crc = crc32fast::hash(content);
-    zip_bytes.extend_from_slice(b"PK\x03\x04");       // signature
-    zip_bytes.extend_from_slice(&[20, 0]);             // version needed
-    zip_bytes.extend_from_slice(&[0, 0]);              // flags
-    zip_bytes.extend_from_slice(&[0, 0]);              // compression (stored)
-    zip_bytes.extend_from_slice(&[0, 0, 0, 0]);        // mod time/date
-    zip_bytes.extend_from_slice(&crc.to_le_bytes());   // crc32
-    zip_bytes.extend_from_slice(&(content.len() as u32).to_le_bytes()); // compressed size
-    zip_bytes.extend_from_slice(&(content.len() as u32).to_le_bytes()); // uncompressed size
-    zip_bytes.extend_from_slice(&(filename.len() as u16).to_le_bytes()); // filename length
-    zip_bytes.extend_from_slice(&[0, 0]);              // extra field length
-    zip_bytes.extend_from_slice(filename.as_bytes());  // filename
-    zip_bytes.extend_from_slice(content);              // file data
-
-    // Central directory entry
-    let local_header_offset = 0u32;
-    zip_bytes.extend_from_slice(b"PK\x01\x02");       // signature
-    zip_bytes.extend_from_slice(&[20, 0]);             // version made by
-    zip_bytes.extend_from_slice(&[20, 0]);             // version needed
-    zip_bytes.extend_from_slice(&[0, 0]);              // flags
-    zip_bytes.extend_from_slice(&[0, 0]);              // compression
-    zip_bytes.extend_from_slice(&[0, 0, 0, 0]);        // mod time/date
-    zip_bytes.extend_from_slice(&crc.to_le_bytes());   // crc32
-    zip_bytes.extend_from_slice(&(content.len() as u32).to_le_bytes());
-    zip_bytes.extend_from_slice(&(content.len() as u32).to_le_bytes());
-    zip_bytes.extend_from_slice(&(filename.len() as u16).to_le_bytes());
-    zip_bytes.extend_from_slice(&[0, 0]);              // extra field
-    zip_bytes.extend_from_slice(&[0, 0]);              // file comment
-    zip_bytes.extend_from_slice(&[0, 0, 0, 0]);        // disk number start
-    zip_bytes.extend_from_slice(&[0, 0]);              // internal attrs
-    zip_bytes.extend_from_slice(&[0, 0, 0, 0]);        // external attrs
-    zip_bytes.extend_from_slice(&local_header_offset.to_le_bytes());
-    zip_bytes.extend_from_slice(filename.as_bytes());
-
-    // End of central directory
-    let central_dir_offset = (30 + filename.len() + content.len()) as u32;
-    let central_dir_size = (46 + filename.len()) as u32;
-    let total_entries = 1u16;
-    zip_bytes.extend_from_slice(b"PK\x05\x06");       // signature
-    zip_bytes.extend_from_slice(&[0, 0]);              // disk number
-    zip_bytes.extend_from_slice(&[0, 0]);              // disk with central dir
-    zip_bytes.extend_from_slice(&total_entries.to_le_bytes()); // entries on this disk
-    zip_bytes.extend_from_slice(&total_entries.to_le_bytes()); // total entries
-    zip_bytes.extend_from_slice(&central_dir_size.to_le_bytes());
-    zip_bytes.extend_from_slice(&central_dir_offset.to_le_bytes());
-    zip_bytes.extend_from_slice(&[0, 0]);              // comment length
-
-    let mut file = std::fs::File::create(&zip_path)
-        .map_err(|e| format!("Failed to create test zip: {}", e))?;
-    file.write_all(&zip_bytes)
-        .map_err(|e| format!("Failed to write test zip: {}", e))?;
-    drop(file);
-
-    eprintln!(
-        "[SENTRY-TEST] Created dummy updater ZIP at: {:?} ({} bytes, contains only README.txt — no installer)",
-        zip_path,
-        zip_bytes.len()
-    );
-
-    // 3. Run through the same security validation as the real install_update
-    let safe_path = get_valid_installer_path(zip_path.to_str().unwrap())
-        .map_err(|e| manual_update_error("sentry_test_update_error", e))?;
-
-    // 4. This is where the real "zip has nothing" error triggers
-    #[cfg(target_os = "windows")]
-    {
-        let result = resolve_windows_installer_from_package(&safe_path);
-        if let Err(e) = result {
-            // Routes through manual_update_error -> sentry::capture_error -> flush
-            return Err(manual_update_error("install_update", e));
-        }
-    }
-
-    Ok(format!("Test ZIP created at: {:?}", zip_path))
 }
 
 fn main() {
@@ -16718,21 +16614,6 @@ fn main() {
                 }
             });
 
-            // Auto-trigger the Sentry update error test on startup (dev only)
-            // so we can verify the error reaches the Sentry dashboard without manual clicks.
-            let app_handle_for_sentry_test = app.handle();
-            if is_dev_runtime() {
-                tauri::async_runtime::spawn(async move {
-                    // Small delay to let the app finish initializing
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    println!("[SENTRY-TEST] Auto-triggering update error simulation...");
-                    match sentry_test_update_error() {
-                        Ok(msg) => println!("[SENTRY-TEST] {}", msg),
-                        Err(e) => println!("[SENTRY-TEST] Update error sent to Sentry: {}", e),
-                    }
-                });
-            }
-
             Ok(())
         })
         .on_page_load(|window, payload| {
@@ -17004,8 +16885,6 @@ fn main() {
             remove_addon_binary,
             remote_clear_streams_cache,
             sentry_report_error,
-            sentry_test_panic,
-            sentry_test_update_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
