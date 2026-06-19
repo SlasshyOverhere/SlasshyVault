@@ -51,6 +51,7 @@ crc32fast = "1.4"
 tar = "0.4"
 rar-stream = { path = "vendor/rar-stream", features = ["async"] }
 unrar = "0.5"
+sentry = "0.48.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Graphics_Dwm", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

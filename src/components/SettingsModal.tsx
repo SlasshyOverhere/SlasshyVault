@@ -1778,6 +1778,69 @@ export function SettingsModal({
                           </Button>
                         </div>
                       </div>
+
+                      {/* Test Sentry crash reporting */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-medium">Test Sentry Crash</h4>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Triggers an intentional Rust panic to verify Sentry captures it.
+                          Check your Sentry dashboard after clicking.
+                        </p>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="w-full gap-2"
+                          onClick={async () => {
+                            const { invoke } = await import("@tauri-apps/api/tauri");
+                            try {
+                              await invoke("sentry_test_panic");
+                            } catch {
+                              // The app will restart — this is expected
+                            }
+                          }}
+                        >
+                          <Bug className="size-4" />
+                          Trigger Test Crash
+                        </Button>
+                      </div>
+
+                      {/* Test update error path (ZIP with no installer) */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-medium">Test Update Error</h4>
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+                            DEV ONLY
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Simulates a broken updater ZIP with no installer inside.
+                          The real auto-update error path will fire and report to Sentry.
+                          Check your Sentry dashboard after clicking.
+                        </p>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="w-full gap-2"
+                          onClick={async () => {
+                            const { invoke } = await import("@tauri-apps/api/tauri");
+                            try {
+                              const result = await invoke<string>("sentry_test_update_error");
+                              alert("Test passed. Error was sent to Sentry.\n\n" + result);
+                            } catch (e) {
+                              // The error message IS the result — it means the real path was hit
+                              alert("Update error triggered and sent to Sentry:\n\n" + String(e));
+                            }
+                          }}
+                        >
+                          <Archive className="size-4" />
+                          Trigger Broken Update Error
+                        </Button>
+                      </div>
                     </m.div>
                   )}
 
