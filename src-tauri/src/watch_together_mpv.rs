@@ -759,3 +759,808 @@ pub fn cleanup_session(session_id: &str) {
     let _ = fs::remove_file(wt_dir.join(format!("state_{}.json", session_id)));
     let _ = fs::remove_file(wt_dir.join(format!("wt_{}.lua", session_id)));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── WatchTogetherController::new() ──
+
+    #[test]
+    fn new_initializes_with_defaults() {
+        let c = WatchTogetherController::new("abc123", true);
+        assert_eq!(c.session_id, "abc123");
+        assert_eq!(c.pipe_name, r"\\.\pipe\mpv-wt-abc123");
+        assert!(c.is_host);
+        assert!(!c.is_connected());
+        assert!(c.cmd_tx.is_none());
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 1);
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn new_sanitizes_session_id() {
+        let c = WatchTogetherController::new("../../../etc/passwd;rm -rf /", false);
+        assert_eq!(c.session_id, "etcpasswdrm-rf");
+        assert_eq!(c.pipe_name, r"\\.\pipe\mpv-wt-etcpasswdrm-rf");
+        assert!(!c.is_host);
+    }
+
+    #[test]
+    fn new_preserves_safe_chars() {
+        let c = WatchTogetherController::new("my-session_123", false);
+        assert_eq!(c.session_id, "my-session_123");
+    }
+
+    #[test]
+    fn new_strips_all_unsafe_chars() {
+        let c = WatchTogetherController::new("a!@#$%^&*()+={}[]|\\:;'\"<>,?/~`b", false);
+        assert_eq!(c.session_id, "ab");
+    }
+
+    // ── get_ipc_arg() ──
+
+    #[test]
+    fn get_ipc_arg_returns_correct_path() {
+        let c = WatchTogetherController::new("test-session", true);
+        assert_eq!(c.get_ipc_arg(), r"--input-ipc-server=\\.\pipe\mpv-wt-test-session");
+    }
+
+    // ── is_connected() ──
+
+    #[test]
+    fn is_connected_false_by_default() {
+        let c = WatchTogetherController::new("s", false);
+        assert!(!c.is_connected());
+    }
+
+    #[test]
+    fn is_connected_reflects_atomic_state() {
+        let c = WatchTogetherController::new("s", false);
+        c.connected.store(true, Ordering::SeqCst);
+        assert!(c.is_connected());
+        c.connected.store(false, Ordering::SeqCst);
+        assert!(!c.is_connected());
+    }
+
+    // ── PlayerState ──
+
+    #[test]
+    fn player_state_default() {
+        let s = PlayerState::default();
+        assert_eq!(s.position, 0.0);
+        assert_eq!(s.duration, 0.0);
+        assert!(s.paused);
+        assert_eq!(s.speed, 1.0);
+    }
+
+    #[tokio::test]
+    async fn player_state_default_applied_to_controller() {
+        let c = WatchTogetherController::new("s", false);
+        let state = c.local_state.read().await;
+        assert_eq!(state.position, 0.0);
+        assert_eq!(state.duration, 0.0);
+        assert!(state.paused);
+        assert_eq!(state.speed, 1.0);
+    }
+
+    // ── MpvCommand serialization ──
+
+    #[test]
+    fn mpv_command_serialize_without_request_id() {
+        let cmd = MpvCommand {
+            command: vec![json!("observe_property"), json!(1), json!("time-pos")],
+            request_id: None,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(s, r#"{"command":["observe_property",1,"time-pos"]}"#);
+        assert!(!s.contains("request_id"));
+    }
+
+    #[test]
+    fn mpv_command_serialize_with_request_id() {
+        let cmd = MpvCommand {
+            command: vec![json!("get_property"), json!("pause")],
+            request_id: Some(42),
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(s, r#"{"command":["get_property","pause"],"request_id":42}"#);
+    }
+
+    // ── MpvResponse deserialization ──
+
+    #[test]
+    fn mpv_response_deserialize_success() {
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":"test.mp4","error":"success","request_id":7}"#,
+        ).unwrap();
+        assert_eq!(r.error, "success");
+        assert_eq!(r.request_id, Some(7));
+        assert_eq!(r.data.unwrap(), "test.mp4");
+    }
+
+    #[test]
+    fn mpv_response_deserialize_error() {
+        let r: MpvResponse =
+            serde_json::from_str(r#"{"error":"property not found"}"#).unwrap();
+        assert_eq!(r.error, "property not found");
+        assert!(r.data.is_none());
+        assert!(r.request_id.is_none());
+    }
+
+    #[test]
+    fn mpv_response_deserialize_null_data() {
+        let r: MpvResponse =
+            serde_json::from_str(r#"{"data":null,"error":"success"}"#).unwrap();
+        assert_eq!(r.error, "success");
+        // serde deserializes JSON null into None for Option<Value>
+        assert!(r.data.is_none());
+    }
+
+    // ── MpvEvent deserialization ──
+
+    #[test]
+    fn mpv_event_property_change_time_pos() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"event":"property-change","id":1,"name":"time-pos","data":42.5}"#,
+        ).unwrap();
+        assert_eq!(e.event.as_deref(), Some("property-change"));
+        assert_eq!(e.id, Some(1));
+        assert_eq!(e.name.as_deref(), Some("time-pos"));
+        assert_eq!(e.data.unwrap().as_f64(), Some(42.5));
+    }
+
+    #[test]
+    fn mpv_event_property_change_pause() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"event":"property-change","id":2,"name":"pause","data":true}"#,
+        ).unwrap();
+        assert_eq!(e.name.as_deref(), Some("pause"));
+        assert_eq!(e.data.unwrap().as_bool(), Some(true));
+    }
+
+    #[test]
+    fn mpv_event_shutdown() {
+        let e: MpvEvent = serde_json::from_str(r#"{"event":"shutdown"}"#).unwrap();
+        assert_eq!(e.event.as_deref(), Some("shutdown"));
+    }
+
+    #[test]
+    fn mpv_event_end_file() {
+        let e: MpvEvent = serde_json::from_str(r#"{"event":"end-file"}"#).unwrap();
+        assert_eq!(e.event.as_deref(), Some("end-file"));
+    }
+
+    #[test]
+    fn mpv_event_seek() {
+        let e: MpvEvent = serde_json::from_str(r#"{"event":"seek"}"#).unwrap();
+        assert_eq!(e.event.as_deref(), Some("seek"));
+    }
+
+    #[test]
+    fn mpv_event_response_fields() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"error":"success","request_id":5,"data":42}"#,
+        ).unwrap();
+        assert!(e.event.is_none());
+        assert_eq!(e.error.as_deref(), Some("success"));
+        assert_eq!(e.request_id, Some(5));
+        assert_eq!(e.data.unwrap().as_i64(), Some(42));
+    }
+
+    #[test]
+    fn mpv_event_missing_optional_fields_default_to_none() {
+        let e: MpvEvent = serde_json::from_str(r#"{"event":"idle"}"#).unwrap();
+        assert!(e.id.is_none());
+        assert!(e.name.is_none());
+        assert!(e.data.is_none());
+        assert!(e.error.is_none());
+        assert!(e.request_id.is_none());
+    }
+
+    // ── ParticipantState ──
+
+    #[test]
+    fn participant_state_construction_and_serde() {
+        let p = ParticipantState {
+            nickname: "Alice".to_string(),
+            ready: true,
+            position: 123.45,
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let deserialized: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(deserialized["nickname"], "Alice");
+        assert_eq!(deserialized["ready"], true);
+        assert_eq!(deserialized["position"], 123.45);
+    }
+
+    // ── MpvSyncEvent ──
+
+    #[test]
+    fn mpv_sync_event_variants() {
+        let e1 = MpvSyncEvent::PauseChanged {
+            paused: true,
+            position: 10.0,
+        };
+        let e2 = MpvSyncEvent::Seeked { position: 30.5 };
+        let e3 = MpvSyncEvent::Ended;
+        let e4 = MpvSyncEvent::PositionUpdate { position: 60.0 };
+
+        match e1 {
+            MpvSyncEvent::PauseChanged { paused, position } => {
+                assert!(paused);
+                assert_eq!(position, 10.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+        match e2 {
+            MpvSyncEvent::Seeked { position } => assert_eq!(position, 30.5),
+            _ => panic!("wrong variant"),
+        }
+        match e3 {
+            MpvSyncEvent::Ended => {}
+            _ => panic!("wrong variant"),
+        }
+        match e4 {
+            MpvSyncEvent::PositionUpdate { position } => assert_eq!(position, 60.0),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── get_estimated_position() ──
+
+    #[tokio::test]
+    async fn get_estimated_position_paused_returns_stored() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 42.0;
+            state.paused = true;
+            state.speed = 1.0;
+            state.last_update = std::time::Instant::now();
+        }
+        let (pos, paused) = c.get_estimated_position().await;
+        assert!(paused);
+        assert!((pos - 42.0).abs() < 0.1);
+    }
+
+    #[tokio::test]
+    async fn get_estimated_position_playing_adds_elapsed() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 10.0;
+            state.paused = false;
+            state.speed = 2.0;
+            state.last_update = std::time::Instant::now() - std::time::Duration::from_millis(50);
+        }
+        let (pos, paused) = c.get_estimated_position().await;
+        assert!(!paused);
+        // 10.0 + ~0.05s * 2.0 = ~10.1
+        assert!(pos >= 10.05 && pos < 10.5);
+    }
+
+    #[tokio::test]
+    async fn get_estimated_position_playing_speed_1x() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 0.0;
+            state.paused = false;
+            state.speed = 1.0;
+            state.last_update = std::time::Instant::now() - std::time::Duration::from_millis(100);
+        }
+        let (pos, paused) = c.get_estimated_position().await;
+        assert!(!paused);
+        assert!(pos >= 0.05 && pos < 0.5);
+    }
+
+    // ── send_raw / send_command / observe_property / show_osd error paths ──
+
+    #[tokio::test]
+    async fn send_raw_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        let result = c.send_raw("{}".to_string()).await;
+        assert!(result.unwrap_err().contains("Not connected"));
+    }
+
+    #[tokio::test]
+    async fn send_command_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        let result = c.send_command(vec![json!("test")]).await;
+        assert!(result.unwrap_err().contains("Not connected"));
+    }
+
+    #[tokio::test]
+    async fn observe_property_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        let result = c.observe_property(1, "time-pos").await;
+        assert!(result.unwrap_err().contains("Not connected"));
+    }
+
+    #[tokio::test]
+    async fn show_osd_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        let result = c.show_osd("Hello", 1000).await;
+        assert!(result.unwrap_err().contains("Not connected"));
+    }
+
+    // ── set_paused logic ──
+
+    #[tokio::test]
+    async fn set_paused_skips_when_already_in_target_state() {
+        let c = WatchTogetherController::new("s", false);
+        // Default: paused=true. Setting paused=true should return Ok early.
+        assert!(c.set_paused(true).await.is_ok());
+        // ignoring_on_the_fly should not have been incremented
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn set_paused_increments_ignoring_on_the_fly() {
+        let c = WatchTogetherController::new("s", false);
+        // Default paused=true, requesting paused=false → will proceed past state check
+        // but fail at send_command (not connected)
+        let _ = c.set_paused(false).await;
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 1);
+    }
+
+    // ── seek_to logic ──
+
+    #[tokio::test]
+    async fn seek_to_skips_when_within_epsilon() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 10.0;
+            state.paused = true;
+            state.last_update = std::time::Instant::now();
+        }
+        // 10.0 - 10.02 = 0.02 < 0.05 epsilon → skip
+        assert!(c.seek_to(10.02).await.is_ok());
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn seek_to_proceeds_when_outside_epsilon() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 10.0;
+            state.paused = true;
+            state.last_update = std::time::Instant::now();
+        }
+        // 10.0 - 20.0 = 10.0 > 0.05 epsilon → proceed
+        let _ = c.seek_to(20.0).await;
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 1);
+    }
+
+    // ── set_speed error path ──
+
+    #[tokio::test]
+    async fn set_speed_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        assert!(c.set_speed(1.5).await.is_err());
+    }
+
+    // ── take_event_rx ──
+
+    #[tokio::test]
+    async fn take_event_rx_returns_none_initially() {
+        let c = WatchTogetherController::new("s", false);
+        // First take consumes the inner None
+        let rx = c.take_event_rx().await;
+        assert!(rx.is_none());
+    }
+
+    #[tokio::test]
+    async fn take_event_rx_returns_value_then_none() {
+        let c = WatchTogetherController::new("s", false);
+        // Manually insert a receiver to test take semantics
+        let (tx, rx) = mpsc::unbounded_channel::<MpvSyncEvent>();
+        *c.event_rx.lock().await = Some(rx);
+        drop(tx);
+
+        let first = c.take_event_rx().await;
+        assert!(first.is_some());
+        let second = c.take_event_rx().await;
+        assert!(second.is_none());
+    }
+
+    // ── should_seek_now cooldown ──
+
+    #[tokio::test]
+    async fn should_seek_now_first_call_returns_true() {
+        let c = WatchTogetherController::new("s", false);
+        assert!(c.should_seek_now().await);
+    }
+
+    #[tokio::test]
+    async fn should_seek_now_respects_cooldown() {
+        let c = WatchTogetherController::new("s", false);
+        // First call succeeds and sets the timestamp
+        assert!(c.should_seek_now().await);
+        // Immediate second call should be blocked by cooldown (1200ms)
+        assert!(!c.should_seek_now().await);
+    }
+
+    #[tokio::test]
+    async fn should_seek_now_allows_after_cooldown_expires() {
+        let c = WatchTogetherController::new("s", false);
+        // Set last_seek to well in the past
+        *c.last_seek_correction.lock().await =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        assert!(c.should_seek_now().await);
+    }
+
+    // ── next_request_id increments ──
+
+    #[tokio::test]
+    async fn send_command_with_id_increments_request_id() {
+        let c = WatchTogetherController::new("s", false);
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 1);
+        // send_command_with_id will fail (not connected) but ID is incremented before send
+        let _ = c.send_command_with_id(vec![json!("test")]).await;
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 2);
+        let _ = c.send_command_with_id(vec![json!("test")]).await;
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 3);
+    }
+
+    // ── MpvCommand empty command list ──
+
+    #[test]
+    fn mpv_command_serialize_empty() {
+        let cmd = MpvCommand {
+            command: vec![],
+            request_id: None,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(s, r#"{"command":[]}"#);
+    }
+
+    // ── MpvResponse with complex data ──
+
+    #[test]
+    fn mpv_response_deserialize_object_data() {
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":{"width":1920,"height":1080},"error":"success"}"#,
+        ).unwrap();
+        let data = r.data.unwrap();
+        assert_eq!(data["width"], 1920);
+        assert_eq!(data["height"], 1080);
+    }
+
+    // ── MpvEvent duration property change ──
+
+    #[test]
+    fn mpv_event_property_change_duration() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"event":"property-change","id":3,"name":"duration","data":7200.5}"#,
+        ).unwrap();
+        assert_eq!(e.name.as_deref(), Some("duration"));
+        assert_eq!(e.data.unwrap().as_f64(), Some(7200.5));
+    }
+
+    // ── PlayerState field mutation ──
+
+    #[tokio::test]
+    async fn player_state_mutable_via_arc() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 99.0;
+            state.duration = 3600.0;
+            state.paused = false;
+            state.speed = 1.5;
+        }
+        let state = c.local_state.read().await;
+        assert_eq!(state.position, 99.0);
+        assert_eq!(state.duration, 3600.0);
+        assert!(!state.paused);
+        assert_eq!(state.speed, 1.5);
+    }
+
+    // ── participants HashMap ──
+
+    #[tokio::test]
+    async fn participants_starts_empty() {
+        let c = WatchTogetherController::new("s", false);
+        let participants = c.participants.lock().await;
+        assert!(participants.is_empty());
+    }
+
+    #[tokio::test]
+    async fn participants_can_add_and_query() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut participants = c.participants.lock().await;
+            participants.insert(
+                "Alice".to_string(),
+                ParticipantState {
+                    nickname: "Alice".to_string(),
+                    ready: true,
+                    position: 5.0,
+                },
+            );
+        }
+        let participants = c.participants.lock().await;
+        assert_eq!(participants.len(), 1);
+        let alice = participants.get("Alice").unwrap();
+        assert!(alice.ready);
+        assert_eq!(alice.position, 5.0);
+    }
+
+    // ── seek_and_play_at error path ──
+
+    #[tokio::test]
+    async fn seek_and_play_at_errors_when_not_connected() {
+        let c = WatchTogetherController::new("s", false);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        // seek_to will fail (not connected) before the scheduling logic
+        let result = c.seek_and_play_at(10.0, now + 5.0).await;
+        assert!(result.is_err());
+    }
+
+    // ── Constants sanity checks ──
+
+    #[test]
+    fn sync_constants_are_reasonable() {
+        assert!(SEEK_THRESHOLD > SLOWDOWN_KICKIN);
+        assert!(SLOWDOWN_KICKIN > SLOWDOWN_RESET);
+        assert!(REWIND_THRESHOLD > SEEK_THRESHOLD);
+        assert!(FASTFORWARD_THRESHOLD > SEEK_THRESHOLD);
+        assert!(SEEK_COOLDOWN_MS > 0);
+        assert!(COMMAND_POSITION_EPSILON > 0.0 && COMMAND_POSITION_EPSILON < SEEK_THRESHOLD);
+        assert!(SLOWDOWN_RATE < 1.0);
+        assert!(SPEEDUP_RATE > 1.0);
+    }
+
+    // ── connect (non-Windows path) ──
+
+    #[tokio::test]
+    #[cfg(not(windows))]
+    async fn connect_returns_error_on_non_windows() {
+        let mut c = WatchTogetherController::new("s", false);
+        let result = c.connect().await;
+        assert!(result.unwrap_err().contains("Non-Windows"));
+    }
+
+    // ── connect (Windows: already connected short-circuit) ──
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn connect_returns_ok_when_already_connected() {
+        let mut c = WatchTogetherController::new("s", false);
+        c.connected.store(true, Ordering::SeqCst);
+        assert!(c.connect().await.is_ok());
+    }
+
+    // ── MpvCommand with multiple values ──
+
+    #[test]
+    fn mpv_command_serialize_set_property() {
+        let cmd = MpvCommand {
+            command: vec![json!("set_property"), json!("pause"), json!(true)],
+            request_id: Some(1),
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert!(s.contains(r#""set_property""#));
+        assert!(s.contains(r#""pause""#));
+        assert!(s.contains("true"));
+        assert!(s.contains(r#""request_id":1"#));
+    }
+
+    #[test]
+    fn mpv_command_serialize_show_text() {
+        let cmd = MpvCommand {
+            command: vec![json!("show-text"), json!("Hello OSD"), json!(3000)],
+            request_id: None,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert!(s.contains("show-text"));
+        assert!(s.contains("Hello OSD"));
+        assert!(s.contains("3000"));
+    }
+
+    // ── MpvEvent with unknown event type ──
+
+    #[test]
+    fn mpv_event_unknown_event_type() {
+        let e: MpvEvent = serde_json::from_str(r#"{"event":"file-loaded"}"#).unwrap();
+        assert_eq!(e.event.as_deref(), Some("file-loaded"));
+        assert!(e.name.is_none());
+        assert!(e.data.is_none());
+    }
+
+    #[test]
+    fn mpv_event_property_change_with_string_data() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"event":"property-change","id":5,"name":"media-title","data":"My Movie.mp4"}"#,
+        ).unwrap();
+        assert_eq!(e.name.as_deref(), Some("media-title"));
+        assert_eq!(e.data.unwrap().as_str(), Some("My Movie.mp4"));
+    }
+
+    // ── set_speed error path when not connected ──
+
+    #[tokio::test]
+    async fn set_speed_errors_when_cmd_tx_missing() {
+        let c = WatchTogetherController::new("s", false);
+        // cmd_tx is None by default → send_command fails
+        c.connected.store(true, Ordering::SeqCst);
+        let result = c.set_speed(1.5).await;
+        assert!(result.is_err());
+    }
+
+    // ── send_command_with_id returns incremental IDs ──
+
+    #[tokio::test]
+    async fn send_command_with_id_returns_id_before_send() {
+        let c = WatchTogetherController::new("s", false);
+        // First call: ID=1, fails at send
+        let result = c.send_command_with_id(vec![json!("test")]).await;
+        assert!(result.is_err());
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 2);
+
+        // Second call: ID=2, fails at send
+        let result = c.send_command_with_id(vec![json!("test")]).await;
+        assert!(result.is_err());
+        assert_eq!(c.next_request_id.load(Ordering::SeqCst), 3);
+    }
+
+    // ── seek_to with playing state (not paused) ──
+
+    #[tokio::test]
+    async fn seek_to_considers_elapsed_time_when_playing() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 10.0;
+            state.paused = false;
+            state.speed = 1.0;
+            state.last_update = std::time::Instant::now() - std::time::Duration::from_millis(200);
+        }
+        // estimated position ~10.2, seeking to 10.22 is within epsilon (0.05)
+        assert!(c.seek_to(10.22).await.is_ok());
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    // ── ignoring_on_the_fly counter ──
+
+    #[test]
+    fn ignoring_on_the_fly_default_is_zero() {
+        let c = WatchTogetherController::new("s", false);
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ignoring_on_the_fly_can_be_manipulated() {
+        let c = WatchTogetherController::new("s", false);
+        c.ignoring_on_the_fly.fetch_add(5, Ordering::SeqCst);
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 5);
+        c.ignoring_on_the_fly.store(0, Ordering::SeqCst);
+        assert_eq!(c.ignoring_on_the_fly.load(Ordering::SeqCst), 0);
+    }
+
+    // ── MpvResponse with array data ──
+
+    #[test]
+    fn mpv_response_deserialize_array_data() {
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":[1,2,3],"error":"success"}"#,
+        ).unwrap();
+        let data = r.data.unwrap();
+        assert_eq!(data.as_array().unwrap().len(), 3);
+    }
+
+    // ── MpvEvent with null data ──
+
+    #[test]
+    fn mpv_event_property_change_null_data() {
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"event":"property-change","id":1,"name":"time-pos","data":null}"#,
+        ).unwrap();
+        assert_eq!(e.name.as_deref(), Some("time-pos"));
+        assert!(e.data.is_none());
+    }
+
+    // ── PlayerState field access ──
+
+    #[test]
+    fn player_state_clone() {
+        let s = PlayerState {
+            position: 42.0,
+            duration: 3600.0,
+            paused: false,
+            speed: 1.5,
+            last_update: std::time::Instant::now(),
+        };
+        let s2 = s.clone();
+        assert_eq!(s2.position, 42.0);
+        assert_eq!(s2.duration, 3600.0);
+        assert!(!s2.paused);
+        assert_eq!(s2.speed, 1.5);
+    }
+
+    // ── ParticipantState field access ──
+
+    #[test]
+    fn participant_state_not_ready() {
+        let p = ParticipantState {
+            nickname: "Bob".to_string(),
+            ready: false,
+            position: 0.0,
+        };
+        assert!(!p.ready);
+        assert_eq!(p.nickname, "Bob");
+    }
+
+    // ── MpvSyncEvent clone ──
+
+    #[test]
+    fn mpv_sync_event_clone() {
+        let e = MpvSyncEvent::PauseChanged {
+            paused: true,
+            position: 5.0,
+        };
+        let e2 = e.clone();
+        match e2 {
+            MpvSyncEvent::PauseChanged { paused, position } => {
+                assert!(paused);
+                assert_eq!(position, 5.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── apply_sync error path (not connected) ──
+
+    #[tokio::test]
+    async fn apply_sync_errors_when_not_connected_and_needs_seek() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 0.0;
+            state.paused = false;
+            state.speed = 1.0;
+            state.last_update = std::time::Instant::now();
+        }
+        // Server position far away → should try to seek → fails (not connected)
+        let result = c.apply_sync(100.0, false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn apply_sync_noop_when_drift_within_reset() {
+        let c = WatchTogetherController::new("s", false);
+        {
+            let mut state = c.local_state.write().await;
+            state.position = 10.0;
+            state.paused = false;
+            state.speed = 1.0;
+            state.last_update = std::time::Instant::now();
+        }
+        // drift < SLOWDOWN_RESET (0.1s), speed already 1.0 → no correction needed
+        let result = c.apply_sync(10.05, false).await;
+        assert!(result.is_ok());
+    }
+
+    // ── seek_and_play_at with future timestamp ──
+
+    #[tokio::test]
+    async fn seek_and_play_at_schedules_unpause() {
+        let c = WatchTogetherController::new("s", false);
+        // seek_to will fail (not connected) but the function structure is tested
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let result = c.seek_and_play_at(10.0, now + 1.0).await;
+        // seek_to fails first
+        assert!(result.is_err());
+    }
+}

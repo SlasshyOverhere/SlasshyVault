@@ -120,9 +120,27 @@ pub fn is_unsupported_archive_item(item: &DriveItem) -> bool {
 }
 
 pub fn is_supported_cloud_media_item(item: &DriveItem) -> bool {
-    VIDEO_MIME_TYPES.contains(&item.mime_type.as_str())
+    // Check MIME type first
+    if VIDEO_MIME_TYPES.contains(&item.mime_type.as_str())
         || is_supported_archive_item(item)
         || is_unsupported_archive_item(item)
+    {
+        return true;
+    }
+    // Fallback: check file extension for cases where Drive assigns a non-standard MIME type
+    // (e.g. application/octet-stream for large ZIP files)
+    let name_lower = item.name.to_ascii_lowercase();
+    name_lower.ends_with(".zip")
+        || name_lower.ends_with(".rar")
+        || name_lower.ends_with(".mkv")
+        || name_lower.ends_with(".mp4")
+        || name_lower.ends_with(".avi")
+        || name_lower.ends_with(".mov")
+        || name_lower.ends_with(".webm")
+        || name_lower.ends_with(".m4v")
+        || name_lower.ends_with(".wmv")
+        || name_lower.ends_with(".flv")
+        || name_lower.ends_with(".ts")
 }
 
 /// Response from Drive API files.list
@@ -1626,5 +1644,1531 @@ fn load_tokens() -> Result<GoogleTokens, String> {
 mod urlencoding {
     pub fn encode(input: &str) -> String {
         percent_encoding::utf8_percent_encode(input, percent_encoding::NON_ALPHANUMERIC).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_drive_item(name: &str, mime_type: &str) -> DriveItem {
+        DriveItem {
+            id: "test-id".to_string(),
+            name: name.to_string(),
+            mime_type: mime_type.to_string(),
+            size: None,
+            modified_time: None,
+            parents: None,
+            web_content_link: None,
+        }
+    }
+
+    // ==================== is_zip_archive_item ====================
+
+    #[test]
+    fn zip_archive_by_mime_zip() {
+        let item = make_drive_item("archive.zip", "application/zip");
+        assert!(is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn zip_archive_by_mime_x_zip_compressed() {
+        let item = make_drive_item("data", "application/x-zip-compressed");
+        assert!(is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn zip_archive_by_extension() {
+        let item = make_drive_item("my_archive.zip", "application/octet-stream");
+        assert!(is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn zip_archive_case_insensitive_extension() {
+        let item = make_drive_item("archive.ZIP", "application/octet-stream");
+        assert!(is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn non_zip_archive_rar() {
+        let item = make_drive_item("archive.rar", "application/vnd.rar");
+        assert!(!is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn non_zip_archive_tar() {
+        let item = make_drive_item("archive.tar", "application/x-tar");
+        assert!(!is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn non_zip_archive_plain_file() {
+        let item = make_drive_item("video.mp4", "video/mp4");
+        assert!(!is_zip_archive_item(&item));
+    }
+
+    // ==================== is_supported_archive_item ====================
+
+    #[test]
+    fn supported_archive_zip() {
+        let item = make_drive_item("archive.zip", "application/zip");
+        assert!(is_supported_archive_item(&item));
+    }
+
+    #[test]
+    fn supported_archive_rar_by_mime() {
+        let item = make_drive_item("data", "application/x-rar-compressed");
+        assert!(is_supported_archive_item(&item));
+    }
+
+    #[test]
+    fn supported_archive_rar_by_extension() {
+        let item = make_drive_item("archive.rar", "application/octet-stream");
+        assert!(is_supported_archive_item(&item));
+    }
+
+    #[test]
+    fn supported_archive_rar_vnd_mime() {
+        let item = make_drive_item("archive.rar", "application/vnd.rar");
+        assert!(is_supported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_tar() {
+        let item = make_drive_item("archive.tar", "application/x-tar");
+        // Tar is not "supported" (not Zip or Rar), but is "unsupported archive"
+        assert!(!is_supported_archive_item(&item));
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_format_7z() {
+        let item = make_drive_item("archive.7z", "application/x-7z-compressed");
+        assert!(!is_supported_archive_item(&item));
+        assert!(!is_unsupported_archive_item(&item));
+        assert!(!is_zip_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_format_iso() {
+        let item = make_drive_item("disc.iso", "application/octet-stream");
+        assert!(!is_supported_archive_item(&item));
+    }
+
+    // ==================== is_unsupported_archive_item ====================
+
+    #[test]
+    fn unsupported_archive_tar_by_mime() {
+        let item = make_drive_item("data", "application/x-tar");
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_tar_by_extension() {
+        let item = make_drive_item("archive.tar", "application/octet-stream");
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_gzip_by_mime() {
+        let item = make_drive_item("data", "application/gzip");
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_tar_gz_extension() {
+        let item = make_drive_item("archive.tar.gz", "application/octet-stream");
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_tgz_extension() {
+        let item = make_drive_item("archive.tgz", "application/octet-stream");
+        assert!(is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_not_zip() {
+        let item = make_drive_item("archive.zip", "application/zip");
+        assert!(!is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_not_rar() {
+        let item = make_drive_item("archive.rar", "application/vnd.rar");
+        assert!(!is_unsupported_archive_item(&item));
+    }
+
+    #[test]
+    fn unsupported_archive_plain_file() {
+        let item = make_drive_item("movie.mp4", "video/mp4");
+        assert!(!is_unsupported_archive_item(&item));
+    }
+
+    // ==================== is_supported_cloud_media_item ====================
+
+    #[test]
+    fn cloud_media_video_mp4() {
+        let item = make_drive_item("movie.mp4", "video/mp4");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_mkv() {
+        let item = make_drive_item("movie.mkv", "video/x-matroska");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_avi() {
+        let item = make_drive_item("clip.avi", "video/avi");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_mov() {
+        let item = make_drive_item("clip.mov", "video/quicktime");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_webm() {
+        let item = make_drive_item("clip.webm", "video/webm");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_m4v() {
+        let item = make_drive_item("episode.m4v", "video/x-m4v");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_wmv() {
+        let item = make_drive_item("clip.wmv", "video/x-ms-wmv");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_flv() {
+        let item = make_drive_item("clip.flv", "video/x-flv");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_video_ts() {
+        let item = make_drive_item("segment.ts", "video/mp2t");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_zip_archive() {
+        let item = make_drive_item("archive.zip", "application/zip");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_rar_archive() {
+        let item = make_drive_item("archive.rar", "application/vnd.rar");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_tar_archive() {
+        let item = make_drive_item("archive.tar", "application/x-tar");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_zip() {
+        let item = make_drive_item("big.zip", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_rar() {
+        let item = make_drive_item("big.rar", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_mkv() {
+        let item = make_drive_item("movie.mkv", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_mp4() {
+        let item = make_drive_item("movie.mp4", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_avi() {
+        let item = make_drive_item("movie.avi", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_mov() {
+        let item = make_drive_item("movie.mov", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_webm() {
+        let item = make_drive_item("movie.webm", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_m4v() {
+        let item = make_drive_item("movie.m4v", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_wmv() {
+        let item = make_drive_item("movie.wmv", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_flv() {
+        let item = make_drive_item("movie.flv", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_extension_ts() {
+        let item = make_drive_item("segment.ts", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_fallback_case_insensitive() {
+        let item = make_drive_item("MOVIE.MP4", "application/octet-stream");
+        assert!(is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_not_supported_pdf() {
+        let item = make_drive_item("document.pdf", "application/pdf");
+        assert!(!is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_not_supported_image() {
+        let item = make_drive_item("photo.jpg", "image/jpeg");
+        assert!(!is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_not_supported_audio() {
+        let item = make_drive_item("song.mp3", "audio/mpeg");
+        assert!(!is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_not_supported_text() {
+        let item = make_drive_item("readme.txt", "text/plain");
+        assert!(!is_supported_cloud_media_item(&item));
+    }
+
+    // ==================== DriveItem serialization/deserialization ====================
+
+    #[test]
+    fn drive_item_serialize_roundtrip() {
+        let item = DriveItem {
+            id: "abc123".to_string(),
+            name: "video.mp4".to_string(),
+            mime_type: "video/mp4".to_string(),
+            size: Some("1048576".to_string()),
+            modified_time: Some("2024-01-15T10:30:00.000Z".to_string()),
+            parents: Some(vec!["parent1".to_string()]),
+            web_content_link: Some("https://drive.google.com/uc?id=abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        let deserialized: DriveItem = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.id, "abc123");
+        assert_eq!(deserialized.name, "video.mp4");
+        assert_eq!(deserialized.mime_type, "video/mp4");
+        assert_eq!(deserialized.size, Some("1048576".to_string()));
+        assert_eq!(
+            deserialized.modified_time,
+            Some("2024-01-15T10:30:00.000Z".to_string())
+        );
+        assert_eq!(
+            deserialized.parents,
+            Some(vec!["parent1".to_string()])
+        );
+        assert_eq!(
+            deserialized.web_content_link,
+            Some("https://drive.google.com/uc?id=abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn drive_item_deserialize_from_api_json() {
+        let json = r#"{
+            "id": "file1",
+            "name": "test.mkv",
+            "mimeType": "video/x-matroska",
+            "size": "5000000000",
+            "modifiedTime": "2024-06-01T12:00:00.000Z",
+            "parents": ["root"],
+            "webContentLink": "https://example.com/download"
+        }"#;
+
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.id, "file1");
+        assert_eq!(item.name, "test.mkv");
+        assert_eq!(item.mime_type, "video/x-matroska");
+        assert_eq!(item.size, Some("5000000000".to_string()));
+        assert_eq!(item.parents, Some(vec!["root".to_string()]));
+    }
+
+    #[test]
+    fn drive_item_deserialize_minimal() {
+        let json = r#"{
+            "id": "f2",
+            "name": "minimal.zip",
+            "mimeType": "application/zip"
+        }"#;
+
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.id, "f2");
+        assert_eq!(item.size, None);
+        assert_eq!(item.modified_time, None);
+        assert_eq!(item.parents, None);
+        assert_eq!(item.web_content_link, None);
+    }
+
+    #[test]
+    fn drive_item_deserialize_camel_case_fields() {
+        // Drive API uses camelCase: mimeType, modifiedTime, webContentLink
+        let json = r#"{
+            "id": "x",
+            "name": "a.mp4",
+            "mimeType": "video/mp4",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+            "webContentLink": "https://example.com"
+        }"#;
+
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.mime_type, "video/mp4");
+        assert_eq!(item.modified_time.as_deref(), Some("2024-01-01T00:00:00Z"));
+        assert_eq!(item.web_content_link.as_deref(), Some("https://example.com"));
+    }
+
+    // ==================== GoogleTokens serialization ====================
+
+    #[test]
+    fn google_tokens_serialize_roundtrip() {
+        let tokens = GoogleTokens {
+            access_token: "at_xyz".to_string(),
+            refresh_token: Some("rt_abc".to_string()),
+            expires_at: Some(1700000000),
+            token_type: "Bearer".to_string(),
+        };
+
+        let json = serde_json::to_string(&tokens).unwrap();
+        let deserialized: GoogleTokens = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.access_token, "at_xyz");
+        assert_eq!(deserialized.refresh_token, Some("rt_abc".to_string()));
+        assert_eq!(deserialized.expires_at, Some(1700000000));
+        assert_eq!(deserialized.token_type, "Bearer");
+    }
+
+    #[test]
+    fn google_tokens_no_refresh() {
+        let tokens = GoogleTokens {
+            access_token: "at_only".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            token_type: "Bearer".to_string(),
+        };
+
+        let json = serde_json::to_string(&tokens).unwrap();
+        let deserialized: GoogleTokens = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.access_token, "at_only");
+        assert_eq!(deserialized.refresh_token, None);
+        assert_eq!(deserialized.expires_at, None);
+    }
+
+    // ==================== DriveAccountInfo serialization ====================
+
+    #[test]
+    fn drive_account_info_serialize_roundtrip() {
+        let info = DriveAccountInfo {
+            email: "user@example.com".to_string(),
+            display_name: Some("Test User".to_string()),
+            photo_url: Some("https://lh3.googleusercontent.com/photo".to_string()),
+            storage_used: Some(5_000_000_000),
+            storage_limit: Some(15_000_000_000),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: DriveAccountInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.email, "user@example.com");
+        assert_eq!(deserialized.display_name, Some("Test User".to_string()));
+        assert_eq!(
+            deserialized.photo_url,
+            Some("https://lh3.googleusercontent.com/photo".to_string())
+        );
+        assert_eq!(deserialized.storage_used, Some(5_000_000_000));
+        assert_eq!(deserialized.storage_limit, Some(15_000_000_000));
+    }
+
+    #[test]
+    fn drive_account_info_minimal() {
+        let info = DriveAccountInfo {
+            email: "u@e.com".to_string(),
+            display_name: None,
+            photo_url: None,
+            storage_used: None,
+            storage_limit: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: DriveAccountInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.email, "u@e.com");
+        assert_eq!(deserialized.display_name, None);
+        assert_eq!(deserialized.storage_used, None);
+        assert_eq!(deserialized.storage_limit, None);
+    }
+
+    // ==================== DriveListResponse serialization ====================
+
+    #[test]
+    fn drive_list_response_deserialize() {
+        let json = r#"{
+            "files": [
+                {
+                    "id": "f1",
+                    "name": "video.mp4",
+                    "mimeType": "video/mp4",
+                    "size": "1000"
+                },
+                {
+                    "id": "f2",
+                    "name": "archive.zip",
+                    "mimeType": "application/zip",
+                    "size": "2000"
+                }
+            ],
+            "nextPageToken": "token123"
+        }"#;
+
+        let response: DriveListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.files.len(), 2);
+        assert_eq!(response.files[0].id, "f1");
+        assert_eq!(response.files[0].name, "video.mp4");
+        assert_eq!(response.files[1].id, "f2");
+        assert_eq!(response.next_page_token, Some("token123".to_string()));
+    }
+
+    #[test]
+    fn drive_list_response_no_next_page() {
+        let json = r#"{
+            "files": [
+                {
+                    "id": "f1",
+                    "name": "a.mp4",
+                    "mimeType": "video/mp4"
+                }
+            ]
+        }"#;
+
+        let response: DriveListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.next_page_token, None);
+    }
+
+    #[test]
+    fn drive_list_response_empty() {
+        let json = r#"{"files": []}"#;
+        let response: DriveListResponse = serde_json::from_str(json).unwrap();
+        assert!(response.files.is_empty());
+        assert_eq!(response.next_page_token, None);
+    }
+
+    // ==================== DriveChangesResponse serialization ====================
+
+    #[test]
+    fn drive_changes_response_deserialize() {
+        let json = r#"{
+            "changes": [
+                {
+                    "kind": "drive#change",
+                    "removed": false,
+                    "file": {
+                        "id": "c1",
+                        "name": "new.mp4",
+                        "mimeType": "video/mp4"
+                    },
+                    "fileId": "c1"
+                },
+                {
+                    "kind": "drive#change",
+                    "removed": true,
+                    "fileId": "c2"
+                }
+            ],
+            "newStartPageToken": "new_token_456",
+            "nextPageToken": null
+        }"#;
+
+        let response: DriveChangesResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.changes.len(), 2);
+        assert_eq!(response.changes[0].file_id, Some("c1".to_string()));
+        assert_eq!(response.changes[0].removed, Some(false));
+        assert!(response.changes[0].file.is_some());
+        assert_eq!(response.changes[1].removed, Some(true));
+        assert!(response.changes[1].file.is_none());
+        assert_eq!(
+            response.new_start_page_token,
+            Some("new_token_456".to_string())
+        );
+        assert_eq!(response.next_page_token, None);
+    }
+
+    // ==================== DriveChange serialization ====================
+
+    #[test]
+    fn drive_change_minimal() {
+        let json = r#"{"fileId": "abc"}"#;
+        let change: DriveChange = serde_json::from_str(json).unwrap();
+        assert_eq!(change.file_id, Some("abc".to_string()));
+        assert_eq!(change.kind, None);
+        assert_eq!(change.removed, None);
+        assert!(change.file.is_none());
+        assert_eq!(change.change_type, None);
+    }
+
+    // ==================== GoogleDriveClient (no-network) ====================
+
+    #[test]
+    fn build_stream_url_format() {
+        let client = GoogleDriveClient {
+            tokens: Arc::new(Mutex::new(None)),
+            http_client: reqwest::Client::new(),
+        };
+
+        let url = client.build_stream_url("abc123");
+        assert_eq!(
+            url,
+            "https://www.googleapis.com/drive/v3/files/abc123?alt=media&supportsAllDrives=true"
+        );
+    }
+
+    #[test]
+    fn build_stream_url_special_chars_in_id() {
+        let client = GoogleDriveClient {
+            tokens: Arc::new(Mutex::new(None)),
+            http_client: reqwest::Client::new(),
+        };
+
+        let url = client.build_stream_url("id-with-dashes_and_underscores");
+        assert!(url.contains("id-with-dashes_and_underscores"));
+        assert!(url.starts_with("https://www.googleapis.com/drive/v3/files/"));
+    }
+
+    #[test]
+    fn is_authenticated_when_no_tokens() {
+        let client = GoogleDriveClient {
+            tokens: Arc::new(Mutex::new(None)),
+            http_client: reqwest::Client::new(),
+        };
+        assert!(!client.is_authenticated());
+    }
+
+    #[test]
+    fn is_authenticated_when_tokens_present() {
+        let tokens = GoogleTokens {
+            access_token: "at".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            token_type: "Bearer".to_string(),
+        };
+        let client = GoogleDriveClient {
+            tokens: Arc::new(Mutex::new(Some(tokens))),
+            http_client: reqwest::Client::new(),
+        };
+        assert!(client.is_authenticated());
+    }
+
+    #[test]
+    fn store_tokens_sets_authentication() {
+        let tokens = GoogleTokens {
+            access_token: "at_store_test".to_string(),
+            refresh_token: Some("rt_store_test".to_string()),
+            expires_at: Some(9999999999),
+            token_type: "Bearer".to_string(),
+        };
+        let client = GoogleDriveClient {
+            tokens: Arc::new(Mutex::new(None)),
+            http_client: reqwest::Client::new(),
+        };
+
+        assert!(!client.is_authenticated());
+        // store_tokens will try to write to disk; that's fine for test
+        // (it writes to the app data dir which may or may not exist)
+        // We just verify the in-memory state changes regardless of disk result
+        let _ = client.store_tokens(tokens);
+        assert!(client.is_authenticated());
+    }
+
+    // ==================== get_auth_url_with_nonce ====================
+
+    #[test]
+    fn auth_url_contains_nonce() {
+        let url = get_auth_url_with_nonce("test-nonce-123");
+        // Hyphens get percent-encoded by urlencoding::encode (NON_ALPHANUMERIC)
+        assert!(url.contains("nonce="));
+        assert!(url.contains("/auth/google"));
+        // Verify the nonce value is actually present (percent-encoded)
+        assert!(url.contains("test%2Dnonce%2D123"));
+    }
+
+    #[test]
+    fn auth_url_encodes_special_chars_in_nonce() {
+        let url = get_auth_url_with_nonce("nonce with spaces&symbols");
+        // Should be percent-encoded
+        assert!(!url.contains("nonce=nonce with"));
+        assert!(url.contains("nonce="));
+    }
+
+    // ==================== Constants ====================
+
+    #[test]
+    fn drive_api_base_url() {
+        assert_eq!(DRIVE_API_BASE, "https://www.googleapis.com/drive/v3");
+    }
+
+    #[test]
+    fn drive_upload_api_base_url() {
+        assert_eq!(
+            DRIVE_UPLOAD_API_BASE,
+            "https://www.googleapis.com/upload/drive/v3"
+        );
+    }
+
+    #[test]
+    fn watch_history_file_name() {
+        assert_eq!(WATCH_HISTORY_FILE_NAME, "slasshyvault_watch_history_v1.json");
+    }
+
+    #[test]
+    fn watchlist_file_name() {
+        assert_eq!(WATCHLIST_FILE_NAME, "slasshyvault_watchlist_v1.json");
+    }
+
+    #[test]
+    fn video_mime_types_contains_common_formats() {
+        assert!(VIDEO_MIME_TYPES.contains(&"video/mp4"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/x-matroska"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/avi"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/quicktime"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/webm"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/x-m4v"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/x-ms-wmv"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/x-flv"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/mp2t"));
+    }
+
+    #[test]
+    fn archive_mime_types_contains_expected() {
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/zip"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/x-zip-compressed"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/x-rar-compressed"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/vnd.rar"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/x-tar"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/gzip"));
+    }
+
+    #[test]
+    fn max_drive_retries_is_reasonable() {
+        assert!(MAX_DRIVE_RETRIES >= 1);
+        assert!(MAX_DRIVE_RETRIES <= 10);
+    }
+
+    // ==================== obfuscate / deobfuscate roundtrip ====================
+
+    #[test]
+    fn obfuscate_deobfuscate_roundtrip() {
+        let original = "hello world";
+        let encoded = obfuscate(original);
+        let decoded = deobfuscate(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn obfuscate_deobfuscate_json() {
+        let original = r#"{"access_token":"abc","token_type":"Bearer"}"#;
+        let encoded = obfuscate(original);
+        let decoded = deobfuscate(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn obfuscate_produces_different_output_each_time() {
+        // AES-GCM uses random nonces, so two encryptions of the same text differ
+        let text = "same input";
+        let a = obfuscate(text);
+        let b = obfuscate(text);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn deobfuscate_aes_rejects_too_short_data() {
+        let result = deobfuscate_aes("dGVzdA=="); // "test" in base64 = 4 bytes, too short
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deobfuscate_legacy_base64_fallback() {
+        // Simulate legacy format: plain base64 encoding
+        use base64::Engine;
+        let original = "legacy token data";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+        let decoded = deobfuscate(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    // ==================== derive_encryption_key ====================
+
+    #[test]
+    fn derive_encryption_key_returns_32_bytes() {
+        let key = derive_encryption_key();
+        assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn derive_encryption_key_deterministic() {
+        // Same machine + user = same key
+        let a = derive_encryption_key();
+        let b = derive_encryption_key();
+        assert_eq!(a, b);
+    }
+
+    // ==================== urlencoding helper ====================
+
+    #[test]
+    fn urlencoding_basic() {
+        let encoded = urlencoding::encode("hello world");
+        assert_eq!(encoded, "hello%20world");
+    }
+
+    #[test]
+    fn urlencoding_special_chars() {
+        let encoded = urlencoding::encode("'root' in parents");
+        assert!(encoded.contains("%27")); // single quote
+        assert!(!encoded.contains("'"));
+    }
+
+    #[test]
+    fn urlencoding_empty() {
+        let encoded = urlencoding::encode("");
+        assert_eq!(encoded, "");
+    }
+
+    #[test]
+    fn urlencoding_already_safe() {
+        let encoded = urlencoding::encode("abc123");
+        assert_eq!(encoded, "abc123");
+    }
+
+    // ==================== GoogleTokens edge cases ====================
+
+    #[test]
+    fn google_tokens_empty_access_token() {
+        let tokens = GoogleTokens {
+            access_token: "".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            token_type: "Bearer".to_string(),
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let deserialized: GoogleTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.access_token, "");
+    }
+
+    #[test]
+    fn google_tokens_negative_expiry() {
+        let tokens = GoogleTokens {
+            access_token: "at".to_string(),
+            refresh_token: None,
+            expires_at: Some(-1),
+            token_type: "Bearer".to_string(),
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let deserialized: GoogleTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.expires_at, Some(-1));
+    }
+
+    // ==================== DriveItem edge cases ====================
+
+    #[test]
+    fn drive_item_empty_parents_vec() {
+        let json = r#"{
+            "id": "f1",
+            "name": "test.mp4",
+            "mimeType": "video/mp4",
+            "parents": []
+        }"#;
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.parents, Some(vec![]));
+    }
+
+    #[test]
+    fn drive_item_multiple_parents() {
+        let json = r#"{
+            "id": "f1",
+            "name": "shared.mp4",
+            "mimeType": "video/mp4",
+            "parents": ["p1", "p2", "p3"]
+        }"#;
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            item.parents,
+            Some(vec!["p1".to_string(), "p2".to_string(), "p3".to_string()])
+        );
+    }
+
+    #[test]
+    fn drive_item_size_zero() {
+        let json = r#"{
+            "id": "f1",
+            "name": "empty.zip",
+            "mimeType": "application/zip",
+            "size": "0"
+        }"#;
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.size, Some("0".to_string()));
+    }
+
+    // ==================== Helper: build client with mock tokens ====================
+
+    fn make_client_with_tokens(tokens: Option<GoogleTokens>) -> GoogleDriveClient {
+        let client = GoogleDriveClient::new();
+        *client.tokens.lock().unwrap() = tokens;
+        client
+    }
+
+    fn make_tokens(access: &str, refresh: Option<&str>, expires_at: Option<i64>) -> GoogleTokens {
+        GoogleTokens {
+            access_token: access.to_string(),
+            refresh_token: refresh.map(String::from),
+            expires_at,
+            token_type: "Bearer".to_string(),
+        }
+    }
+
+    // ==================== is_authenticated ====================
+
+    #[test]
+    fn is_authenticated_with_tokens() {
+        let client = make_client_with_tokens(Some(make_tokens("at", Some("rt"), None)));
+        assert!(client.is_authenticated());
+    }
+
+    #[test]
+    fn is_authenticated_without_tokens() {
+        let client = make_client_with_tokens(None);
+        assert!(!client.is_authenticated());
+    }
+
+    // ==================== build_stream_url ====================
+
+    #[test]
+    fn build_stream_url_format_via_helper() {
+        let client = make_client_with_tokens(None);
+        let url = client.build_stream_url("abc123");
+        assert_eq!(
+            url,
+            "https://www.googleapis.com/drive/v3/files/abc123?alt=media&supportsAllDrives=true"
+        );
+    }
+
+    #[test]
+    fn build_stream_url_special_chars_via_helper() {
+        let client = make_client_with_tokens(None);
+        let url = client.build_stream_url("id/with?special");
+        assert!(url.contains("files/id/with?special"));
+        assert!(url.starts_with("https://www.googleapis.com/drive/v3/files/"));
+    }
+
+    // ==================== get_auth_url_with_nonce ====================
+
+    #[test]
+    fn auth_url_encodes_special_nonce() {
+        let url = get_auth_url_with_nonce("a b&c=d");
+        assert!(url.contains("nonce=a%20b%26c%3Dd"));
+    }
+
+    #[test]
+    fn auth_url_empty_nonce() {
+        let url = get_auth_url_with_nonce("");
+        assert!(url.contains("/auth/google?nonce="));
+    }
+
+    // ==================== validate_tokens (async) ====================
+
+    #[tokio::test]
+    async fn validate_tokens_none() {
+        let client = make_client_with_tokens(None);
+        assert!(!client.validate_tokens().await);
+    }
+
+    #[tokio::test]
+    async fn validate_tokens_no_expiry_assumed_valid() {
+        let client = make_client_with_tokens(Some(make_tokens("at", None, None)));
+        assert!(client.validate_tokens().await);
+    }
+
+    #[tokio::test]
+    async fn validate_tokens_expired_no_refresh() {
+        let past = chrono::Utc::now().timestamp() - 3600;
+        let client = make_client_with_tokens(Some(make_tokens("at", None, Some(past))));
+        assert!(!client.validate_tokens().await);
+    }
+
+    #[tokio::test]
+    async fn validate_tokens_valid_future_expiry() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("at", Some("rt"), Some(future))));
+        assert!(client.validate_tokens().await);
+    }
+
+    #[tokio::test]
+    async fn validate_tokens_just_about_to_expire_no_refresh() {
+        let soon = chrono::Utc::now().timestamp() + 30;
+        let client = make_client_with_tokens(Some(make_tokens("at", None, Some(soon))));
+        assert!(!client.validate_tokens().await);
+    }
+
+    // ==================== get_access_token (async) ====================
+
+    #[tokio::test]
+    async fn get_access_token_none() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_access_token().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Not authenticated"));
+    }
+
+    #[tokio::test]
+    async fn get_access_token_valid() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("my-access-token", None, Some(future))));
+        let result = client.get_access_token().await;
+        assert_eq!(result.unwrap(), "my-access-token");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_no_expiry_returns_token() {
+        let client = make_client_with_tokens(Some(make_tokens("token-no-expiry", None, None)));
+        let result = client.get_access_token().await;
+        assert_eq!(result.unwrap(), "token-no-expiry");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_expired_no_refresh() {
+        let past = chrono::Utc::now().timestamp() - 100;
+        let client = make_client_with_tokens(Some(make_tokens("expired", None, Some(past))));
+        let result = client.get_access_token().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no refresh token"));
+    }
+
+    #[tokio::test]
+    async fn get_access_token_expired_with_refresh_fails_network() {
+        let past = chrono::Utc::now().timestamp() - 100;
+        let client = make_client_with_tokens(Some(make_tokens("expired", Some("rt"), Some(past))));
+        let result = client.get_access_token().await;
+        assert!(result.is_err());
+    }
+
+    // ==================== store_tokens / revoke_and_clear_tokens ====================
+
+    #[tokio::test]
+    async fn store_and_clear_tokens() {
+        let client = make_client_with_tokens(None);
+        assert!(!client.is_authenticated());
+
+        let tokens = make_tokens("at", Some("rt"), None);
+        let _ = client.store_tokens(tokens);
+        assert!(client.is_authenticated());
+
+        let _ = client.revoke_and_clear_tokens().await;
+        assert!(!client.is_authenticated());
+    }
+
+    #[tokio::test]
+    async fn revoke_and_clear_no_tokens() {
+        let client = make_client_with_tokens(None);
+        let result = client.revoke_and_clear_tokens().await;
+        assert!(result.is_ok());
+        assert!(!client.is_authenticated());
+    }
+
+    // ==================== save_watch_history_snapshot JSON validation ====================
+
+    #[tokio::test]
+    async fn save_watch_history_invalid_json() {
+        let client = make_client_with_tokens(Some(make_tokens("at", None, None)));
+        let result = client.save_watch_history_snapshot("not valid json {{{").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid watch history snapshot JSON"));
+    }
+
+    #[tokio::test]
+    async fn save_watch_history_valid_json_no_validation_error() {
+        let client = make_client_with_tokens(Some(make_tokens("at", None, None)));
+        let result = client.save_watch_history_snapshot(r#"{"key":"value"}"#).await;
+        assert!(result.is_err());
+        // Error should NOT be a JSON validation error — it should reach the network call
+        assert!(!result.unwrap_err().contains("Invalid watch history snapshot JSON"));
+    }
+
+    // ==================== save_watchlist_snapshot JSON validation ====================
+
+    #[tokio::test]
+    async fn save_watchlist_invalid_json() {
+        let client = make_client_with_tokens(Some(make_tokens("at", None, None)));
+        let result = client.save_watchlist_snapshot("{bad json").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid watchlist snapshot JSON"));
+    }
+
+    #[tokio::test]
+    async fn save_watchlist_valid_json_no_validation_error() {
+        let client = make_client_with_tokens(Some(make_tokens("at", None, None)));
+        let result = client.save_watchlist_snapshot(r#"{"items":[]}"#).await;
+        assert!(result.is_err());
+        // Error should NOT be a JSON validation error — it should reach the network call
+        assert!(!result.unwrap_err().contains("Invalid watchlist snapshot JSON"));
+    }
+
+    // ==================== API methods error paths (no valid token) ====================
+
+    #[tokio::test]
+    async fn list_files_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.list_files(None, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_folders_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.list_folders(None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_video_files_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.list_video_files("folder123", false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_stream_url_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_stream_url("file123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_file_metadata_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_file_metadata("file123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_account_info_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_account_info().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_changes_start_token_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_changes_start_token().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_changes_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_changes("token123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_video_changes_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.get_video_changes("token123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_all_folder_ids_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.list_all_folder_ids("folder123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn create_permission_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.create_permission("file123", "user@example.com", "reader").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_file_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.delete_file("file123").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_watch_history_snapshot_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.load_watch_history_snapshot().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_watchlist_snapshot_not_authenticated() {
+        let client = make_client_with_tokens(None);
+        let result = client.load_watchlist_snapshot().await;
+        assert!(result.is_err());
+    }
+
+    // ==================== API methods with expired token, no refresh ====================
+
+    #[tokio::test]
+    async fn list_files_expired_token() {
+        let past = chrono::Utc::now().timestamp() - 3600;
+        let client = make_client_with_tokens(Some(make_tokens("expired", None, Some(past))));
+        let result = client.list_files(None, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no refresh token"));
+    }
+
+    #[tokio::test]
+    async fn get_file_metadata_expired_token() {
+        let past = chrono::Utc::now().timestamp() - 3600;
+        let client = make_client_with_tokens(Some(make_tokens("expired", None, Some(past))));
+        let result = client.get_file_metadata("file123").await;
+        assert!(result.is_err());
+    }
+
+    // ==================== DriveListResponse deserialization ====================
+
+    #[test]
+    fn drive_list_response_deserialize_with_folder() {
+        let json = r#"{
+            "files": [
+                {"id": "f1", "name": "video.mp4", "mimeType": "video/mp4"},
+                {"id": "f2", "name": "sub", "mimeType": "application/vnd.google-apps.folder"}
+            ],
+            "nextPageToken": "tok_abc"
+        }"#;
+        let resp: DriveListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.files.len(), 2);
+        assert_eq!(resp.files[0].id, "f1");
+        assert_eq!(resp.files[1].name, "sub");
+        assert_eq!(resp.next_page_token, Some("tok_abc".to_string()));
+    }
+
+    #[test]
+    fn drive_list_response_empty_files() {
+        let json = r#"{"files": []}"#;
+        let resp: DriveListResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.files.is_empty());
+        assert!(resp.next_page_token.is_none());
+    }
+
+    // ==================== DriveChangesResponse deserialization ====================
+
+    #[test]
+    fn drive_changes_response_with_file_and_removed() {
+        let json = r#"{
+            "changes": [
+                {
+                    "kind": "drive#change",
+                    "removed": false,
+                    "file": {"id": "f1", "name": "new.mp4", "mimeType": "video/mp4"},
+                    "fileId": "f1"
+                },
+                {
+                    "kind": "drive#change",
+                    "removed": true,
+                    "fileId": "f2"
+                }
+            ],
+            "newStartPageToken": "new_tok",
+            "nextPageToken": null
+        }"#;
+        let resp: DriveChangesResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.changes.len(), 2);
+        assert!(!resp.changes[0].removed.unwrap());
+        assert!(resp.changes[0].file.is_some());
+        assert!(resp.changes[1].removed.unwrap());
+        assert!(resp.changes[1].file.is_none());
+        assert_eq!(resp.new_start_page_token, Some("new_tok".to_string()));
+    }
+
+    #[test]
+    fn drive_changes_response_empty() {
+        let json = r#"{"changes": [], "newStartPageToken": "tok"}"#;
+        let resp: DriveChangesResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.changes.is_empty());
+    }
+
+    // ==================== DriveChange edge cases ====================
+
+    #[test]
+    fn drive_change_missing_optional_fields() {
+        let json = r#"{"fileId": "f1"}"#;
+        let change: DriveChange = serde_json::from_str(json).unwrap();
+        assert_eq!(change.file_id, Some("f1".to_string()));
+        assert!(change.removed.is_none());
+        assert!(change.file.is_none());
+        assert!(change.kind.is_none());
+    }
+
+    // ==================== DriveAccountInfo deserialization ====================
+
+    #[test]
+    fn drive_account_info_deserialize() {
+        let info = DriveAccountInfo {
+            email: "user@example.com".to_string(),
+            display_name: Some("Test User".to_string()),
+            photo_url: Some("https://photo.url".to_string()),
+            storage_used: Some(1024),
+            storage_limit: Some(15_000_000_000),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: DriveAccountInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.email, "user@example.com");
+        assert_eq!(deserialized.display_name, Some("Test User".to_string()));
+        assert_eq!(deserialized.storage_used, Some(1024));
+        assert_eq!(deserialized.storage_limit, Some(15_000_000_000));
+    }
+
+    #[test]
+    fn drive_account_info_minimal_from_json() {
+        let json = r#"{"email": "a@b.com"}"#;
+        let info: DriveAccountInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.email, "a@b.com");
+        assert!(info.display_name.is_none());
+        assert!(info.photo_url.is_none());
+        assert!(info.storage_used.is_none());
+        assert!(info.storage_limit.is_none());
+    }
+
+    // ==================== GoogleTokens serialization ====================
+
+    #[test]
+    fn google_tokens_full_roundtrip() {
+        let tokens = GoogleTokens {
+            access_token: "at".to_string(),
+            refresh_token: Some("rt".to_string()),
+            expires_at: Some(1700000000),
+            token_type: "Bearer".to_string(),
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let deserialized: GoogleTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.access_token, "at");
+        assert_eq!(deserialized.refresh_token, Some("rt".to_string()));
+        assert_eq!(deserialized.expires_at, Some(1700000000));
+        assert_eq!(deserialized.token_type, "Bearer");
+    }
+
+    // ==================== obfuscate / deobfuscate roundtrip ====================
+
+    #[test]
+    fn obfuscate_deobfuscate_roundtrip_json() {
+        let original = r#"{"access_token":"test","token_type":"Bearer"}"#;
+        let encoded = obfuscate(original);
+        let decoded = deobfuscate(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn obfuscate_different_each_time() {
+        let data = "same input";
+        let a = obfuscate(data);
+        let b = obfuscate(data);
+        assert_ne!(a, b);
+        assert_eq!(deobfuscate(&a).unwrap(), data);
+        assert_eq!(deobfuscate(&b).unwrap(), data);
+    }
+
+    #[test]
+    fn deobfuscate_invalid_base64() {
+        let result = deobfuscate("not-valid-base64!!!@#");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deobfuscate_aes_too_short_valid_base64() {
+        // "test" in base64 = 4 bytes, well under the 29-byte minimum for AES-GCM
+        let result = deobfuscate_aes("dGVzdA==");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too short"));
+    }
+
+    // ==================== derive_encryption_key deterministic ====================
+
+    #[test]
+    fn encryption_key_deterministic() {
+        let a = derive_encryption_key();
+        let b = derive_encryption_key();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 32);
+    }
+
+    // ==================== VIDEO_MIME_TYPES constant ====================
+
+    #[test]
+    fn video_mime_types_not_empty() {
+        assert!(!VIDEO_MIME_TYPES.is_empty());
+        assert!(VIDEO_MIME_TYPES.contains(&"video/mp4"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/x-matroska"));
+        assert!(VIDEO_MIME_TYPES.contains(&"video/avi"));
+    }
+
+    #[test]
+    fn archive_mime_types_not_empty() {
+        assert!(!ARCHIVE_MIME_TYPES.is_empty());
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/zip"));
+        assert!(ARCHIVE_MIME_TYPES.contains(&"application/x-rar-compressed"));
+    }
+
+    // ==================== get_stream_url with valid token (async) ====================
+
+    #[tokio::test]
+    async fn get_stream_url_with_valid_token() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid-at", None, Some(future))));
+        let result = client.get_stream_url("my-file-id").await;
+        assert!(result.is_ok());
+        let (url, token) = result.unwrap();
+        assert_eq!(token, "valid-at");
+        assert!(url.contains("my-file-id"));
+        assert!(url.contains("alt=media"));
+    }
+
+    // ==================== API methods with valid token but network failure ====================
+
+    #[tokio::test]
+    async fn list_files_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.list_files(Some("folder1"), Some("page2")).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Failed to list files") || err.contains("Drive API"));
+    }
+
+    #[tokio::test]
+    async fn list_folders_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.list_folders(Some("parent123")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_account_info_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.get_account_info().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_changes_start_token_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.get_changes_start_token().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn create_permission_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.create_permission("fid", "e@x.com", "reader").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_file_valid_token_network_fail() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let client = make_client_with_tokens(Some(make_tokens("valid", None, Some(future))));
+        let result = client.delete_file("fid").await;
+        assert!(result.is_err());
+    }
+
+    // ==================== GoogleTokens: refresh_token present/absent ====================
+
+    #[test]
+    fn google_tokens_with_refresh() {
+        let tokens = make_tokens("at", Some("rt"), None);
+        assert!(tokens.refresh_token.is_some());
+    }
+
+    #[test]
+    fn google_tokens_without_refresh() {
+        let tokens = make_tokens("at", None, None);
+        assert!(tokens.refresh_token.is_none());
+    }
+
+    // ==================== DriveItem: camelCase serde ====================
+
+    #[test]
+    fn drive_item_camel_case_fields() {
+        let json = r#"{
+            "id": "x",
+            "name": "n",
+            "mimeType": "video/mp4",
+            "size": "100",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+            "parents": ["p1"],
+            "webContentLink": "https://link"
+        }"#;
+        let item: DriveItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.modified_time.as_deref(), Some("2024-01-01T00:00:00Z"));
+        assert_eq!(item.web_content_link.as_deref(), Some("https://link"));
+    }
+
+    // ==================== cloud_media: unsupported formats ====================
+
+    #[test]
+    fn cloud_media_7z_not_supported() {
+        let item = make_drive_item("archive.7z", "application/x-7z-compressed");
+        assert!(!is_supported_cloud_media_item(&item));
+    }
+
+    #[test]
+    fn cloud_media_iso_not_supported() {
+        let item = make_drive_item("disc.iso", "application/octet-stream");
+        assert!(!is_supported_cloud_media_item(&item));
     }
 }

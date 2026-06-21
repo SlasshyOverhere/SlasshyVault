@@ -61,6 +61,7 @@ export function VideoPlayer({ src, title, poster, onClose, onProgress, initialTi
             setIsTranscoding(false);
             return true;
         } catch (e) {
+            console.error('[VideoPlayer] Transcode failed:', e)
             setIsTranscoding(false);
             setError(`Transcoding failed: ${e}. Please configure FFmpeg in Settings > Player, or use MPV/VLC player.`);
             setIsLoading(false);

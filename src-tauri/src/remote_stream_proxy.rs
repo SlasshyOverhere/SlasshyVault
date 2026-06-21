@@ -480,3 +480,489 @@ pub async fn resolve_redirects(url: &str) -> Result<String, String> {
     println!("[REMOTE-PROXY] Resolved: {} -> {}", url, final_url);
     Ok(final_url)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    // ── parse_range ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_range_valid_start_end() {
+        assert_eq!(parse_range("bytes=0-499", 1000), Some((0, 499)));
+    }
+
+    #[test]
+    fn parse_range_valid_middle() {
+        assert_eq!(parse_range("bytes=500-999", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn parse_range_suffix_last_500() {
+        // bytes=-500 → last 500 bytes: start=500, end=999
+        assert_eq!(parse_range("bytes=-500", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn parse_range_suffix_larger_than_file() {
+        // bytes=-2000 on 1000-byte file → start=0, end=999
+        assert_eq!(parse_range("bytes=-2000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn parse_range_open_ended() {
+        // bytes=950- → start=950, end=file_size-1
+        assert_eq!(parse_range("bytes=950-", 1000), Some((950, 999)));
+    }
+
+    #[test]
+    fn parse_range_exact_byte() {
+        assert_eq!(parse_range("bytes=0-0", 1000), Some((0, 0)));
+    }
+
+    #[test]
+    fn parse_range_missing_prefix() {
+        assert_eq!(parse_range("0-499", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_wrong_unit() {
+        assert_eq!(parse_range("bits=0-499", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_no_dash() {
+        assert_eq!(parse_range("bytes=500", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_empty_string() {
+        assert_eq!(parse_range("", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_multiple_dashes() {
+        // "bytes=1-2-3" splits into 3 parts → None
+        assert_eq!(parse_range("bytes=1-2-3", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_non_numeric() {
+        assert_eq!(parse_range("bytes=abc-def", 1000), None);
+    }
+
+    #[test]
+    fn parse_range_suffix_zero() {
+        // bytes=-0 → suffix=0, start=1000, end=999 → saturating_sub gives 1000
+        // start=1000 but file_size-1=999, so (1000, 999) — semantically empty range
+        assert_eq!(parse_range("bytes=-0", 1000), Some((1000, 999)));
+    }
+
+    #[test]
+    fn parse_range_whitespace_trimmed() {
+        assert_eq!(parse_range("  bytes=0-499  ", 1000), Some((0, 499)));
+    }
+
+    // ── sanitize_filename ──────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_filename_alphanumeric_passthrough() {
+        assert_eq!(sanitize_filename("hello123"), "hello123");
+    }
+
+    #[test]
+    fn sanitize_filename_preserves_dash_underscore() {
+        assert_eq!(sanitize_filename("my-file_name"), "my-file_name");
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_special_chars() {
+        assert_eq!(sanitize_filename("a b/c\\d:e"), "a_b_c_d_e");
+    }
+
+    #[test]
+    fn sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "");
+    }
+
+    #[test]
+    fn sanitize_filename_all_special() {
+        assert_eq!(sanitize_filename("///:::   "), "_________");
+    }
+
+    #[test]
+    fn sanitize_filename_truncates_at_50() {
+        let long = "a".repeat(100);
+        assert_eq!(sanitize_filename(&long).len(), 50);
+    }
+
+    #[test]
+    fn sanitize_filename_exactly_50() {
+        let s = "a".repeat(50);
+        assert_eq!(sanitize_filename(&s).len(), 50);
+        assert_eq!(sanitize_filename(&s), s);
+    }
+
+    #[test]
+    fn sanitize_filename_unicode_letters_kept() {
+        // Rust's is_alphanumeric() includes Unicode letters, so é is kept
+        assert_eq!(sanitize_filename("café"), "café");
+    }
+
+    #[test]
+    fn sanitize_filename_unicode_symbols_replaced() {
+        // Symbols like emojis are not alphanumeric
+        assert_eq!(sanitize_filename("a★b"), "a_b");
+    }
+
+    // ── content_type_for_path ──────────────────────────────────────────
+
+    #[test]
+    fn content_type_mp4() {
+        assert_eq!(content_type_for_path(Path::new("video.mp4")), "video/mp4");
+    }
+
+    #[test]
+    fn content_type_mkv() {
+        assert_eq!(content_type_for_path(Path::new("video.mkv")), "video/x-matroska");
+    }
+
+    #[test]
+    fn content_type_webm() {
+        assert_eq!(content_type_for_path(Path::new("video.webm")), "video/webm");
+    }
+
+    #[test]
+    fn content_type_avi() {
+        assert_eq!(content_type_for_path(Path::new("video.avi")), "video/x-msvideo");
+    }
+
+    #[test]
+    fn content_type_mov() {
+        assert_eq!(content_type_for_path(Path::new("video.mov")), "video/quicktime");
+    }
+
+    #[test]
+    fn content_type_ts() {
+        assert_eq!(content_type_for_path(Path::new("video.ts")), "video/mp2t");
+    }
+
+    #[test]
+    fn content_type_flv() {
+        assert_eq!(content_type_for_path(Path::new("video.flv")), "video/x-flv");
+    }
+
+    #[test]
+    fn content_type_wmv() {
+        assert_eq!(content_type_for_path(Path::new("video.wmv")), "video/x-ms-wmv");
+    }
+
+    #[test]
+    fn content_type_mpeg() {
+        assert_eq!(content_type_for_path(Path::new("video.mpeg")), "video/mpeg");
+    }
+
+    #[test]
+    fn content_type_mpg() {
+        assert_eq!(content_type_for_path(Path::new("video.mpg")), "video/mpeg");
+    }
+
+    #[test]
+    fn content_type_3gp() {
+        assert_eq!(content_type_for_path(Path::new("video.3gp")), "video/3gpp");
+    }
+
+    #[test]
+    fn content_type_ogv() {
+        assert_eq!(content_type_for_path(Path::new("video.ogv")), "video/ogg");
+    }
+
+    #[test]
+    fn content_type_m4v() {
+        assert_eq!(content_type_for_path(Path::new("video.m4v")), "video/mp4");
+    }
+
+    #[test]
+    fn content_type_unknown_defaults_to_mp4() {
+        assert_eq!(content_type_for_path(Path::new("file.xyz")), "video/mp4");
+    }
+
+    #[test]
+    fn content_type_no_extension() {
+        assert_eq!(content_type_for_path(Path::new("noext")), "video/mp4");
+    }
+
+    // ── ALLOWED_CONTENT_TYPES ──────────────────────────────────────────
+
+    #[test]
+    fn allowed_content_types_include_video() {
+        assert!(ALLOWED_CONTENT_TYPES.iter().any(|ct| ct.starts_with("video/")));
+    }
+
+    #[test]
+    fn allowed_content_types_include_audio() {
+        assert!(ALLOWED_CONTENT_TYPES.iter().any(|ct| ct.starts_with("audio/")));
+    }
+
+    #[test]
+    fn allowed_content_types_include_octet_stream() {
+        assert!(ALLOWED_CONTENT_TYPES.contains(&"application/octet-stream"));
+    }
+
+    #[test]
+    fn allowed_content_types_include_matroska() {
+        assert!(ALLOWED_CONTENT_TYPES.contains(&"application/x-matroska"));
+    }
+
+    #[test]
+    fn allowed_content_types_include_realmedia() {
+        assert!(ALLOWED_CONTENT_TYPES.contains(&"application/vnd.rn-realmedia"));
+    }
+
+    // ── RemoteStreamProxyHandle ────────────────────────────────────────
+
+    #[test]
+    fn handle_localhost_url_format() {
+        let handle = RemoteStreamProxyHandle {
+            port: 12345,
+            url: "https://example.com/video.mp4".to_string(),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            thread_handles: vec![],
+        };
+        assert_eq!(handle.localhost_url(), "http://127.0.0.1:12345/stream");
+    }
+
+    #[test]
+    fn handle_stop_sets_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let handle = RemoteStreamProxyHandle {
+            port: 0,
+            url: String::new(),
+            stop_flag: flag.clone(),
+            thread_handles: vec![],
+        };
+        assert!(!flag.load(Ordering::Relaxed));
+        handle.stop();
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn handle_stop_is_idempotent() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let handle = RemoteStreamProxyHandle {
+            port: 0,
+            url: String::new(),
+            stop_flag: flag.clone(),
+            thread_handles: vec![],
+        };
+        handle.stop();
+        handle.stop();
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn handle_drop_sets_flag_and_joins() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag2 = flag.clone();
+        // Spawn a quick thread that finishes immediately
+        let t = std::thread::spawn(move || {
+            flag2.store(true, Ordering::Relaxed);
+        });
+        let handle = RemoteStreamProxyHandle {
+            port: 0,
+            url: String::new(),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            thread_handles: vec![t],
+        };
+        drop(handle);
+        // Thread ran to completion
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn handle_url_stored() {
+        let handle = RemoteStreamProxyHandle {
+            port: 8080,
+            url: "https://example.com/test.mkv".to_string(),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            thread_handles: vec![],
+        };
+        assert_eq!(handle.url, "https://example.com/test.mkv");
+        assert_eq!(handle.port, 8080);
+    }
+
+    // ── set_active_proxy / clear_active_proxy ──────────────────────────
+
+    fn make_test_handle(port: u16) -> RemoteStreamProxyHandle {
+        RemoteStreamProxyHandle {
+            port,
+            url: format!("https://example.com/{}", port),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            thread_handles: vec![],
+        }
+    }
+
+    #[test]
+    fn set_active_proxy_stores_handle() {
+        let handle = make_test_handle(9001);
+        set_active_proxy(handle);
+        // Verify it was stored by checking the lock
+        let guard = ACTIVE_PROXY.lock().unwrap();
+        assert!(guard.is_some());
+        assert_eq!(guard.as_ref().unwrap().port, 9001);
+        drop(guard);
+        clear_active_proxy();
+    }
+
+    #[test]
+    fn set_active_proxy_replaces_previous() {
+        let h1 = make_test_handle(9002);
+        let flag1 = h1.stop_flag.clone();
+        set_active_proxy(h1);
+
+        let h2 = make_test_handle(9003);
+        set_active_proxy(h2);
+
+        // Previous handle's stop flag should be set (stopped on replacement)
+        assert!(flag1.load(Ordering::Relaxed));
+
+        // Current handle is the new one
+        let guard = ACTIVE_PROXY.lock().unwrap();
+        assert_eq!(guard.as_ref().unwrap().port, 9003);
+        drop(guard);
+        clear_active_proxy();
+    }
+
+    #[test]
+    fn clear_active_proxy_stops_and_removes() {
+        let handle = make_test_handle(9004);
+        let flag = handle.stop_flag.clone();
+        set_active_proxy(handle);
+        assert!(!flag.load(Ordering::Relaxed));
+
+        clear_active_proxy();
+
+        assert!(flag.load(Ordering::Relaxed));
+        let guard = ACTIVE_PROXY.lock().unwrap();
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn clear_active_proxy_when_empty_is_noop() {
+        // Ensure clean state
+        clear_active_proxy();
+        clear_active_proxy(); // double-clear should not panic
+        let guard = ACTIVE_PROXY.lock().unwrap();
+        assert!(guard.is_none());
+    }
+
+    // ── start_proxy ────────────────────────────────────────────────────
+
+    /// Stop the proxy and forget the handle so Drop doesn't block on joining
+    /// the server thread (which blocks on incoming_requests).
+    fn stop_and_forget(h: RemoteStreamProxyHandle) {
+        h.stop();
+        std::mem::forget(h);
+    }
+
+    #[test]
+    fn start_proxy_returns_valid_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handle = start_proxy(
+            "https://example.com/video.mp4".to_string(),
+            tmp.path().to_path_buf(),
+            "testkey".to_string(),
+            "Test Video".to_string(),
+            None,
+        );
+        assert!(handle.is_ok());
+        let h = handle.unwrap();
+        assert!(h.port > 0);
+        assert_eq!(h.url, "https://example.com/video.mp4");
+        assert!(!h.stop_flag.load(Ordering::Relaxed));
+        assert_eq!(h.localhost_url(), format!("http://127.0.0.1:{}/stream", h.port));
+        stop_and_forget(h);
+    }
+
+    #[test]
+    fn start_proxy_with_cache_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("my_video.mkv");
+        let handle = start_proxy(
+            "https://example.com/video.mp4".to_string(),
+            tmp.path().to_path_buf(),
+            "testkey".to_string(),
+            "Test Video".to_string(),
+            Some(cache_path.clone()),
+        );
+        assert!(handle.is_ok());
+        stop_and_forget(handle.unwrap());
+    }
+
+    #[test]
+    fn start_proxy_with_none_cache_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handle = start_proxy(
+            "https://example.com/video.mp4".to_string(),
+            tmp.path().to_path_buf(),
+            "key123".to_string(),
+            "My Video Title".to_string(),
+            None,
+        );
+        assert!(handle.is_ok());
+        stop_and_forget(handle.unwrap());
+    }
+
+    #[test]
+    fn start_proxy_creates_cache_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a").join("b").join("c");
+        assert!(!nested.exists());
+        let handle = start_proxy(
+            "https://example.com/video.mp4".to_string(),
+            nested.clone(),
+            "key".to_string(),
+            "Title".to_string(),
+            None,
+        );
+        assert!(handle.is_ok());
+        assert!(nested.exists());
+        stop_and_forget(handle.unwrap());
+    }
+
+    #[test]
+    fn start_proxy_binds_to_free_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = start_proxy(
+            "https://example.com/video.mp4".to_string(),
+            tmp.path().to_path_buf(),
+            "key".to_string(),
+            "Title".to_string(),
+            None,
+        );
+        assert!(result.is_ok());
+        stop_and_forget(result.unwrap());
+    }
+
+    // ── resolve_redirects ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_redirects_invalid_url_returns_error() {
+        let result = resolve_redirects("not_a_valid_url").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("HEAD failed"));
+    }
+
+    #[tokio::test]
+    async fn resolve_redirects_empty_url_returns_error() {
+        let result = resolve_redirects("").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_redirects_unreachable_host_returns_error() {
+        let result = resolve_redirects("http://192.0.2.1:1/test").await;
+        assert!(result.is_err());
+    }
+}

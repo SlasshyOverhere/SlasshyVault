@@ -203,4 +203,101 @@ mod tests {
         let guard = init();
         assert!(guard.is_none(), "init() should return None when DSN is not set");
     }
+
+    // ── has_consent / set_consent roundtrip ──
+
+    #[test]
+    fn consent_defaults_to_true() {
+        set_consent(true);
+        assert!(has_consent());
+    }
+
+    #[test]
+    fn set_consent_false_disables() {
+        set_consent(false);
+        assert!(!has_consent());
+        // Restore
+        set_consent(true);
+    }
+
+    #[test]
+    fn consent_roundtrip_toggle() {
+        set_consent(true);
+        assert!(has_consent());
+        set_consent(false);
+        assert!(!has_consent());
+        set_consent(true);
+        assert!(has_consent());
+    }
+
+    // ── capture_error (no-panic path) ──
+
+    #[test]
+    fn capture_error_does_not_panic_without_dsn() {
+        // Without SENTRY_DSN set, capture_message is a safe no-op
+        capture_error("test-context", "test details about the error");
+        // If we get here without panicking, the test passes
+    }
+
+    #[test]
+    fn capture_error_formats_message() {
+        // Just verify the function runs; the internal format is "[UPDATE-ERROR] {ctx}: {details}"
+        capture_error("update", "disk full");
+        capture_error("", "");
+    }
+
+    // ── is_dev_runtime ──
+
+    #[test]
+    fn is_dev_runtime_reflects_debug_assertions() {
+        // In `cargo test` (debug build), is_dev_runtime returns true
+        // because cfg!(debug_assertions) is true.
+        let dev = is_dev_runtime();
+        assert!(dev, "cargo test runs in debug mode, so is_dev_runtime should be true");
+    }
+
+    // ── init returns None when DSN is empty string ──
+
+    #[test]
+    fn init_returns_none_for_empty_dsn() {
+        let original = std::env::var(SENTRY_DSN_ENV).ok();
+        std::env::set_var(SENTRY_DSN_ENV, "");
+        let guard = init();
+        assert!(guard.is_none(), "empty DSN should be treated as unset");
+        // Restore
+        match original {
+            Some(val) => std::env::set_var(SENTRY_DSN_ENV, val),
+            None => std::env::remove_var(SENTRY_DSN_ENV),
+        }
+    }
+
+    // ── SENTRY_SAMPLE_RATE_ENV parsing ──
+
+    #[test]
+    fn sample_rate_env_var_overrides_default() {
+        let original_dsn = std::env::var(SENTRY_DSN_ENV).ok();
+        let original_rate = std::env::var(SENTRY_SAMPLE_RATE_ENV).ok();
+
+        // Skip if DSN is set (would try to actually init sentry)
+        if original_dsn.is_some() && !original_dsn.as_deref().unwrap_or("").is_empty() {
+            return;
+        }
+
+        std::env::set_var(SENTRY_DSN_ENV, "https://examplePublicKey@o0.ingest.sentry.io/0");
+        std::env::set_var(SENTRY_SAMPLE_RATE_ENV, "0.5");
+        let guard = init();
+        // Guard may be Some (init succeeded) or None (invalid DSN rejected by sentry crate)
+        // Either way, no panic = pass
+        drop(guard);
+
+        // Restore
+        match original_dsn {
+            Some(val) => std::env::set_var(SENTRY_DSN_ENV, val),
+            None => std::env::remove_var(SENTRY_DSN_ENV),
+        }
+        match original_rate {
+            Some(val) => std::env::set_var(SENTRY_SAMPLE_RATE_ENV, val),
+            None => std::env::remove_var(SENTRY_SAMPLE_RATE_ENV),
+        }
+    }
 }

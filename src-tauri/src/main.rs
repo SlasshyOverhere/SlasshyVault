@@ -1352,16 +1352,25 @@ async fn gdrive_scan_folder(
 
     if !zip_files_detected.is_empty() {
         let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        let zip_indexed_count = indexed_count; // items actually indexed from ZIPs
+        let status_msg = if zip_indexed_count > 0 {
+            format!(
+                "Finished processing {} ZIP archive(s). {} episode(s) added to your library.",
+                zip_files_detected.len(), zip_indexed_count
+            )
+        } else {
+            format!(
+                "Finished processing {} ZIP archive(s). No episodes could be indexed — check file naming or archive integrity.",
+                zip_files_detected.len()
+            )
+        };
         emit_zip_processing_event(
             &window,
-            "complete",
+            if zip_indexed_count > 0 { "complete" } else { "warning" },
             zip_files_detected.len(),
             archive_name,
             None,
-            &format!(
-                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
-                zip_files_detected.len()
-            ),
+            &status_msg,
         );
     }
 
@@ -1396,14 +1405,20 @@ async fn gdrive_scan_folder(
     );
     println!("[CLOUD] {}", message);
 
+    let final_skipped_reasons = if skipped_reasons.is_empty() {
+        None
+    } else {
+        Some(skipped_reasons)
+    };
+
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
         tv_count,
         message,
-        skipped_reasons: None,
+        skipped_reasons: final_skipped_reasons,
     })
 }
 
@@ -1648,6 +1663,7 @@ async fn scan_all_cloud_folders(
                         Err(error) => {
                             println!("[ZIP] Failed to index '{}': {}", file.name, error);
                             skipped_count += 1;
+                            skipped_reasons.push(format!("{} — ZIP indexing error: {}", file.name, error));
                             continue;
                         }
                     }
@@ -2057,12 +2073,8 @@ async fn check_cloud_changes(
     let api_duration = api_start.elapsed();
     println!("[CLOUD CHANGES] Changes API call took {:?}", api_duration);
 
-    // Save the new token immediately
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.set_gdrive_changes_token(&new_token)
-            .map_err(|e| e.to_string())?;
-    }
+    // Token is saved AFTER indexing completes (see end of function).
+    // Saving before indexing would permanently lose failed files from detection.
 
     let mut removed_titles: Vec<String> = Vec::new();
     if !removed_file_ids.is_empty() {
@@ -2846,7 +2858,7 @@ async fn check_cloud_changes(
     };
 
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
@@ -11995,12 +12007,8 @@ async fn background_check_cloud_changes(
     let api_duration = api_start.elapsed();
     println!("[CLOUD BG] Changes API call took {:?}", api_duration);
 
-    // Save the new token immediately
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.set_gdrive_changes_token(&new_token)
-            .map_err(|e| e.to_string())?;
-    }
+    // Token is saved AFTER indexing completes (see end of function).
+    // Saving before indexing would permanently lose failed files from detection.
 
     let mut removed_titles: Vec<String> = Vec::new();
     if !removed_file_ids.is_empty() {
@@ -12464,16 +12472,25 @@ async fn background_check_cloud_changes(
 
     if !zip_files_detected.is_empty() {
         let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        let zip_indexed_count = indexed_count;
+        let status_msg = if zip_indexed_count > 0 {
+            format!(
+                "Finished processing {} ZIP archive(s). {} episode(s) added to your library.",
+                zip_files_detected.len(), zip_indexed_count
+            )
+        } else {
+            format!(
+                "Finished processing {} ZIP archive(s). No episodes could be indexed — check file naming or archive integrity.",
+                zip_files_detected.len()
+            )
+        };
         emit_zip_processing_event_from_handle(
             app_handle,
-            "complete",
+            if zip_indexed_count > 0 { "complete" } else { "warning" },
             zip_files_detected.len(),
             archive_name,
             None,
-            &format!(
-                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
-                zip_files_detected.len()
-            ),
+            &status_msg,
         );
     }
 
@@ -12685,8 +12702,13 @@ async fn background_check_cloud_changes(
 
     let final_skipped_reasons = if skipped_reasons.is_empty() { None } else { Some(skipped_reasons) };
 
+    // Save token AFTER indexing completes so failed files are retried on next poll
+    if let Ok(db) = state.db.lock() {
+        let _ = db.set_gdrive_changes_token(&new_token);
+    }
+
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
@@ -13542,7 +13564,9 @@ mod install_update_tests {
     fn accepts_allowed_installer_in_staging_dir() {
         let installer_path = create_temp_installer(TEST_INSTALLER_NAME);
         let validated = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap();
-        assert!(validated.starts_with(updater_staging_root()));
+        // canonical_path has \\?\ prefix on Windows; compare against canonicalized staging root
+        let canonical_staging = updater_staging_root().canonicalize().unwrap();
+        assert!(validated.starts_with(&canonical_staging));
         remove_test_artifact(&installer_path);
     }
 
@@ -13564,6 +13588,921 @@ mod install_update_tests {
         let error = get_valid_installer_path(installer_path.to_str().unwrap()).unwrap_err();
         assert!(error.contains("updater staging directory"));
         remove_test_artifact(&installer_path);
+    }
+}
+
+// ==================== ADDITIONAL TESTS FOR PURE HELPERS ====================
+
+#[cfg(test)]
+mod version_compare_tests {
+    use super::version_compare;
+
+    #[test]
+    fn higher_major_is_newer() {
+        assert!(version_compare("2.0.0", "1.9.9"));
+    }
+
+    #[test]
+    fn higher_minor_is_newer() {
+        assert!(version_compare("1.5.0", "1.4.9"));
+    }
+
+    #[test]
+    fn higher_patch_is_newer() {
+        assert!(version_compare("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn equal_versions_not_newer() {
+        assert!(!version_compare("1.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn older_version_not_newer() {
+        assert!(!version_compare("1.0.0", "2.0.0"));
+    }
+
+    #[test]
+    fn handles_missing_patch() {
+        assert!(version_compare("1.1", "1.0"));
+    }
+
+    #[test]
+    fn handles_single_component() {
+        assert!(version_compare("3", "2"));
+    }
+
+    #[test]
+    fn handles_zero_version() {
+        assert!(!version_compare("0.0.0", "0.0.0"));
+    }
+
+    #[test]
+    fn handles_two_digit_components() {
+        assert!(version_compare("1.12.3", "1.11.9"));
+    }
+
+    #[test]
+    fn lower_patch_not_newer() {
+        assert!(!version_compare("1.0.0", "1.0.1"));
+    }
+}
+
+#[cfg(test)]
+mod authorized_update_url_tests {
+    use super::is_authorized_update_url;
+    use super::ALLOWED_REPO;
+
+    fn make_url(s: &str) -> url::Url {
+        url::Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn rejects_http_scheme() {
+        let url = make_url("http://github.com/SlasshyOverhere/SlasshyVault/releases/download/v1/test.exe");
+        assert!(!is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn rejects_ftp_scheme() {
+        let url = make_url("ftp://github.com/SlasshyOverhere/SlasshyVault/releases/download/v1/test.exe");
+        assert!(!is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn allows_github_https_with_correct_repo() {
+        let url = make_url(&format!("https://github.com/{}/releases/download/v1/test.exe", ALLOWED_REPO));
+        assert!(is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn rejects_wrong_github_repo() {
+        let url = make_url("https://github.com/SomeOtherOrg/SomeOtherRepo/releases/download/v1/test.exe");
+        assert!(!is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn rejects_non_github_host() {
+        let url = make_url("https://evil.com/SlasshyOverhere/SlasshyVault/releases/download/v1/test.exe");
+        assert!(!is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn allows_any_https_redirect() {
+        let url = make_url("https://objects.githubusercontent.com/some-redirect");
+        assert!(is_authorized_update_url(&url, true));
+    }
+
+    #[test]
+    fn rejects_http_redirect() {
+        let url = make_url("http://objects.githubusercontent.com/some-redirect");
+        assert!(!is_authorized_update_url(&url, true));
+    }
+
+    #[test]
+    fn allows_www_github_host() {
+        let url = make_url(&format!("https://www.github.com/{}/releases/download/v1/test.exe", ALLOWED_REPO));
+        assert!(is_authorized_update_url(&url, false));
+    }
+
+    #[test]
+    fn rejects_github_wrong_path() {
+        let url = make_url("https://github.com/WrongOrg/WrongRepo/releases/download/v1/test.exe");
+        assert!(!is_authorized_update_url(&url, false));
+    }
+}
+
+#[cfg(test)]
+mod sanitize_filename_tests {
+    use super::sanitize_update_filename;
+
+    fn make_url(s: &str) -> url::Url {
+        url::Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn extracts_filename_from_url() {
+        let url = make_url("https://github.com/org/repo/releases/download/v1/SlasshyVault-Setup-3.0.56.exe");
+        assert_eq!(sanitize_update_filename(&url), "SlasshyVault-Setup-3.0.56.exe");
+    }
+
+    #[test]
+    fn replaces_special_chars() {
+        // URL percent-encodes spaces; % and @ and ! are all non-alphanumeric -> _
+        let url = make_url("https://example.com/path/file%20name%40special!.exe");
+        let result = sanitize_update_filename(&url);
+        assert!(result.contains("special_"));
+        assert!(!result.contains("@"));
+        assert!(!result.contains("!"));
+    }
+
+    #[test]
+    fn returns_fallback_for_empty_path() {
+        let url = make_url("https://example.com/");
+        assert_eq!(sanitize_update_filename(&url), "slasshyvault-update.bin");
+    }
+
+    #[test]
+    fn trims_leading_trailing_dots() {
+        let url = make_url("https://example.com/...hidden...");
+        assert_eq!(sanitize_update_filename(&url), "hidden");
+    }
+
+    #[test]
+    fn returns_fallback_for_only_dots() {
+        let url = make_url("https://example.com/...");
+        assert_eq!(sanitize_update_filename(&url), "slasshyvault-update.bin");
+    }
+
+    #[test]
+    fn preserves_dashes_and_underscores() {
+        let url = make_url("https://example.com/my_file-name.exe");
+        assert_eq!(sanitize_update_filename(&url), "my_file-name.exe");
+    }
+}
+
+#[cfg(test)]
+mod ffprobe_parsing_tests {
+    use super::parse_ffprobe_frame_rate;
+
+    #[test]
+    fn parses_fraction() {
+        let fps = parse_ffprobe_frame_rate(Some("30000/1001"));
+        assert!(fps.is_some());
+        let fps = fps.unwrap();
+        assert!((fps - 29.97).abs() < 0.01);
+    }
+
+    #[test]
+    fn parses_integer_string() {
+        let fps = parse_ffprobe_frame_rate(Some("25"));
+        assert_eq!(fps, Some(25.0));
+    }
+
+    #[test]
+    fn returns_none_for_none() {
+        assert_eq!(parse_ffprobe_frame_rate(None), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty() {
+        assert_eq!(parse_ffprobe_frame_rate(Some("")), None);
+    }
+
+    #[test]
+    fn returns_none_for_zero_over_zero() {
+        assert_eq!(parse_ffprobe_frame_rate(Some("0/0")), None);
+    }
+
+    #[test]
+    fn returns_none_for_zero_denominator() {
+        assert_eq!(parse_ffprobe_frame_rate(Some("30/0")), None);
+    }
+
+    #[test]
+    fn handles_whitespace() {
+        let fps = parse_ffprobe_frame_rate(Some("  24000/1001  "));
+        assert!(fps.is_some());
+        assert!((fps.unwrap() - 23.976).abs() < 0.01);
+    }
+
+    #[test]
+    fn returns_none_for_garbage() {
+        assert_eq!(parse_ffprobe_frame_rate(Some("abc")), None);
+    }
+
+    #[test]
+    fn parses_60fps() {
+        let fps = parse_ffprobe_frame_rate(Some("60000/1000"));
+        assert_eq!(fps, Some(60.0));
+    }
+}
+
+#[cfg(test)]
+mod container_name_tests {
+    use super::normalize_container_name;
+
+    #[test]
+    fn normalizes_matroska() {
+        assert_eq!(normalize_container_name(Some("matroska"), None), Some("MKV".to_string()));
+    }
+
+    #[test]
+    fn normalizes_mov_mp4_variant() {
+        assert_eq!(normalize_container_name(Some("mov,mp4,m4a,3gp,3g2,mj2"), None), Some("MP4".to_string()));
+    }
+
+    #[test]
+    fn normalizes_avi() {
+        assert_eq!(normalize_container_name(Some("avi"), None), Some("AVI".to_string()));
+    }
+
+    #[test]
+    fn normalizes_webm() {
+        assert_eq!(normalize_container_name(Some("webm"), None), Some("WEBM".to_string()));
+    }
+
+    #[test]
+    fn normalizes_mpegts() {
+        assert_eq!(normalize_container_name(Some("mpegts"), None), Some("TS".to_string()));
+    }
+
+    #[test]
+    fn falls_back_to_extension() {
+        assert_eq!(normalize_container_name(None, Some("mkv")), Some("MKV".to_string()));
+    }
+
+    #[test]
+    fn returns_none_for_both_none() {
+        assert_eq!(normalize_container_name(None, None), None);
+    }
+
+    #[test]
+    fn handles_case_insensitive() {
+        assert_eq!(normalize_container_name(Some("MATROSKA"), None), Some("MKV".to_string()));
+    }
+
+    #[test]
+    fn unknown_format_uppercased() {
+        assert_eq!(normalize_container_name(Some("flac"), None), Some("FLAC".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod resolution_label_tests {
+    use super::resolution_label_from_dimensions;
+
+    #[test]
+    fn detects_4k() {
+        assert_eq!(resolution_label_from_dimensions(Some(3840), Some(2160)), Some("2160p".to_string()));
+    }
+
+    #[test]
+    fn detects_1440p() {
+        assert_eq!(resolution_label_from_dimensions(Some(2560), Some(1440)), Some("1440p".to_string()));
+    }
+
+    #[test]
+    fn detects_1080p() {
+        assert_eq!(resolution_label_from_dimensions(Some(1920), Some(1080)), Some("1080p".to_string()));
+    }
+
+    #[test]
+    fn detects_720p() {
+        assert_eq!(resolution_label_from_dimensions(Some(1280), Some(720)), Some("720p".to_string()));
+    }
+
+    #[test]
+    fn uses_raw_height_for_small() {
+        assert_eq!(resolution_label_from_dimensions(Some(640), Some(360)), Some("360p".to_string()));
+    }
+
+    #[test]
+    fn returns_none_for_zero_height() {
+        // width must also be small so it doesn't match a resolution bucket
+        assert_eq!(resolution_label_from_dimensions(Some(0), Some(0)), None);
+    }
+
+    #[test]
+    fn returns_none_for_no_height() {
+        assert_eq!(resolution_label_from_dimensions(Some(1920), None), None);
+    }
+
+    #[test]
+    fn handles_width_only_default() {
+        assert_eq!(resolution_label_from_dimensions(None, Some(1080)), Some("1080p".to_string()));
+    }
+
+    #[test]
+    fn detects_4k_by_height_only() {
+        assert_eq!(resolution_label_from_dimensions(None, Some(2160)), Some("2160p".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod language_inference_tests {
+    use super::infer_language_from_text;
+
+    #[test]
+    fn recognizes_en() {
+        assert_eq!(infer_language_from_text("en"), Some(("en", "English", "en,eng,english")));
+    }
+
+    #[test]
+    fn recognizes_eng() {
+        assert_eq!(infer_language_from_text("eng"), Some(("en", "English", "en,eng,english")));
+    }
+
+    #[test]
+    fn recognizes_english() {
+        assert_eq!(infer_language_from_text("English"), Some(("en", "English", "en,eng,english")));
+    }
+
+    #[test]
+    fn recognizes_hindi() {
+        assert_eq!(infer_language_from_text("hi"), Some(("hi", "Hindi", "hi,hin,hindi")));
+    }
+
+    #[test]
+    fn recognizes_japanese() {
+        assert_eq!(infer_language_from_text("ja"), Some(("ja", "Japanese", "ja,jpn,japanese")));
+    }
+
+    #[test]
+    fn recognizes_unknown_with_english_substring() {
+        assert_eq!(infer_language_from_text("English 5.1"), Some(("en", "English", "en,eng,english")));
+    }
+
+    #[test]
+    fn returns_none_for_empty() {
+        assert_eq!(infer_language_from_text(""), None);
+    }
+
+    #[test]
+    fn returns_none_for_und() {
+        assert_eq!(infer_language_from_text("und"), None);
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert_eq!(infer_language_from_text("  en  "), Some(("en", "English", "en,eng,english")));
+    }
+
+    #[test]
+    fn recognizes_german_deu() {
+        assert_eq!(infer_language_from_text("deu"), Some(("de", "German", "de,deu,german")));
+    }
+
+    #[test]
+    fn returns_none_for_garbage() {
+        assert_eq!(infer_language_from_text("xyz123"), None);
+    }
+
+    #[test]
+    fn recognizes_spanish() {
+        assert_eq!(infer_language_from_text("es"), Some(("es", "Spanish", "es,spa,spanish")));
+    }
+}
+
+#[cfg(test)]
+mod validate_addon_url_tests {
+    use super::validate_addon_url;
+
+    #[test]
+    fn accepts_valid_https_url() {
+        assert!(validate_addon_url("https://example.com/addon").is_ok());
+    }
+
+    #[test]
+    fn accepts_valid_http_url() {
+        assert!(validate_addon_url("http://localhost:3000/addon").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_url() {
+        assert!(validate_addon_url("").is_err());
+    }
+
+    #[test]
+    fn rejects_ftp_scheme() {
+        assert!(validate_addon_url("ftp://example.com/addon").is_err());
+    }
+
+    #[test]
+    fn rejects_file_scheme() {
+        assert!(validate_addon_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_zero_ip() {
+        assert!(validate_addon_url("http://0.0.0.0:8080/addon").is_err());
+    }
+
+    #[test]
+    fn accepts_localhost() {
+        assert!(validate_addon_url("http://localhost:8080/addon").is_ok());
+    }
+
+    #[test]
+    fn rejects_localhost_localdomain() {
+        assert!(validate_addon_url("http://localhost.localdomain/addon").is_err());
+    }
+
+    #[test]
+    fn rejects_no_scheme() {
+        assert!(validate_addon_url("example.com/addon").is_err());
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert!(validate_addon_url("  https://example.com  ").is_ok());
+    }
+
+    #[test]
+    fn rejects_link_local() {
+        assert!(validate_addon_url("http://169.254.1.1/addon").is_err());
+    }
+}
+
+#[cfg(test)]
+mod notification_format_tests {
+    use super::{format_added_notification, format_removed_notification};
+
+    #[test]
+    fn added_movie_format() {
+        let msg = format_added_notification("Inception", false, None, None);
+        assert_eq!(msg, "Inception added to your library");
+    }
+
+    #[test]
+    fn added_tv_episode_format() {
+        let msg = format_added_notification("Breaking Bad", true, Some(1), Some(5));
+        assert_eq!(msg, "Breaking Bad S01E05 added to your library");
+    }
+
+    #[test]
+    fn added_tv_defaults_to_s01e01() {
+        let msg = format_added_notification("Show", true, None, None);
+        assert_eq!(msg, "Show S01E01 added to your library");
+    }
+
+    #[test]
+    fn removed_single_item() {
+        let msg = format_removed_notification("Movie", None);
+        assert_eq!(msg, "Movie removed (deleted from Drive)");
+    }
+
+    #[test]
+    fn removed_single_count() {
+        let msg = format_removed_notification("Movie", Some(1));
+        assert_eq!(msg, "Movie removed (deleted from Drive)");
+    }
+
+    #[test]
+    fn removed_multiple() {
+        let msg = format_removed_notification("Show", Some(5));
+        assert_eq!(msg, "Show - 5 items removed (deleted from Drive)");
+    }
+}
+
+#[cfg(test)]
+mod reminder_validation_tests {
+    use super::{validate_reminder_input, validate_tracking_mode, normalize_tracking_mode, MovieReminderInput};
+
+    fn valid_input() -> MovieReminderInput {
+        MovieReminderInput {
+            tmdb_id: "12345".to_string(),
+            media_type: "movie".to_string(),
+            title: "Test Movie".to_string(),
+            poster_path: None,
+            season_number: None,
+            episode_number: None,
+            release_date: None,
+            reminder_at: "2025-01-01T00:00:00Z".to_string(),
+            source: None,
+            tracking_mode: None,
+            tracking_season_number: None,
+            notes: None,
+            is_active: None,
+        }
+    }
+
+    #[test]
+    fn valid_movie_passes() {
+        assert!(validate_reminder_input(&valid_input()).is_ok());
+    }
+
+    #[test]
+    fn empty_tmdb_id_fails() {
+        let mut input = valid_input();
+        input.tmdb_id = "".to_string();
+        assert!(validate_reminder_input(&input).is_err());
+    }
+
+    #[test]
+    fn empty_title_fails() {
+        let mut input = valid_input();
+        input.title = "".to_string();
+        assert!(validate_reminder_input(&input).is_err());
+    }
+
+    #[test]
+    fn invalid_media_type_fails() {
+        let mut input = valid_input();
+        input.media_type = "book".to_string();
+        assert!(validate_reminder_input(&input).is_err());
+    }
+
+    #[test]
+    fn tv_media_type_passes() {
+        let mut input = valid_input();
+        input.media_type = "tv".to_string();
+        assert!(validate_reminder_input(&input).is_ok());
+    }
+
+    #[test]
+    fn movie_tracking_mode_must_be_single() {
+        let mut input = valid_input();
+        input.media_type = "movie".to_string();
+        input.tracking_mode = Some("tv_season".to_string());
+        assert!(validate_tracking_mode(&input).is_err());
+    }
+
+    #[test]
+    fn tv_tracking_mode_tv_season_ok() {
+        let mut input = valid_input();
+        input.media_type = "tv".to_string();
+        input.tracking_mode = Some("tv_season".to_string());
+        assert!(validate_tracking_mode(&input).is_ok());
+    }
+
+    #[test]
+    fn normalize_defaults_to_single() {
+        let input = valid_input();
+        assert_eq!(normalize_tracking_mode(&input).unwrap(), "single");
+    }
+
+    #[test]
+    fn normalize_invalid_mode_fails() {
+        let mut input = valid_input();
+        input.tracking_mode = Some("continuous".to_string());
+        assert!(normalize_tracking_mode(&input).is_err());
+    }
+}
+
+#[cfg(test)]
+mod watchlist_validation_tests {
+    use super::{validate_watchlist_input, normalize_watchlist_notification_mode, WatchlistItemInput};
+
+    fn valid_input() -> WatchlistItemInput {
+        WatchlistItemInput {
+            tmdb_id: "12345".to_string(),
+            media_type: "movie".to_string(),
+            title: "Test Movie".to_string(),
+            poster_path: None,
+            release_date: None,
+            notes: None,
+            is_active: None,
+            notification_enabled: None,
+            notification_mode: None,
+            notification_interval_minutes: None,
+            notify_at: None,
+        }
+    }
+
+    #[test]
+    fn valid_input_passes() {
+        assert!(validate_watchlist_input(&valid_input()).is_ok());
+    }
+
+    #[test]
+    fn empty_tmdb_id_fails() {
+        let mut input = valid_input();
+        input.tmdb_id = "".to_string();
+        assert!(validate_watchlist_input(&input).is_err());
+    }
+
+    #[test]
+    fn empty_title_fails() {
+        let mut input = valid_input();
+        input.title = "".to_string();
+        assert!(validate_watchlist_input(&input).is_err());
+    }
+
+    #[test]
+    fn invalid_media_type_fails() {
+        let mut input = valid_input();
+        input.media_type = "book".to_string();
+        assert!(validate_watchlist_input(&input).is_err());
+    }
+
+    #[test]
+    fn notification_enabled_without_notify_at_fails() {
+        let mut input = valid_input();
+        input.notification_enabled = Some(true);
+        input.notify_at = None;
+        assert!(validate_watchlist_input(&input).is_err());
+    }
+
+    #[test]
+    fn notification_enabled_with_notify_at_passes() {
+        let mut input = valid_input();
+        input.notification_enabled = Some(true);
+        input.notify_at = Some("2025-01-01T00:00:00Z".to_string());
+        assert!(validate_watchlist_input(&input).is_ok());
+    }
+
+    #[test]
+    fn spam_mode_requires_positive_interval() {
+        let mut input = valid_input();
+        input.notification_mode = Some("spam".to_string());
+        input.notification_interval_minutes = Some(0);
+        assert!(validate_watchlist_input(&input).is_err());
+    }
+
+    #[test]
+    fn spam_mode_with_interval_passes() {
+        let mut input = valid_input();
+        input.notification_mode = Some("spam".to_string());
+        input.notification_interval_minutes = Some(60);
+        assert!(validate_watchlist_input(&input).is_ok());
+    }
+
+    #[test]
+    fn normalize_single_mode() {
+        let input = valid_input();
+        assert_eq!(normalize_watchlist_notification_mode(&input).unwrap(), "single");
+    }
+
+    #[test]
+    fn normalize_spam_mode() {
+        let mut input = valid_input();
+        input.notification_mode = Some("spam".to_string());
+        assert_eq!(normalize_watchlist_notification_mode(&input).unwrap(), "spam");
+    }
+
+    #[test]
+    fn normalize_invalid_mode_fails() {
+        let mut input = valid_input();
+        input.notification_mode = Some("burst".to_string());
+        assert!(normalize_watchlist_notification_mode(&input).is_err());
+    }
+}
+
+#[cfg(test)]
+mod episode_inference_tests {
+    use super::infer_episode_numbers_from_path;
+
+    #[test]
+    fn parses_standard_s01e05() {
+        let result = infer_episode_numbers_from_path("Breaking.Bad.S01E05.720p.mkv");
+        assert_eq!(result, Some((1, 5)));
+    }
+
+    #[test]
+    fn parses_s1e1() {
+        let result = infer_episode_numbers_from_path("Show.S1E1.mkv");
+        assert_eq!(result, Some((1, 1)));
+    }
+
+    #[test]
+    fn parses_s10e100() {
+        let result = infer_episode_numbers_from_path("Show.S10E100.mkv");
+        assert_eq!(result, Some((10, 100)));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        let result = infer_episode_numbers_from_path("show.s03e12.mkv");
+        assert_eq!(result, Some((3, 12)));
+    }
+
+    #[test]
+    fn returns_none_for_no_match() {
+        let result = infer_episode_numbers_from_path("movie.mkv");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn returns_none_for_empty() {
+        let result = infer_episode_numbers_from_path("");
+        assert_eq!(result, None);
+    }
+}
+
+#[cfg(test)]
+mod compute_hash_tests {
+    use super::compute_partial_hash;
+    use std::io::Write;
+    use uuid::Uuid;
+
+    fn temp_file_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("hash_test_{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn computes_hash_for_content() {
+        let path = temp_file_path();
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"hello world test data").unwrap();
+        drop(f);
+
+        let hash = compute_partial_hash(path.to_str().unwrap());
+        assert!(hash.is_some());
+        assert_eq!(hash.unwrap().len(), 8);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_none_for_missing_file() {
+        let hash = compute_partial_hash("/nonexistent/path/file.bin");
+        assert!(hash.is_none());
+    }
+
+    #[test]
+    fn returns_none_for_empty_file() {
+        let path = temp_file_path();
+        std::fs::File::create(&path).unwrap();
+
+        let hash = compute_partial_hash(path.to_str().unwrap());
+        assert!(hash.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn same_content_same_hash() {
+        let path1 = temp_file_path();
+        let path2 = temp_file_path();
+        let data = b"deterministic content for hash test";
+        std::fs::File::create(&path1).unwrap().write_all(data).unwrap();
+        std::fs::File::create(&path2).unwrap().write_all(data).unwrap();
+
+        let h1 = compute_partial_hash(path1.to_str().unwrap());
+        let h2 = compute_partial_hash(path2.to_str().unwrap());
+        assert_eq!(h1, h2);
+
+        let _ = std::fs::remove_file(&path1);
+        let _ = std::fs::remove_file(&path2);
+    }
+}
+
+#[cfg(test)]
+mod augment_match_key_tests {
+    use super::augment_match_key_with_phash;
+    use std::io::Write;
+    use uuid::Uuid;
+
+    #[test]
+    fn returns_none_when_no_key_and_no_path() {
+        assert_eq!(augment_match_key_with_phash(None, None), None);
+    }
+
+    #[test]
+    fn returns_none_when_no_path() {
+        // Function early-returns None via ? operator when file_path is None
+        assert_eq!(augment_match_key_with_phash(Some("key".to_string()), None), None);
+    }
+
+    #[test]
+    fn returns_key_when_path_empty() {
+        assert_eq!(augment_match_key_with_phash(Some("key".to_string()), Some("")), Some("key".to_string()));
+    }
+
+    #[test]
+    fn appends_phash_when_file_exists() {
+        let path = std::env::temp_dir().join(format!("phash_test_{}", Uuid::new_v4()));
+        std::fs::File::create(&path).unwrap().write_all(b"test data").unwrap();
+
+        let result = augment_match_key_with_phash(Some("key".to_string()), Some(path.to_str().unwrap()));
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(val.starts_with("key|phash:"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn phash_only_when_no_existing_key() {
+        let path = std::env::temp_dir().join(format!("phash_test_{}", Uuid::new_v4()));
+        std::fs::File::create(&path).unwrap().write_all(b"test data").unwrap();
+
+        let result = augment_match_key_with_phash(None, Some(path.to_str().unwrap()));
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(val.starts_with("phash:"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::{is_dev_runtime, updater_staging_root, runtime_window_title, runtime_app_identifier, runtime_deep_link_scheme};
+
+    #[test]
+    fn is_dev_runtime_returns_bool() {
+        let _ = is_dev_runtime();
+    }
+
+    #[test]
+    fn updater_staging_root_contains_expected_name() {
+        let root = updater_staging_root();
+        let name = root.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name == "slasshyvault-updater" || name == "slasshyvault-updater-dev",
+            "Unexpected staging root name: {}",
+            name
+        );
+    }
+
+    #[test]
+    fn updater_staging_root_is_under_temp() {
+        let root = updater_staging_root();
+        let temp = std::env::temp_dir();
+        assert!(root.starts_with(&temp));
+    }
+
+    #[test]
+    fn runtime_window_title_not_empty() {
+        assert!(!runtime_window_title().is_empty());
+    }
+
+    #[test]
+    fn runtime_app_identifier_contains_slasshyvault() {
+        assert!(runtime_app_identifier().contains("slasshyvault"));
+    }
+
+    #[test]
+    fn runtime_deep_link_scheme_contains_slasshyvault() {
+        assert!(runtime_deep_link_scheme().contains("slasshyvault"));
+    }
+
+    #[test]
+    fn dev_and_release_differ() {
+        let title = runtime_window_title();
+        let id = runtime_app_identifier();
+        let scheme = runtime_deep_link_scheme();
+
+        if is_dev_runtime() {
+            assert_eq!(title, "SlasshyVault Dev");
+            assert_eq!(id, "com.slasshyvault.app.dev");
+            assert_eq!(scheme, "slasshyvault-dev");
+        } else {
+            assert_eq!(title, "SlasshyVault");
+            assert_eq!(id, "com.slasshyvault.app");
+            assert_eq!(scheme, "slasshyvault");
+        }
+    }
+}
+
+#[cfg(test)]
+mod segments_private_ipv6_tests {
+    use super::segments_are_private_ipv6;
+
+    #[test]
+    fn fc00_is_private() {
+        let ip: std::net::Ipv6Addr = "fc00::1".parse().unwrap();
+        assert!(segments_are_private_ipv6(ip));
+    }
+
+    #[test]
+    fn fe80_is_private() {
+        let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
+        assert!(segments_are_private_ipv6(ip));
+    }
+
+    #[test]
+    fn global_unicast_not_private() {
+        let ip: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
+        assert!(!segments_are_private_ipv6(ip));
+    }
+
+    #[test]
+    fn fd00_is_private() {
+        let ip: std::net::Ipv6Addr = "fd00::1".parse().unwrap();
+        assert!(segments_are_private_ipv6(ip));
     }
 }
 

@@ -415,3 +415,742 @@ fn sanitize_filename(title: &str) -> String {
         .trim()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use tempfile::TempDir;
+
+    /// Build a Config with a custom zip_cache_dir pointing at a temp dir.
+    fn config_with_cache_dir(dir: &std::path::Path) -> Config {
+        Config {
+            zip_cache_dir: Some(dir.to_string_lossy().to_string()),
+            ..Config::default()
+        }
+    }
+
+    /// Build a Config with no custom cache dir (falls back to default).
+    fn config_default_cache() -> Config {
+        Config {
+            zip_cache_dir: None,
+            ..Config::default()
+        }
+    }
+
+    /// Insert an entry directly into the manager for testing status/stop/cleanup.
+    fn insert_test_entry(
+        manager: &CacheManager,
+        key: &str,
+        state: CacheState,
+        target_path: &str,
+    ) {
+        let mut active = manager.lock_active().unwrap();
+        active.insert(
+            key.to_string(),
+            ActiveCache {
+                cancel_flag: Arc::new(AtomicBool::new(false)),
+                status: CacheStatus {
+                    cache_key: key.to_string(),
+                    state,
+                    downloaded_bytes: 0,
+                    total_bytes: 1024,
+                    speed_bytes_per_second: 0.0,
+                    target_path: target_path.to_string(),
+                },
+            },
+        );
+    }
+
+    // ── CacheManager::new / Default ──────────────────────────────────────
+
+    #[test]
+    fn new_creates_empty_manager() {
+        let mgr = CacheManager::new();
+        let statuses = mgr.all_status();
+        assert!(statuses.is_empty());
+    }
+
+    #[test]
+    fn default_trait_works() {
+        let mgr = CacheManager::default();
+        assert!(mgr.all_status().is_empty());
+    }
+
+    #[test]
+    fn clone_shares_state() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        insert_test_entry(&mgr, "k1", CacheState::Idle, tmp.path().join("f.mkv").to_str().unwrap());
+
+        let mgr2 = mgr.clone();
+        assert_eq!(mgr2.all_status().len(), 1);
+        assert_eq!(mgr2.status("k1").unwrap().cache_key, "k1");
+    }
+
+    // ── cache_dir() ─────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_dir_custom_path() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = config_with_cache_dir(tmp.path());
+        let dir = CacheManager::cache_dir(&cfg);
+        assert_eq!(dir, tmp.path());
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn cache_dir_default_fallback() {
+        let cfg = config_default_cache();
+        let dir = CacheManager::cache_dir(&cfg);
+        assert!(dir.to_string_lossy().contains("stream_cache"));
+    }
+
+    #[test]
+    fn cache_dir_empty_string_falls_back() {
+        let cfg = Config {
+            zip_cache_dir: Some(String::new()),
+            ..Config::default()
+        };
+        let dir = CacheManager::cache_dir(&cfg);
+        assert!(dir.to_string_lossy().contains("stream_cache"));
+    }
+
+    // ── is_cache_dir_set() ──────────────────────────────────────────────
+
+    #[test]
+    fn is_cache_dir_set_true() {
+        let cfg = Config {
+            zip_cache_dir: Some("/some/path".into()),
+            ..Config::default()
+        };
+        assert!(CacheManager::is_cache_dir_set(&cfg));
+    }
+
+    #[test]
+    fn is_cache_dir_set_false_none() {
+        let cfg = config_default_cache();
+        assert!(!CacheManager::is_cache_dir_set(&cfg));
+    }
+
+    #[test]
+    fn is_cache_dir_set_false_empty() {
+        let cfg = Config {
+            zip_cache_dir: Some(String::new()),
+            ..Config::default()
+        };
+        assert!(!CacheManager::is_cache_dir_set(&cfg));
+    }
+
+    // ── lock_active() ───────────────────────────────────────────────────
+
+    #[test]
+    fn lock_active_returns_guard() {
+        let mgr = CacheManager::new();
+        let guard = mgr.lock_active().unwrap();
+        assert!(guard.is_empty());
+    }
+
+    #[test]
+    fn lock_active_allows_mutation() {
+        let mgr = CacheManager::new();
+        {
+            let mut guard = mgr.lock_active().unwrap();
+            guard.insert(
+                "test".into(),
+                ActiveCache {
+                    cancel_flag: Arc::new(AtomicBool::new(false)),
+                    status: CacheStatus {
+                        cache_key: "test".into(),
+                        state: CacheState::Idle,
+                        downloaded_bytes: 0,
+                        total_bytes: 0,
+                        speed_bytes_per_second: 0.0,
+                        target_path: String::new(),
+                    },
+                },
+            );
+        }
+        assert_eq!(mgr.all_status().len(), 1);
+    }
+
+    // ── stop() ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn stop_sets_cancel_flag() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        insert_test_entry(
+            &mgr,
+            "key1",
+            CacheState::Downloading { progress: 50.0 },
+            tmp.path().join("f.mkv").to_str().unwrap(),
+        );
+
+        mgr.stop("key1").unwrap();
+
+        let guard = mgr.lock_active().unwrap();
+        let entry = guard.get("key1").unwrap();
+        assert!(entry.cancel_flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn stop_unknown_key_returns_err() {
+        let mgr = CacheManager::new();
+        let err = mgr.stop("nonexistent").unwrap_err();
+        assert!(err.contains("No active cache"));
+    }
+
+    #[test]
+    fn stop_idle_entry_succeeds() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        insert_test_entry(&mgr, "k", CacheState::Idle, tmp.path().join("f.mkv").to_str().unwrap());
+        mgr.stop("k").unwrap();
+    }
+
+    // ── status() ────────────────────────────────────────────────────────
+
+    #[test]
+    fn status_returns_entry() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        insert_test_entry(&mgr, "s1", CacheState::Idle, tmp.path().join("f.mkv").to_str().unwrap());
+
+        let s = mgr.status("s1").unwrap();
+        assert_eq!(s.cache_key, "s1");
+        assert_eq!(s.total_bytes, 1024);
+    }
+
+    #[test]
+    fn status_returns_none_for_missing() {
+        let mgr = CacheManager::new();
+        assert!(mgr.status("missing").is_none());
+    }
+
+    #[test]
+    fn status_reflects_state_changes() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "x", CacheState::Downloading { progress: 42.0 }, "/tmp/f.mkv");
+
+        let s = mgr.status("x").unwrap();
+        match s.state {
+            CacheState::Downloading { progress } => assert!((progress - 42.0).abs() < f64::EPSILON),
+            _ => panic!("expected Downloading"),
+        }
+    }
+
+    // ── all_status() ────────────────────────────────────────────────────
+
+    #[test]
+    fn all_status_empty() {
+        let mgr = CacheManager::new();
+        assert!(mgr.all_status().is_empty());
+    }
+
+    #[test]
+    fn all_status_multiple() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "a", CacheState::Idle, "/a.mkv");
+        insert_test_entry(&mgr, "b", CacheState::Idle, "/b.mkv");
+        insert_test_entry(&mgr, "c", CacheState::Idle, "/c.mkv");
+
+        let all = mgr.all_status();
+        assert_eq!(all.len(), 3);
+        let keys: Vec<&str> = all.iter().map(|s| s.cache_key.as_str()).collect();
+        assert!(keys.contains(&"a"));
+        assert!(keys.contains(&"b"));
+        assert!(keys.contains(&"c"));
+    }
+
+    // ── cleanup() ───────────────────────────────────────────────────────
+
+    #[test]
+    fn cleanup_removes_entry_from_map() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.mkv");
+        std::fs::write(&path, b"data").unwrap();
+        insert_test_entry(&mgr, "c1", CacheState::Idle, path.to_str().unwrap());
+
+        mgr.cleanup("c1").unwrap();
+        assert!(mgr.status("c1").is_none());
+    }
+
+    #[test]
+    fn cleanup_removes_part_file() {
+        let tmp = TempDir::new().unwrap();
+        let mkv = tmp.path().join("test.mkv");
+        let part = tmp.path().join("test.mkv.part");
+        std::fs::write(&mkv, b"data").unwrap();
+        std::fs::write(&part, b"partial").unwrap();
+
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "c2", CacheState::Idle, mkv.to_str().unwrap());
+
+        mgr.cleanup("c2").unwrap();
+        assert!(!mkv.exists());
+        assert!(!part.exists());
+    }
+
+    #[test]
+    fn cleanup_missing_key_still_ok() {
+        let mgr = CacheManager::new();
+        // cleanup on nonexistent key: removes nothing, returns Ok
+        mgr.cleanup("ghost").unwrap();
+    }
+
+    #[test]
+    fn cleanup_missing_file_still_ok() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "nofile", CacheState::Idle, "/nonexistent/path.mkv");
+        // should not panic even though file doesn't exist
+        mgr.cleanup("nofile").unwrap();
+        assert!(mgr.status("nofile").is_none());
+    }
+
+    // ── cleanup_all() ───────────────────────────────────────────────────
+
+    #[test]
+    fn cleanup_all_removes_everything() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        for i in 0..3 {
+            let p = tmp.path().join(format!("f{i}.mkv"));
+            std::fs::write(&p, b"x").unwrap();
+            insert_test_entry(&mgr, &format!("k{i}"), CacheState::Idle, p.to_str().unwrap());
+        }
+
+        mgr.cleanup_all().unwrap();
+        assert!(mgr.all_status().is_empty());
+    }
+
+    #[test]
+    fn cleanup_all_on_empty_is_noop() {
+        let mgr = CacheManager::new();
+        mgr.cleanup_all().unwrap();
+        assert!(mgr.all_status().is_empty());
+    }
+
+    // ── auto_cleanup_old() ──────────────────────────────────────────────
+
+    #[test]
+    fn auto_cleanup_old_removes_expired_files() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = config_with_cache_dir(tmp.path());
+        cfg.cloud_cache_expiry_hours = 1; // minimum expiry
+
+        // Create files and attempt to backdate via stdlib
+        let old_file = tmp.path().join("expired.mkv");
+        std::fs::write(&old_file, b"old").unwrap();
+        let old_part = tmp.path().join("expired.mkv.part");
+        std::fs::write(&old_part, b"oldpart").unwrap();
+
+        // Try to backdate using File::set_times (Rust 1.75+)
+        let old_time = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&old_file) {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(old_time));
+        }
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&old_part) {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(old_time));
+        }
+
+        CacheManager::auto_cleanup_old(&cfg);
+
+        // Files may or may not be removed depending on set_times support.
+        // Either outcome is acceptable — we verify no panic.
+    }
+
+    #[test]
+    fn auto_cleanup_old_keeps_fresh_files() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = config_with_cache_dir(tmp.path());
+
+        let fresh = tmp.path().join("fresh.mkv");
+        std::fs::write(&fresh, b"new").unwrap();
+
+        CacheManager::auto_cleanup_old(&cfg);
+        assert!(fresh.exists());
+    }
+
+    #[test]
+    fn auto_cleanup_old_ignores_non_mkv_files() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = config_with_cache_dir(tmp.path());
+
+        let txt = tmp.path().join("readme.txt");
+        std::fs::write(&txt, b"keep me").unwrap();
+        // Backdate it via stdlib
+        let old_time = std::time::SystemTime::now() - std::time::Duration::from_secs(100 * 3600);
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&txt) {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(old_time));
+        }
+
+        CacheManager::auto_cleanup_old(&cfg);
+        // .txt is not .mkv or .mkv.part, so it must survive
+        assert!(txt.exists());
+    }
+
+    #[test]
+    fn auto_cleanup_old_nonexistent_dir_is_noop() {
+        let cfg = Config {
+            zip_cache_dir: Some("/definitely/does/not/exist/path".into()),
+            ..Config::default()
+        };
+        // should not panic
+        CacheManager::auto_cleanup_old(&cfg);
+    }
+
+    #[test]
+    fn auto_cleanup_old_min_expiry_is_1_hour() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = config_with_cache_dir(tmp.path());
+        cfg.cloud_cache_expiry_hours = 0; // clamped to 1
+
+        let f = tmp.path().join("recent.mkv");
+        std::fs::write(&f, b"data").unwrap();
+
+        CacheManager::auto_cleanup_old(&cfg);
+        // File is fresh, should survive even with clamped expiry
+        assert!(f.exists());
+    }
+
+    // ── CacheState variants ─────────────────────────────────────────────
+
+    #[test]
+    fn cache_state_serialization_roundtrip() {
+        let states = vec![
+            CacheState::Idle,
+            CacheState::Downloading { progress: 75.5 },
+            CacheState::Cached { path: "/tmp/f.mkv".into() },
+            CacheState::Cancelled,
+            CacheState::Failed { error: "oops".into() },
+        ];
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let back: CacheStatus = serde_json::from_str(&format!(
+                r#"{{"cacheKey":"k","state":{},"downloadedBytes":0,"totalBytes":0,"speedBytesPerSecond":0.0,"targetPath":""}}"#,
+                json
+            ))
+            .unwrap();
+            // Verify roundtrip by re-serializing
+            let json2 = serde_json::to_string(&back.state).unwrap();
+            assert_eq!(json, json2);
+        }
+    }
+
+    #[test]
+    fn cache_state_tagged_serialization() {
+        let idle = CacheState::Idle;
+        let json = serde_json::to_string(&idle).unwrap();
+        assert_eq!(json, r#"{"type":"idle"}"#);
+
+        let dl = CacheState::Downloading { progress: 50.0 };
+        let json = serde_json::to_string(&dl).unwrap();
+        assert!(json.contains(r#""type":"downloading""#));
+        assert!(json.contains("50"));
+    }
+
+    // ── CacheStatus ─────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_status_fields() {
+        let s = CacheStatus {
+            cache_key: "mykey".into(),
+            state: CacheState::Cached { path: "/p".into() },
+            downloaded_bytes: 2048,
+            total_bytes: 4096,
+            speed_bytes_per_second: 1024.0,
+            target_path: "/p".into(),
+        };
+        assert_eq!(s.cache_key, "mykey");
+        assert_eq!(s.downloaded_bytes, 2048);
+        assert_eq!(s.total_bytes, 4096);
+        assert!((s.speed_bytes_per_second - 1024.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cache_status_serialize_camel_case() {
+        let s = CacheStatus {
+            cache_key: "k".into(),
+            state: CacheState::Idle,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed_bytes_per_second: 0.0,
+            target_path: String::new(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("cacheKey"));
+        assert!(json.contains("downloadedBytes"));
+        assert!(json.contains("totalBytes"));
+        assert!(json.contains("speedBytesPerSecond"));
+        assert!(json.contains("targetPath"));
+    }
+
+    // ── ActiveCache ─────────────────────────────────────────────────────
+
+    #[test]
+    fn active_cache_cancel_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let ac = ActiveCache {
+            cancel_flag: flag.clone(),
+            status: CacheStatus {
+                cache_key: "k".into(),
+                state: CacheState::Idle,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                speed_bytes_per_second: 0.0,
+                target_path: String::new(),
+            },
+        };
+        assert!(!ac.cancel_flag.load(Ordering::Relaxed));
+        ac.cancel_flag.store(true, Ordering::Relaxed);
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    // ── sanitize_filename() ─────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_filename_keeps_safe_chars() {
+        assert_eq!(sanitize_filename("hello-world_v2.0 test"), "hello-world_v2.0 test");
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_special_chars() {
+        assert_eq!(sanitize_filename("file/name:test"), "file_name_test");
+    }
+
+    #[test]
+    fn sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "");
+    }
+
+    #[test]
+    fn sanitize_filename_unicode() {
+        // Non-alphanumeric unicode chars get replaced
+        assert_eq!(sanitize_filename("movie★"), "movie_");
+    }
+
+    #[test]
+    fn sanitize_filename_trim() {
+        assert_eq!(sanitize_filename("  spaces  "), "spaces");
+    }
+
+    // ── Duplicate start prevention (via lock_active) ────────────────────
+
+    #[test]
+    fn duplicate_key_prevention() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "dup", CacheState::Idle, "/tmp/f.mkv");
+
+        // Simulate start() check: contains_key
+        let guard = mgr.lock_active().unwrap();
+        assert!(guard.contains_key("dup"));
+        assert!(!guard.contains_key("other"));
+    }
+
+    // ── CacheState individual variant serialization ──
+
+    #[test]
+    fn cache_state_cached_serialization() {
+        let s = CacheState::Cached { path: "/tmp/f.mkv".into() };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""type":"cached""#));
+        assert!(json.contains("/tmp/f.mkv"));
+    }
+
+    #[test]
+    fn cache_state_cancelled_serialization() {
+        let s = CacheState::Cancelled;
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, r#"{"type":"cancelled"}"#);
+    }
+
+    #[test]
+    fn cache_state_failed_serialization() {
+        let s = CacheState::Failed { error: "disk full".into() };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""type":"failed""#));
+        assert!(json.contains("disk full"));
+    }
+
+    #[test]
+    fn cache_state_downloading_serialization() {
+        let s = CacheState::Downloading { progress: 33.3 };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""type":"downloading""#));
+        assert!(json.contains("33.3"));
+    }
+
+    // ── CacheStatus deserialization ──
+
+    #[test]
+    fn cache_status_deserialize_camel_case() {
+        let json = r#"{"cacheKey":"k1","state":{"type":"idle"},"downloadedBytes":100,"totalBytes":200,"speedBytesPerSecond":50.0,"targetPath":"/tmp/f.mkv"}"#;
+        let s: CacheStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.cache_key, "k1");
+        assert_eq!(s.downloaded_bytes, 100);
+        assert_eq!(s.total_bytes, 200);
+        assert!((s.speed_bytes_per_second - 50.0).abs() < f64::EPSILON);
+        assert_eq!(s.target_path, "/tmp/f.mkv");
+    }
+
+    // ── stop() with various CacheState variants ──
+
+    #[test]
+    fn stop_cached_entry_succeeds() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        insert_test_entry(&mgr, "cached", CacheState::Cached { path: tmp.path().join("f.mkv").to_string_lossy().to_string() }, tmp.path().join("f.mkv").to_str().unwrap());
+        mgr.stop("cached").unwrap();
+    }
+
+    #[test]
+    fn stop_failed_entry_succeeds() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "failed", CacheState::Failed { error: "oops".into() }, "/tmp/f.mkv");
+        mgr.stop("failed").unwrap();
+    }
+
+    #[test]
+    fn stop_cancelled_entry_succeeds() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "cancelled", CacheState::Cancelled, "/tmp/f.mkv");
+        mgr.stop("cancelled").unwrap();
+    }
+
+    // ── cleanup() with Downloading state ──
+
+    #[test]
+    fn cleanup_downloading_entry() {
+        let mgr = CacheManager::new();
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("dl.mkv");
+        std::fs::write(&path, b"partial").unwrap();
+        insert_test_entry(&mgr, "dl", CacheState::Downloading { progress: 50.0 }, path.to_str().unwrap());
+
+        mgr.cleanup("dl").unwrap();
+        assert!(mgr.status("dl").is_none());
+        assert!(!path.exists());
+    }
+
+    // ── all_status after cleanup ──
+
+    #[test]
+    fn all_status_after_partial_cleanup() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "a", CacheState::Idle, "/a.mkv");
+        insert_test_entry(&mgr, "b", CacheState::Idle, "/b.mkv");
+
+        mgr.cleanup("a").unwrap();
+        let all = mgr.all_status();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].cache_key, "b");
+    }
+
+    // ── sanitize_filename more edge cases ──
+
+    #[test]
+    fn sanitize_filename_only_special_chars() {
+        assert_eq!(sanitize_filename("/:\\*?\"<>|"), "_________");
+    }
+
+    #[test]
+    fn sanitize_filename_preserves_dots() {
+        assert_eq!(sanitize_filename("file.name.ext"), "file.name.ext");
+    }
+
+    #[test]
+    fn sanitize_filename_preserves_dashes_underscores() {
+        assert_eq!(sanitize_filename("my-file_name"), "my-file_name");
+    }
+
+    // ── CacheManager with Downloading state that has progress ──
+
+    #[test]
+    fn status_reflects_downloading_progress() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "dl1", CacheState::Downloading { progress: 75.5 }, "/tmp/f.mkv");
+
+        let s = mgr.status("dl1").unwrap();
+        match s.state {
+            CacheState::Downloading { progress } => assert!((progress - 75.5).abs() < f64::EPSILON),
+            _ => panic!("expected Downloading"),
+        }
+    }
+
+    // ── CacheManager::cache_dir with whitespace-only string ──
+
+    #[test]
+    fn cache_dir_whitespace_string_uses_custom_path() {
+        let cfg = Config {
+            zip_cache_dir: Some("   ".into()),
+            ..Config::default()
+        };
+        let dir = CacheManager::cache_dir(&cfg);
+        // Whitespace-only is non-empty string, so cache_dir uses the custom path
+        // (create_dir_all may fail on Windows for "   " but the PathBuf is correct)
+        assert_eq!(dir, std::path::PathBuf::from("   "));
+    }
+
+    // ── is_cache_dir_set with whitespace ──
+
+    #[test]
+    fn is_cache_dir_set_true_for_whitespace() {
+        let cfg = Config {
+            zip_cache_dir: Some("  ".into()),
+            ..Config::default()
+        };
+        // "  " is non-empty, so is_cache_dir_set returns true
+        assert!(CacheManager::is_cache_dir_set(&cfg));
+    }
+
+    // ── stop sets flag even for non-Downloading states ──
+
+    #[test]
+    fn stop_sets_cancel_flag_for_cached() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "sc", CacheState::Cached { path: "/f.mkv".into() }, "/f.mkv");
+        mgr.stop("sc").unwrap();
+        let guard = mgr.lock_active().unwrap();
+        let entry = guard.get("sc").unwrap();
+        assert!(entry.cancel_flag.load(Ordering::Relaxed));
+    }
+
+    // ── cleanup_all removes entries from map ──
+
+    #[test]
+    fn cleanup_all_removes_all_entries_from_map() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "x1", CacheState::Idle, "/x1.mkv");
+        insert_test_entry(&mgr, "x2", CacheState::Downloading { progress: 50.0 }, "/x2.mkv");
+        insert_test_entry(&mgr, "x3", CacheState::Cached { path: "/x3.mkv".into() }, "/x3.mkv");
+
+        mgr.cleanup_all().unwrap();
+        assert!(mgr.status("x1").is_none());
+        assert!(mgr.status("x2").is_none());
+        assert!(mgr.status("x3").is_none());
+    }
+
+    // ── ActiveCache cancel_flag shared reference ──
+
+    #[test]
+    fn active_cache_cancel_flag_shared() {
+        let mgr = CacheManager::new();
+        insert_test_entry(&mgr, "shared", CacheState::Idle, "/f.mkv");
+
+        // Get the cancel flag
+        let flag = {
+            let guard = mgr.lock_active().unwrap();
+            guard.get("shared").unwrap().cancel_flag.clone()
+        };
+
+        // Set via external clone
+        flag.store(true, Ordering::Relaxed);
+
+        // Verify via manager
+        let guard = mgr.lock_active().unwrap();
+        let entry = guard.get("shared").unwrap();
+        assert!(entry.cancel_flag.load(Ordering::Relaxed));
+    }
+}

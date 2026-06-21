@@ -166,10 +166,13 @@ function AddonSourcesManager() {
             invoke<string | null>("get_addon_version", { url }),
             new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))
           ]);
-        } catch {}
+        } catch {
+          console.debug('[Settings] Addon version check failed for', id)
+        }
       }
       setSourceStatus(prev => ({ ...prev, [id]: { online, version, checking: false } }));
-    } catch {
+    } catch (e) {
+      console.warn('[Settings] Source status check failed:', e)
       setSourceStatus(prev => ({ ...prev, [id]: { online: false, version: null, checking: false } }));
     }
   }, []);
@@ -415,7 +418,7 @@ export function SettingsModal({
     if (open && autoCheckUpdate && activeSection === "updates") {
       handleCheckUpdate();
     }
-  }, [open, autoCheckUpdate]);
+  }, [open, autoCheckUpdate, activeSection]);
 
   const loadAppVersion = async () => {
     try {

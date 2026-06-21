@@ -192,7 +192,9 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 mediaType: 'tv',
               })
               if (extIds?.imdb_id) setLocalImdbId(extIds.imdb_id)
-            } catch {}
+            } catch {
+              console.warn('[RemoteMediaDetail] Failed to fetch external IDs')
+            }
           }
         }
       } catch (e) {

@@ -44,7 +44,8 @@ export function RoomLobby({
             await navigator.clipboard.writeText(room.code);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
-        } catch {
+        } catch (e) {
+            console.warn('[RoomLobby] Clipboard write failed:', e)
             toast({
                 title: "Error",
                 description: "Failed to copy room code",

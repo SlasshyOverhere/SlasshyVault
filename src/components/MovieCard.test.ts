@@ -40,6 +40,86 @@ describe('areMovieCardPropsEqual', () => {
     expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(true)
   })
 
+  it('should return true when items are different references but same fields', () => {
+    const onClick = () => {}
+    const onFixMatch = () => {}
+
+    const prevProps: MovieCardProps = {
+      item: { ...mockItem },
+      onClick,
+      onFixMatch,
+    }
+    const nextProps: MovieCardProps = {
+      item: { ...mockItem },
+      onClick,
+      onFixMatch,
+    }
+
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(true)
+  })
+
+  it('should return false when overview changes', () => {
+    const prevProps: MovieCardProps = {
+      item: { ...mockItem, overview: 'old' },
+      onClick: () => {},
+      onFixMatch: () => {},
+    }
+    const nextProps: MovieCardProps = {
+      item: { ...mockItem, overview: 'new' },
+      onClick: () => {},
+      onFixMatch: () => {},
+    }
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
+  it('should return false when poster_path changes', () => {
+    const prevProps: MovieCardProps = {
+      item: { ...mockItem, poster_path: '/a.jpg' },
+      onClick: () => {},
+      onFixMatch: () => {},
+    }
+    const nextProps: MovieCardProps = {
+      item: { ...mockItem, poster_path: '/b.jpg' },
+      onClick: () => {},
+      onFixMatch: () => {},
+    }
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
+  it('should return false when layout changes', () => {
+    const prevProps: MovieCardProps = {
+      item: mockItem,
+      onClick: () => {},
+      onFixMatch: () => {},
+      layout: 'grid',
+    }
+    const nextProps: MovieCardProps = {
+      item: mockItem,
+      onClick: () => {},
+      onFixMatch: () => {},
+      layout: 'list',
+    }
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
+  it('should return false when showNewBadge changes', () => {
+    const onClick = () => {}
+    const onFixMatch = () => {}
+    const prevProps: MovieCardProps = {
+      item: mockItem,
+      onClick,
+      onFixMatch,
+      showNewBadge: true,
+    }
+    const nextProps: MovieCardProps = {
+      item: mockItem,
+      onClick,
+      onFixMatch,
+      showNewBadge: false,
+    }
+    expect(areMovieCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
   it('should return false when item id changes', () => {
     const prevProps: MovieCardProps = {
       item: mockItem,
@@ -165,6 +245,32 @@ describe('areContinueCardPropsEqual', () => {
       index: 0
     }
 
+    expect(areContinueCardPropsEqual(prevProps, nextProps)).toBe(false)
+  })
+
+  it('should return true when items are different references but same fields', () => {
+    const onClick = () => {}
+    const prevProps: ContinueCardProps = {
+      item: { ...mockItem },
+      onClick,
+    }
+    const nextProps: ContinueCardProps = {
+      item: { ...mockItem },
+      onClick,
+    }
+    expect(areContinueCardPropsEqual(prevProps, nextProps)).toBe(true)
+  })
+
+  it('should return false when items have different ids', () => {
+    const onClick = () => {}
+    const prevProps: ContinueCardProps = {
+      item: { ...mockItem, id: 1 },
+      onClick,
+    }
+    const nextProps: ContinueCardProps = {
+      item: { ...mockItem, id: 2 },
+      onClick,
+    }
     expect(areContinueCardPropsEqual(prevProps, nextProps)).toBe(false)
   })
 })

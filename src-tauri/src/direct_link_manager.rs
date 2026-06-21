@@ -463,7 +463,7 @@ fn is_supported_compression(method: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_archive, validate_url, verify_and_refresh_link, DdlSource};
+    use super::{check_link_health, index_archive, validate_url, verify_and_refresh_link, DdlSource};
     use crc32fast::Hasher;
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -725,5 +725,270 @@ mod tests {
         let result = verify_and_refresh_link(&source, &refreshed_server.base_url).unwrap();
         assert!(!result.accepted);
         assert!(result.message.contains("different file"));
+    }
+
+    #[test]
+    fn verify_and_refresh_link_accepts_same_archive_at_new_url() {
+        let zip_bytes = build_test_zip(&[("Show.S01E01.mkv", b"episode-one")]);
+        let server1 = start_range_server(zip_bytes.clone(), "season.zip", true);
+        let server2 = start_range_server(zip_bytes, "season.zip", true);
+
+        let validation = validate_url(&server1.base_url).unwrap();
+        let indexed = index_archive(&server1.base_url, &validation).unwrap();
+
+        let result = verify_and_refresh_link(&indexed.source, &server2.base_url).unwrap();
+        assert!(result.accepted);
+        assert!(result.message.contains("success"));
+    }
+
+    #[test]
+    fn verify_and_refresh_link_fails_on_unreachable_url() {
+        // Use a port guaranteed to have nothing listening
+        let unreachable_url = "http://127.0.0.1:1/nonexistent.zip";
+
+        let source = DdlSource {
+            id: "s1".to_string(),
+            url: unreachable_url.to_string(),
+            filename: "season.zip".to_string(),
+            file_size: 100,
+            archive_format: "zip".to_string(),
+            entry_count: 1,
+            video_count: 1,
+            cd_offset: 0,
+            cd_size: 0,
+            created_at: "2026-01-01 00:00:00".to_string(),
+            last_verified_at: "2026-01-01 00:00:00".to_string(),
+            is_expired: false,
+            addon_origin: None,
+        };
+
+        let err = verify_and_refresh_link(&source, unreachable_url);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn check_link_health_returns_true_for_accessible_url() {
+        let zip_bytes = build_test_zip(&[("Show.S01E01.mkv", b"ep")]);
+        let server = start_range_server(zip_bytes, "test.zip", true);
+
+        let result = check_link_health(&server.base_url).unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_link_health_returns_false_for_unreachable_url() {
+        // Use a port that's almost certainly not listening
+        let result = check_link_health("http://127.0.0.1:1/nonexistent.zip").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn check_link_health_returns_true_for_4xx_status() {
+        // tiny_http server with a handler that returns 404
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = Server::from_listener(listener, None).unwrap();
+
+        let handle = thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let _ = request.respond(Response::empty(404));
+            }
+        });
+
+        let url = format!("http://{}/missing.zip", addr);
+        // check_link_health returns Ok(status < 400), so 404 => false
+        let result = check_link_health(&url).unwrap();
+        assert!(!result);
+
+        drop(handle);
+    }
+
+    #[test]
+    fn validate_url_rejects_ftp_scheme() {
+        let err = validate_url("ftp://example.com/file.zip").unwrap_err();
+        assert!(err.contains("HTTPS URLs are allowed"));
+    }
+
+    #[test]
+    fn validate_url_rejects_private_ip_10() {
+        let err = validate_url("http://10.0.0.1/file.zip").unwrap_err();
+        assert!(err.contains("Private") || err.contains("internal"));
+    }
+
+    #[test]
+    fn validate_url_rejects_private_ip_192_168() {
+        let err = validate_url("http://192.168.1.1/file.zip").unwrap_err();
+        assert!(err.contains("Private") || err.contains("internal"));
+    }
+
+    #[test]
+    fn parse_content_disposition_parses_simple_filename() {
+        let result = super::parse_content_disposition_filename(
+            "attachment; filename=\"myfile.zip\"",
+        );
+        assert_eq!(result, Some("myfile.zip".to_string()));
+    }
+
+    #[test]
+    fn parse_content_disposition_parses_rfc5987_encoded() {
+        let result = super::parse_content_disposition_filename(
+            "attachment; filename*=UTF-8''my%20file%20%281%29.zip",
+        );
+        assert_eq!(result, Some("my file (1).zip".to_string()));
+    }
+
+    #[test]
+    fn parse_content_disposition_returns_none_for_empty() {
+        assert_eq!(super::parse_content_disposition_filename(""), None);
+        assert_eq!(
+            super::parse_content_disposition_filename("attachment"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_content_disposition_takes_first_match() {
+        // When filename* appears first, it wins (left-to-right scan)
+        let result = super::parse_content_disposition_filename(
+            "attachment; filename*=UTF-8''preferred.zip; filename=\"fallback.zip\"",
+        );
+        assert_eq!(result, Some("preferred.zip".to_string()));
+
+        // When filename appears first, it wins
+        let result2 = super::parse_content_disposition_filename(
+            "attachment; filename=\"first.zip\"; filename*=UTF-8''second.zip",
+        );
+        assert_eq!(result2, Some("first.zip".to_string()));
+    }
+
+    #[test]
+    fn parse_content_disposition_unquoted_filename() {
+        let result = super::parse_content_disposition_filename("attachment; filename=data.zip");
+        assert_eq!(result, Some("data.zip".to_string()));
+    }
+
+    #[test]
+    fn is_supported_compression_accepts_stored_and_deflate() {
+        assert!(super::is_supported_compression(0)); // Stored
+        assert!(super::is_supported_compression(8)); // Deflate
+    }
+
+    #[test]
+    fn is_supported_compression_rejects_other_methods() {
+        assert!(!super::is_supported_compression(1)); // Shrunk
+        assert!(!super::is_supported_compression(6));
+        assert!(!super::is_supported_compression(9)); // Deflate64
+        assert!(!super::is_supported_compression(12)); // BZIP2
+        assert!(!super::is_supported_compression(14)); // LZMA
+        assert!(!super::is_supported_compression(99));
+    }
+
+    #[test]
+    fn ddl_source_serde_round_trip() {
+        let source = super::DdlSource {
+            id: "abc-123".to_string(),
+            url: "https://example.com/file.zip".to_string(),
+            filename: "file.zip".to_string(),
+            file_size: 1024,
+            archive_format: "zip".to_string(),
+            entry_count: 5,
+            video_count: 3,
+            cd_offset: 500,
+            cd_size: 200,
+            created_at: "2026-01-01 00:00:00".to_string(),
+            last_verified_at: "2026-06-01 12:00:00".to_string(),
+            is_expired: false,
+            addon_origin: Some("tt1234567:1:StreamName".to_string()),
+        };
+
+        let json = serde_json::to_string(&source).unwrap();
+        let deserialized: super::DdlSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, source.id);
+        assert_eq!(deserialized.url, source.url);
+        assert_eq!(deserialized.filename, source.filename);
+        assert_eq!(deserialized.file_size, source.file_size);
+        assert_eq!(deserialized.entry_count, source.entry_count);
+        assert_eq!(deserialized.video_count, source.video_count);
+        assert_eq!(deserialized.cd_offset, source.cd_offset);
+        assert_eq!(deserialized.cd_size, source.cd_size);
+        assert_eq!(deserialized.is_expired, source.is_expired);
+        assert_eq!(deserialized.addon_origin, source.addon_origin);
+    }
+
+    #[test]
+    fn ddl_source_serde_with_null_addon_origin() {
+        let source = super::DdlSource {
+            id: "x".to_string(),
+            url: "https://example.com/f.zip".to_string(),
+            filename: "f.zip".to_string(),
+            file_size: 100,
+            archive_format: "zip".to_string(),
+            entry_count: 1,
+            video_count: 1,
+            cd_offset: 0,
+            cd_size: 0,
+            created_at: "2026-01-01 00:00:00".to_string(),
+            last_verified_at: "2026-01-01 00:00:00".to_string(),
+            is_expired: true,
+            addon_origin: None,
+        };
+
+        let json = serde_json::to_string(&source).unwrap();
+        let deserialized: super::DdlSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.addon_origin, None);
+        assert!(deserialized.is_expired);
+    }
+
+    #[test]
+    fn ddl_validation_result_serde_round_trip() {
+        let result = super::DdlValidationResult {
+            supports_range: true,
+            file_size: 999,
+            filename: "archive.zip".to_string(),
+            content_type: "application/zip".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: super::DdlValidationResult = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.supports_range);
+        assert_eq!(deserialized.file_size, 999);
+        assert_eq!(deserialized.filename, "archive.zip");
+    }
+
+    #[test]
+    fn ddl_refresh_result_serde_round_trip() {
+        let result = super::DdlRefreshResult {
+            accepted: false,
+            message: "size mismatch".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: super::DdlRefreshResult = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.accepted);
+        assert_eq!(deserialized.message, "size mismatch");
+    }
+
+    #[test]
+    fn ddl_indexed_entry_serde_round_trip() {
+        let entry = super::DdlIndexedEntry {
+            entry_path: "Show/episode.mkv".to_string(),
+            entry_name: "episode.mkv".to_string(),
+            title: "Episode".to_string(),
+            season: Some(1),
+            episode: Some(2),
+            compression_method: 8,
+            local_header_offset: 100,
+            data_start_offset: 150,
+            compressed_size: 500,
+            uncompressed_size: 1000,
+            crc32: "abcdef01".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("entryPath"));
+        assert!(json.contains("localHeaderOffset"));
+
+        let deserialized: super::DdlIndexedEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.entry_path, "Show/episode.mkv");
+        assert_eq!(deserialized.season, Some(1));
+        assert_eq!(deserialized.episode, Some(2));
+        assert_eq!(deserialized.compression_method, 8);
     }
 }

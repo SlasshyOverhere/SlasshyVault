@@ -278,7 +278,10 @@ function MovieCardBase({
                     try {
                       const eps = await getEpisodes(item.id)
                       setTvShowEpisodes(eps)
-                    } catch { setTvShowEpisodes([]) }
+                    } catch (e) {
+                      console.warn('[MovieCard] Failed to load episodes:', e)
+                      setTvShowEpisodes([])
+                    }
                     setTvShowLoading(false)
                   }
                   setShowFileInfo(true)
@@ -607,7 +610,10 @@ function MovieCardBase({
                 try {
                   const eps = await getEpisodes(item.id)
                   setTvShowEpisodes(eps)
-                } catch { setTvShowEpisodes([]) }
+                } catch (e) {
+                  console.warn('[MovieCard] Failed to load episodes:', e)
+                  setTvShowEpisodes([])
+                }
                 setTvShowLoading(false)
               }
               setShowFileInfo(true)

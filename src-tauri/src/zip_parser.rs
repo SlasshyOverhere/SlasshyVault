@@ -79,6 +79,16 @@ pub enum ZipError {
     EntryRequiresExtraction,
     #[error("Extracted ZIP entry failed integrity validation")]
     IntegrityCheckFailed,
+    #[error("Drive API error: {0}")]
+    DriveApiError(String),
+    #[error("HTTP request failed: {0}")]
+    HttpRequestError(String),
+    #[error("Central directory too large: {size} bytes exceeds limit of {max} bytes")]
+    CentralDirectoryTooLarge { size: u64, max: u64 },
+    #[error("Too many ZIP entries: {count} exceeds limit of {max}")]
+    TooManyEntries { count: usize, max: usize },
+    #[error("HTTP {status}: {message}")]
+    HttpStatus { status: u16, message: String },
 }
 
 pub fn find_eocd(data: &[u8], buffer_base_offset: u64) -> Result<EocdRecord, ZipError> {
@@ -372,8 +382,8 @@ fn read_u64(data: &[u8], offset: usize) -> Result<u64, ZipError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_eocd, parse_central_directory, parse_local_file_header, sanitize_zip_entry_path,
-        ZipCompressionType,
+        find_eocd, parse_central_directory, parse_local_file_header, parse_zip64_extra,
+        sanitize_zip_entry_path, ZipCompressionType, ZipError, Zip64Extra,
     };
 
     #[test]
@@ -475,5 +485,568 @@ mod tests {
         assert_eq!(entries[0].filename, "Show.S01E01.mkv");
         assert_eq!(entries[0].compressed_size, 100);
         assert_eq!(ZipCompressionType::Store, ZipCompressionType::Store);
+    }
+
+    // --- find_eocd edge cases ---
+
+    #[test]
+    fn find_eocd_rejects_too_small() {
+        assert!(find_eocd(&[0u8; 21], 0).is_err());
+        assert!(find_eocd(&[], 0).is_err());
+    }
+
+    #[test]
+    fn find_eocd_rejects_no_signature() {
+        let data = vec![0xFFu8; 22];
+        assert!(find_eocd(&data, 0).is_err());
+    }
+
+    #[test]
+    fn find_eocd_rejects_truncated_comment() {
+        // EOCD at offset 0, comment_length=10 but only 22 bytes total
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes()); // signature
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // disk
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // cd_disk
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // entries_this_disk
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // entries_total
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // cd_size
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // cd_offset
+        bytes.extend_from_slice(&10u16.to_le_bytes()); // comment_length=10 but no comment bytes
+        assert!(find_eocd(&bytes, 0).is_err());
+    }
+
+    #[test]
+    fn find_eocd_with_comment() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // entries_this_disk
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // entries_total
+        bytes.extend_from_slice(&50u32.to_le_bytes()); // cd_size
+        bytes.extend_from_slice(&100u32.to_le_bytes()); // cd_offset
+        bytes.extend_from_slice(&5u16.to_le_bytes()); // comment_length=5
+        bytes.extend_from_slice(b"hello"); // comment bytes
+
+        let eocd = find_eocd(&bytes, 0).unwrap();
+        assert_eq!(eocd.cd_entries_total, 2);
+        assert_eq!(eocd.cd_size, 50);
+        assert_eq!(eocd.cd_offset, 100);
+        assert!(!eocd.is_zip64);
+    }
+
+    #[test]
+    fn find_eocd_with_buffer_base_offset() {
+        let mut bytes = vec![0u8; 10]; // padding before EOCD
+        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&200u32.to_le_bytes());
+        bytes.extend_from_slice(&300u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+
+        let eocd = find_eocd(&bytes, 500).unwrap();
+        assert_eq!(eocd.offset, 500 + 10); // buffer_base + index of signature
+        assert_eq!(eocd.cd_offset, 300);
+        assert_eq!(eocd.cd_size, 200);
+    }
+
+    #[test]
+    fn find_eocd_rejects_zip64_without_locator() {
+        // u16::MAX entries triggers zip64 path, but no locator present
+        let mut bytes = vec![0u8; 22];
+        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes()); // entries_total = u16::MAX -> needs zip64
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+
+        let result = find_eocd(&bytes, 0);
+        assert!(result.is_err());
+    }
+
+    // --- parse_local_file_header edge cases ---
+
+    #[test]
+    fn parse_local_header_rejects_too_small() {
+        assert!(parse_local_file_header(&[0u8; 29], 0).is_err());
+        assert!(parse_local_file_header(&[], 0).is_err());
+    }
+
+    #[test]
+    fn parse_local_header_rejects_bad_signature() {
+        let mut bytes = vec![0u8; 30];
+        bytes[0..4].copy_from_slice(&0x9999_9999u32.to_le_bytes());
+        assert!(matches!(
+            parse_local_file_header(&bytes, 0),
+            Err(ZipError::NotAValidZip)
+        ));
+    }
+
+    // --- parse_zip64_extra tests ---
+
+    #[test]
+    fn parse_zip64_extra_finds_uncompressed() {
+        // header_id=0x0001, data_size=8, value=0x1234567890ABCDEF
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes()); // header_id
+        extra.extend_from_slice(&8u16.to_le_bytes()); // data_size
+        extra.extend_from_slice(&0x1234_5678_90AB_CDEFu64.to_le_bytes());
+
+        let result = parse_zip64_extra(&extra, true, false, false).unwrap();
+        assert_eq!(result.uncompressed_size, Some(0x1234_5678_90AB_CDEF));
+        assert!(result.compressed_size.is_none());
+        assert!(result.local_header_offset.is_none());
+    }
+
+    #[test]
+    fn parse_zip64_extra_finds_compressed() {
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&500u64.to_le_bytes());
+
+        let result = parse_zip64_extra(&extra, false, true, false).unwrap();
+        assert!(result.uncompressed_size.is_none());
+        assert_eq!(result.compressed_size, Some(500));
+        assert!(result.local_header_offset.is_none());
+    }
+
+    #[test]
+    fn parse_zip64_extra_finds_offset() {
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&999u64.to_le_bytes());
+
+        let result = parse_zip64_extra(&extra, false, false, true).unwrap();
+        assert!(result.uncompressed_size.is_none());
+        assert!(result.compressed_size.is_none());
+        assert_eq!(result.local_header_offset, Some(999));
+    }
+
+    #[test]
+    fn parse_zip64_extra_finds_all_three() {
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&24u16.to_le_bytes()); // 3 * 8
+        extra.extend_from_slice(&100u64.to_le_bytes()); // uncompressed
+        extra.extend_from_slice(&200u64.to_le_bytes()); // compressed
+        extra.extend_from_slice(&300u64.to_le_bytes()); // offset
+
+        let result = parse_zip64_extra(&extra, true, true, true).unwrap();
+        assert_eq!(result.uncompressed_size, Some(100));
+        assert_eq!(result.compressed_size, Some(200));
+        assert_eq!(result.local_header_offset, Some(300));
+    }
+
+    #[test]
+    fn parse_zip64_extra_skips_non_zip64_fields() {
+        let mut extra = Vec::new();
+        // non-zip64 field
+        extra.extend_from_slice(&0x0002u16.to_le_bytes()); // different header_id
+        extra.extend_from_slice(&4u16.to_le_bytes());
+        extra.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        // actual zip64 field
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&42u64.to_le_bytes());
+
+        let result = parse_zip64_extra(&extra, true, false, false).unwrap();
+        assert_eq!(result.uncompressed_size, Some(42));
+    }
+
+    #[test]
+    fn parse_zip64_extra_rejects_empty() {
+        assert!(parse_zip64_extra(&[], true, false, false).is_err());
+    }
+
+    #[test]
+    fn parse_zip64_extra_rejects_truncated_header() {
+        // Only 2 bytes, need 4 for header
+        assert!(parse_zip64_extra(&[0x01, 0x00], true, false, false).is_err());
+    }
+
+    #[test]
+    fn parse_zip64_extra_rejects_truncated_data() {
+        // header says data_size=8 but only 4 bytes follow
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&[0u8; 4]); // only 4 of 8 bytes
+
+        assert!(parse_zip64_extra(&extra, true, false, false).is_err());
+    }
+
+    #[test]
+    fn parse_zip64_extra_rejects_when_need_uncompressed_but_absent() {
+        // zip64 field present but data_size=0 (no fields)
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&0u16.to_le_bytes()); // data_size=0
+
+        assert!(parse_zip64_extra(&extra, true, false, false).is_err());
+    }
+
+    #[test]
+    fn parse_zip64_extra_none_needed_returns_default() {
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x0001u16.to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&42u64.to_le_bytes());
+
+        let result = parse_zip64_extra(&extra, false, false, false).unwrap();
+        assert!(result.uncompressed_size.is_none());
+        assert!(result.compressed_size.is_none());
+        assert!(result.local_header_offset.is_none());
+    }
+
+    // --- parse_central_directory edge cases ---
+
+    #[test]
+    fn parse_cd_rejects_bad_signature() {
+        let mut entry = vec![0u8; 46];
+        entry[0..4].copy_from_slice(&0x9999_9999u32.to_le_bytes());
+        assert!(parse_central_directory(&entry, 0).is_err());
+    }
+
+    #[test]
+    fn parse_cd_rejects_truncated_entry() {
+        // 30 bytes < CENTRAL_DIRECTORY_FIXED_SIZE (46)
+        assert!(parse_central_directory(&vec![0u8; 30], 0).is_err());
+    }
+
+    #[test]
+    fn parse_cd_rejects_truncated_extra_field() {
+        // Valid header but extra_field_length extends past end
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&0x0201_4b50u32.to_le_bytes()); // signature
+        entry.extend_from_slice(&20u16.to_le_bytes()); // version
+        entry.extend_from_slice(&20u16.to_le_bytes()); // version_needed
+        entry.extend_from_slice(&0u16.to_le_bytes()); // flags
+        entry.extend_from_slice(&0u16.to_le_bytes()); // compression
+        entry.extend_from_slice(&0u16.to_le_bytes()); // mod_time
+        entry.extend_from_slice(&0u16.to_le_bytes()); // mod_date
+        entry.extend_from_slice(&0u32.to_le_bytes()); // crc32
+        entry.extend_from_slice(&0u32.to_le_bytes()); // compressed_size
+        entry.extend_from_slice(&0u32.to_le_bytes()); // uncompressed_size
+        entry.extend_from_slice(&3u16.to_le_bytes()); // file_name_length=3
+        entry.extend_from_slice(&100u16.to_le_bytes()); // extra_field_length=100 (too big)
+        entry.extend_from_slice(&0u16.to_le_bytes()); // comment_length
+        entry.extend_from_slice(&0u16.to_le_bytes()); // disk_start
+        entry.extend_from_slice(&0u16.to_le_bytes()); // internal_attr
+        entry.extend_from_slice(&0u32.to_le_bytes()); // external_attr
+        entry.extend_from_slice(&0u32.to_le_bytes()); // local_header_offset
+        entry.extend_from_slice(b"abc"); // filename (only 3 bytes, extra needs 100 more but not there)
+
+        assert!(parse_central_directory(&entry, 0).is_err());
+    }
+
+    #[test]
+    fn parse_cd_rejects_invalid_utf8_filename() {
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&3u16.to_le_bytes()); // filename length=3
+        entry.extend_from_slice(&0u16.to_le_bytes()); // extra
+        entry.extend_from_slice(&0u16.to_le_bytes()); // comment
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // invalid UTF-8
+
+        let result = parse_central_directory(&entry, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_cd_sets_directory_flag() {
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&11u16.to_le_bytes()); // filename length
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(b"mydir/file/");
+
+        let entries = parse_central_directory(&entry, 0).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_directory);
+        assert_eq!(entries[0].filename, "mydir/file/");
+    }
+
+    #[test]
+    fn parse_cd_sets_encrypted_flag() {
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&20u16.to_le_bytes());
+        entry.extend_from_slice(&1u16.to_le_bytes()); // flags bit 0 = encrypted
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&6u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(b"a.b c.");
+
+        let entries = parse_central_directory(&entry, 0).unwrap();
+        assert!(entries[0].is_encrypted);
+    }
+
+    #[test]
+    fn parse_cd_multiple_entries() {
+        let mut data = Vec::new();
+        for i in 0..3u8 {
+            let name = format!("file{i}.txt");
+            data.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            data.extend_from_slice(&20u16.to_le_bytes());
+            data.extend_from_slice(&20u16.to_le_bytes());
+            data.extend_from_slice(&0u16.to_le_bytes()); // flags
+            data.extend_from_slice(&8u16.to_le_bytes()); // deflate
+            data.extend_from_slice(&0u16.to_le_bytes());
+            data.extend_from_slice(&0u16.to_le_bytes());
+            data.extend_from_slice(&(i as u32 * 100).to_le_bytes()); // crc32
+            data.extend_from_slice(&(i as u32 * 50 + 10).to_le_bytes()); // compressed
+            data.extend_from_slice(&(i as u32 * 100 + 20).to_le_bytes()); // uncompressed
+            data.extend_from_slice(&(name.len() as u16).to_le_bytes()); // filename length
+            data.extend_from_slice(&0u16.to_le_bytes()); // extra
+            data.extend_from_slice(&0u16.to_le_bytes()); // comment
+            data.extend_from_slice(&0u16.to_le_bytes());
+            data.extend_from_slice(&0u16.to_le_bytes());
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&(i as u32 * 1000).to_le_bytes()); // local_header_offset
+            data.extend_from_slice(name.as_bytes());
+        }
+
+        let entries = parse_central_directory(&data, 0).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].filename, "file0.txt");
+        assert_eq!(entries[1].filename, "file1.txt");
+        assert_eq!(entries[2].filename, "file2.txt");
+        assert_eq!(entries[0].compression_method, 8);
+        assert_eq!(entries[1].compressed_size, 60);
+        assert_eq!(entries[2].uncompressed_size, 220);
+        assert_eq!(entries[2].crc32, 200);
+        assert_eq!(entries[0].local_header_offset, 0);
+        assert_eq!(entries[1].local_header_offset, 1000);
+        assert_eq!(entries[2].local_header_offset, 2000);
+    }
+
+    #[test]
+    fn parse_cd_empty_data() {
+        let entries = parse_central_directory(&[], 0).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_cd_with_zip64_extra() {
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        entry.extend_from_slice(&45u16.to_le_bytes()); // version (zip64)
+        entry.extend_from_slice(&45u16.to_le_bytes()); // version_needed
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&u32::MAX.to_le_bytes()); // compressed_size -> zip64
+        entry.extend_from_slice(&u32::MAX.to_le_bytes()); // uncompressed_size -> zip64
+        entry.extend_from_slice(&4u16.to_le_bytes()); // filename_length
+        entry.extend_from_slice(&28u16.to_le_bytes()); // extra_field_length (4 header + 24 data)
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u16.to_le_bytes());
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&u32::MAX.to_le_bytes()); // local_header_offset -> zip64
+        entry.extend_from_slice(b"a.mk");
+        // zip64 extra field
+        entry.extend_from_slice(&0x0001u16.to_le_bytes()); // header_id
+        entry.extend_from_slice(&24u16.to_le_bytes()); // data_size (3 * 8)
+        entry.extend_from_slice(&9999u64.to_le_bytes()); // uncompressed
+        entry.extend_from_slice(&8888u64.to_le_bytes()); // compressed
+        entry.extend_from_slice(&7777u64.to_le_bytes()); // offset
+
+        let entries = parse_central_directory(&entry, 0).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uncompressed_size, 9999);
+        assert_eq!(entries[0].compressed_size, 8888);
+        assert_eq!(entries[0].local_header_offset, 7777);
+    }
+
+    // --- ZipCompressionType tests ---
+
+    #[test]
+    fn zip_compression_type_variants() {
+        assert_eq!(ZipCompressionType::Store, ZipCompressionType::Store);
+        assert_eq!(ZipCompressionType::Deflate, ZipCompressionType::Deflate);
+        assert_eq!(ZipCompressionType::Mixed, ZipCompressionType::Mixed);
+        assert_eq!(ZipCompressionType::Other, ZipCompressionType::Other);
+        assert_ne!(ZipCompressionType::Store, ZipCompressionType::Deflate);
+        assert_ne!(ZipCompressionType::Mixed, ZipCompressionType::Other);
+    }
+
+    // --- ZipError display tests ---
+
+    #[test]
+    fn zip_error_display_messages() {
+        assert_eq!(
+            format!("{}", ZipError::NotAValidZip),
+            "This file is not a valid ZIP archive"
+        );
+        assert_eq!(
+            format!("{}", ZipError::EocdNotFound),
+            "Could not find the ZIP directory structure"
+        );
+        assert_eq!(
+            format!("{}", ZipError::CorruptedArchive),
+            "ZIP archive is truncated or corrupted"
+        );
+        assert_eq!(
+            format!("{}", ZipError::Zip64ParsingError),
+            "ZIP64 metadata is missing or incomplete"
+        );
+        assert_eq!(
+            format!("{}", ZipError::InvalidPath),
+            "ZIP contains an invalid path"
+        );
+        assert_eq!(
+            format!("{}", ZipError::PathTraversalAttempt),
+            "ZIP contains a path traversal attempt"
+        );
+        assert_eq!(
+            format!("{}", ZipError::InvalidUtf8Filename),
+            "ZIP contains an invalid UTF-8 filename"
+        );
+        assert_eq!(
+            format!("{}", ZipError::EncryptedEntry),
+            "ZIP entry uses unsupported encryption"
+        );
+        assert_eq!(
+            format!("{}", ZipError::UnsupportedCompressionMethod(99)),
+            "ZIP entry uses unsupported compression method 99"
+        );
+        assert_eq!(
+            format!("{}", ZipError::EntryRequiresExtraction),
+            "Compressed ZIP entry must be extracted before playback"
+        );
+        assert_eq!(
+            format!("{}", ZipError::IntegrityCheckFailed),
+            "Extracted ZIP entry failed integrity validation"
+        );
+        assert_eq!(
+            format!("{}", ZipError::DriveApiError("timeout".into())),
+            "Drive API error: timeout"
+        );
+        assert_eq!(
+            format!("{}", ZipError::HttpRequestError("conn refused".into())),
+            "HTTP request failed: conn refused"
+        );
+        assert_eq!(
+            format!("{}", ZipError::CentralDirectoryTooLarge { size: 100, max: 50 }),
+            "Central directory too large: 100 bytes exceeds limit of 50 bytes"
+        );
+        assert_eq!(
+            format!("{}", ZipError::TooManyEntries { count: 200, max: 100 }),
+            "Too many ZIP entries: 200 exceeds limit of 100"
+        );
+        assert_eq!(
+            format!("{}", ZipError::HttpStatus { status: 404, message: "not found".into() }),
+            "HTTP 404: not found"
+        );
+    }
+
+    // --- sanitize_zip_entry_path extra edge cases ---
+
+    #[test]
+    fn sanitize_rejects_root_only() {
+        assert!(sanitize_zip_entry_path("/").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_dot_only() {
+        // "." resolves to no components after cleaning
+        assert!(sanitize_zip_entry_path(".").is_err());
+    }
+
+    #[test]
+    fn sanitize_preserves_trailing_slash() {
+        assert_eq!(
+            sanitize_zip_entry_path("dir/subdir/").unwrap(),
+            "dir/subdir/"
+        );
+    }
+
+    #[test]
+    fn sanitize_normalizes_mixed_slashes() {
+        assert_eq!(
+            sanitize_zip_entry_path("a\\b/c\\d").unwrap(),
+            "a/b/c/d"
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_windows_drive_variations() {
+        assert!(sanitize_zip_entry_path("d:/file.txt").is_err());
+        assert!(sanitize_zip_entry_path("Z:/file.txt").is_err());
+        assert!(sanitize_zip_entry_path("C:\\file.txt").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_double_dot_at_end() {
+        assert!(sanitize_zip_entry_path("dir/..").is_err());
+    }
+
+    #[test]
+    fn sanitize_single_dot_components_ok() {
+        // "a/./b" should normalize to "a/b"
+        assert_eq!(
+            sanitize_zip_entry_path("a/./b").unwrap(),
+            "a/b"
+        );
+    }
+
+    // --- Zip64Extra default test ---
+
+    #[test]
+    fn zip64_extra_default_is_none() {
+        let z = Zip64Extra::default();
+        assert!(z.uncompressed_size.is_none());
+        assert!(z.compressed_size.is_none());
+        assert!(z.local_header_offset.is_none());
     }
 }

@@ -209,7 +209,9 @@ export default function DirectLinksView({
             if (current[sourceId] != null) return current
             return { ...current, [sourceId]: media }
           })
-        } catch { /* skip */ }
+        } catch (e) {
+          console.warn('[DirectLinks] Failed to load source media:', e)
+        }
       })
     )
     return () => { cancelled = true }
@@ -235,7 +237,9 @@ export default function DirectLinksView({
           if (m.media_type !== "tvshow") ids.push(m.id)
           return ids
         }, [])
-      } catch { /* skip */ }
+      } catch (e) {
+        console.warn('[DirectLinks] Failed to load indexed media:', e)
+      }
       setTimeout(() => {
         setShowAddModal(false)
         setAddUrl("")
