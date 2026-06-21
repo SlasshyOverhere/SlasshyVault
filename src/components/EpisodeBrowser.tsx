@@ -133,7 +133,7 @@ export function EpisodeBrowser({
     } catch {
       /* imdb ratings unavailable */
     }
-  }, [show.tmdb_id, tmdbEpisodesBySeason, episodes])
+  }, [show.tmdb_id, show.imdb_id, tmdbEpisodesBySeason, episodes])
 
   const loadEpisodes = useCallback(async () => {
     try {

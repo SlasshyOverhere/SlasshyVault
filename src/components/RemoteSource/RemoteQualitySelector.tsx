@@ -276,13 +276,13 @@ export function RemoteQualitySelector({
                 <p className="text-[10px] text-neutral-600 mb-2 px-1">These require logging in on the hosting site. Opens in your browser.</p>
 
                 <div className="space-y-2">
-                  {hubdriveStreams.map((stream, idx) => {
+                  {hubdriveStreams.map((stream) => {
                     const status = hubdriveStatus[stream.url]
                     const isValid = status && status !== 'loading' ? status.valid : null
                     const isLoading = status === 'loading'
                     return (
                       <button
-                        key={`hd-${idx}`}
+                        key={stream.url}
                         onClick={() => onOpenUrl?.(stream.url)}
                         className="w-full text-left p-3 rounded-xl bg-[#0D0D0D] border border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700/60 transition-all duration-200 group"
                       >
@@ -321,13 +321,13 @@ export function RemoteQualitySelector({
                         {group.quality}
                       </h4>
                       <div className="space-y-2">
-                        {group.streams.map((stream, idx) => {
+                        {group.streams.map((stream) => {
                           const active = isStreamActive(stream.url)
                           const checkPending = Object.keys(streamStatus).length > 0 && streamStatus[stream.url] === undefined
 
                           return (
                             <button
-                              key={idx}
+                              key={stream.url}
                               role="option"
                               aria-selected={false}
                               aria-label={`${stream.name}${!active ? ' (unreachable)' : ''}${stream.recommended ? ' (recommended)' : ''}`}

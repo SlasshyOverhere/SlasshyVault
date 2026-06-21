@@ -415,7 +415,7 @@ export function SettingsModal({
     if (open && autoCheckUpdate && activeSection === "updates") {
       handleCheckUpdate();
     }
-  }, [open, autoCheckUpdate]);
+  }, [open, autoCheckUpdate, activeSection]);
 
   const loadAppVersion = async () => {
     try {

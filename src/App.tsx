@@ -607,10 +607,11 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
+  const notificationIdCounter = useRef(0)
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
     setNotifications((current) => [
       {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: `notif-${++notificationIdCounter.current}`,
         createdAt: input.createdAt ?? new Date().toISOString(),
         read: false,
         ...input,
@@ -641,7 +642,7 @@ function App() {
     setNotifications((current) => current.map((item) => (
       item.read ? item : { ...item, read: true }
     )))
-  }, [notificationCenterOpen])
+  }, [])
 
   // Beta features state
   const [betaEnabled, setBetaEnabledState] = useState(isBetaEnabled)
@@ -962,7 +963,7 @@ function App() {
       title: 'Content Indexed',
       description: `${contentName} is now available in Newly Added.`
     })
-  }, [loadRecentlyAddedForHome])
+  }, [loadRecentlyAddedForHome, toast])
 
   const fetchData = useCallback(async () => {
     try {

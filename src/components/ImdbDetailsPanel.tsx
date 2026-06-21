@@ -251,9 +251,9 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                   <div className="space-y-2">
                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">Interests</h3>
                     <div className="flex flex-wrap gap-1.5">
-                      {data.interests.slice(0, 12).map(i => (
-                        <span key={i} className="px-2 py-0.5 rounded-full bg-white/[0.03] border border-white/5 text-white/40 text-[10px] font-medium">
-                          {i}
+                      {data.interests.slice(0, 12).map((interest, idx) => (
+                        <span key={`${interest}-${idx}`} className="px-2 py-0.5 rounded-full bg-white/[0.03] border border-white/5 text-white/40 text-[10px] font-medium">
+                          {interest}
                         </span>
                       ))}
                     </div>
