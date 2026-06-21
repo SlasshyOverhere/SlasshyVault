@@ -836,7 +836,7 @@ export const updateWatchProgress = async (
       duration,
     });
   } catch (error) {
-    console.warn("Failed to update progress:", error);
+    console.error("Failed to update progress:", error);
   }
 };
 
@@ -855,7 +855,7 @@ export const updateEpisodeDuration = async (mediaId: number, durationSeconds: nu
   try {
     await invoke("update_episode_duration", { mediaId, durationSeconds });
   } catch (error) {
-    console.warn("Failed to update episode duration:", error);
+    console.error("Failed to update episode duration:", error);
   }
 };
 
@@ -1045,7 +1045,7 @@ export const getCachedImageUrl = (
       });
       return convertFileSrc(filePath);
     } catch (error) {
-      console.warn("[Image] Failed to get cached image:", imageName, error);
+      console.debug("[ImageCache] Cache miss:", imageName);
       return null;
     }
   })();

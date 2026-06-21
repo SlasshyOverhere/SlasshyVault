@@ -190,7 +190,7 @@ export function FixMatchModal({ open, onOpenChange, item, onSuccess }: FixMatchM
       try {
         await Promise.resolve(onSuccess())
       } catch (refreshError) {
-        console.error("Failed to refresh UI after match update", refreshError)
+        console.warn("[FixMatch] UI refresh after match update:", refreshError)
       }
     } catch (error) {
       console.error("Failed to fix match", error)

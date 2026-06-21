@@ -95,7 +95,7 @@ const LibraryPoster = memo(function LibraryPoster({ posterPath, alt }: { posterP
         const url = await getCachedImageUrl(filename)
         if (!cancelled) setImgUrl(url)
       } catch (e) {
-        console.warn('[RemoteSourceView] getCachedImageUrl:', e)
+        console.debug('[RemoteSourceView] getCachedImageUrl:', e)
         if (!cancelled) setImgUrl(null)
       }
     }
@@ -206,7 +206,7 @@ function RemoteSourceViewInner() {
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
-    } catch (e) { console.warn('[RemoteSourceView] load search history:', e); return [] }
+    } catch (e) { console.debug('[RemoteSourceView] load search history:', e); return [] }
   })
 
   useEffect(() => {
@@ -238,7 +238,7 @@ function RemoteSourceViewInner() {
     try {
       const items = await invoke<RemoteLibraryItem[]>('remote_get_library')
       setRemoteLibrary(items)
-    } catch (e) { console.warn('[RemoteSourceView] loadRemoteLibrary:', e) }
+    } catch (e) { console.error('[RemoteSourceView] loadRemoteLibrary:', e) }
   }, [])
 
   // Pre-fetch all streams for a season (tt{imdb}:{season}:full)
@@ -254,7 +254,7 @@ function RemoteSourceViewInner() {
       }
       seasonStreamsCache.current.set(cacheKey, epMap)
     } catch (e) {
-      console.warn('[RemoteSourceView] season streams fetch failed:', e)
+      console.debug('[RemoteSourceView] season streams fetch failed:', e)
     }
   }, [])
 
@@ -293,7 +293,7 @@ function RemoteSourceViewInner() {
                 episode_title: ep.name ?? null,
               })
             }
-          } catch (e) { console.warn(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
+          } catch (e) { console.debug(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
         }
         setShowEpisodes(allEpisodes)
         // Pre-fetch season streams in background for instant episode playback
@@ -309,7 +309,7 @@ function RemoteSourceViewInner() {
         const episodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
         setShowEpisodes(episodes)
       }
-    } catch (e) { console.warn('[RemoteSourceView] loadShowEpisodes:', e) }
+    } catch (e) { console.error('[RemoteSourceView] loadShowEpisodes:', e) }
     finally { setLoadingEpisodes(false) }
   }, [handleFetchSeasonStreams])
 
@@ -362,7 +362,7 @@ function RemoteSourceViewInner() {
       })
       .catch((e) => {
         if (reqId !== searchReqIdRef.current) return
-        console.warn('[RemoteSourceView] search_tmdb:', e)
+        console.error('[RemoteSourceView] search_tmdb:', e)
         setSearchResults([])
       })
       .finally(() => {
@@ -579,7 +579,7 @@ function RemoteSourceViewInner() {
           overview: selectedItem.overview || null,
         })
         await loadRemoteLibrary()
-      } catch (e) { console.warn('[RemoteSourceView] auto-add to library:', e) }
+      } catch (e) { console.error('[RemoteSourceView] auto-add to library:', e) }
     }
     launchPlayback(stream, identifier, 0, selectedItem, currentSeason, currentEpisode, currentEpisodeTitle)
   }, [selectedItem, currentSeason, currentEpisode, currentEpisodeTitle, launchPlayback, isInLibrary, loadRemoteLibrary])
@@ -636,7 +636,7 @@ function RemoteSourceViewInner() {
         if (reqId !== detailReqId.current) return
         if (details.poster_path) {
           setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.warn('[RemoteSourceView] remote_update_poster:', e))
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.debug('[RemoteSourceView] remote_update_poster:', e))
         }
         if (details.backdrop_path) {
           setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
@@ -647,12 +647,12 @@ function RemoteSourceViewInner() {
       } else {
         const [details, extIds] = await Promise.all([
           invoke<any>('get_tv_details', { tvId: searchItem.id }),
-          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch((e) => { console.warn('[RemoteSourceView] get_imdb_details:', e); return null }),
+          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch((e) => { console.debug('[RemoteSourceView] get_imdb_details:', e); return null }),
         ])
         if (reqId !== detailReqId.current) return
         if (details.poster_path) {
           setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.warn('[RemoteSourceView] remote_update_poster:', e))
+          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.debug('[RemoteSourceView] remote_update_poster:', e))
         }
         if (details.backdrop_path) {
           setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } : prev)

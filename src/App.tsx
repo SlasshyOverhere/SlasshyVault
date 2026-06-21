@@ -757,7 +757,8 @@ function App() {
       const { isGDriveConnected: checkConnected } = await import('@/services/gdrive')
       const connected = await checkConnected()
       setIsGDriveConnected(connected)
-    } catch {
+    } catch (e) {
+      console.warn('[App] GDrive status check failed:', e)
       setIsGDriveConnected(false)
     }
   }
@@ -911,7 +912,7 @@ function App() {
     try {
       await syncWatchHistory()
     } catch (error) {
-      console.warn('[History] Sync failed:', error)
+      console.error('[History] Sync failed:', error)
     }
   }, [])
 
@@ -1133,7 +1134,8 @@ function App() {
         if (completed) {
           try {
             await autoMarkAsWatched()
-          } catch {
+          } catch (e) {
+            console.warn('[App] autoMarkAsWatched failed:', e)
             toast({ title: "Progress Saved", description: `${displayTitle} - 100% watched` })
           }
         } else if (final_position && final_duration && final_position > 30) {
@@ -1142,7 +1144,8 @@ function App() {
           if (isProgressPastAutoCompleteThreshold(progressPercent)) {
             try {
               await autoMarkAsWatched()
-            } catch {
+            } catch (e) {
+              console.warn('[App] autoMarkAsWatched failed:', e)
               toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
             }
           } else if (shouldPromptToMarkComplete(progressPercent)) {
@@ -1199,7 +1202,7 @@ function App() {
 
         if (eventType === 'mpv-event-ended') {
           const reason = (raw as Record<string, string>)?.reason
-          console.log('[MPV-NATIVE] Playback ended:', reason)
+          console.debug('[MPV-NATIVE] Playback ended:', reason)
           setIsNativePlaying(false)
           await Promise.all([loadContinueWatching(), loadRecentlyAdded(), runWatchHistorySync()])
           return
@@ -1549,8 +1552,8 @@ function App() {
         if (item.poster_path) {
           try {
             posterUrl = await getCachedImageUrl(item.poster_path.replace('image_cache/', '')) || undefined
-          } catch {
-            console.warn('[App] Cache lookup failed')
+          } catch (e) {
+            console.debug('[App] Cache lookup failed:', e)
           }
         }
 
@@ -1637,7 +1640,8 @@ function App() {
         runWatchHistorySync(),
         fetchData(),
       ])
-    } catch {
+    } catch (e) {
+      console.error('[App] Failed to mark as watched:', e)
       toast({ title: "Error", description: "Failed to mark as watched", variant: "destructive" })
     }
   }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync, toast])
@@ -1656,7 +1660,8 @@ function App() {
         runWatchHistorySync(),
         fetchData(),
       ])
-    } catch {
+    } catch (e) {
+      console.error('[App] Failed to remove watched status:', e)
       toast({ title: "Error", description: "Failed to remove watched status", variant: "destructive" })
     }
   }, [fetchData, loadContinueWatching, loadRecentlyAdded, loadHistoryEvents, runWatchHistorySync, toast])
@@ -1893,7 +1898,8 @@ function App() {
             toast({ title: "Partial Delete", description: result.message, variant: "destructive" })
             await fetchDataRef.current()
           }
-        } catch {
+        } catch (e) {
+          console.error('[App] Failed to delete file:', e)
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
       }
@@ -1942,7 +1948,8 @@ function App() {
       await Promise.all([loadContinueWatching(), loadRecentlyAdded(), loadHistoryEvents(), runWatchHistorySync()])
       // Refresh library items to update progress display on cards
       await fetchData()
-    } catch {
+    } catch (e) {
+      console.error('[App] Failed to mark as complete:', e)
       toast({ title: "Error", description: "Failed to mark as complete", variant: "destructive" })
     }
   }

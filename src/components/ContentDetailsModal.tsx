@@ -682,7 +682,7 @@ export function ContentDetailsModal({
             nextHero = getTmdbImageUrl(chosen?.backdrop_path, "original")
           }
         } catch (error) {
-          console.warn("Failed to fetch hero image fallback:", error);
+          console.warn("[ContentDetails] Failed to fetch hero image fallback:", error);
         }
       }
 

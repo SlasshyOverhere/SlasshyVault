@@ -46,7 +46,7 @@ export function useAuth() {
         const bundledInfo = await getBundledMpvInfo()
         if (bundledInfo.exists) {
           await saveConfig({ ...config, mpv_path: bundledInfo.path })
-          console.log('[useAuth] Using bundled MPV:', bundledInfo.path)
+          console.debug('[useAuth] Using bundled MPV:', bundledInfo.path)
           return
         }
       }
@@ -217,7 +217,7 @@ export function useAuth() {
           headers: { 'Authorization': `Bearer ${token}` },
         }).catch(() => { /* best-effort, don't block logout */ })
       } catch {
-        // Token may already be invalid -- proceed with local disconnect regardless
+        console.debug('[useAuth] Social logout skipped (token may be invalid)')
       }
 
       const { disconnectGDrive } = await import('@/services/gdrive')

@@ -87,7 +87,7 @@ export function DeleteEpisodesModal({
             .catch((err) => {
                 if (cancelled) return;
                 setError("Failed to load episodes");
-                console.error(err);
+                console.error('[DeleteEpisodes] Failed to load episodes:', err);
             })
             .finally(() => {
                 if (cancelled) return;
@@ -135,7 +135,7 @@ export function DeleteEpisodesModal({
             }
         } catch (err) {
             setError("Failed to delete files");
-            console.error(err);
+            console.error('[DeleteEpisodes] Delete failed:', err);
         } finally {
             setIsDeleting(false);
         }
@@ -151,7 +151,7 @@ export function DeleteEpisodesModal({
             onClose();
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to delete cloud folder");
-            console.error(err);
+            console.error('[DeleteEpisodes] Cloud folder delete failed:', err);
         } finally {
             setIsDeletingFolder(false);
         }

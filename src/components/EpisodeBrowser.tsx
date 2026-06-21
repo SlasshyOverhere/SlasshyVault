@@ -111,7 +111,7 @@ export function EpisodeBrowser({
           }
         }
       } catch {
-        /* skip tmdb for this season */
+        console.debug('[EpisodeBrowser] TMDB season data unavailable')
       }
     }
 
@@ -131,7 +131,7 @@ export function EpisodeBrowser({
         }
       }
     } catch {
-      /* imdb ratings unavailable */
+      console.debug('[EpisodeBrowser] IMDb ratings unavailable')
     }
   }, [show.tmdb_id, show.imdb_id, tmdbEpisodesBySeason, episodes])
 
@@ -147,7 +147,8 @@ export function EpisodeBrowser({
         )
         setSelectedSeason(first)
       }
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Failed to load episodes:', e)
       toast({ title: "Error", description: "Failed to load episodes", variant: "destructive" })
     } finally {
       setLoading(false)
@@ -190,7 +191,8 @@ export function EpisodeBrowser({
       const result = await refreshSeriesMetadata(parseInt(show.tmdb_id), show.title)
       toast({ title: "Refreshed", description: result })
       await loadEpisodes()
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Refresh failed:', e)
       toast({ title: "Error", description: "Refresh failed", variant: "destructive" })
     } finally {
       setIsRefreshing(false)
@@ -265,7 +267,8 @@ export function EpisodeBrowser({
     // Fire server call in background
     try {
       await Promise.all([markAsComplete(ep.id), emit("media-marked-complete", { media_id: ep.id })])
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Failed to mark watched:', e)
       toast({ title: "Error", description: "Failed to mark watched", variant: "destructive" })
     }
   }, [toast, loadEpisodes])
@@ -280,7 +283,8 @@ export function EpisodeBrowser({
     // Fire server call in background
     try {
       await clearProgress(ep.id)
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Failed to unmark watched:', e)
       toast({ title: "Error", description: "Failed to remove watched status", variant: "destructive" })
     }
   }, [toast, loadEpisodes])
@@ -320,7 +324,8 @@ export function EpisodeBrowser({
       } else {
         await startPlayback(ep, 0)
       }
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Playback failed:', e)
       toast({ title: "Error", description: "Playback failed", variant: "destructive" })
     }
   }
@@ -342,7 +347,8 @@ export function EpisodeBrowser({
         title: "Now Playing",
         description: `S${String(ep.season_number).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")}`,
       })
-    } catch {
+    } catch (e) {
+      console.error('[EpisodeBrowser] Start playback failed:', e)
       toast({ title: "Error", description: "Playback failed", variant: "destructive" })
     }
   }

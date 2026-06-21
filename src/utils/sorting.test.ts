@@ -53,4 +53,11 @@ describe('sortMediaItems', () => {
     expect(byRecent[0].id).toBe(2);
     expect(byRecent[1].id).toBe(1);
   });
+
+  it('returns copy for progress or unknown sort option', () => {
+    const result = sortMediaItems(mockItems, 'progress');
+    expect(result).toHaveLength(mockItems.length);
+    expect(result).not.toBe(mockItems); // shallow copy
+    expect(result[0].id).toBe(mockItems[0].id);
+  });
 });

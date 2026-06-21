@@ -40,6 +40,7 @@ export const ShareDialog = ({ open, onOpenChange, fileId, fileName }: ShareDialo
         description: `"${fileName}" has been shared with ${trimmedEmail}.`,
       })
     } catch (error) {
+      console.error('[ShareDialog] Failed to share:', error)
       toast({
         title: "Failed to share",
         description: error instanceof Error ? error.message : "Something went wrong. Please try again.",
