@@ -21,7 +21,7 @@ const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const ZIP_TAIL_BYTES: u64 = 131_072;
 const MAX_ZIP_ENTRIES: usize = 10_000;
 const MAX_ENTRY_SIZE_BYTES: u64 = 50 * 1024 * 1024 * 1024;
-const MAX_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_CENTRAL_DIRECTORY_BYTES: u64 = 256 * 1024 * 1024;
 const LOCAL_HEADER_PREFETCH_BYTES: u64 = 4096;
 const ZIP_TEMP_CACHE_MAX_AGE_SECS: u64 = 86_400;
 
@@ -550,7 +550,10 @@ fn analyze_zip_with_client(
     let eocd = zip_parser::find_eocd(&tail, tail_start)?;
 
     if eocd.cd_size > MAX_CENTRAL_DIRECTORY_BYTES {
-        return Err(ZipError::CorruptedArchive);
+        return Err(ZipError::CentralDirectoryTooLarge {
+            size: eocd.cd_size,
+            max: MAX_CENTRAL_DIRECTORY_BYTES,
+        });
     }
 
     let cd_end = eocd
@@ -562,7 +565,10 @@ fn analyze_zip_with_client(
     let parsed_entries = zip_parser::parse_central_directory(&central_directory, eocd.cd_offset)?;
 
     if parsed_entries.len() > MAX_ZIP_ENTRIES {
-        return Err(ZipError::CorruptedArchive);
+        return Err(ZipError::TooManyEntries {
+            count: parsed_entries.len(),
+            max: MAX_ZIP_ENTRIES,
+        });
     }
 
     let video_entries: Vec<_> = parsed_entries
@@ -646,17 +652,28 @@ fn fetch_drive_metadata(
     access_token: &str,
     zip_file_id: &str,
 ) -> Result<DriveMetadataResponse, ZipError> {
-    client
-        .get(format!(
-            "{}/files/{}?fields=id,name,size&supportsAllDrives=true",
-            DRIVE_API_BASE, zip_file_id
-        ))
+    let url = format!(
+        "{}/files/{}?fields=id,name,size&supportsAllDrives=true",
+        DRIVE_API_BASE, zip_file_id
+    );
+    let response = client
+        .get(&url)
         .header(AUTHORIZATION, bearer_value(access_token))
         .send()
-        .and_then(|response| response.error_for_status())
-        .map_err(|_| ZipError::NotAValidZip)?
+        .map_err(|e| ZipError::HttpRequestError(format!("Drive metadata fetch failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(ZipError::HttpStatus {
+            status: status.as_u16(),
+            message: format!("Drive metadata API returned {}: {}", status, body),
+        });
+    }
+
+    response
         .json::<DriveMetadataResponse>()
-        .map_err(|_| ZipError::NotAValidZip)
+        .map_err(|e| ZipError::DriveApiError(format!("Failed to parse Drive metadata JSON: {}", e)))
 }
 
 fn fetch_range(
@@ -666,19 +683,64 @@ fn fetch_range(
     start: u64,
     end: u64,
 ) -> Result<Vec<u8>, ZipError> {
-    client
-        .get(format!(
-            "{}/files/{}?alt=media&supportsAllDrives=true",
-            DRIVE_API_BASE, zip_file_id
-        ))
-        .header(AUTHORIZATION, bearer_value(access_token))
-        .header(RANGE, format!("bytes={}-{}", start, end))
-        .send()
-        .and_then(|response| response.error_for_status())
-        .map_err(|_| ZipError::CorruptedArchive)?
-        .bytes()
-        .map(|bytes| bytes.to_vec())
-        .map_err(|_| ZipError::CorruptedArchive)
+    let url = format!(
+        "{}/files/{}?alt=media&supportsAllDrives=true",
+        DRIVE_API_BASE, zip_file_id
+    );
+    let range_header = format!("bytes={}-{}", start, end);
+
+    // Retry logic for transient errors (429 rate limit, 5xx server errors)
+    let max_retries = 3;
+    let mut last_error = String::new();
+
+    for attempt in 0..max_retries {
+        let response = match client
+            .get(&url)
+            .header(AUTHORIZATION, bearer_value(access_token))
+            .header(RANGE, &range_header)
+            .send()
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = format!("HTTP request failed (attempt {}/{}): {}", attempt + 1, max_retries, e);
+                std::thread::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32)));
+                continue;
+            }
+        };
+
+        let status = response.status();
+
+        // Retry on 429 (rate limit) and 5xx (server errors)
+        if status.as_u16() == 429 || status.is_server_error() {
+            let retry_after = response.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(2u64.pow(attempt as u32));
+            last_error = format!("HTTP {} on range fetch (attempt {}/{}), retrying in {}s", status, attempt + 1, max_retries, retry_after);
+            println!("[ZIP] {}", last_error);
+            std::thread::sleep(std::time::Duration::from_secs(retry_after));
+            continue;
+        }
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(ZipError::HttpStatus {
+                status: status.as_u16(),
+                message: format!("Range fetch (bytes={}-{}) returned {}: {}", start, end, status, body),
+            });
+        }
+
+        return response
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| ZipError::HttpRequestError(format!("Failed to read range response body: {}", e)));
+    }
+
+    Err(ZipError::HttpRequestError(format!(
+        "Range fetch failed after {} retries for bytes={}-{}: {}",
+        max_retries, start, end, last_error
+    )))
 }
 
 fn fetch_response_range(
@@ -688,16 +750,27 @@ fn fetch_response_range(
     start: u64,
     end: u64,
 ) -> Result<reqwest::blocking::Response, ZipError> {
-    client
-        .get(format!(
-            "{}/files/{}?alt=media&supportsAllDrives=true",
-            DRIVE_API_BASE, zip_file_id
-        ))
+    let url = format!(
+        "{}/files/{}?alt=media&supportsAllDrives=true",
+        DRIVE_API_BASE, zip_file_id
+    );
+    let response = client
+        .get(&url)
         .header(AUTHORIZATION, bearer_value(access_token))
         .header(RANGE, format!("bytes={}-{}", start, end))
         .send()
-        .and_then(|response| response.error_for_status())
-        .map_err(|_| ZipError::CorruptedArchive)
+        .map_err(|e| ZipError::HttpRequestError(format!("Response range fetch failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(ZipError::HttpStatus {
+            status: status.as_u16(),
+            message: format!("Range fetch returned {}: {}", status, body),
+        });
+    }
+
+    Ok(response)
 }
 
 fn fetch_data_start_offset(

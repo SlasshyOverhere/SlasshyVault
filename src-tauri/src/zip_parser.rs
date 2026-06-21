@@ -79,6 +79,16 @@ pub enum ZipError {
     EntryRequiresExtraction,
     #[error("Extracted ZIP entry failed integrity validation")]
     IntegrityCheckFailed,
+    #[error("Drive API error: {0}")]
+    DriveApiError(String),
+    #[error("HTTP request failed: {0}")]
+    HttpRequestError(String),
+    #[error("Central directory too large: {size} bytes exceeds limit of {max} bytes")]
+    CentralDirectoryTooLarge { size: u64, max: u64 },
+    #[error("Too many ZIP entries: {count} exceeds limit of {max}")]
+    TooManyEntries { count: usize, max: usize },
+    #[error("HTTP {status}: {message}")]
+    HttpStatus { status: u16, message: String },
 }
 
 pub fn find_eocd(data: &[u8], buffer_base_offset: u64) -> Result<EocdRecord, ZipError> {

@@ -120,9 +120,27 @@ pub fn is_unsupported_archive_item(item: &DriveItem) -> bool {
 }
 
 pub fn is_supported_cloud_media_item(item: &DriveItem) -> bool {
-    VIDEO_MIME_TYPES.contains(&item.mime_type.as_str())
+    // Check MIME type first
+    if VIDEO_MIME_TYPES.contains(&item.mime_type.as_str())
         || is_supported_archive_item(item)
         || is_unsupported_archive_item(item)
+    {
+        return true;
+    }
+    // Fallback: check file extension for cases where Drive assigns a non-standard MIME type
+    // (e.g. application/octet-stream for large ZIP files)
+    let name_lower = item.name.to_ascii_lowercase();
+    name_lower.ends_with(".zip")
+        || name_lower.ends_with(".rar")
+        || name_lower.ends_with(".mkv")
+        || name_lower.ends_with(".mp4")
+        || name_lower.ends_with(".avi")
+        || name_lower.ends_with(".mov")
+        || name_lower.ends_with(".webm")
+        || name_lower.ends_with(".m4v")
+        || name_lower.ends_with(".wmv")
+        || name_lower.ends_with(".flv")
+        || name_lower.ends_with(".ts")
 }
 
 /// Response from Drive API files.list

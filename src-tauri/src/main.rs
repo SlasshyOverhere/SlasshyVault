@@ -1352,16 +1352,25 @@ async fn gdrive_scan_folder(
 
     if !zip_files_detected.is_empty() {
         let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        let zip_indexed_count = indexed_count; // items actually indexed from ZIPs
+        let status_msg = if zip_indexed_count > 0 {
+            format!(
+                "Finished processing {} ZIP archive(s). {} episode(s) added to your library.",
+                zip_files_detected.len(), zip_indexed_count
+            )
+        } else {
+            format!(
+                "Finished processing {} ZIP archive(s). No episodes could be indexed — check file naming or archive integrity.",
+                zip_files_detected.len()
+            )
+        };
         emit_zip_processing_event(
             &window,
-            "complete",
+            if zip_indexed_count > 0 { "complete" } else { "warning" },
             zip_files_detected.len(),
             archive_name,
             None,
-            &format!(
-                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
-                zip_files_detected.len()
-            ),
+            &status_msg,
         );
     }
 
@@ -1396,14 +1405,20 @@ async fn gdrive_scan_folder(
     );
     println!("[CLOUD] {}", message);
 
+    let final_skipped_reasons = if skipped_reasons.is_empty() {
+        None
+    } else {
+        Some(skipped_reasons)
+    };
+
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
         tv_count,
         message,
-        skipped_reasons: None,
+        skipped_reasons: final_skipped_reasons,
     })
 }
 
@@ -1648,6 +1663,7 @@ async fn scan_all_cloud_folders(
                         Err(error) => {
                             println!("[ZIP] Failed to index '{}': {}", file.name, error);
                             skipped_count += 1;
+                            skipped_reasons.push(format!("{} — ZIP indexing error: {}", file.name, error));
                             continue;
                         }
                     }
@@ -2057,12 +2073,8 @@ async fn check_cloud_changes(
     let api_duration = api_start.elapsed();
     println!("[CLOUD CHANGES] Changes API call took {:?}", api_duration);
 
-    // Save the new token immediately
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.set_gdrive_changes_token(&new_token)
-            .map_err(|e| e.to_string())?;
-    }
+    // Token is saved AFTER indexing completes (see end of function).
+    // Saving before indexing would permanently lose failed files from detection.
 
     let mut removed_titles: Vec<String> = Vec::new();
     if !removed_file_ids.is_empty() {
@@ -2846,7 +2858,7 @@ async fn check_cloud_changes(
     };
 
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
@@ -11995,12 +12007,8 @@ async fn background_check_cloud_changes(
     let api_duration = api_start.elapsed();
     println!("[CLOUD BG] Changes API call took {:?}", api_duration);
 
-    // Save the new token immediately
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.set_gdrive_changes_token(&new_token)
-            .map_err(|e| e.to_string())?;
-    }
+    // Token is saved AFTER indexing completes (see end of function).
+    // Saving before indexing would permanently lose failed files from detection.
 
     let mut removed_titles: Vec<String> = Vec::new();
     if !removed_file_ids.is_empty() {
@@ -12464,16 +12472,25 @@ async fn background_check_cloud_changes(
 
     if !zip_files_detected.is_empty() {
         let archive_name = zip_files_detected.first().map(|name| name.as_str());
+        let zip_indexed_count = indexed_count;
+        let status_msg = if zip_indexed_count > 0 {
+            format!(
+                "Finished processing {} ZIP archive(s). {} episode(s) added to your library.",
+                zip_files_detected.len(), zip_indexed_count
+            )
+        } else {
+            format!(
+                "Finished processing {} ZIP archive(s). No episodes could be indexed — check file naming or archive integrity.",
+                zip_files_detected.len()
+            )
+        };
         emit_zip_processing_event_from_handle(
             app_handle,
-            "complete",
+            if zip_indexed_count > 0 { "complete" } else { "warning" },
             zip_files_detected.len(),
             archive_name,
             None,
-            &format!(
-                "Finished processing {} ZIP archive(s). Episode entries have been added to your library.",
-                zip_files_detected.len()
-            ),
+            &status_msg,
         );
     }
 
@@ -12685,8 +12702,13 @@ async fn background_check_cloud_changes(
 
     let final_skipped_reasons = if skipped_reasons.is_empty() { None } else { Some(skipped_reasons) };
 
+    // Save token AFTER indexing completes so failed files are retried on next poll
+    if let Ok(db) = state.db.lock() {
+        let _ = db.set_gdrive_changes_token(&new_token);
+    }
+
     Ok(CloudIndexResult {
-        success: true,
+        success: indexed_count > 0 || skipped_count == 0,
         indexed_count,
         skipped_count,
         movies_count,
