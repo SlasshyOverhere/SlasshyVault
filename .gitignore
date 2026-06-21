@@ -98,6 +98,8 @@ plan/
 .claudeignore
 .omc/
 .serena/
+.agents/
+skills-lock.json
 
 # Design docs
 DESIGN.md
