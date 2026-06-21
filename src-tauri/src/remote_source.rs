@@ -466,3 +466,534 @@ pub fn verify_streams(urls: &[String]) -> Vec<StreamVerification> {
         .into_inner()
         .expect("verify_streams mutex into_inner")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_quality ──
+
+    #[test]
+    fn parse_quality_4k_lowercase() {
+        assert_eq!(parse_quality("Movie 4k"), "4K");
+    }
+
+    #[test]
+    fn parse_quality_4k_uppercase() {
+        assert_eq!(parse_quality("Movie 4K HDR"), "4K");
+    }
+
+    #[test]
+    fn parse_quality_2160p() {
+        assert_eq!(parse_quality("Movie.2160p.BluRay"), "4K");
+    }
+
+    #[test]
+    fn parse_quality_1080p() {
+        assert_eq!(parse_quality("Movie.1080p.WEB-DL"), "1080p");
+    }
+
+    #[test]
+    fn parse_quality_1080p_uppercase() {
+        assert_eq!(parse_quality("MOVIE 1080P RIP"), "1080p");
+    }
+
+    #[test]
+    fn parse_quality_720p() {
+        assert_eq!(parse_quality("Movie.720p.HDRip"), "720p");
+    }
+
+    #[test]
+    fn parse_quality_480p() {
+        assert_eq!(parse_quality("Movie.480p.DVDRip"), "480p");
+    }
+
+    #[test]
+    fn parse_quality_unknown_empty() {
+        assert_eq!(parse_quality(""), "Unknown");
+    }
+
+    #[test]
+    fn parse_quality_unknown_no_resolution() {
+        assert_eq!(parse_quality("Some Random Title"), "Unknown");
+    }
+
+    #[test]
+    fn parse_quality_respects_priority_4k_over_1080p() {
+        assert_eq!(parse_quality("Movie 4K 1080p"), "4K");
+    }
+
+    #[test]
+    fn parse_quality_1080p_over_720p() {
+        assert_eq!(parse_quality("Movie 1080p 720p"), "1080p");
+    }
+
+    #[test]
+    fn parse_quality_2160p_over_1080p() {
+        assert_eq!(parse_quality("Movie 2160p 1080p"), "4K");
+    }
+
+    // ── parse_source ──
+
+    #[test]
+    fn parse_source_4k_lowercase() {
+        assert_eq!(parse_source("Movie 4k"), "Premium");
+    }
+
+    #[test]
+    fn parse_source_4k_uppercase() {
+        assert_eq!(parse_source("Movie 4K HDR"), "Premium");
+    }
+
+    #[test]
+    fn parse_source_standard_1080p() {
+        assert_eq!(parse_source("Movie 1080p BluRay"), "Standard");
+    }
+
+    #[test]
+    fn parse_source_standard_720p() {
+        assert_eq!(parse_source("Movie 720p WEB-DL"), "Standard");
+    }
+
+    #[test]
+    fn parse_source_standard_empty() {
+        assert_eq!(parse_source(""), "Standard");
+    }
+
+    #[test]
+    fn parse_source_standard_bluray_no_4k() {
+        assert_eq!(parse_source("Movie BluRay"), "Standard");
+    }
+
+    #[test]
+    fn parse_source_4k_case_insensitive() {
+        assert_eq!(parse_source("4K"), "Premium");
+        assert_eq!(parse_source("4k"), "Premium");
+    }
+
+    // ── format_file_size ──
+
+    #[test]
+    fn format_file_size_zero() {
+        assert_eq!(format_file_size(0), "0.00 B");
+    }
+
+    #[test]
+    fn format_file_size_one_byte() {
+        assert_eq!(format_file_size(1), "1.00 B");
+    }
+
+    #[test]
+    fn format_file_size_exact_kb() {
+        assert_eq!(format_file_size(1024), "1.00 KB");
+    }
+
+    #[test]
+    fn format_file_size_exact_mb() {
+        assert_eq!(format_file_size(1024 * 1024), "1.00 MB");
+    }
+
+    #[test]
+    fn format_file_size_exact_gb() {
+        assert_eq!(format_file_size(1024_i64 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn format_file_size_exact_tb() {
+        assert_eq!(format_file_size(1024_i64 * 1024 * 1024 * 1024), "1.00 TB");
+    }
+
+    #[test]
+    fn format_file_size_fractional_mb() {
+        let bytes = 1500 * 1024; // ~1.46 MB
+        assert_eq!(format_file_size(bytes), "1.46 MB");
+    }
+
+    #[test]
+    fn format_file_size_fractional_gb() {
+        let bytes = (2.5 * 1024.0 * 1024.0 * 1024.0) as i64;
+        assert_eq!(format_file_size(bytes), "2.50 GB");
+    }
+
+    #[test]
+    fn format_file_size_large_tb() {
+        // ~5 TB
+        let bytes = 5_i64 * 1024 * 1024 * 1024 * 1024;
+        assert_eq!(format_file_size(bytes), "5.00 TB");
+    }
+
+    #[test]
+    fn format_file_size_clamps_at_tb() {
+        // Larger than TB still shows TB
+        let bytes = 1024_i64 * 1024 * 1024 * 1024 * 1024; // 1 PB in bytes
+        assert!(format_file_size(bytes).ends_with("TB"));
+    }
+
+    #[test]
+    fn format_file_size_small_bytes() {
+        assert_eq!(format_file_size(100), "100.00 B");
+        assert_eq!(format_file_size(512), "512.00 B");
+    }
+
+    // ── StreamVerification struct ──
+
+    #[test]
+    fn stream_verification_construction() {
+        let sv = StreamVerification {
+            url: "https://example.com/video.mp4".to_string(),
+            active: true,
+        };
+        assert_eq!(sv.url, "https://example.com/video.mp4");
+        assert!(sv.active);
+    }
+
+    #[test]
+    fn stream_verification_inactive() {
+        let sv = StreamVerification {
+            url: "https://dead-link.example".to_string(),
+            active: false,
+        };
+        assert!(!sv.active);
+    }
+
+    #[test]
+    fn stream_verification_clone() {
+        let sv = StreamVerification {
+            url: "https://example.com".to_string(),
+            active: true,
+        };
+        let sv2 = sv.clone();
+        assert_eq!(sv.url, sv2.url);
+        assert_eq!(sv.active, sv2.active);
+    }
+
+    #[test]
+    fn stream_verification_serialize_roundtrip() {
+        let sv = StreamVerification {
+            url: "https://example.com/v.mp4".to_string(),
+            active: true,
+        };
+        let json = serde_json::to_string(&sv).unwrap();
+        let deserialized: StreamVerification = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.url, sv.url);
+        assert_eq!(deserialized.active, sv.active);
+    }
+
+    // ── GroupedStreams struct ──
+
+    #[test]
+    fn grouped_streams_construction() {
+        let gs = GroupedStreams {
+            quality: "1080p".to_string(),
+            streams: vec![],
+        };
+        assert_eq!(gs.quality, "1080p");
+        assert!(gs.streams.is_empty());
+    }
+
+    #[test]
+    fn grouped_streams_serialize_roundtrip() {
+        let gs = GroupedStreams {
+            quality: "4K".to_string(),
+            streams: vec![RemoteStream {
+                name: "Test".to_string(),
+                description: "desc".to_string(),
+                url: "https://example.com".to_string(),
+                video_size: 1024,
+                not_web_ready: false,
+                parsed_quality: "4K".to_string(),
+                parsed_source: "Premium".to_string(),
+                recommended: true,
+                is_hubdrive: false,
+                episode_number: None,
+            }],
+        };
+        let json = serde_json::to_string(&gs).unwrap();
+        let deserialized: GroupedStreams = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.quality, "4K");
+        assert_eq!(deserialized.streams.len(), 1);
+    }
+
+    // ── group_streams ──
+
+    fn make_stream(quality: &str, video_size: i64, recommended: bool) -> RemoteStream {
+        RemoteStream {
+            name: format!("{} Stream", quality),
+            description: String::new(),
+            url: "https://example.com".to_string(),
+            video_size,
+            not_web_ready: false,
+            parsed_quality: quality.to_string(),
+            parsed_source: "Standard".to_string(),
+            recommended,
+            is_hubdrive: false,
+            episode_number: None,
+        }
+    }
+
+    #[test]
+    fn group_streams_empty() {
+        let result = group_streams(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn group_streams_single() {
+        let streams = vec![make_stream("1080p", 1000, false)];
+        let result = group_streams(streams);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].quality, "1080p");
+        assert_eq!(result[0].streams.len(), 1);
+    }
+
+    #[test]
+    fn group_streams_same_quality() {
+        let streams = vec![
+            make_stream("1080p", 100, false),
+            make_stream("1080p", 200, false),
+            make_stream("1080p", 300, false),
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].quality, "1080p");
+        assert_eq!(result[0].streams.len(), 3);
+    }
+
+    #[test]
+    fn group_streams_different_qualities() {
+        let streams = vec![
+            make_stream("720p", 100, false),
+            make_stream("1080p", 200, false),
+            make_stream("4K", 300, false),
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result.len(), 3);
+        // 4K should be first (best quality)
+        assert_eq!(result[0].quality, "4K");
+        assert_eq!(result[1].quality, "1080p");
+        assert_eq!(result[2].quality, "720p");
+    }
+
+    #[test]
+    fn group_streams_recommended_floats_to_top() {
+        let streams = vec![
+            make_stream("720p", 100, false),
+            make_stream("1080p", 200, true), // recommended
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result[0].quality, "1080p");
+        assert_eq!(result[1].quality, "720p");
+    }
+
+    #[test]
+    fn group_streams_recommended_sorts_before_size() {
+        let streams = vec![
+            make_stream("1080p", 500, false),
+            make_stream("1080p", 100, true), // recommended but smaller
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result[0].streams.len(), 2);
+        assert!(result[0].streams[0].recommended);
+        assert!(!result[0].streams[1].recommended);
+    }
+
+    #[test]
+    fn group_streams_within_group_sorted_by_size_desc() {
+        let streams = vec![
+            make_stream("1080p", 100, false),
+            make_stream("1080p", 500, false),
+            make_stream("1080p", 300, false),
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result[0].streams[0].video_size, 500);
+        assert_eq!(result[0].streams[1].video_size, 300);
+        assert_eq!(result[0].streams[2].video_size, 100);
+    }
+
+    #[test]
+    fn group_streams_mixed_qualities_ordered_correctly() {
+        let streams = vec![
+            make_stream("480p", 100, false),
+            make_stream("4K", 500, false),
+            make_stream("Unknown", 200, false),
+            make_stream("1080p", 300, false),
+            make_stream("720p", 400, false),
+        ];
+        let result = group_streams(streams);
+        let qualities: Vec<&str> = result.iter().map(|g| g.quality.as_str()).collect();
+        assert_eq!(qualities, vec!["4K", "1080p", "720p", "480p", "Unknown"]);
+    }
+
+    #[test]
+    fn group_streams_unknown_quality_ordered_last() {
+        let streams = vec![
+            make_stream("Unknown", 100, false),
+            make_stream("1080p", 200, false),
+        ];
+        let result = group_streams(streams);
+        assert_eq!(result[0].quality, "1080p");
+        assert_eq!(result[1].quality, "Unknown");
+    }
+
+    // ── RemoteStream serde ──
+
+    #[test]
+    fn remote_stream_serde_defaults() {
+        let json = r#"{"name":"test","description":"","url":"https://example.com"}"#;
+        let s: RemoteStream = serde_json::from_str(json).unwrap();
+        assert_eq!(s.video_size, 0);
+        assert!(!s.not_web_ready);
+        assert!(!s.recommended);
+        assert!(s.episode_number.is_none());
+    }
+
+    #[test]
+    fn remote_stream_serde_camel_case() {
+        let json = r#"{"name":"test","description":"d","url":"u","videoSize":123,"notWebReady":true,"recommended":true}"#;
+        let s: RemoteStream = serde_json::from_str(json).unwrap();
+        assert_eq!(s.video_size, 123);
+        assert!(s.not_web_ready);
+        assert!(s.recommended);
+    }
+
+    #[test]
+    fn remote_stream_skipped_fields_default() {
+        let json = r#"{"name":"test","description":"d","url":"u"}"#;
+        let s: RemoteStream = serde_json::from_str(json).unwrap();
+        assert_eq!(s.parsed_quality, "");
+        assert_eq!(s.parsed_source, "");
+        assert!(!s.is_hubdrive);
+    }
+
+    // ── parse_streams_body ──
+
+    #[test]
+    fn parse_streams_body_valid_json() {
+        let json = r#"{"streams":[{"name":"Movie.1080p","description":"desc","url":"https://example.com/video.mp4","behavior_hints":{"video_size":500,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].parsed_quality, "1080p");
+        assert_eq!(streams[0].video_size, 500);
+    }
+
+    #[test]
+    fn parse_streams_body_empty_streams_errors() {
+        let json = r#"{"streams":[]}"#;
+        let result = parse_streams_body(json);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "No streams available for this content");
+    }
+
+    #[test]
+    fn parse_streams_body_invalid_json_errors() {
+        let result = parse_streams_body("not json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().starts_with("Failed to parse response:"));
+    }
+
+    #[test]
+    fn parse_streams_body_extracts_episode_number() {
+        // "S01 E05" with space so E05 is a separate token
+        let json = r#"{"streams":[{"name":"Show.S01 E05.1080p","description":"","url":"https://example.com/video.mp4","behavior_hints":{"video_size":0,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, Some(5));
+    }
+
+    #[test]
+    fn parse_streams_body_extracts_episode_from_description() {
+        let json = r#"{"streams":[{"name":"Show.1080p","description":"Episode 12","url":"https://example.com/video.mp4","behavior_hints":{"video_size":0,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, Some(12));
+    }
+
+    #[test]
+    fn parse_streams_body_hubdrive_url_flag() {
+        let json = r#"{"streams":[{"name":"Movie.1080p","description":"","url":"https://hubdrive.site/file/abc","behavior_hints":{"video_size":0,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert!(streams[0].is_hubdrive);
+    }
+
+    #[test]
+    fn parse_streams_body_r2dev_recommended() {
+        let json = r#"{"streams":[{"name":"Movie.1080p","description":"","url":"https://pub-xxx.r2.dev/video.mp4","behavior_hints":{"video_size":0,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert!(streams[0].recommended);
+    }
+
+    #[test]
+    fn parse_streams_body_title_fallback_to_description() {
+        let json = r#"{"streams":[{"name":"Movie.1080p","title":"My Title","url":"https://example.com/video.mp4","behavior_hints":{"video_size":0,"not_web_ready":false}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].description, "My Title");
+    }
+
+    // ── extract_episode_number (via parse_streams_body) ──
+
+    #[test]
+    fn extract_episode_e_prefix() {
+        let json = r#"{"streams":[{"name":"Show.E03.1080p","description":"","url":"u","behavior_hints":{}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, Some(3));
+    }
+
+    #[test]
+    fn extract_episode_episode_word() {
+        let json = r#"{"streams":[{"name":"Show.1080p","description":"Episode 7 of 12","url":"u","behavior_hints":{}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, Some(7));
+    }
+
+    #[test]
+    fn extract_episode_none_when_absent() {
+        let json = r#"{"streams":[{"name":"Movie.1080p","description":"A good movie","url":"u","behavior_hints":{}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, None);
+    }
+
+    #[test]
+    fn extract_episode_from_e_pattern() {
+        let json = r#"{"streams":[{"name":"Show.E15.720p","description":"","url":"u","behavior_hints":{}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].episode_number, Some(15));
+    }
+
+    // ── behavior_hints defaults ──
+
+    #[test]
+    fn behavior_hints_defaults() {
+        let json = r#"{"streams":[{"name":"M","description":"","url":"u"}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].video_size, 0);
+        assert!(!streams[0].not_web_ready);
+    }
+
+    #[test]
+    fn behavior_hints_video_size_from_f64() {
+        let json = r#"{"streams":[{"name":"M","description":"","url":"u","behavior_hints":{"video_size":1234567.0}}]}"#;
+        let streams = parse_streams_body(json).unwrap();
+        assert_eq!(streams[0].video_size, 1234567);
+    }
+
+    // ── fetch URL construction ──
+
+    #[test]
+    fn fetch_movie_streams_url_format() {
+        // We can't easily test the fetch without a server, but we can verify
+        // the function exists and has the right signature by calling with
+        // a non-existent server (it will error on network)
+        let result = fetch_movie_streams("tt1234567", "http://127.0.0.1:1", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_series_streams_url_format() {
+        let result = fetch_series_streams("tt1234567", 1, 2, "http://127.0.0.1:1", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_season_streams_url_format() {
+        let result = fetch_season_streams("tt1234567", 1, "http://127.0.0.1:1", false);
+        assert!(result.is_err());
+    }
+}

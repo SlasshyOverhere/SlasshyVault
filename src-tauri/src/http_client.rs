@@ -215,3 +215,184 @@ pub fn local_http_get_raw(url: &str) -> Result<(u64, std::io::BufReader<std::net
 
     Ok((content_length, reader))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Client constructors ──────────────────────────────────────────────
+
+    #[test]
+    fn shared_client_returns_static_ref() {
+        let a = shared_client();
+        let b = shared_client();
+        // Same static address
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn quick_client_returns_static_ref() {
+        let a = quick_client();
+        let b = quick_client();
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn long_client_returns_static_ref() {
+        let a = long_client();
+        let b = long_client();
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn proxy_client_returns_static_ref() {
+        let a = proxy_client();
+        let b = proxy_client();
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn make_client_builds_without_panic() {
+        let _client = make_client(5, 2, 10, "test client");
+    }
+
+    // ── local_http_get ───────────────────────────────────────────────────
+
+    #[test]
+    fn local_http_get_invalid_url_returns_err() {
+        let result = local_http_get("not a url");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid URL"));
+    }
+
+    #[test]
+    fn local_http_get_no_host_returns_err() {
+        let result = local_http_get("http://");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn local_http_get_connection_refused_returns_err() {
+        // Port 1 is almost certainly unused → connection refused
+        let result = local_http_get("http://127.0.0.1:1/test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to connect"));
+    }
+
+    // ── local_http_get_raw ───────────────────────────────────────────────
+
+    #[test]
+    fn local_http_get_raw_invalid_url_returns_err() {
+        let result = local_http_get_raw("bad url");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid URL"));
+    }
+
+    #[test]
+    fn local_http_get_raw_connection_refused_returns_err() {
+        let result = local_http_get_raw("http://127.0.0.1:1/test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to connect"));
+    }
+
+    // ── decode_chunked_body ──────────────────────────────────────────────
+
+    #[test]
+    fn decode_single_chunk() {
+        // "Hello" = 5 bytes, hex = 5
+        let input = "5\r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "Hello");
+    }
+
+    #[test]
+    fn decode_multiple_chunks() {
+        let input = "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "Hello World");
+    }
+
+    #[test]
+    fn decode_empty_input() {
+        assert_eq!(decode_chunked_body(""), "");
+    }
+
+    #[test]
+    fn decode_zero_length_chunk_only() {
+        let input = "0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "");
+    }
+
+    #[test]
+    fn decode_chunk_with_hex_uppercase() {
+        let input = "A\r\n0123456789\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "0123456789");
+    }
+
+    #[test]
+    fn decode_chunk_with_hex_mixed_case() {
+        let input = "a\r\nabcdefghij\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "abcdefghij");
+    }
+
+    #[test]
+    fn decode_chunk_with_whitespace_around_size() {
+        // Size line has leading/trailing spaces
+        let input = " 5 \r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "Hello");
+    }
+
+    #[test]
+    fn decode_malformed_hex_size_breaks() {
+        // "ZZZ" is not valid hex → parse fails → break
+        let input = "ZZZ\r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "");
+    }
+
+    #[test]
+    fn decode_missing_crlf_after_size_breaks() {
+        // No \r\n → find returns None → break
+        let input = "5Hello0";
+        assert_eq!(decode_chunked_body(input), "");
+    }
+
+    #[test]
+    fn decode_truncated_chunk_data_breaks() {
+        // Chunk says 10 bytes but only 10 bytes total (3 data + "\r\n0\r\n\r\n")
+        // chunk_end == remaining.len(), so no break; returns remaining after size header
+        let input = "A\r\nabc\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "abc\r\n0\r\n\r\n");
+    }
+
+    #[test]
+    fn decode_empty_size_line_skips() {
+        // Blank line before actual chunk → skip, then parse "5"
+        let input = "\r\n5\r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "Hello");
+    }
+
+    #[test]
+    fn decode_three_chunks_concatenated() {
+        let input = "3\r\nabc\r\n3\r\ndef\r\n3\r\nghi\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "abcdefghi");
+    }
+
+    #[test]
+    fn decode_chunk_no_trailing_crlf_after_data() {
+        // Chunk data ends exactly at input boundary (no trailing \r\n)
+        let input = "3\r\nabc";
+        assert_eq!(decode_chunked_body(input), "abc");
+    }
+
+    #[test]
+    fn decode_large_hex_size() {
+        // Chunk size "FF" = 255, but data is only 5 bytes → truncated → empty
+        let input = "FF\r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "");
+    }
+
+    #[test]
+    fn decode_chunk_size_zero_mid_stream() {
+        // First chunk is zero-length → immediate break, second chunk ignored
+        let input = "0\r\n\r\n5\r\nHello\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked_body(input), "");
+    }
+}

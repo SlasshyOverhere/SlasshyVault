@@ -1022,3 +1022,1080 @@ fn filter_websocket_extensions(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── generate_room_code ──
+
+    #[test]
+    fn room_code_is_6_chars() {
+        let code = generate_room_code();
+        assert_eq!(code.len(), 6);
+    }
+
+    #[test]
+    fn room_code_is_alphanumeric_subset() {
+        let code = generate_room_code();
+        for ch in code.chars() {
+            assert!(
+                CODE_CHARS.contains(&(ch as u8)),
+                "char '{}' not in CODE_CHARS",
+                ch
+            );
+        }
+    }
+
+    #[test]
+    fn room_codes_are_unique_over_many_calls() {
+        let mut codes = std::collections::HashSet::new();
+        for _ in 0..200 {
+            codes.insert(generate_room_code());
+        }
+        // 200 calls, pool of 32^6 = ~1B codes — all should be unique
+        assert_eq!(codes.len(), 200);
+    }
+
+    // ── Participant ──
+
+    #[test]
+    fn participant_serialization_roundtrip() {
+        let p = Participant {
+            id: "abc".into(),
+            nickname: "Nick".into(),
+            is_host: true,
+            is_ready: false,
+            duration: Some(123.4),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Participant = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "abc");
+        assert_eq!(back.nickname, "Nick");
+        assert!(back.is_host);
+        assert!(!back.is_ready);
+        assert_eq!(back.duration, Some(123.4));
+    }
+
+    // ── RoomInfo ──
+
+    #[test]
+    fn room_info_serialization_roundtrip() {
+        let r = RoomInfo {
+            code: "ABC123".into(),
+            host_id: "h1".into(),
+            media_title: "Movie".into(),
+            media_id: 42,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: RoomInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.code, "ABC123");
+        assert_eq!(back.media_id, 42);
+        assert!(!back.is_playing);
+    }
+
+    #[test]
+    fn room_info_state_defaults() {
+        // is_playing and state should default when missing from JSON
+        let json = r#"{"code":"X","host_id":"h","media_title":"T","media_id":1,"participants":[],"current_position":0.0}"#;
+        let r: RoomInfo = serde_json::from_str(json).unwrap();
+        assert!(!r.is_playing);
+        assert!(r.state.is_none());
+        assert_eq!(r.current_position, 0.0);
+    }
+
+    // ── SyncCommand ──
+
+    #[test]
+    fn sync_command_serialization_roundtrip() {
+        let cmd = SyncCommand {
+            action: "pause".into(),
+            position: 42.5,
+            from: Some("user1".into()),
+            timestamp: Some(1234567890),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: SyncCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.action, "pause");
+        assert_eq!(back.position, 42.5);
+        assert_eq!(back.from, Some("user1".into()));
+    }
+
+    // ── ClientMessage enum ──
+
+    #[test]
+    fn client_message_create_serializes_tag() {
+        let msg = ClientMessage::Create {
+            media_title: "Test".into(),
+            media_id: 1,
+            media_match_key: None,
+            nickname: "Nick".into(),
+            client_id: "cid".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"create""#));
+    }
+
+    #[test]
+    fn client_message_join_serializes_tag() {
+        let msg = ClientMessage::Join {
+            room_code: "ABC".into(),
+            nickname: "Nick".into(),
+            client_id: "cid".into(),
+            media_id: 1,
+            media_title: None,
+            media_match_key: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"join""#));
+    }
+
+    // ── ServerMessage enum ──
+
+    #[test]
+    fn server_message_deserialize_room_created() {
+        let json = r#"{"type":"room_created","room":{"code":"X","host_id":"h","media_title":"T","media_id":1,"participants":[],"current_position":0.0}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::RoomCreated { room } => assert_eq!(room.code, "X"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_error() {
+        let json = r#"{"type":"error","message":"boom"}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Error { message } => assert_eq!(message, "boom"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── WatchEvent enum ──
+
+    #[test]
+    fn watch_event_serializes_tags() {
+        let ev = WatchEvent::Disconnected;
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"disconnected""#));
+
+        let ev2 = WatchEvent::ShowOsd {
+            message: "hi".into(),
+            duration_ms: 3000,
+        };
+        let json2 = serde_json::to_string(&ev2).unwrap();
+        assert!(json2.contains(r#""type":"show_osd""#));
+    }
+
+    // ── ParticipantSyncInfo ──
+
+    #[test]
+    fn participant_sync_info_roundtrip() {
+        let psi = ParticipantSyncInfo {
+            id: "u1".into(),
+            nickname: "Alice".into(),
+            position: 10.0,
+            paused: false,
+            rtt: 50,
+        };
+        let json = serde_json::to_string(&psi).unwrap();
+        let back: ParticipantSyncInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.rtt, 50);
+    }
+
+    // ── WatchSession::new ──
+
+    #[test]
+    fn session_new_defaults() {
+        let s = WatchSession::new(42, true);
+        assert_eq!(s.media_id, 42);
+        assert!(s.is_host);
+        assert!(!s.client_id.is_empty());
+        assert!(s.mpv_pid.is_none());
+        assert!(s.command_tx.is_none());
+        assert!(s.shutdown_tx.is_none());
+    }
+
+    #[test]
+    fn session_new_not_host() {
+        let s = WatchSession::new(1, false);
+        assert!(!s.is_host);
+    }
+
+    // ── WatchTogetherManager::new / Default ──
+
+    #[tokio::test]
+    async fn manager_new_starts_empty() {
+        let m = WatchTogetherManager::new();
+        assert!(!m.is_active().await);
+        assert!(!m.is_host().await);
+        assert!(m.get_client_id().await.is_none());
+        assert!(m.get_room_state().await.is_none());
+        assert!(m.get_mpv_pid().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn manager_default_trait() {
+        let m = WatchTogetherManager::default();
+        assert!(!m.is_active().await);
+    }
+
+    // ── Helper to inject a session with channels ──
+
+    async fn make_manager_with_session(is_host: bool) -> (WatchTogetherManager, mpsc::Receiver<ClientMessage>) {
+        let m = WatchTogetherManager::new();
+        let (tx, rx) = mpsc::channel::<ClientMessage>(32);
+        let (_, shutdown_rx_unused) = mpsc::channel::<()>(1);
+        // keep shutdown_rx_unused alive so we don't accidentally use it
+        drop(shutdown_rx_unused);
+
+        let mut session = WatchSession::new(99, is_host);
+        session.command_tx = Some(tx);
+
+        let mut guard = m.session.lock().await;
+        *guard = Some(session);
+        drop(guard);
+
+        (m, rx)
+    }
+
+    // ── is_active / get_client_id after injecting session ──
+
+    #[tokio::test]
+    async fn is_active_true_when_session_exists() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        assert!(m.is_active().await);
+    }
+
+    #[tokio::test]
+    async fn get_client_id_returns_uuid() {
+        let (m, _rx) = make_manager_with_session(false).await;
+        let cid = m.get_client_id().await;
+        assert!(cid.is_some());
+        // valid UUID format
+        assert!(uuid::Uuid::parse_str(&cid.unwrap()).is_ok());
+    }
+
+    // ── is_host ──
+
+    #[tokio::test]
+    async fn is_host_without_room_info_falls_back_to_session_flag() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        // No room_info set, should fall back to session.is_host
+        assert!(m.is_host().await);
+    }
+
+    #[tokio::test]
+    async fn is_host_false_for_joiner() {
+        let (m, _rx) = make_manager_with_session(false).await;
+        assert!(!m.is_host().await);
+    }
+
+    // ── set_mpv_pid / get_mpv_pid ──
+
+    #[tokio::test]
+    async fn set_and_get_mpv_pid() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        assert!(m.get_mpv_pid().await.is_none());
+        m.set_mpv_pid(1234).await;
+        assert_eq!(m.get_mpv_pid().await, Some(1234));
+    }
+
+    #[tokio::test]
+    async fn set_mpv_pid_noop_when_no_session() {
+        let m = WatchTogetherManager::new();
+        m.set_mpv_pid(999).await; // should not panic
+        assert!(m.get_mpv_pid().await.is_none());
+    }
+
+    // ── set_ready ──
+
+    #[tokio::test]
+    async fn set_ready_sends_message() {
+        let (m, mut rx) = make_manager_with_session(true).await;
+        m.set_ready(120.0).await.unwrap();
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            ClientMessage::Ready { duration } => assert_eq!(duration, 120.0),
+            _ => panic!("expected Ready"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_ready_fails_without_session() {
+        let m = WatchTogetherManager::new();
+        assert!(m.set_ready(1.0).await.is_err());
+    }
+
+    // ── start_playback ──
+
+    #[tokio::test]
+    async fn start_playback_host_sends_start() {
+        let (m, mut rx) = make_manager_with_session(true).await;
+        m.start_playback().await.unwrap();
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(msg, ClientMessage::Start));
+    }
+
+    #[tokio::test]
+    async fn start_playback_non_host_fails() {
+        let (m, _rx) = make_manager_with_session(false).await;
+        let err = m.start_playback().await.unwrap_err();
+        assert!(err.contains("host"));
+    }
+
+    #[tokio::test]
+    async fn start_playback_fails_without_session() {
+        let m = WatchTogetherManager::new();
+        assert!(m.start_playback().await.is_err());
+    }
+
+    // ── send_sync ──
+
+    #[tokio::test]
+    async fn send_sync_sends_command() {
+        let (m, mut rx) = make_manager_with_session(true).await;
+        m.send_sync("play", 10.5).await.unwrap();
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            ClientMessage::Sync { command } => {
+                assert_eq!(command.action, "play");
+                assert_eq!(command.position, 10.5);
+                assert!(command.from.is_none());
+                assert!(command.timestamp.is_none());
+            }
+            _ => panic!("expected Sync"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_sync_fails_without_session() {
+        let m = WatchTogetherManager::new();
+        assert!(m.send_sync("pause", 0.0).await.is_err());
+    }
+
+    // ── leave_room ──
+
+    #[tokio::test]
+    async fn leave_room_clears_session() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        assert!(m.is_active().await);
+        m.leave_room().await.unwrap();
+        assert!(!m.is_active().await);
+    }
+
+    #[tokio::test]
+    async fn leave_room_noop_when_no_session() {
+        let m = WatchTogetherManager::new();
+        m.leave_room().await.unwrap(); // should not panic or error
+        assert!(!m.is_active().await);
+    }
+
+    // ── get_room_state ──
+
+    #[tokio::test]
+    async fn get_room_state_none_when_no_room_info() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        // session exists but room_info is None
+        assert!(m.get_room_state().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_room_state_returns_room_when_set() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        let room = RoomInfo {
+            code: "TEST1".into(),
+            host_id: "h1".into(),
+            media_title: "Test Movie".into(),
+            media_id: 10,
+            participants: vec![],
+            is_playing: false,
+            state: Some("playing".to_string()),
+            current_position: 0.0,
+        };
+        // Write room info into the session
+        {
+            let guard = m.session.lock().await;
+            let session = guard.as_ref().unwrap();
+            let mut info = session.room_info.write().await;
+            *info = Some(room.clone());
+        }
+
+        let state = m.get_room_state().await.unwrap();
+        assert_eq!(state.code, "TEST1");
+        // normalize_room should set is_playing=true when state=="playing"
+        assert!(state.is_playing);
+    }
+
+    // ── normalize_room ──
+
+    #[test]
+    fn normalize_room_sets_is_playing_from_state() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: Some("playing".into()),
+            current_position: 0.0,
+        };
+        let normalized = WatchTogetherManager::normalize_room(room);
+        assert!(normalized.is_playing);
+    }
+
+    #[test]
+    fn normalize_room_keeps_is_playing_false_for_non_playing_state() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: Some("paused".into()),
+            current_position: 0.0,
+        };
+        let normalized = WatchTogetherManager::normalize_room(room);
+        assert!(!normalized.is_playing);
+    }
+
+    #[test]
+    fn normalize_room_keeps_is_playing_false_when_state_none() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        let normalized = WatchTogetherManager::normalize_room(room);
+        assert!(!normalized.is_playing);
+    }
+
+    // ── is_host with room_info set ──
+
+    #[tokio::test]
+    async fn is_host_checks_room_info_host_id() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        let client_id = m.get_client_id().await.unwrap();
+
+        let room = RoomInfo {
+            code: "R1".into(),
+            host_id: client_id.clone(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        {
+            let guard = m.session.lock().await;
+            let session = guard.as_ref().unwrap();
+            let mut info = session.room_info.write().await;
+            *info = Some(room);
+        }
+
+        assert!(m.is_host().await);
+    }
+
+    #[tokio::test]
+    async fn is_host_false_when_different_host_id() {
+        let (m, _rx) = make_manager_with_session(true).await;
+
+        let room = RoomInfo {
+            code: "R1".into(),
+            host_id: "someone_else".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        {
+            let guard = m.session.lock().await;
+            let session = guard.as_ref().unwrap();
+            let mut info = session.room_info.write().await;
+            *info = Some(room);
+        }
+
+        assert!(!m.is_host().await);
+    }
+
+    // ── filter_websocket_extensions ──
+
+    #[test]
+    fn filter_removes_permessage_deflate() {
+        let mut req = http::Request::builder()
+            .uri("ws://localhost")
+            .header("Sec-WebSocket-Extensions", "permessage-deflate, foo")
+            .body(())
+            .unwrap();
+        filter_websocket_extensions(&mut req);
+        let val = req.headers().get("Sec-WebSocket-Extensions").unwrap().to_str().unwrap();
+        assert_eq!(val, "foo");
+    }
+
+    #[test]
+    fn filter_removes_header_when_only_deflate() {
+        let mut req = http::Request::builder()
+            .uri("ws://localhost")
+            .header("Sec-WebSocket-Extensions", "permessage-deflate")
+            .body(())
+            .unwrap();
+        filter_websocket_extensions(&mut req);
+        assert!(req.headers().get("Sec-WebSocket-Extensions").is_none());
+    }
+
+    #[test]
+    fn filter_noop_when_no_header() {
+        let mut req = http::Request::builder()
+            .uri("ws://localhost")
+            .body(())
+            .unwrap();
+        filter_websocket_extensions(&mut req);
+        assert!(req.headers().get("Sec-WebSocket-Extensions").is_none());
+    }
+
+    // ── WatchSession::read_room_info ──
+
+    #[tokio::test]
+    async fn read_room_info_none_initially() {
+        let s = WatchSession::new(1, false);
+        let result: Option<String> = s.read_room_info(|info| info.map(|r| r.code.clone())).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_room_info_some_after_set() {
+        let s = WatchSession::new(1, true);
+        {
+            let mut info = s.room_info.write().await;
+            *info = Some(RoomInfo {
+                code: "CODE1".into(),
+                host_id: "h".into(),
+                media_title: "T".into(),
+                media_id: 1,
+                participants: vec![],
+                is_playing: false,
+                state: None,
+                current_position: 0.0,
+            });
+        }
+        let code = s.read_room_info(|info| info.map(|r| r.code.clone())).await;
+        assert_eq!(code, Some("CODE1".into()));
+    }
+
+    // ── WatchSession::send_message without command_tx ──
+
+    #[tokio::test]
+    async fn send_message_fails_when_no_tx() {
+        let s = WatchSession::new(1, false);
+        let err = s.send_message(ClientMessage::Heartbeat).await.unwrap_err();
+        assert!(err.contains("Not connected"));
+    }
+
+    // ── CODE_CHARS sanity ──
+
+    #[test]
+    fn code_chars_has_no_ambiguous_chars() {
+        let ambiguous = b"Il1O0";
+        for &ch in ambiguous {
+            assert!(
+                !CODE_CHARS.contains(&ch),
+                "ambiguous char '{}' found in CODE_CHARS",
+                ch as char
+            );
+        }
+    }
+
+    #[test]
+    fn code_chars_length() {
+        assert_eq!(CODE_CHARS.len(), 32);
+    }
+
+    // ── ClientMessage all variants serialization ──
+
+    #[test]
+    fn client_message_ready_serializes_tag() {
+        let msg = ClientMessage::Ready { duration: 90.0 };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"ready""#));
+        assert!(json.contains("90"));
+    }
+
+    #[test]
+    fn client_message_sync_serializes_tag() {
+        let msg = ClientMessage::Sync {
+            command: SyncCommand {
+                action: "pause".into(),
+                position: 5.0,
+                from: None,
+                timestamp: None,
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"sync""#));
+        assert!(json.contains("pause"));
+    }
+
+    #[test]
+    fn client_message_start_serializes_tag() {
+        let json = serde_json::to_string(&ClientMessage::Start).unwrap();
+        assert!(json.contains(r#""type":"start""#));
+    }
+
+    #[test]
+    fn client_message_leave_serializes_tag() {
+        let json = serde_json::to_string(&ClientMessage::Leave).unwrap();
+        assert!(json.contains(r#""type":"leave""#));
+    }
+
+    #[test]
+    fn client_message_heartbeat_serializes_tag() {
+        let json = serde_json::to_string(&ClientMessage::Heartbeat).unwrap();
+        assert!(json.contains(r#""type":"heartbeat""#));
+    }
+
+    #[test]
+    fn client_message_state_report_serializes() {
+        let msg = ClientMessage::StateReport {
+            position: 42.0,
+            paused: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"state_report""#));
+        assert!(json.contains("42"));
+        assert!(json.contains("false"));
+    }
+
+    #[test]
+    fn client_message_pong_report_serializes() {
+        let msg = ClientMessage::PongReport {
+            ping_id: "client-1".into(),
+            rtt: 25.5,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"pong_report""#));
+        assert!(json.contains("client-1"));
+    }
+
+    #[test]
+    fn client_message_buffering_started_serializes() {
+        let msg = ClientMessage::BufferingStarted { position: 10.0 };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"buffering_started""#));
+    }
+
+    // ── ServerMessage deserialization for more variants ──
+
+    #[test]
+    fn server_message_deserialize_room_joined() {
+        let json = r#"{"type":"room_joined","room":{"code":"J1","host_id":"h","media_title":"T","media_id":1,"participants":[],"current_position":0.0}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::RoomJoined { room } => assert_eq!(room.code, "J1"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_room_state() {
+        let json = r#"{"type":"room_state","room":{"code":"RS","host_id":"h","media_title":"T","media_id":1,"participants":[],"is_playing":true,"state":"playing","current_position":5.0}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::RoomState { room } => {
+                assert_eq!(room.code, "RS");
+                assert!(room.is_playing);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_participant_joined() {
+        let json = r#"{"type":"participant_joined","participant":{"id":"u1","nickname":"Bob","is_host":false,"is_ready":false,"duration":null}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::ParticipantJoined { participant } => {
+                assert_eq!(participant.id, "u1");
+                assert_eq!(participant.nickname, "Bob");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_participant_left_with_room() {
+        let json = r#"{"type":"participant_left","participant_id":"u2","room":{"code":"X","host_id":"h","media_title":"T","media_id":1,"participants":[],"current_position":0.0}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::ParticipantLeft { participant_id, room } => {
+                assert_eq!(participant_id, "u2");
+                assert!(room.is_some());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_participant_left_without_room() {
+        let json = r#"{"type":"participant_left","participant_id":"u3"}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::ParticipantLeft { participant_id, room } => {
+                assert_eq!(participant_id, "u3");
+                assert!(room.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_participant_ready() {
+        let json = r#"{"type":"participant_ready","participant_id":"u1","duration":120.0}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::ParticipantReady { participant_id, duration } => {
+                assert_eq!(participant_id, "u1");
+                assert_eq!(duration, 120.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_playback_started() {
+        let json = r#"{"type":"playback_started","position":0.0}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::PlaybackStarted { position } => assert_eq!(position, 0.0),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_state_update() {
+        let json = r#"{"type":"state_update","position":42.5,"paused":false,"server_time":1234567890,"your_rtt":15.0,"participants":[]}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::StateUpdate { position, paused, your_rtt, participants, .. } => {
+                assert_eq!(position, 42.5);
+                assert!(!paused);
+                assert_eq!(your_rtt, 15.0);
+                assert!(participants.is_empty());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_ping() {
+        let json = r#"{"type":"ping","ping_id":"srv-1","server_time":999}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Ping { ping_id, server_time } => {
+                assert_eq!(ping_id, "srv-1");
+                assert_eq!(server_time, 999);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_pong() {
+        let json = r#"{"type":"pong","ping_id":"c-1","server_time":100,"your_rtt":12.0}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Pong { ping_id, your_rtt, .. } => {
+                assert_eq!(ping_id, "c-1");
+                assert_eq!(your_rtt, 12.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_heartbeat_ack() {
+        let json = r#"{"type":"heartbeat_ack","timestamp":42}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::HeartbeatAck { timestamp } => assert_eq!(timestamp, 42),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_prepare() {
+        let json = r#"{"type":"prepare","position":10.0,"pre_buffer_target":3}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Prepare { position, pre_buffer_target } => {
+                assert_eq!(position, 10.0);
+                assert_eq!(pre_buffer_target, 3);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_play_at() {
+        let json = r#"{"type":"play_at","position":10.0,"play_at_timestamp":1700000000.0}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::PlayAt { position, play_at_timestamp } => {
+                assert_eq!(position, 10.0);
+                assert_eq!(play_at_timestamp, 1700000000.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_sync_resume() {
+        let json = r#"{"type":"sync_resume","position":10.0,"play_at_timestamp":1700000000.0}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::SyncResume { position, play_at_timestamp } => {
+                assert_eq!(position, 10.0);
+                assert_eq!(play_at_timestamp, 1700000000.0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_pause() {
+        let json = r#"{"type":"pause","reason":"buffering","triggered_by":"u1"}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Pause { reason, triggered_by } => {
+                assert_eq!(reason, "buffering");
+                assert_eq!(triggered_by, "u1");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_sync_with_echo() {
+        let json = r#"{"type":"sync","command":{"action":"play","position":5.0},"from":"u1","timestamp":100,"is_echo":true}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ServerMessage::Sync { is_echo, .. } => assert!(is_echo),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── WatchEvent all variant serialization ──
+
+    #[test]
+    fn watch_event_room_updated_serializes() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        let ev = WatchEvent::RoomUpdated { room };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"room_updated""#));
+    }
+
+    #[test]
+    fn watch_event_sync_command_serializes() {
+        let ev = WatchEvent::SyncCommand {
+            command: SyncCommand {
+                action: "pause".into(),
+                position: 10.0,
+                from: None,
+                timestamp: None,
+            },
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"sync_command""#));
+    }
+
+    #[test]
+    fn watch_event_participant_changed_serializes() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: None,
+            current_position: 0.0,
+        };
+        let ev = WatchEvent::ParticipantChanged { room };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"participant_changed""#));
+    }
+
+    #[test]
+    fn watch_event_playback_started_serializes() {
+        let ev = WatchEvent::PlaybackStarted { position: 0.0 };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"playback_started""#));
+    }
+
+    #[test]
+    fn watch_event_error_serializes() {
+        let ev = WatchEvent::Error { message: "boom".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"error""#));
+        assert!(json.contains("boom"));
+    }
+
+    #[test]
+    fn watch_event_state_update_serializes() {
+        let ev = WatchEvent::StateUpdate {
+            position: 5.0,
+            paused: false,
+            your_rtt: 20.0,
+            participants: vec![],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"state_update""#));
+    }
+
+    #[test]
+    fn watch_event_prepare_serializes() {
+        let ev = WatchEvent::Prepare {
+            position: 10.0,
+            pre_buffer_target: 3,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"prepare""#));
+    }
+
+    #[test]
+    fn watch_event_play_at_serializes() {
+        let ev = WatchEvent::PlayAt {
+            position: 10.0,
+            play_at_timestamp: 1700000000.0,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"play_at""#));
+    }
+
+    #[test]
+    fn watch_event_sync_resume_serializes() {
+        let ev = WatchEvent::SyncResume {
+            position: 10.0,
+            play_at_timestamp: 1700000000.0,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"sync_resume""#));
+    }
+
+    #[test]
+    fn watch_event_pause_serializes() {
+        let ev = WatchEvent::Pause {
+            reason: "buffering".into(),
+            triggered_by: "u1".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"pause""#));
+    }
+
+    // ── normalize_room edge cases ──
+
+    #[test]
+    fn normalize_room_already_playing_stays_playing() {
+        let room = RoomInfo {
+            code: "X".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: true,
+            state: Some("playing".into()),
+            current_position: 0.0,
+        };
+        let normalized = WatchTogetherManager::normalize_room(room);
+        assert!(normalized.is_playing);
+    }
+
+    // ── WatchSession::send_message with tx ──
+
+    #[tokio::test]
+    async fn send_message_succeeds_with_tx() {
+        let (tx, mut rx) = mpsc::channel::<ClientMessage>(1);
+        let mut s = WatchSession::new(1, false);
+        s.command_tx = Some(tx);
+
+        s.send_message(ClientMessage::Heartbeat).await.unwrap();
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(msg, ClientMessage::Heartbeat));
+    }
+
+    // ── set_event_callback and emit_event ──
+
+    #[tokio::test]
+    async fn set_event_callback_and_emit() {
+        let m = WatchTogetherManager::new();
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::<WatchEvent>::new()));
+        let received_clone = received.clone();
+
+        m.set_event_callback(move |event| {
+            let _r = received_clone.clone();
+            // We can't await in a sync callback, but we can check the event type
+            // by matching on it
+            let _ = event; // event is received
+        }).await;
+
+        // The callback was set; verify it's Some
+        let cb = m.event_callback.lock().await;
+        assert!(cb.is_some());
+    }
+
+    #[tokio::test]
+    async fn emit_event_without_callback_does_not_panic() {
+        let m = WatchTogetherManager::new();
+        // No callback set — emit should be a no-op
+        m.emit_event(WatchEvent::Disconnected).await;
+    }
+
+    // ── get_room_state with normalize_room applied ──
+
+    #[tokio::test]
+    async fn get_room_state_normalizes_is_playing() {
+        let (m, _rx) = make_manager_with_session(true).await;
+        let room = RoomInfo {
+            code: "N1".into(),
+            host_id: "h".into(),
+            media_title: "T".into(),
+            media_id: 1,
+            participants: vec![],
+            is_playing: false,
+            state: Some("playing".to_string()),
+            current_position: 0.0,
+        };
+        {
+            let guard = m.session.lock().await;
+            let session = guard.as_ref().unwrap();
+            let mut info = session.room_info.write().await;
+            *info = Some(room);
+        }
+
+        let state = m.get_room_state().await.unwrap();
+        assert!(state.is_playing, "normalize_room should set is_playing from state");
+    }
+}

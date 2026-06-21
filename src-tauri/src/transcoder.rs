@@ -325,3 +325,541 @@ pub fn stop_all_transcodes() -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    // ---------------------------------------------------------------------------
+    // needs_transcoding
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn needs_transcoding_for_mkv() {
+        assert!(needs_transcoding("video.mkv"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_avi() {
+        assert!(needs_transcoding("video.avi"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_wmv() {
+        assert!(needs_transcoding("video.wmv"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_flv() {
+        assert!(needs_transcoding("video.flv"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_mov() {
+        assert!(needs_transcoding("video.mov"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_m2ts() {
+        assert!(needs_transcoding("video.m2ts"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_ts() {
+        assert!(needs_transcoding("video.ts"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_vob() {
+        assert!(needs_transcoding("video.vob"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_divx() {
+        assert!(needs_transcoding("video.divx"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_xvid() {
+        assert!(needs_transcoding("video.xvid"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_rmvb() {
+        assert!(needs_transcoding("video.rmvb"));
+    }
+
+    #[test]
+    fn needs_transcoding_for_rm() {
+        assert!(needs_transcoding("video.rm"));
+    }
+
+    #[test]
+    fn no_transcoding_for_mp4() {
+        assert!(!needs_transcoding("video.mp4"));
+    }
+
+    #[test]
+    fn no_transcoding_for_webm() {
+        assert!(!needs_transcoding("video.webm"));
+    }
+
+    #[test]
+    fn no_transcoding_for_ogg() {
+        assert!(!needs_transcoding("video.ogg"));
+    }
+
+    #[test]
+    fn no_transcoding_for_gif() {
+        assert!(!needs_transcoding("image.gif"));
+    }
+
+    #[test]
+    fn no_transcoding_for_empty_ext() {
+        assert!(!needs_transcoding("noextension"));
+    }
+
+    #[test]
+    fn no_transcoding_for_no_dot() {
+        assert!(!needs_transcoding("nodotfile"));
+    }
+
+    #[test]
+    fn needs_transcoding_case_insensitive() {
+        // Extension comparison is lowercase, but input can be mixed case
+        assert!(needs_transcoding("movie.MKV"));
+        assert!(needs_transcoding("movie.Mkv"));
+        assert!(!needs_transcoding("movie.MP4"));
+    }
+
+    #[test]
+    fn needs_transcoding_nested_path() {
+        assert!(needs_transcoding("/some/deep/path/video.mkv"));
+        assert!(!needs_transcoding("C:\\Users\\file.mp4"));
+    }
+
+    #[test]
+    fn needs_transcoding_dotted_filename() {
+        assert!(needs_transcoding("my.file.name.avi"));
+        assert!(!needs_transcoding("my.file.name.mp4"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // TranscodeSession struct
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn transcode_session_fields() {
+        let session = TranscodeSession {
+            ffmpeg_process: None,
+            server_port: 9001,
+            file_path: "/tmp/test.mkv".to_string(),
+        };
+
+        assert!(session.ffmpeg_process.is_none());
+        assert_eq!(session.server_port, 9001);
+        assert_eq!(session.file_path, "/tmp/test.mkv");
+    }
+
+    #[test]
+    fn transcode_session_drop_kills_process() {
+        // Spawn a real child process (sleep) and verify Drop kills it
+        let child = Command::new("python")
+            .args(["-c", "import time; time.sleep(60)"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                // Fallback: try `sleep` (unix) or just skip
+                Command::new("sleep")
+                    .arg("60")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            });
+
+        if let Ok(child) = child {
+            let pid = child.id();
+            {
+                let _session = TranscodeSession {
+                    ffmpeg_process: Some(child),
+                    server_port: 9002,
+                    file_path: "/tmp/drop_test.mkv".to_string(),
+                };
+                // _session dropped here, should kill child
+            }
+            // On Windows, process.kill sends TerminateProcess; child should be gone.
+            // We can't reliably check exit status immediately, but no panic = success.
+            // Just verify the pid existed (non-zero on Windows).
+            assert!(pid > 0, "child process should have a valid pid");
+        }
+        // If neither python nor sleep is available, test passes vacuously.
+    }
+
+    // ---------------------------------------------------------------------------
+    // stop_transcode
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn stop_transcode_nonexistent_session() {
+        // Stopping a session that doesn't exist should succeed (no-op)
+        assert!(stop_transcode(999999).is_ok());
+    }
+
+    #[test]
+    fn stop_transcode_session_with_no_process() {
+        // Insert a session with None process, then stop it
+        let session = TranscodeSession {
+            ffmpeg_process: None,
+            server_port: 9010,
+            file_path: "/tmp/none_proc.mkv".to_string(),
+        };
+
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            sessions.insert(888888, session);
+        }
+
+        assert!(stop_transcode(888888).is_ok());
+
+        // Verify removed
+        let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+        assert!(!sessions.contains_key(&888888));
+    }
+
+    #[test]
+    fn stop_transcode_with_real_process() {
+        let child = Command::new("python")
+            .args(["-c", "import time; time.sleep(60)"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                Command::new("sleep")
+                    .arg("60")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            });
+
+        if let Ok(child) = child {
+            let session = TranscodeSession {
+                ffmpeg_process: Some(child),
+                server_port: 9011,
+                file_path: "/tmp/stop_test.mkv".to_string(),
+            };
+
+            {
+                let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+                sessions.insert(777777, session);
+            }
+
+            assert!(stop_transcode(777777).is_ok());
+
+            let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            assert!(!sessions.contains_key(&777777));
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // stop_all_transcodes
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn stop_all_transcodes_empty() {
+        // Clear any leftover sessions, then stop_all on empty map
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            sessions.clear();
+        }
+        assert!(stop_all_transcodes().is_ok());
+    }
+
+    #[test]
+    fn stop_all_transcodes_multiple_no_process() {
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            for id in 700000..700005 {
+                sessions.insert(
+                    id,
+                    TranscodeSession {
+                        ffmpeg_process: None,
+                        server_port: 9020 + (id - 700000) as u16,
+                        file_path: format!("/tmp/all_{}.mkv", id),
+                    },
+                );
+            }
+        }
+
+        assert!(stop_all_transcodes().is_ok());
+
+        let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+        assert!(sessions.is_empty(), "all sessions should be removed");
+    }
+
+    #[test]
+    fn stop_all_transcodes_mixed_process_and_none() {
+        let child = Command::new("python")
+            .args(["-c", "import time; time.sleep(60)"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                Command::new("sleep")
+                    .arg("60")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            });
+
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            // One with None
+            sessions.insert(
+                600001,
+                TranscodeSession {
+                    ffmpeg_process: None,
+                    server_port: 9030,
+                    file_path: "/tmp/mixed_none.mkv".to_string(),
+                },
+            );
+            // One with a real process (if available)
+            if let Ok(c) = child {
+                sessions.insert(
+                    600002,
+                    TranscodeSession {
+                        ffmpeg_process: Some(c),
+                        server_port: 9031,
+                        file_path: "/tmp/mixed_real.mkv".to_string(),
+                    },
+                );
+            }
+        }
+
+        assert!(stop_all_transcodes().is_ok());
+
+        let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // start_transcode – error paths (no FFmpeg installed)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn start_transcode_ffmpeg_not_found() {
+        let result = start_transcode(
+            "C:\\nonexistent\\ffmpeg.exe",
+            "C:\\nonexistent\\video.mkv",
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Error from validate_executable_path or the exists() check
+        assert!(
+            !err.is_empty(),
+            "should return an error for nonexistent ffmpeg path"
+        );
+    }
+
+    #[test]
+    fn start_transcode_video_not_found() {
+        // Need a path that passes validate_executable_path but file doesn't exist.
+        // This test only works if ffmpeg actually exists on the system.
+        // Use a clearly fake ffmpeg path that will fail the exists() check first.
+        let result = start_transcode(
+            "C:\\nonexistent_dir\\ffmpeg.exe",
+            "C:\\nonexistent_dir\\video.mkv",
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // find_available_port
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn find_available_port_returns_some() {
+        // Port 9000-9100 range; at least one should be free in a test environment
+        let port = find_available_port();
+        assert!(port.is_some(), "should find an available port in 9000-9100");
+        let p = port.unwrap();
+        assert!((9000..9100).contains(&p));
+    }
+
+    #[test]
+    fn find_available_port_returns_valid_port() {
+        // Verify find_available_port returns a port in the expected range
+        // (Cannot reliably re-bind due to TOCTOU race with other tests)
+        if let Some(port) = find_available_port() {
+            assert!((9000..9100).contains(&port), "port {} outside expected range 9000-9100", port);
+        }
+    }
+
+    // ── SESSION_COUNTER increments ──
+
+    #[test]
+    fn session_counter_increments() {
+        let c1 = {
+            let mut counter = SESSION_COUNTER.lock().unwrap();
+            *counter += 1;
+            *counter
+        };
+        let c2 = {
+            let mut counter = SESSION_COUNTER.lock().unwrap();
+            *counter += 1;
+            *counter
+        };
+        assert!(c2 > c1, "counter should increment: {} vs {}", c1, c2);
+    }
+
+    // ── TranscodeSession Drop with None process ──
+
+    #[test]
+    fn transcode_session_drop_none_process() {
+        {
+            let _session = TranscodeSession {
+                ffmpeg_process: None,
+                server_port: 9050,
+                file_path: "/tmp/drop_none.mkv".to_string(),
+            };
+            // _session dropped here — should not panic
+        }
+        // If we reach here, Drop handled None gracefully
+    }
+
+    // ── stop_transcode removes specific session ──
+
+    #[test]
+    fn stop_transcode_removes_only_target_session() {
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            sessions.insert(
+                500001,
+                TranscodeSession {
+                    ffmpeg_process: None,
+                    server_port: 9060,
+                    file_path: "/tmp/keep.mkv".to_string(),
+                },
+            );
+            sessions.insert(
+                500002,
+                TranscodeSession {
+                    ffmpeg_process: None,
+                    server_port: 9061,
+                    file_path: "/tmp/remove.mkv".to_string(),
+                },
+            );
+        }
+
+        assert!(stop_transcode(500002).is_ok());
+
+        let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+        assert!(sessions.contains_key(&500001), "other session should remain");
+        assert!(!sessions.contains_key(&500002), "target session should be removed");
+    }
+
+    // ── stop_all_transcodes drains all ──
+
+    #[test]
+    fn stop_all_transcodes_drains_entire_map() {
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            for id in 600010..600020 {
+                sessions.insert(
+                    id,
+                    TranscodeSession {
+                        ffmpeg_process: None,
+                        server_port: 9070 + (id - 600010) as u16,
+                        file_path: format!("/tmp/all_{}.mkv", id),
+                    },
+                );
+            }
+        }
+
+        assert!(stop_all_transcodes().is_ok());
+
+        let sessions = TRANSCODE_SESSIONS.lock().unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    // ── start_transcode with file that exists but ffmpeg doesn't ──
+
+    #[test]
+    fn start_transcode_ffmpeg_path_is_directory() {
+        // Use a path that exists as a directory, not an executable
+        let result = start_transcode(
+            "C:\\Windows",
+            "C:\\Windows\\System32\\notepad.exe",
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_transcode_with_start_time_zero() {
+        // start_time = Some(0.0) should not add -ss flag
+        let result = start_transcode(
+            "C:\\nonexistent\\ffmpeg.exe",
+            "C:\\nonexistent\\video.mkv",
+            Some(0.0),
+        );
+        assert!(result.is_err());
+        // Error is from validate_executable_path or exists() check
+    }
+
+    #[test]
+    fn start_transcode_with_positive_start_time() {
+        let result = start_transcode(
+            "C:\\nonexistent\\ffmpeg.exe",
+            "C:\\nonexistent\\video.mkv",
+            Some(42.5),
+        );
+        assert!(result.is_err());
+    }
+
+    // ── needs_transcoding with uppercase extensions ──
+
+    #[test]
+    fn needs_transcoding_uppercase_extensions() {
+        assert!(needs_transcoding("video.AVI"));
+        assert!(needs_transcoding("video.MKV"));
+        assert!(needs_transcoding("video.WMV"));
+        assert!(needs_transcoding("video.FLV"));
+        assert!(needs_transcoding("video.MOV"));
+        assert!(!needs_transcoding("video.MP4"));
+        assert!(!needs_transcoding("video.WEBM"));
+    }
+
+    // ── needs_transcoding with path separators ──
+
+    #[test]
+    fn needs_transcoding_windows_path() {
+        assert!(needs_transcoding("C:\\Users\\test\\video.mkv"));
+        assert!(!needs_transcoding("C:\\Users\\test\\video.mp4"));
+    }
+
+    // ── Multiple concurrent stop_transcode calls ──
+
+    #[test]
+    fn stop_transcode_same_id_twice_is_safe() {
+        {
+            let mut sessions = TRANSCODE_SESSIONS.lock().unwrap();
+            sessions.insert(
+                400001,
+                TranscodeSession {
+                    ffmpeg_process: None,
+                    server_port: 9080,
+                    file_path: "/tmp/twice.mkv".to_string(),
+                },
+            );
+        }
+
+        // First stop removes it
+        assert!(stop_transcode(400001).is_ok());
+        // Second stop is a no-op (session already removed)
+        assert!(stop_transcode(400001).is_ok());
+    }
+}

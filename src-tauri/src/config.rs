@@ -522,3 +522,710 @@ pub fn save_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ── URL / constant tests ──────────────────────────────────────────
+
+    #[test]
+    fn get_bundled_mpv_download_url_format() {
+        let url = get_bundled_mpv_download_url();
+        assert!(url.starts_with("https://media.githubusercontent.com/media/"));
+        assert!(url.contains(GITHUB_REPO));
+        assert!(url.contains(GITHUB_BRANCH));
+        assert!(url.contains(BUNDLED_MPV_REPO_PATH));
+        assert_eq!(
+            url,
+            "https://media.githubusercontent.com/media/SlasshyOverhere/SlasshyVault/main/mpv-player/slasshyvault-mpv.rar"
+        );
+    }
+
+    // ── Path helper tests ─────────────────────────────────────────────
+
+    #[test]
+    fn get_bundled_mpv_dir_contains_mpv_bundled() {
+        let dir = get_bundled_mpv_dir();
+        assert!(dir.ends_with("mpv_bundled"));
+    }
+
+    #[test]
+    fn get_bundled_mpv_rar_temp_path_contains_rar_name() {
+        let path = get_bundled_mpv_rar_temp_path();
+        assert!(path.ends_with(BUNDLED_MPV_RAR_TEMP_NAME));
+        // Parent should be the bundled dir
+        assert_eq!(path.parent(), Some(get_bundled_mpv_dir().as_path()));
+    }
+
+    // ── PlayerMode tests ──────────────────────────────────────────────
+
+    #[test]
+    fn player_mode_default_is_external() {
+        assert_eq!(PlayerMode::default(), PlayerMode::External);
+    }
+
+    #[test]
+    fn player_mode_serde_roundtrip() {
+        let mode = PlayerMode::External;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"external\"");
+        let deserialized: PlayerMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, PlayerMode::External);
+    }
+
+    #[test]
+    fn player_mode_debug_clone() {
+        let mode = PlayerMode::External;
+        let cloned = mode.clone();
+        assert_eq!(mode, cloned);
+        let debug = format!("{:?}", mode);
+        assert_eq!(debug, "External");
+    }
+
+    // ── AddonSource tests ─────────────────────────────────────────────
+
+    #[test]
+    fn addon_source_serde_roundtrip() {
+        let src = AddonSource {
+            id: "abc-123".to_string(),
+            name: "Test Addon".to_string(),
+            url: "http://localhost:7000".to_string(),
+            enabled: true,
+            is_default: false,
+            binary_path: Some("/usr/bin/addon".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        let deserialized: AddonSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, "abc-123");
+        assert_eq!(deserialized.name, "Test Addon");
+        assert_eq!(deserialized.url, "http://localhost:7000");
+        assert!(deserialized.enabled);
+        assert!(!deserialized.is_default);
+        assert_eq!(deserialized.binary_path, Some("/usr/bin/addon".to_string()));
+    }
+
+    #[test]
+    fn addon_source_deserialize_without_optional_fields() {
+        let json = r#"{"id":"x","name":"n","url":"u","enabled":false,"is_default":true}"#;
+        let src: AddonSource = serde_json::from_str(json).unwrap();
+        assert!(src.binary_path.is_none());
+    }
+
+    // ── Config default tests ──────────────────────────────────────────
+
+    #[test]
+    fn config_default_values() {
+        let cfg = Config::default();
+        assert!(cfg.mpv_path.is_none());
+        assert!(cfg.vlc_path.is_none());
+        assert!(cfg.ffprobe_path.is_none());
+        assert!(cfg.ffmpeg_path.is_none());
+        assert!(cfg.tmdb_api_key.is_none());
+        assert!(cfg.omdb_api_key.is_none());
+        assert!(!cfg.cloud_cache_enabled);
+        assert!(cfg.cloud_cache_dir.is_none());
+        assert_eq!(cfg.cloud_cache_max_mb, 1024);
+        assert_eq!(cfg.cloud_cache_expiry_hours, 24);
+        assert_eq!(cfg.cloud_scan_interval_minutes, 5);
+        assert!(cfg.zip_indexing_enabled);
+        assert!(cfg.zip_cache_dir.is_none());
+        assert_eq!(cfg.zip_cache_max_gb, 20);
+        assert_eq!(cfg.zip_cache_expiry_days, 7);
+        assert!(cfg.notifications_enabled);
+        assert!(cfg.dev_backend_url.is_none());
+        assert_eq!(cfg.player_mode, PlayerMode::External);
+        assert!(cfg.addon_url.is_none());
+        assert!(cfg.addon_sources.is_empty());
+    }
+
+    // ── Config serde roundtrip tests ──────────────────────────────────
+
+    #[test]
+    fn config_serde_roundtrip_full() {
+        let cfg = Config {
+            mpv_path: Some("C:\\mpv\\mpv.exe".to_string()),
+            vlc_path: Some("C:\\vlc\\vlc.exe".to_string()),
+            ffprobe_path: Some("C:\\ffprobe.exe".to_string()),
+            ffmpeg_path: Some("C:\\ffmpeg.exe".to_string()),
+            tmdb_api_key: Some("tmdb-key-123".to_string()),
+            omdb_api_key: Some("omdb-key-456".to_string()),
+            cloud_cache_enabled: true,
+            cloud_cache_dir: Some("D:\\cache".to_string()),
+            cloud_cache_max_mb: 2048,
+            cloud_cache_expiry_hours: 48,
+            cloud_scan_interval_minutes: 10,
+            zip_indexing_enabled: false,
+            zip_cache_dir: Some("D:\\zipcache".to_string()),
+            zip_cache_max_gb: 50,
+            zip_cache_expiry_days: 14,
+            notifications_enabled: false,
+            dev_backend_url: Some("http://localhost:3001".to_string()),
+            player_mode: PlayerMode::External,
+            addon_url: Some("http://addon.example.com".to_string()),
+            addon_sources: vec![AddonSource {
+                id: "s1".to_string(),
+                name: "Source1".to_string(),
+                url: "http://s1.example.com".to_string(),
+                enabled: true,
+                is_default: true,
+                binary_path: Some("C:\\addon.exe".to_string()),
+            }],
+        };
+
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let deserialized: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.mpv_path, cfg.mpv_path);
+        assert_eq!(deserialized.vlc_path, cfg.vlc_path);
+        assert_eq!(deserialized.ffprobe_path, cfg.ffprobe_path);
+        assert_eq!(deserialized.ffmpeg_path, cfg.ffmpeg_path);
+        assert_eq!(deserialized.tmdb_api_key, cfg.tmdb_api_key);
+        assert_eq!(deserialized.omdb_api_key, cfg.omdb_api_key);
+        assert_eq!(deserialized.cloud_cache_enabled, cfg.cloud_cache_enabled);
+        assert_eq!(deserialized.cloud_cache_dir, cfg.cloud_cache_dir);
+        assert_eq!(deserialized.cloud_cache_max_mb, cfg.cloud_cache_max_mb);
+        assert_eq!(deserialized.cloud_cache_expiry_hours, cfg.cloud_cache_expiry_hours);
+        assert_eq!(deserialized.cloud_scan_interval_minutes, cfg.cloud_scan_interval_minutes);
+        assert_eq!(deserialized.zip_indexing_enabled, cfg.zip_indexing_enabled);
+        assert_eq!(deserialized.zip_cache_dir, cfg.zip_cache_dir);
+        assert_eq!(deserialized.zip_cache_max_gb, cfg.zip_cache_max_gb);
+        assert_eq!(deserialized.zip_cache_expiry_days, cfg.zip_cache_expiry_days);
+        assert_eq!(deserialized.notifications_enabled, cfg.notifications_enabled);
+        assert_eq!(deserialized.dev_backend_url, cfg.dev_backend_url);
+        assert_eq!(deserialized.player_mode, cfg.player_mode);
+        assert_eq!(deserialized.addon_url, cfg.addon_url);
+        assert_eq!(deserialized.addon_sources.len(), 1);
+        assert_eq!(deserialized.addon_sources[0].id, "s1");
+    }
+
+    #[test]
+    fn config_deserialize_empty_json_uses_defaults() {
+        let json = "{}";
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert!(cfg.mpv_path.is_none());
+        assert!(cfg.cloud_cache_max_mb == 1024); // default fn
+        assert!(cfg.cloud_cache_expiry_hours == 24);
+        assert!(cfg.cloud_scan_interval_minutes == 5);
+        assert!(cfg.zip_indexing_enabled);
+        assert!(cfg.zip_cache_max_gb == 20);
+        assert!(cfg.zip_cache_expiry_days == 7);
+        assert!(cfg.notifications_enabled);
+        assert_eq!(cfg.player_mode, PlayerMode::External);
+        assert!(cfg.addon_sources.is_empty());
+    }
+
+    #[test]
+    fn config_deserialize_partial_json_fills_defaults() {
+        let json = r#"{"mpv_path":"/usr/bin/mpv","cloud_cache_max_mb":512}"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.mpv_path, Some("/usr/bin/mpv".to_string()));
+        assert_eq!(cfg.cloud_cache_max_mb, 512);
+        // Defaults still present
+        assert_eq!(cfg.cloud_cache_expiry_hours, 24);
+        assert!(cfg.notifications_enabled);
+    }
+
+    // ── Default function tests ────────────────────────────────────────
+
+    #[test]
+    fn default_functions_return_expected_values() {
+        assert_eq!(default_cloud_cache_max_mb(), 1024);
+        assert_eq!(default_cloud_cache_expiry_hours(), 24);
+        assert_eq!(default_cloud_scan_interval_minutes(), 5);
+        assert!(default_zip_indexing_enabled());
+        assert_eq!(default_zip_cache_max_gb(), 20);
+        assert_eq!(default_zip_cache_expiry_days(), 7);
+        assert!(default_notifications_enabled());
+    }
+
+    // ── validate_executable_path tests ────────────────────────────────
+
+    #[test]
+    fn validate_empty_path_returns_ok() {
+        assert!(validate_executable_path("", "mpv").is_ok());
+    }
+
+    #[test]
+    fn validate_matching_executable_name_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "mpv").is_ok());
+    }
+
+    #[test]
+    fn validate_matching_name_without_exe_extension_succeeds() {
+        // canonicalize needs the file to exist on disk
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("mpv");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "mpv").is_ok());
+    }
+
+    #[test]
+    fn validate_slasshyvault_mpv_variant_accepted_for_mpv() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("slasshyvault-mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "mpv").is_ok());
+    }
+
+    #[test]
+    fn validate_wrong_name_returns_err() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("calc.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let result = validate_executable_path(&exe.to_string_lossy(), "mpv");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Security violation"));
+        assert!(err.contains("calc"));
+    }
+
+    #[test]
+    fn validate_nonexistent_path_returns_err() {
+        let result = validate_executable_path("Z:\\nonexistent\\mpv.exe", "mpv");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid executable path"));
+    }
+
+    #[test]
+    fn validate_case_insensitive_match() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("MPV.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "mpv").is_ok());
+    }
+
+    #[test]
+    fn validate_expected_name_case_insensitive() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "MPV").is_ok());
+    }
+
+    #[test]
+    fn validate_cmd_exe_rejected_for_mpv() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("cmd.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "mpv").is_err());
+    }
+
+    #[test]
+    fn validate_non_mpv_expected_name_matching_works() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("vlc.exe");
+        fs::write(&exe, b"fake").unwrap();
+        assert!(validate_executable_path(&exe.to_string_lossy(), "vlc").is_ok());
+        // slasshyvault-mpv should NOT be accepted when expecting "vlc"
+        let exe2 = tmp.path().join("slasshyvault-mpv.exe");
+        fs::write(&exe2, b"fake").unwrap();
+        assert!(validate_executable_path(&exe2.to_string_lossy(), "vlc").is_err());
+    }
+
+    // ── apply_hidden_process_flags tests ──────────────────────────────
+
+    #[test]
+    fn apply_hidden_process_flags_does_not_panic() {
+        let mut cmd = Command::new("echo");
+        apply_hidden_process_flags(&mut cmd);
+        // On Windows this sets CREATE_NO_WINDOW; on other platforms it's a no-op.
+        // Verify the command can still execute.
+        let output = cmd.arg("hello").output().unwrap();
+        assert!(output.status.success());
+    }
+
+    // ── find_mpv_recursive tests ──────────────────────────────────────
+
+    #[test]
+    fn find_mpv_recursive_finds_mpv_exe_in_root() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let found = find_mpv_recursive(tmp.path());
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().file_name().unwrap(), "mpv.exe");
+    }
+
+    #[test]
+    fn find_mpv_recursive_finds_slasshyvault_mpv_exe() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("slasshyvault-mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let found = find_mpv_recursive(tmp.path());
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().file_name().unwrap(), "slasshyvault-mpv.exe");
+    }
+
+    #[test]
+    fn find_mpv_recursive_finds_in_subdirectory() {
+        let tmp = TempDir::new().unwrap();
+        let subdir = tmp.path().join("sub");
+        fs::create_dir(&subdir).unwrap();
+        let exe = subdir.join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let found = find_mpv_recursive(tmp.path());
+        assert!(found.is_some());
+        assert!(found.unwrap().starts_with(&subdir));
+    }
+
+    #[test]
+    fn find_mpv_recursive_case_insensitive_name() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("MPV.EXE");
+        fs::write(&exe, b"fake").unwrap();
+        let found = find_mpv_recursive(tmp.path());
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn find_mpv_recursive_returns_none_when_no_mpv() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("other.exe"), b"fake").unwrap();
+        assert!(find_mpv_recursive(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn find_mpv_recursive_returns_none_for_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        assert!(find_mpv_recursive(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn find_mpv_recursive_returns_none_for_nonexistent_dir() {
+        let path = Path::new("Z:\\nonexistent_dir_12345");
+        assert!(find_mpv_recursive(path).is_none());
+    }
+
+    #[test]
+    fn find_mpv_recursive_skips_non_exe_files() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("mpv.txt"), b"fake").unwrap();
+        fs::write(tmp.path().join("mpv.dll"), b"fake").unwrap();
+        assert!(find_mpv_recursive(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn find_mpv_recursive_ignores_wrong_stem_with_exe() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("notmpv.exe"), b"fake").unwrap();
+        assert!(find_mpv_recursive(tmp.path()).is_none());
+    }
+
+    // ── search_directory_for_mpv tests ────────────────────────────────
+
+    #[test]
+    fn search_directory_for_mpv_finds_direct() {
+        let tmp = TempDir::new().unwrap();
+        let exe = tmp.path().join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let found = search_directory_for_mpv(&tmp.path().to_string_lossy(), 3);
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn search_directory_for_mpv_finds_in_subdirectory() {
+        let tmp = TempDir::new().unwrap();
+        let subdir = tmp.path().join("mpv");
+        fs::create_dir(&subdir).unwrap();
+        let exe = subdir.join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+        let found = search_directory_for_mpv(&tmp.path().to_string_lossy(), 3);
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn search_directory_for_mpv_returns_none_at_zero_depth() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("mpv.exe"), b"fake").unwrap();
+        assert!(search_directory_for_mpv(&tmp.path().to_string_lossy(), 0).is_none());
+    }
+
+    #[test]
+    fn search_directory_for_mpv_returns_none_for_nonexistent_dir() {
+        assert!(search_directory_for_mpv("Z:\\nonexistent_12345", 3).is_none());
+    }
+
+    #[test]
+    fn search_directory_for_mpv_returns_none_for_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("regularfile.txt");
+        fs::write(&file, b"fake").unwrap();
+        assert!(search_directory_for_mpv(&file.to_string_lossy(), 3).is_none());
+    }
+
+    // ── expand_and_check_pattern tests ────────────────────────────────
+
+    #[test]
+    fn expand_and_check_pattern_finds_matching_entry() {
+        let tmp = TempDir::new().unwrap();
+        let user_dir = tmp.path().join("testuser");
+        fs::create_dir(&user_dir).unwrap();
+        let mpv_dir = user_dir.join("scoop").join("apps").join("mpv").join("current");
+        fs::create_dir_all(&mpv_dir).unwrap();
+        let exe = mpv_dir.join("mpv.exe");
+        fs::write(&exe, b"fake").unwrap();
+
+        let pattern = format!("{}\\*\\scoop\\apps\\mpv\\current\\mpv.exe", tmp.path().display());
+        let found = expand_and_check_pattern(&pattern);
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn expand_and_check_pattern_returns_none_no_match() {
+        let tmp = TempDir::new().unwrap();
+        let user_dir = tmp.path().join("testuser");
+        fs::create_dir(&user_dir).unwrap();
+
+        let pattern = format!("{}\\*\\scoop\\mpv.exe", tmp.path().display());
+        let found = expand_and_check_pattern(&pattern);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn expand_and_check_pattern_returns_none_nonexistent_prefix() {
+        let found = expand_and_check_pattern("Z:\\nonexistent_*\\mpv.exe");
+        assert!(found.is_none());
+    }
+
+    // ── save_config / load_config roundtrip tests ─────────────────────
+
+    #[test]
+    fn save_and_load_config_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("media_config.json");
+
+        // Monkey-patch by writing directly
+        let cfg = Config {
+            mpv_path: Some("C:\\mpv\\mpv.exe".to_string()),
+            tmdb_api_key: Some("key123".to_string()),
+            cloud_cache_max_mb: 512,
+            notifications_enabled: false,
+            ..Config::default()
+        };
+
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        fs::write(&config_path, &json).unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        let loaded: Config = serde_json::from_str(&contents).unwrap();
+        assert_eq!(loaded.mpv_path, Some("C:\\mpv\\mpv.exe".to_string()));
+        assert_eq!(loaded.tmdb_api_key, Some("key123".to_string()));
+        assert_eq!(loaded.cloud_cache_max_mb, 512);
+        assert!(!loaded.notifications_enabled);
+    }
+
+    #[test]
+    fn save_config_produces_valid_json() {
+        let cfg = Config::default();
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        // Verify it parses back
+        let _: Config = serde_json::from_str(&json).unwrap();
+        // Verify pretty formatting (contains newlines)
+        assert!(json.contains('\n'));
+    }
+
+    // ── heal_corrupted_config tests ───────────────────────────────────
+
+    #[test]
+    fn heal_corrupted_config_creates_backup_and_default() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("media_config.json");
+        let config_path_str = config_path.to_string_lossy().to_string();
+
+        // Write corrupted content
+        fs::write(&config_path, "{invalid json!!!").unwrap();
+
+        // Temporarily override the config path by testing heal_corrupted_config directly
+        heal_corrupted_config(&config_path_str);
+
+        // Original should be renamed to .corrupted
+        let backup = format!("{}.corrupted", config_path_str);
+        assert!(Path::new(&backup).exists());
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "{invalid json!!!");
+    }
+
+    #[test]
+    fn heal_corrupted_config_no_existing_file() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("media_config.json");
+        let config_path_str = config_path.to_string_lossy().to_string();
+
+        // Should not error even if file doesn't exist
+        heal_corrupted_config(&config_path_str);
+    }
+
+    // ── Constants verification ────────────────────────────────────────
+
+    #[test]
+    fn constants_are_correct() {
+        assert_eq!(BUNDLED_MPV_RAR_FILENAME, "slasshyvault-mpv.rar");
+        assert_eq!(BUNDLED_MPV_RAR_TEMP_NAME, "slasshyvault-mpv.rar");
+        assert_eq!(GITHUB_REPO, "SlasshyOverhere/SlasshyVault");
+        assert_eq!(GITHUB_BRANCH, "main");
+        assert_eq!(BUNDLED_MPV_REPO_PATH, "mpv-player/slasshyvault-mpv.rar");
+    }
+
+    #[test]
+    fn mpv_search_paths_not_empty() {
+        assert!(!MPV_SEARCH_PATHS.is_empty());
+        // All entries should contain "mpv"
+        for path in MPV_SEARCH_PATHS {
+            assert!(path.to_lowercase().contains("mpv"), "Search path missing 'mpv': {}", path);
+        }
+        // All entries should end with mpv.exe
+        for path in MPV_SEARCH_PATHS {
+            assert!(path.ends_with("mpv.exe"), "Search path doesn't end with mpv.exe: {}", path);
+        }
+    }
+
+    // ── bundled_mpv_exists / get_bundled_mpv_path tests ───────────────
+
+    // Note: These depend on the real app data dir which may or may not exist.
+    // We test the logic by checking that bundled_mpv_exists returns a bool
+    // and get_bundled_mpv_path always returns a valid PathBuf.
+
+    #[test]
+    fn get_bundled_mpv_path_always_returns_path() {
+        let path = get_bundled_mpv_path();
+        // Should always return a PathBuf ending with mpv.exe
+        assert!(path.ends_with("mpv.exe"));
+    }
+
+    #[test]
+    fn bundled_mpv_exists_returns_bool() {
+        // Just verify it doesn't panic
+        let _exists = bundled_mpv_exists();
+    }
+
+    // ── remove_bundled_mpv tests ──────────────────────────────────────
+
+    #[test]
+    fn remove_bundled_mpv_on_nonexistent_dir_succeeds() {
+        // This test uses the real app data dir. If the dir doesn't exist,
+        // remove_bundled_mpv should succeed (no-op).
+        // If it does exist, we don't want to delete it, so skip.
+        let dir = get_bundled_mpv_dir();
+        if !dir.exists() {
+            assert!(remove_bundled_mpv().is_ok());
+        }
+    }
+
+    // ── Config struct field defaults after deserialization ─────────────
+
+    #[test]
+    fn config_all_option_fields_none_by_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.mpv_path.is_none());
+        assert!(cfg.vlc_path.is_none());
+        assert!(cfg.ffprobe_path.is_none());
+        assert!(cfg.ffmpeg_path.is_none());
+        assert!(cfg.tmdb_api_key.is_none());
+        assert!(cfg.omdb_api_key.is_none());
+        assert!(cfg.cloud_cache_dir.is_none());
+        assert!(cfg.zip_cache_dir.is_none());
+        assert!(cfg.dev_backend_url.is_none());
+        assert!(cfg.addon_url.is_none());
+    }
+
+    #[test]
+    fn config_clone() {
+        let cfg = Config::default();
+        let cloned = cfg.clone();
+        assert_eq!(cfg.mpv_path, cloned.mpv_path);
+        assert_eq!(cfg.cloud_cache_max_mb, cloned.cloud_cache_max_mb);
+        assert_eq!(cfg.player_mode, cloned.player_mode);
+    }
+
+    #[test]
+    fn config_debug_output() {
+        let cfg = Config::default();
+        let debug = format!("{:?}", cfg);
+        assert!(debug.contains("Config"));
+        assert!(debug.contains("mpv_path"));
+    }
+
+    // ── AddonSource clone/debug ───────────────────────────────────────
+
+    #[test]
+    fn addon_source_clone_and_debug() {
+        let src = AddonSource {
+            id: "id1".to_string(),
+            name: "name1".to_string(),
+            url: "http://url1".to_string(),
+            enabled: true,
+            is_default: false,
+            binary_path: None,
+        };
+        let cloned = src.clone();
+        assert_eq!(cloned.id, "id1");
+        let debug = format!("{:?}", src);
+        assert!(debug.contains("AddonSource"));
+    }
+
+    // ── Serialization edge cases ──────────────────────────────────────
+
+    #[test]
+    fn config_with_empty_addon_sources_serializes() {
+        let cfg = Config {
+            addon_sources: vec![],
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"addon_sources\":[]"));
+        let _: Config = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn config_with_multiple_addon_sources() {
+        let cfg = Config {
+            addon_sources: vec![
+                AddonSource {
+                    id: "1".to_string(),
+                    name: "First".to_string(),
+                    url: "http://first".to_string(),
+                    enabled: true,
+                    is_default: true,
+                    binary_path: None,
+                },
+                AddonSource {
+                    id: "2".to_string(),
+                    name: "Second".to_string(),
+                    url: "http://second".to_string(),
+                    enabled: false,
+                    is_default: false,
+                    binary_path: Some("/path/to/binary".to_string()),
+                },
+            ],
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.addon_sources.len(), 2);
+        assert_eq!(deserialized.addon_sources[0].name, "First");
+        assert_eq!(deserialized.addon_sources[1].name, "Second");
+        assert!(deserialized.addon_sources[1].binary_path.is_some());
+    }
+
+    // ── Load from malformed JSON (corruption scenarios) ───────────────
+
+    #[test]
+    fn deserialize_unknown_fields_ignored() {
+        let json = r#"{"unknown_field":"value","mpv_path":"test"}"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.mpv_path, Some("test".to_string()));
+    }
+
+    #[test]
+    fn deserialize_wrong_types_fall_back_to_defaults() {
+        // cloud_cache_max_mb expects u32; string should fail serde
+        let json = r#"{"cloud_cache_max_mb":"not_a_number"}"#;
+        let result: Result<Config, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+}

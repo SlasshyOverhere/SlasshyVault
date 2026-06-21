@@ -5199,10 +5199,26 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::*;
     use rusqlite::Connection;
     use std::fs;
+    use std::path::PathBuf;
     use uuid::Uuid;
+
+    /// Create a temp DB, return (db, path) so caller can clean up.
+    fn make_db() -> (Database, PathBuf) {
+        let db_path =
+            std::env::temp_dir().join(format!("slasshyvault-db-test-{}.db", Uuid::new_v4()));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        (db, db_path)
+    }
+
+    fn cleanup(db: Database, db_path: PathBuf) {
+        drop(db);
+        let _ = fs::remove_file(db_path);
+    }
+
+    // ==================== INIT / MIGRATION ====================
 
     #[test]
     fn init_migrates_legacy_media_table_before_creating_indexes() {
@@ -5263,10 +5279,706 @@ mod tests {
     }
 
     #[test]
+    fn init_creates_all_tables() {
+        let (db, db_path) = make_db();
+        let table_names: Vec<String> = {
+            let mut stmt = db
+                .conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(table_names.contains(&"media".to_string()));
+        assert!(table_names.contains(&"app_settings".to_string()));
+        assert!(table_names.contains(&"movie_reminders".to_string()));
+        assert!(table_names.contains(&"watchlist_items".to_string()));
+        assert!(table_names.contains(&"cloud_folders".to_string()));
+        assert!(table_names.contains(&"ddl_sources".to_string()));
+        assert!(table_names.contains(&"zip_archives".to_string()));
+        assert!(table_names.contains(&"watch_history_events".to_string()));
+        assert!(table_names.contains(&"streaming_history".to_string()));
+        cleanup(db, db_path);
+    }
+
+    // ==================== CRUD: INSERT ====================
+
+    #[test]
+    fn insert_movie_returns_id_and_persists() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie(
+                "Test Movie",
+                Some(2024),
+                Some("An overview"),
+                Some("Actor A"),
+                Some("Director X"),
+                Some("/poster.jpg"),
+                "/movies/test.mkv",
+                7200.0,
+                Some("tmdb123"),
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.title, "Test Movie");
+        assert_eq!(item.year, Some(2024));
+        assert_eq!(item.overview.as_deref(), Some("An overview"));
+        assert_eq!(item.cast_names.as_deref(), Some("Actor A"));
+        assert_eq!(item.director.as_deref(), Some("Director X"));
+        assert_eq!(item.poster_path.as_deref(), Some("/poster.jpg"));
+        assert_eq!(item.file_path.as_deref(), Some("/movies/test.mkv"));
+        assert_eq!(item.media_type, "movie");
+        assert_eq!(item.duration_seconds, Some(7200.0));
+        assert_eq!(item.tmdb_id.as_deref(), Some("tmdb123"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_tvshow_returns_id_and_persists() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_tvshow(
+                "Test Show",
+                Some(2023),
+                Some("Show overview"),
+                Some("Actor B"),
+                Some("/show_poster.jpg"),
+                "/tv/test-show",
+                Some("tmdb456"),
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.title, "Test Show");
+        assert_eq!(item.year, Some(2023));
+        assert_eq!(item.media_type, "tvshow");
+        assert_eq!(item.tmdb_id.as_deref(), Some("tmdb456"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_episode_returns_id_and_persists() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", Some(2024), None, None, None, "/tv/show", None)
+            .unwrap();
+        let ep_id = db
+            .insert_episode("Pilot", "/tv/show/s01e01.mkv", show_id, 1, 1, 2400.0)
+            .unwrap();
+        assert!(ep_id > 0);
+
+        let item = db.get_media_by_id(ep_id).unwrap();
+        assert_eq!(item.title, "Pilot");
+        assert_eq!(item.media_type, "tvepisode");
+        assert_eq!(item.parent_id, Some(show_id));
+        assert_eq!(item.season_number, Some(1));
+        assert_eq!(item.episode_number, Some(1));
+        assert_eq!(item.duration_seconds, Some(2400.0));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_episode_with_metadata_persists_all_fields() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        let ep_id = db
+            .insert_episode_with_metadata(
+                "Show",
+                "/tv/show/s01e02.mkv",
+                show_id,
+                1,
+                2,
+                2500.0,
+                Some("The Second"),
+                Some("Episode overview"),
+                Some("/still.jpg"),
+            )
+            .unwrap();
+
+        let item = db.get_media_by_id(ep_id).unwrap();
+        assert_eq!(item.episode_title.as_deref(), Some("The Second"));
+        assert_eq!(item.overview.as_deref(), Some("Episode overview"));
+        assert_eq!(item.still_path.as_deref(), Some("/still.jpg"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== CRUD: REMOVE ====================
+
+    #[test]
+    fn remove_media_returns_poster_path_and_deletes() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie(
+                "To Delete",
+                None,
+                None,
+                None,
+                None,
+                Some("/poster.jpg"),
+                "/del.mkv",
+                0.0,
+                None,
+            )
+            .unwrap();
+        let poster = db.remove_media(id).unwrap();
+        assert_eq!(poster.as_deref(), Some("/poster.jpg"));
+
+        // Verify deleted
+        assert!(db.get_media_by_id(id).is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn remove_media_by_file_path_returns_info_and_deletes() {
+        let (db, db_path) = make_db();
+        db.insert_movie(
+            "Path Movie",
+            None,
+            None,
+            None,
+            None,
+            Some("/p.jpg"),
+            "/path/movie.mkv",
+            0.0,
+            None,
+        )
+        .unwrap();
+
+        let info = db.remove_media_by_file_path("/path/movie.mkv").unwrap();
+        assert!(info.is_some());
+        let (id, title, poster, _still) = info.unwrap();
+        assert!(id > 0);
+        assert_eq!(title, "Path Movie");
+        assert_eq!(poster.as_deref(), Some("/p.jpg"));
+
+        // Verify deleted
+        assert!(db.remove_media_by_file_path("/path/movie.mkv").unwrap().is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn remove_series_episodes_deletes_all_children() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        db.insert_episode("Ep1", "/tv/show/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+        db.insert_episode("Ep2", "/tv/show/s01e02.mkv", show_id, 1, 2, 0.0)
+            .unwrap();
+
+        db.remove_series_episodes(show_id).unwrap();
+        let eps = db.get_episodes(show_id).unwrap();
+        assert!(eps.is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CRUD: GET / QUERY ====================
+
+    #[test]
+    fn get_media_by_id_not_found_returns_err() {
+        let (db, db_path) = make_db();
+        assert!(db.get_media_by_id(99999).is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_library_returns_items_by_type() {
+        let (db, db_path) = make_db();
+        db.insert_movie("Alpha", None, None, None, None, None, "/a.mkv", 0.0, None)
+            .unwrap();
+        db.insert_movie("Beta", None, None, None, None, None, "/b.mkv", 0.0, None)
+            .unwrap();
+        db.insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+
+        let movies = db.get_library("movie", None).unwrap();
+        assert_eq!(movies.len(), 2);
+        let shows = db.get_library("tvshow", None).unwrap();
+        assert_eq!(shows.len(), 1);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_library_search_filters_by_title() {
+        let (db, db_path) = make_db();
+        db.insert_movie("Alpha", None, None, None, None, None, "/a.mkv", 0.0, None)
+            .unwrap();
+        db.insert_movie("Beta", None, None, None, None, None, "/b.mkv", 0.0, None)
+            .unwrap();
+
+        let found = db.get_library("movie", Some("lph")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Alpha");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_library_filtered_by_cloud_status() {
+        let (db, db_path) = make_db();
+        db.insert_movie("Local", None, None, None, None, None, "/local.mkv", 0.0, None)
+            .unwrap();
+        db.insert_cloud_movie(
+            "Cloud",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "cloud.mkv",
+            "cf1",
+            "folder1",
+            0.0,
+            None,
+        )
+        .unwrap();
+
+        let local_only = db.get_library_filtered("movie", None, Some(false)).unwrap();
+        assert_eq!(local_only.len(), 1);
+        assert_eq!(local_only[0].title, "Local");
+
+        let cloud_only = db.get_library_filtered("movie", None, Some(true)).unwrap();
+        assert_eq!(cloud_only.len(), 1);
+        assert_eq!(cloud_only[0].title, "Cloud");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_recently_added_returns_limited_results() {
+        let (db, db_path) = make_db();
+        for i in 0..5 {
+            db.insert_movie(
+                &format!("Movie {}", i),
+                None,
+                None,
+                None,
+                None,
+                None,
+                &format!("/m{}.mkv", i),
+                0.0,
+                None,
+            )
+            .unwrap();
+        }
+
+        let recent = db.get_recently_added(3, None).unwrap();
+        assert_eq!(recent.len(), 3);
+        // Should be ordered by id DESC
+        assert_eq!(recent[0].title, "Movie 4");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_episodes_returns_children_ordered() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        db.insert_episode("Ep2", "/s01e02.mkv", show_id, 1, 2, 0.0)
+            .unwrap();
+        db.insert_episode("Ep1", "/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+        db.insert_episode("Ep3", "/s02e01.mkv", show_id, 2, 1, 0.0)
+            .unwrap();
+
+        let eps = db.get_episodes(show_id).unwrap();
+        assert_eq!(eps.len(), 3);
+        // Ordered by season, episode
+        assert_eq!(eps[0].episode_number, Some(1));
+        assert_eq!(eps[1].episode_number, Some(2));
+        assert_eq!(eps[2].season_number, Some(2));
+        cleanup(db, db_path);
+    }
+
+    // ==================== WATCH HISTORY ====================
+
+    #[test]
+    fn update_progress_sets_resume_position() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 7200.0, None)
+            .unwrap();
+
+        db.update_progress(id, 3600.0, 7200.0).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.resume_position_seconds, Some(3600.0));
+        assert_eq!(item.duration_seconds, Some(7200.0));
+        assert!(item.last_watched.is_some());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn update_progress_near_end_clears_position() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 7200.0, None)
+            .unwrap();
+
+        // 95% watched -> should clear progress (threshold is 93%)
+        db.update_progress(id, 6840.0, 7200.0).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.resume_position_seconds, Some(0.0));
+        assert!(item.last_watched.is_some());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_resume_info_returns_correct_state() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 3600.0, None)
+            .unwrap();
+
+        // No progress yet
+        let info = db.get_resume_info(id).unwrap();
+        assert!(!info.has_progress);
+        assert_eq!(info.position, 0.0);
+
+        // Set progress
+        db.update_progress(id, 1800.0, 3600.0).unwrap();
+        let info = db.get_resume_info(id).unwrap();
+        assert!(info.has_progress);
+        assert!((info.position - 1800.0).abs() < 1.0);
+        assert!((info.progress_percent - 50.0).abs() < 1.0);
+        assert_eq!(info.time_str, "00:30:00");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn clear_progress_resets_position() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 3600.0, None)
+            .unwrap();
+        db.update_progress(id, 1800.0, 3600.0).unwrap();
+        db.clear_progress(id).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.resume_position_seconds, Some(0.0));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_watch_history_returns_watched_items() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Watched", None, None, None, None, None, "/w.mkv", 3600.0, None)
+            .unwrap();
+        db.update_progress(id, 1800.0, 3600.0).unwrap();
+
+        let history = db.get_watch_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].title, "Watched");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_watch_history_excludes_unwatched() {
+        let (db, db_path) = make_db();
+        db.insert_movie("Unwatched", None, None, None, None, None, "/u.mkv", 3600.0, None)
+            .unwrap();
+
+        let history = db.get_watch_history(10).unwrap();
+        assert!(history.is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn record_watch_event_creates_event() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 3600.0, None)
+            .unwrap();
+
+        // update_progress calls record_watch_event internally for plays >= 10s
+        db.update_progress(id, 1800.0, 3600.0).unwrap();
+
+        let events = db.get_watch_history_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "Movie");
+        assert_eq!(events[0].media_type, "movie");
+        assert!(!events[0].completed);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn record_watch_event_marks_completed() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 3600.0, None)
+            .unwrap();
+
+        // 95% -> completed
+        db.update_progress(id, 3420.0, 3600.0).unwrap();
+
+        let events = db.get_watch_history_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].completed);
+        cleanup(db, db_path);
+    }
+
+    // ==================== SETTINGS ====================
+
+    #[test]
+    fn setting_roundtrip() {
+        let (db, db_path) = make_db();
+
+        assert!(db.get_setting("nonexistent").unwrap().is_none());
+
+        db.set_setting("theme", "dark").unwrap();
+        let val = db.get_setting("theme").unwrap();
+        assert_eq!(val.as_deref(), Some("dark"));
+
+        // Overwrite
+        db.set_setting("theme", "light").unwrap();
+        let val = db.get_setting("theme").unwrap();
+        assert_eq!(val.as_deref(), Some("light"));
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLOUD ====================
+
+    #[test]
+    fn insert_cloud_movie_persists() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_cloud_movie(
+                "Cloud Movie",
+                Some(2024),
+                Some("Cloud overview"),
+                None,
+                None,
+                None,
+                "cloud.mkv",
+                "file-123",
+                "folder-abc",
+                5400.0,
+                Some("tmdb-cloud"),
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.title, "Cloud Movie");
+        assert_eq!(item.is_cloud, Some(true));
+        assert_eq!(item.cloud_file_id.as_deref(), Some("file-123"));
+        assert_eq!(item.file_path, Some("gdrive:file-123".to_string()));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_cloud_tvshow_persists() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_cloud_tvshow(
+                "Cloud Show",
+                Some(2023),
+                None,
+                None,
+                None,
+                "cloud-show-folder",
+                "folder-xyz",
+                Some("tmdb-show"),
+            )
+            .unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.media_type, "tvshow");
+        assert_eq!(item.is_cloud, Some(true));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn cloud_folders_crud() {
+        let (db, db_path) = make_db();
+
+        // Empty
+        let folders = db.get_cloud_folders().unwrap();
+        assert!(folders.is_empty());
+
+        // Add
+        let _ = db.add_cloud_folder("f1", "My Folder").unwrap();
+        let _ = db.add_cloud_folder("f2", "Other Folder").unwrap();
+        let folders = db.get_cloud_folders().unwrap();
+        assert_eq!(folders.len(), 2);
+
+        // Remove
+        let removed = db.remove_cloud_folder("f1").unwrap();
+        assert_eq!(removed, 1);
+        let folders = db.get_cloud_folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].0, "f2");
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== ZIP ARCHIVES ====================
+
+    #[test]
+    fn zip_archive_roundtrip() {
+        let (db, db_path) = make_db();
+        let archive = zip_manager::ZipArchiveInfo {
+            zip_file_id: "zip-001".to_string(),
+            filename: "test.zip".to_string(),
+            archive_format: "zip".to_string(),
+            file_size_bytes: 1024000,
+            compression_type: crate::zip_parser::ZipCompressionType::Deflate,
+            central_dir_offset: 1020000,
+            central_dir_size: 4000,
+            total_entries: 10,
+            video_entries: 3,
+        };
+
+        db.insert_zip_archive(&archive).unwrap();
+
+        let record = db.get_zip_archive("zip-001").unwrap();
+        assert_eq!(record.zip_file_id, "zip-001");
+        assert_eq!(record.filename, "test.zip");
+        assert_eq!(record.archive_format, "zip");
+        assert_eq!(record.file_size_bytes, 1024000);
+        assert_eq!(record.total_entries, 10);
+        assert_eq!(record.video_entries, 3);
+
+        // Delete
+        let deleted = db.delete_zip_archive("zip-001").unwrap();
+        assert_eq!(deleted, 1);
+
+        // Verify deleted
+        assert!(db.get_zip_archive("zip-001").is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_zip_archive_upserts_on_conflict() {
+        let (db, db_path) = make_db();
+        let archive = zip_manager::ZipArchiveInfo {
+            zip_file_id: "zip-upsert".to_string(),
+            filename: "original.zip".to_string(),
+            archive_format: "zip".to_string(),
+            file_size_bytes: 500,
+            compression_type: crate::zip_parser::ZipCompressionType::Deflate,
+            central_dir_offset: 400,
+            central_dir_size: 100,
+            total_entries: 5,
+            video_entries: 1,
+        };
+        db.insert_zip_archive(&archive).unwrap();
+
+        // Upsert with different data
+        let updated = zip_manager::ZipArchiveInfo {
+            zip_file_id: "zip-upsert".to_string(),
+            filename: "updated.zip".to_string(),
+            archive_format: "7z".to_string(),
+            file_size_bytes: 800,
+            compression_type: crate::zip_parser::ZipCompressionType::Store,
+            central_dir_offset: 700,
+            central_dir_size: 100,
+            total_entries: 8,
+            video_entries: 2,
+        };
+        db.insert_zip_archive(&updated).unwrap();
+
+        let record = db.get_zip_archive("zip-upsert").unwrap();
+        assert_eq!(record.filename, "updated.zip");
+        assert_eq!(record.archive_format, "7z");
+        assert_eq!(record.file_size_bytes, 800);
+        assert_eq!(record.total_entries, 8);
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== METADATA ====================
+
+    #[test]
+    fn update_poster_path_changes_path() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None)
+            .unwrap();
+
+        db.update_poster_path(id, "/new_poster.jpg").unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.poster_path.as_deref(), Some("/new_poster.jpg"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn update_metadata_changes_fields() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Old Title", None, None, None, None, None, "/m.mkv", 0.0, None)
+            .unwrap();
+
+        let meta = crate::tmdb::TmdbMetadata {
+            title: "New Title".to_string(),
+            year: Some(2025),
+            overview: Some("Great movie".to_string()),
+            cast_names: Some("Actor 1, Actor 2".to_string()),
+            director: Some("Director Y".to_string()),
+            poster_path: Some("/new_poster.jpg".to_string()),
+            tmdb_id: Some("tmdb999".to_string()),
+            imdb_id: Some("imdb999".to_string()),
+            runtime_seconds: Some(5400.0),
+            imdb_image_url: None,
+        };
+        db.update_metadata(id, &meta).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.title, "New Title");
+        assert_eq!(item.year, Some(2025));
+        assert_eq!(item.overview.as_deref(), Some("Great movie"));
+        assert_eq!(item.cast_names.as_deref(), Some("Actor 1, Actor 2"));
+        assert_eq!(item.director.as_deref(), Some("Director Y"));
+        assert_eq!(item.poster_path.as_deref(), Some("/new_poster.jpg"));
+        assert_eq!(item.tmdb_id.as_deref(), Some("tmdb999"));
+        // Duration should be set since it was 0
+        assert_eq!(item.duration_seconds, Some(5400.0));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn update_metadata_preserves_existing_duration() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("M", None, None, None, None, None, "/m.mkv", 3600.0, None)
+            .unwrap();
+
+        let meta = crate::tmdb::TmdbMetadata {
+            title: "M".to_string(),
+            year: None,
+            overview: None,
+            cast_names: None,
+            director: None,
+            poster_path: None,
+            tmdb_id: None,
+            imdb_id: None,
+            runtime_seconds: Some(5400.0),
+            imdb_image_url: None,
+        };
+        db.update_metadata(id, &meta).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        // Duration should NOT change because it was already > 0
+        assert_eq!(item.duration_seconds, Some(3600.0));
+        cleanup(db, db_path);
+    }
+
+    // ==================== STATS ====================
+
+    #[test]
     fn get_library_stats_returns_counts_without_loading_rows() {
-        let db_path =
-            std::env::temp_dir().join(format!("slasshyvault-db-stats-test-{}.db", Uuid::new_v4()));
-        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        let (db, db_path) = make_db();
 
         db.insert_movie(
             "Movie One",
@@ -5320,7 +6032,1644 @@ mod tests {
         assert_eq!(cloud_stats.shows, 1);
         assert_eq!(cloud_stats.episodes, 0);
 
-        drop(db);
-        let _ = fs::remove_file(db_path);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_watch_stats_returns_zero_on_empty_db() {
+        let (db, db_path) = make_db();
+        let stats = db.get_watch_stats().unwrap();
+        assert_eq!(stats.movies_watched, 0);
+        assert_eq!(stats.episodes_watched, 0);
+        assert_eq!(stats.total_watch_time_seconds, 0.0);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_watch_stats_counts_completed_media() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 7200.0, None)
+            .unwrap();
+
+        // Mark as watched (progress near end clears resume position)
+        db.update_progress(id, 7000.0, 7200.0).unwrap();
+
+        let stats = db.get_watch_stats().unwrap();
+        assert_eq!(stats.movies_watched, 1);
+        assert!(stats.total_watch_time_seconds > 0.0);
+        cleanup(db, db_path);
+    }
+
+    // ==================== ANALYTICS ====================
+
+    #[test]
+    fn get_analytics_data_returns_structured_data() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("Movie", None, None, None, None, None, "/m.mkv", 7200.0, None)
+            .unwrap();
+        db.update_progress(id, 1800.0, 7200.0).unwrap();
+
+        let analytics = db.get_analytics_data().unwrap();
+        // Should have at least one recent event
+        assert!(!analytics.recent_events.is_empty());
+        // Library stats should reflect the movie
+        assert_eq!(analytics.library_stats.movies, 1);
+        // Overview should be populated
+        assert!(analytics.overview.total_events > 0);
+        cleanup(db, db_path);
+    }
+
+    // ==================== DDL SOURCES ====================
+
+    #[test]
+    fn ddl_source_roundtrip() {
+        let (db, db_path) = make_db();
+
+        db.upsert_ddl_source(
+            "ddl-1",
+            "https://example.com/file.zip",
+            "file.zip",
+            1024000,
+            "zip",
+            5,
+            3,
+            1000,
+            500,
+            None,
+        )
+        .unwrap();
+
+        let sources = db.get_ddl_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, "ddl-1");
+        assert_eq!(sources[0].url, "https://example.com/file.zip");
+        assert_eq!(sources[0].filename, "file.zip");
+        assert_eq!(sources[0].file_size, 1024000);
+        assert!(!sources[0].is_expired);
+
+        let source = db.get_ddl_source("ddl-1").unwrap();
+        assert_eq!(source.id, "ddl-1");
+
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn ddl_source_upsert_updates_on_conflict() {
+        let (db, db_path) = make_db();
+
+        db.upsert_ddl_source("ddl-2", "https://old.url", "old.zip", 100, "zip", 1, 1, 0, 0, None)
+            .unwrap();
+
+        db.upsert_ddl_source(
+            "ddl-2",
+            "https://new.url",
+            "new.zip",
+            200,
+            "7z",
+            5,
+            3,
+            100,
+            50,
+            Some("addon:123"),
+        )
+        .unwrap();
+
+        let sources = db.get_ddl_sources().unwrap();
+        assert_eq!(sources.len(), 1); // still one record
+        assert_eq!(sources[0].url, "https://new.url");
+        assert_eq!(sources[0].filename, "new.zip");
+        assert_eq!(sources[0].file_size, 200);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn delete_ddl_source_and_media_removes_all() {
+        let (db, db_path) = make_db();
+
+        db.upsert_ddl_source(
+            "ddl-del",
+            "https://example.com/file.zip",
+            "file.zip",
+            1024,
+            "zip",
+            2,
+            1,
+            0,
+            0,
+            None,
+        )
+        .unwrap();
+
+        // Insert a DDL media item linked to this source
+        db.insert_ddl_episode("DDL Ep", None, Some(1), Some(1), "ddl-del", "zip", "ep1.mkv", 0, 0, 0, 0, "", 0, None, None, None)
+            .unwrap();
+
+        let deleted = db.delete_ddl_source_and_media("ddl-del").unwrap();
+        assert_eq!(deleted, 1);
+
+        // Source should be gone
+        assert!(db.get_ddl_source("ddl-del").is_err());
+        let sources = db.get_ddl_sources().unwrap();
+        assert!(sources.is_empty());
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== WATCHLIST ====================
+
+    #[test]
+    fn watchlist_item_create_and_get() {
+        let (db, db_path) = make_db();
+
+        let item = db
+            .create_or_update_watchlist_item(NewWatchlistItem {
+                tmdb_id: "tmdb-wl-1",
+                media_type: "movie",
+                title: "Watchlist Movie",
+                poster_path: Some("/wl.jpg"),
+                release_date: Some("2025-06-01"),
+                notes: Some("Looks good"),
+                is_active: true,
+                notification_enabled: false,
+                notification_mode: "off",
+                notification_interval_minutes: None,
+                notify_at: None,
+            })
+            .unwrap();
+
+        assert!(item.id > 0);
+        assert_eq!(item.tmdb_id, "tmdb-wl-1");
+        assert_eq!(item.title, "Watchlist Movie");
+        assert!(item.is_active);
+
+        // Get by ID
+        let fetched = db.get_watchlist_item(item.id).unwrap();
+        assert_eq!(fetched.title, "Watchlist Movie");
+
+        // Get all
+        let all = db.get_watchlist_items(false).unwrap();
+        assert_eq!(all.len(), 1);
+
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn watchlist_upsert_updates_on_conflict() {
+        let (db, db_path) = make_db();
+
+        db.create_or_update_watchlist_item(NewWatchlistItem {
+            tmdb_id: "tmdb-up",
+            media_type: "movie",
+            title: "Old Title",
+            poster_path: None,
+            release_date: None,
+            notes: None,
+            is_active: true,
+            notification_enabled: false,
+            notification_mode: "off",
+            notification_interval_minutes: None,
+            notify_at: None,
+        })
+        .unwrap();
+
+        let updated = db
+            .create_or_update_watchlist_item(NewWatchlistItem {
+                tmdb_id: "tmdb-up",
+                media_type: "movie",
+                title: "New Title",
+                poster_path: Some("/new.jpg"),
+                release_date: Some("2026-01-01"),
+                notes: Some("Updated notes"),
+                is_active: false,
+                notification_enabled: true,
+                notification_mode: "release",
+                notification_interval_minutes: Some(60),
+                notify_at: Some("2026-01-01T00:00:00Z"),
+            })
+            .unwrap();
+
+        assert_eq!(updated.title, "New Title");
+        assert_eq!(updated.poster_path.as_deref(), Some("/new.jpg"));
+        assert!(!updated.is_active);
+        assert!(updated.notification_enabled);
+
+        // Only one record
+        let all = db.get_watchlist_items(true).unwrap();
+        assert_eq!(all.len(), 1);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn delete_watchlist_item_removes_record() {
+        let (db, db_path) = make_db();
+
+        let item = db
+            .create_or_update_watchlist_item(NewWatchlistItem {
+                tmdb_id: "tmdb-del",
+                media_type: "movie",
+                title: "To Delete",
+                poster_path: None,
+                release_date: None,
+                notes: None,
+                is_active: true,
+                notification_enabled: false,
+                notification_mode: "off",
+                notification_interval_minutes: None,
+                notify_at: None,
+            })
+            .unwrap();
+
+        db.delete_watchlist_item(item.id).unwrap();
+
+        let all = db.get_watchlist_items(true).unwrap();
+        assert!(all.is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== MOVIE REMINDERS ====================
+
+    #[test]
+    fn movie_reminder_create_and_get() {
+        let (db, db_path) = make_db();
+
+        let reminder = db
+            .create_movie_reminder(NewMovieReminder {
+                tmdb_id: "tmdb-rem-1",
+                media_type: "movie",
+                title: "Upcoming Movie",
+                poster_path: Some("/rem.jpg"),
+                season_number: None,
+                episode_number: None,
+                release_date: Some("2026-12-25"),
+                reminder_at: "2026-12-20T00:00:00Z",
+                source: "tmdb",
+                tracking_mode: "single",
+                tracking_season_number: None,
+                notes: Some("Don't miss it"),
+                is_active: true,
+            })
+            .unwrap();
+
+        assert!(reminder.id > 0);
+        assert_eq!(reminder.title, "Upcoming Movie");
+        assert!(reminder.is_active);
+
+        // Get by ID
+        let fetched = db.get_movie_reminder(reminder.id).unwrap();
+        assert_eq!(fetched.title, "Upcoming Movie");
+
+        // Get all (active only)
+        let all = db.get_movie_reminders(false).unwrap();
+        assert_eq!(all.len(), 1);
+
+        // Get all including inactive
+        db.set_movie_reminder_active(reminder.id, false).unwrap();
+        let all = db.get_movie_reminders(false).unwrap();
+        assert!(all.is_empty());
+        let all_incl = db.get_movie_reminders(true).unwrap();
+        assert_eq!(all_incl.len(), 1);
+
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn delete_movie_reminder_removes_record() {
+        let (db, db_path) = make_db();
+
+        let reminder = db
+            .create_movie_reminder(NewMovieReminder {
+                tmdb_id: "tmdb-del",
+                media_type: "movie",
+                title: "To Delete",
+                poster_path: None,
+                season_number: None,
+                episode_number: None,
+                release_date: None,
+                reminder_at: "2026-01-01T00:00:00Z",
+                source: "tmdb",
+                tracking_mode: "single",
+                tracking_season_number: None,
+                notes: None,
+                is_active: true,
+            })
+            .unwrap();
+
+        db.delete_movie_reminder(reminder.id).unwrap();
+        assert!(db.get_movie_reminder(reminder.id).is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_due_movie_reminders_returns_overdue() {
+        let (db, db_path) = make_db();
+
+        // Past reminder
+        db.create_movie_reminder(NewMovieReminder {
+            tmdb_id: "tmdb-due",
+            media_type: "movie",
+            title: "Due",
+            poster_path: None,
+            season_number: None,
+            episode_number: None,
+            release_date: None,
+            reminder_at: "2020-01-01T00:00:00Z",
+            source: "tmdb",
+            tracking_mode: "single",
+            tracking_season_number: None,
+            notes: None,
+            is_active: true,
+        })
+        .unwrap();
+
+        // Future reminder
+        db.create_movie_reminder(NewMovieReminder {
+            tmdb_id: "tmdb-future",
+            media_type: "movie",
+            title: "Future",
+            poster_path: None,
+            season_number: None,
+            episode_number: None,
+            release_date: None,
+            reminder_at: "2099-01-01T00:00:00Z",
+            source: "tmdb",
+            tracking_mode: "single",
+            tracking_season_number: None,
+            notes: None,
+            is_active: true,
+        })
+        .unwrap();
+
+        let due = db.get_due_movie_reminders("2025-01-01T00:00:00Z").unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].title, "Due");
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== ADDITIONAL CRUD METHODS ====================
+
+    #[test]
+    fn get_all_file_paths_returns_non_tvshow_paths() {
+        let (db, db_path) = make_db();
+        db.insert_movie("M", None, None, None, None, None, "/movies/m.mkv", 0.0, None)
+            .unwrap();
+        db.insert_tvshow("S", None, None, None, None, "/tv/s", None)
+            .unwrap();
+        db.insert_episode("E", "/tv/s/s01e01.mp4", 2, 1, 1, 0.0)
+            .unwrap();
+
+        let paths = db.get_all_file_paths().unwrap();
+        assert!(paths.contains(&"/movies/m.mkv".to_string()));
+        assert!(paths.contains(&"/tv/s/s01e01.mp4".to_string()));
+        // tvshow folder path should be excluded
+        assert!(!paths.iter().any(|p| p == "/tv/s"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_media_by_file_path_finds_existing() {
+        let (db, db_path) = make_db();
+        db.insert_movie("M", None, None, None, None, None, "/find/me.mkv", 0.0, None)
+            .unwrap();
+
+        let found = db.get_media_by_file_path("/find/me.mkv").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().title, "M");
+
+        let not_found = db.get_media_by_file_path("/nope.mkv").unwrap();
+        assert!(not_found.is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn cleanup_empty_series_removes_childless_shows() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Empty", None, None, None, None, "/tv/empty", None)
+            .unwrap();
+
+        let cleaned = db.cleanup_empty_series().unwrap();
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(cleaned[0].0, show_id);
+
+        // Verify deleted
+        assert!(db.get_media_by_id(show_id).is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn cleanup_empty_series_keeps_shows_with_episodes() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("HasEps", None, None, None, None, "/tv/he", None)
+            .unwrap();
+        db.insert_episode("Ep", "/tv/he/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+
+        let cleaned = db.cleanup_empty_series().unwrap();
+        assert!(cleaned.is_empty());
+
+        // Show still exists
+        assert!(db.get_media_by_id(show_id).is_ok());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn find_series_by_folder_returns_show_id() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+
+        let found = db.find_series_by_folder("/tv/show").unwrap();
+        assert_eq!(found, Some(show_id));
+
+        let not_found = db.find_series_by_folder("/tv/other").unwrap();
+        assert!(not_found.is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_media_file_paths_returns_paths_for_ids() {
+        let (db, db_path) = make_db();
+        let id1 = db
+            .insert_movie("A", None, None, None, None, None, "/a.mkv", 0.0, None)
+            .unwrap();
+        let id2 = db
+            .insert_movie("B", None, None, None, None, None, "/b.mkv", 0.0, None)
+            .unwrap();
+
+        let paths = db.get_media_file_paths(&[id1, id2]).unwrap();
+        assert_eq!(paths.len(), 2);
+
+        let empty = db.get_media_file_paths(&[]).unwrap();
+        assert!(empty.is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_parent_series_ids_returns_unique_parents() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/s", None)
+            .unwrap();
+        let ep1 = db
+            .insert_episode("E1", "/tv/s/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+        let ep2 = db
+            .insert_episode("E2", "/tv/s/s01e02.mkv", show_id, 1, 2, 0.0)
+            .unwrap();
+
+        let parents = db.get_parent_series_ids(&[ep1, ep2]).unwrap();
+        assert_eq!(parents.len(), 1);
+        assert_eq!(parents[0], show_id);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn series_has_episodes_returns_correctly() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/s", None)
+            .unwrap();
+
+        assert!(!db.series_has_episodes(show_id).unwrap());
+
+        db.insert_episode("E1", "/tv/s/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+
+        assert!(db.series_has_episodes(show_id).unwrap());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn delete_media_entries_removes_multiple() {
+        let (db, db_path) = make_db();
+        let id1 = db
+            .insert_movie("A", None, None, None, None, Some("/poster_a.jpg"), "/a.mkv", 0.0, None)
+            .unwrap();
+        let id2 = db
+            .insert_movie("B", None, None, None, None, Some("/poster_b.jpg"), "/b.mkv", 0.0, None)
+            .unwrap();
+
+        let posters = db.delete_media_entries(&[id1, id2]).unwrap();
+        assert_eq!(posters.len(), 2);
+
+        assert!(db.get_media_by_id(id1).is_err());
+        assert!(db.get_media_by_id(id2).is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLEAR ALL DATA ====================
+
+    #[test]
+    fn clear_all_data_removes_everything() {
+        let (db, db_path) = make_db();
+        db.insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None)
+            .unwrap();
+        db.set_setting("key", "val").unwrap();
+
+        let result = db.clear_all_data().unwrap();
+        assert!(!result.is_empty());
+
+        let stats = db.get_library_stats(None).unwrap();
+        assert_eq!(stats.movies, 0);
+        assert!(db.get_setting("key").unwrap().is_none());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLOUD MEDIA QUERIES ====================
+
+    #[test]
+    fn cloud_file_exists_returns_correctly() {
+        let (db, db_path) = make_db();
+        assert!(!db.cloud_file_exists("cf-1"));
+
+        db.insert_cloud_movie(
+            "Cloud M",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "cloud.mkv",
+            "cf-1",
+            "folder-1",
+            0.0,
+            None,
+        )
+        .unwrap();
+
+        assert!(db.cloud_file_exists("cf-1"));
+        assert!(!db.cloud_file_exists("cf-99"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_cloud_file_ids_for_folder_returns_ids() {
+        let (db, db_path) = make_db();
+        db.insert_cloud_movie(
+            "A",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "a.mkv",
+            "cf-a",
+            "folder-1",
+            0.0,
+            None,
+        )
+        .unwrap();
+        db.insert_cloud_movie(
+            "B",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "b.mkv",
+            "cf-b",
+            "folder-1",
+            0.0,
+            None,
+        )
+        .unwrap();
+
+        let ids = db.get_cloud_file_ids_for_folder("folder-1").unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"cf-a".to_string()));
+        assert!(ids.contains(&"cf-b".to_string()));
+        cleanup(db, db_path);
+    }
+
+    // ==================== CACHED EPISODE METADATA ====================
+
+    #[test]
+    fn cached_episode_metadata_roundtrip() {
+        let (db, db_path) = make_db();
+
+        db.save_cached_episode_metadata(
+            "tmdb-show-1",
+            1,
+            1,
+            Some("Pilot Episode"),
+            Some("The first episode"),
+            Some("/still/pilot.jpg"),
+            Some("2024-01-01"),
+            Some(8.5),
+        )
+        .unwrap();
+
+        let meta = db
+            .get_cached_episode_metadata("tmdb-show-1", 1, 1)
+            .unwrap();
+        assert!(meta.is_some());
+        let m = meta.unwrap();
+        assert_eq!(m.episode_title.as_deref(), Some("Pilot Episode"));
+        assert_eq!(m.overview.as_deref(), Some("The first episode"));
+        assert_eq!(m.still_path.as_deref(), Some("/still/pilot.jpg"));
+        assert_eq!(m.vote_average, Some(8.5));
+
+        assert!(db.has_cached_metadata_for_series("tmdb-show-1").unwrap());
+        assert!(!db.has_cached_metadata_for_series("tmdb-show-99").unwrap());
+
+        let cleared = db.clear_cached_metadata_for_series("tmdb-show-1").unwrap();
+        assert_eq!(cleared, 1);
+        assert!(!db.has_cached_metadata_for_series("tmdb-show-1").unwrap());
+        cleanup(db, db_path);
+    }
+
+    // ==================== EPISODE METADATA UPDATE ====================
+
+    #[test]
+    fn update_episode_metadata_changes_fields() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        let ep_id = db
+            .insert_episode("Ep", "/tv/show/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+
+        db.update_episode_metadata(ep_id, Some("Ep Title"), Some("Overview"), Some("/still.jpg"))
+            .unwrap();
+
+        let item = db.get_media_by_id(ep_id).unwrap();
+        assert_eq!(item.episode_title.as_deref(), Some("Ep Title"));
+        assert_eq!(item.overview.as_deref(), Some("Overview"));
+        assert_eq!(item.still_path.as_deref(), Some("/still.jpg"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== GDRIVE TOKEN ====================
+
+    #[test]
+    fn gdrive_changes_token_roundtrip() {
+        let (db, db_path) = make_db();
+
+        assert!(db.get_gdrive_changes_token().unwrap().is_none());
+
+        db.set_gdrive_changes_token("token-abc").unwrap();
+        let token = db.get_gdrive_changes_token().unwrap();
+        assert_eq!(token.as_deref(), Some("token-abc"));
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== DDL MEDIA ====================
+
+    #[test]
+    fn insert_ddl_episode_and_query() {
+        let (db, db_path) = make_db();
+
+        db.upsert_ddl_source(
+            "ddl-test",
+            "https://example.com/file.zip",
+            "file.zip",
+            1024,
+            "zip",
+            2,
+            1,
+            0,
+            0,
+            None,
+        )
+        .unwrap();
+
+        let ep_id = db
+            .insert_ddl_episode(
+                "DDL Ep",
+                None,
+                Some(1),
+                Some(1),
+                "ddl-test",
+                "zip",
+                "ep1.mkv",
+                0, 0, 0, 0, "", 0, None, None, None,
+            )
+            .unwrap();
+
+        let ddl_media = db.get_ddl_media("movie", None).unwrap();
+        assert!(!ddl_media.is_empty());
+
+        let item = db.get_media_by_id(ep_id).unwrap();
+        assert_eq!(item.ddl_source_id.as_deref(), Some("ddl-test"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== STREAMING HISTORY ====================
+
+    #[test]
+    fn streaming_history_save_and_get() {
+        let (db, db_path) = make_db();
+
+        db.save_streaming_progress(
+            "tmdb-stream-1",
+            "movie",
+            "Stream Movie",
+            Some("/poster.jpg"),
+            None,
+            None,
+            1800.0,
+            3600.0,
+        )
+        .unwrap();
+
+        let history = db.get_streaming_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].title, "Stream Movie");
+        assert_eq!(history[0].tmdb_id, "tmdb-stream-1");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn clear_all_streaming_history_removes_entries() {
+        let (db, db_path) = make_db();
+
+        db.save_streaming_progress("tmdb-1", "movie", "A", None, None, None, 900.0, 1800.0)
+            .unwrap();
+        db.save_streaming_progress("tmdb-2", "movie", "B", None, None, None, 900.0, 1800.0)
+            .unwrap();
+
+        let cleared = db.clear_all_streaming_history().unwrap();
+        assert_eq!(cleared, 2);
+        assert!(db.get_streaming_history(10).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn remove_from_streaming_history_removes_one() {
+        let (db, db_path) = make_db();
+
+        db.save_streaming_progress("tmdb-1", "movie", "A", None, None, None, 900.0, 1800.0)
+            .unwrap();
+        db.save_streaming_progress("tmdb-2", "movie", "B", None, None, None, 900.0, 1800.0)
+            .unwrap();
+
+        let history = db.get_streaming_history(10).unwrap();
+        assert_eq!(history.len(), 2);
+
+        db.remove_from_streaming_history(history[0].id).unwrap();
+        assert_eq!(db.get_streaming_history(10).unwrap().len(), 1);
+        cleanup(db, db_path);
+    }
+
+    // ==================== UNIQUE CONSTRAINTS ====================
+
+    #[test]
+    fn insert_movie_duplicate_file_path_errors() {
+        let (db, db_path) = make_db();
+        db.insert_movie("A", None, None, None, None, None, "/same.mkv", 0.0, None)
+            .unwrap();
+        // Second insert with same file_path should fail
+        assert!(db
+            .insert_movie("B", None, None, None, None, None, "/same.mkv", 0.0, None)
+            .is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CASCADE DELETE ====================
+
+    #[test]
+    fn delete_parent_cascades_to_episodes() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        let ep_id = db
+            .insert_episode("Ep", "/tv/show/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+
+        // Delete parent
+        db.remove_media(show_id).unwrap();
+
+        // Episode should be gone via cascade
+        assert!(db.get_media_by_id(ep_id).is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== GET ALL MEDIA ====================
+
+    #[test]
+    fn get_all_media_returns_everything() {
+        let (db, db_path) = make_db();
+        db.insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None)
+            .unwrap();
+        db.insert_tvshow("S", None, None, None, None, "/tv/s", None)
+            .unwrap();
+        db.insert_episode("E", "/tv/s/s01e01.mkv", 2, 1, 1, 0.0)
+            .unwrap();
+
+        let all = db.get_all_media().unwrap();
+        assert_eq!(all.len(), 3);
+        cleanup(db, db_path);
+    }
+
+    // ==================== EPISODE STILL PATH UPDATE ====================
+
+    #[test]
+    fn update_episode_still_path_updates_correctly() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/show", None)
+            .unwrap();
+        let ep_id = db
+            .insert_episode("Ep", "/tv/show/s01e01.mkv", show_id, 1, 1, 0.0)
+            .unwrap();
+
+        db.update_episode_still_path(show_id, 1, 1, "/new_still.jpg")
+            .unwrap();
+
+        let item = db.get_media_by_id(ep_id).unwrap();
+        assert_eq!(item.still_path.as_deref(), Some("/new_still.jpg"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== FILE SIZE / DURATION UPDATE ====================
+
+    #[test]
+    fn update_file_size_and_duration() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None)
+            .unwrap();
+
+        db.update_file_size(id, 1024000).unwrap();
+        db.update_duration(id, 7200.0).unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.file_size_bytes, Some(1024000));
+        assert_eq!(item.duration_seconds, Some(7200.0));
+        cleanup(db, db_path);
+    }
+
+    // ==================== FIND BY TMDB ====================
+
+    #[test]
+    fn find_media_by_tmdb_returns_correct_media() {
+        let (db, db_path) = make_db();
+        let id = db
+            .insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, Some("tmdb-123"))
+            .unwrap();
+
+        let found = db.find_media_by_tmdb("tmdb-123", "movie").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, id);
+
+        let not_found = db.find_media_by_tmdb("tmdb-999", "movie").unwrap();
+        assert!(not_found.is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn find_series_id_by_tmdb_returns_show_id() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_tvshow("Show", None, None, None, None, "/tv/s", Some("tmdb-show-1"))
+            .unwrap();
+
+        let found = db.find_series_id_by_tmdb("tmdb-show-1").unwrap();
+        assert_eq!(found, Some(show_id));
+
+        let not_found = db.find_series_id_by_tmdb("tmdb-none").unwrap();
+        assert!(not_found.is_none());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLOUD INDEX FAILURES ====================
+
+    #[test]
+    fn cloud_index_failure_roundtrip() {
+        let (db, db_path) = make_db();
+
+        db.upsert_cloud_index_failure("cf-1", "bad.mkv", "corrupt file").unwrap();
+
+        let failures = db.get_cloud_index_failures(10).unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].cloud_file_id, "cf-1");
+        assert_eq!(failures[0].last_error, "corrupt file");
+
+        db.clear_cloud_index_failure("cf-1").unwrap();
+        assert!(db.get_cloud_index_failures(10).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== POSTER PATHS ====================
+
+    #[test]
+    fn get_all_poster_paths_returns_paths() {
+        let (db, db_path) = make_db();
+        db.insert_movie("A", None, None, None, None, Some("/a.jpg"), "/a.mkv", 0.0, None)
+            .unwrap();
+        db.insert_movie("B", None, None, None, None, None, "/b.mkv", 0.0, None)
+            .unwrap();
+
+        let paths = db.get_all_poster_paths().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], "/a.jpg");
+        cleanup(db, db_path);
+    }
+
+    // ==================== BROKEN FILE PATHS ====================
+
+    #[test]
+    fn get_broken_file_paths_empty_on_valid_db() {
+        let (db, db_path) = make_db();
+        // Paths with directory separators are NOT considered "broken"
+        db.insert_movie("M", None, None, None, None, None, "/nonexistent/path.mkv", 0.0, None)
+            .unwrap();
+
+        let broken = db.get_broken_file_paths().unwrap();
+        // get_broken_file_paths finds bare filenames (no / or \) — paths with separators are fine
+        assert!(broken.is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== REMOVE MEDIA BY CLOUD FILE ID ====================
+
+    #[test]
+    fn remove_media_by_cloud_file_id_removes_and_returns_info() {
+        let (db, db_path) = make_db();
+        let show_id = db
+            .insert_cloud_tvshow("Show", None, None, None, None, "folder", "fid-folder", None)
+            .unwrap();
+        let ep_id = db
+            .insert_cloud_episode(
+                "Ep",
+                "ep.mkv",
+                show_id,
+                1,
+                1,
+                "cf-ep-1",
+                "fid-folder",
+                Some("Ep Title"),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let result = db.remove_media_by_cloud_file_id("cf-ep-1").unwrap();
+        assert!(result.is_some());
+        // Episode should be gone
+        assert!(db.get_media_by_id(ep_id).is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== SETTING ROUNDTRIP ====================
+
+    #[test]
+    fn setting_set_and_get_roundtrip() {
+        let (db, db_path) = make_db();
+
+        assert!(db.get_setting("my_key").unwrap().is_none());
+
+        db.set_setting("my_key", "my_value").unwrap();
+        assert_eq!(db.get_setting("my_key").unwrap().as_deref(), Some("my_value"));
+
+        // Overwrite
+        db.set_setting("my_key", "updated").unwrap();
+        assert_eq!(db.get_setting("my_key").unwrap().as_deref(), Some("updated"));
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== MOVIE REMINDERS: NOTIFY / ADVANCE ====================
+
+    #[test]
+    fn mark_movie_reminder_notified_sets_fields() {
+        let (db, db_path) = make_db();
+        let rem = db.create_movie_reminder(NewMovieReminder {
+            tmdb_id: "tmdb-n", media_type: "movie", title: "N",
+            poster_path: None, season_number: None, episode_number: None,
+            release_date: None, reminder_at: "2020-01-01T00:00:00Z",
+            source: "tmdb", tracking_mode: "single", tracking_season_number: None,
+            notes: None, is_active: true,
+        }).unwrap();
+
+        db.mark_movie_reminder_notified(rem.id, "2020-01-02T00:00:00Z").unwrap();
+
+        let fetched = db.get_movie_reminder(rem.id).unwrap();
+        assert!(!fetched.is_active);
+        assert_eq!(fetched.notified_at.as_deref(), Some("2020-01-02T00:00:00Z"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn advance_movie_reminder_updates_fields_and_reactivates() {
+        let (db, db_path) = make_db();
+        let rem = db.create_movie_reminder(NewMovieReminder {
+            tmdb_id: "tmdb-adv", media_type: "tv", title: "Old Title",
+            poster_path: None, season_number: Some(1), episode_number: Some(1),
+            release_date: Some("2025-01-01"), reminder_at: "2025-01-01T00:00:00Z",
+            source: "tmdb", tracking_mode: "season", tracking_season_number: Some(1),
+            notes: None, is_active: true,
+        }).unwrap();
+
+        db.mark_movie_reminder_notified(rem.id, "2025-01-02T00:00:00Z").unwrap();
+        assert!(!db.get_movie_reminder(rem.id).unwrap().is_active);
+
+        db.advance_movie_reminder(
+            rem.id, "New Ep", Some("/p.jpg"), Some(1), Some(2),
+            Some("2025-02-01"), "2025-02-01T00:00:00Z", "tmdb", Some(1),
+            "2025-01-15T00:00:00Z",
+        ).unwrap();
+
+        let p = db.get_movie_reminder(rem.id).unwrap();
+        assert!(p.is_active);
+        assert_eq!(p.title, "New Ep");
+        assert_eq!(p.episode_number, Some(2));
+        assert_eq!(p.poster_path.as_deref(), Some("/p.jpg"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== WATCHLIST: DUE NOTIFICATIONS / REPLACE ====================
+
+    #[test]
+    fn get_due_watchlist_notifications_returns_due_items() {
+        let (db, db_path) = make_db();
+
+        db.create_or_update_watchlist_item(NewWatchlistItem {
+            tmdb_id: "tmdb-due", media_type: "movie", title: "Due",
+            poster_path: None, release_date: None, notes: None,
+            is_active: true, notification_enabled: true, notification_mode: "release",
+            notification_interval_minutes: None, notify_at: Some("2020-01-01T00:00:00Z"),
+        }).unwrap();
+
+        db.create_or_update_watchlist_item(NewWatchlistItem {
+            tmdb_id: "tmdb-future", media_type: "movie", title: "Future",
+            poster_path: None, release_date: None, notes: None,
+            is_active: true, notification_enabled: true, notification_mode: "release",
+            notification_interval_minutes: None, notify_at: Some("2099-01-01T00:00:00Z"),
+        }).unwrap();
+
+        // Inactive notification
+        db.create_or_update_watchlist_item(NewWatchlistItem {
+            tmdb_id: "tmdb-off", media_type: "movie", title: "Off",
+            poster_path: None, release_date: None, notes: None,
+            is_active: true, notification_enabled: false, notification_mode: "off",
+            notification_interval_minutes: None, notify_at: Some("2020-01-01T00:00:00Z"),
+        }).unwrap();
+
+        let due = db.get_due_watchlist_notifications("2025-01-01T00:00:00Z").unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].tmdb_id, "tmdb-due");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn replace_watchlist_items_replaces_all() {
+        let (db, db_path) = make_db();
+
+        db.create_or_update_watchlist_item(NewWatchlistItem {
+            tmdb_id: "tmdb-old", media_type: "movie", title: "Old",
+            poster_path: None, release_date: None, notes: None,
+            is_active: true, notification_enabled: false, notification_mode: "off",
+            notification_interval_minutes: None, notify_at: None,
+        }).unwrap();
+        assert_eq!(db.get_watchlist_items(true).unwrap().len(), 1);
+
+        let items = vec![WatchlistItem {
+            id: 100, tmdb_id: "tmdb-new".into(), media_type: "movie".into(),
+            title: "New".into(), poster_path: None, release_date: None,
+            notes: None, is_active: true, notification_enabled: false,
+            notification_mode: "off".into(), notification_interval_minutes: None,
+            notify_at: None, last_notified_at: None,
+            created_at: "2025-01-01".into(), updated_at: "2025-01-01".into(),
+        }];
+        db.replace_watchlist_items(&items).unwrap();
+
+        let all = db.get_watchlist_items(true).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].tmdb_id, "tmdb-new");
+        cleanup(db, db_path);
+    }
+
+    // ==================== DDL SOURCE: URL / EXPIRED ====================
+
+    #[test]
+    fn get_ddl_source_url_returns_url() {
+        let (db, db_path) = make_db();
+        db.upsert_ddl_source("ddl-u", "https://host/file.zip", "file.zip",
+            100, "zip", 1, 1, 0, 0, None).unwrap();
+        assert_eq!(db.get_ddl_source_url("ddl-u").unwrap(), "https://host/file.zip");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn mark_ddl_source_expired_sets_flag() {
+        let (db, db_path) = make_db();
+        db.upsert_ddl_source("ddl-e", "https://host/file.zip", "file.zip",
+            100, "zip", 1, 1, 0, 0, None).unwrap();
+        assert!(!db.get_ddl_source("ddl-e").unwrap().is_expired);
+
+        db.mark_ddl_source_expired("ddl-e").unwrap();
+        assert!(db.get_ddl_source("ddl-e").unwrap().is_expired);
+        cleanup(db, db_path);
+    }
+
+    // ==================== ZIP ARCHIVE CRUD ====================
+
+    #[test]
+    fn zip_archive_insert_get_delete() {
+        let (db, db_path) = make_db();
+        let archive = crate::zip_manager::ZipArchiveInfo {
+            zip_file_id: "zf-1".to_string(),
+            filename: "test.zip".to_string(),
+            archive_format: "zip".to_string(),
+            file_size_bytes: 5000,
+            compression_type: crate::zip_parser::ZipCompressionType::Store,
+            central_dir_offset: 4000,
+            central_dir_size: 500,
+            total_entries: 3,
+            video_entries: 2,
+        };
+        db.insert_zip_archive(&archive).unwrap();
+
+        let rec = db.get_zip_archive("zf-1").unwrap();
+        assert_eq!(rec.zip_file_id, "zf-1");
+        assert_eq!(rec.filename, "test.zip");
+        assert_eq!(rec.file_size_bytes, 5000);
+        assert_eq!(rec.total_entries, 3);
+        assert_eq!(rec.video_entries, 2);
+
+        let deleted = db.delete_zip_archive("zf-1").unwrap();
+        assert_eq!(deleted, 1);
+        assert!(db.get_zip_archive("zf-1").is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CACHED EPISODE METADATA ====================
+
+    #[test]
+    fn cached_episode_metadata_roundtrip_extended() {
+        let (db, db_path) = make_db();
+
+        db.save_cached_episode_metadata("tmdb-ser", 1, 1,
+            Some("Pilot"), Some("First ep"), Some("/still1.jpg"),
+            Some("2024-01-01"), Some(8.5)).unwrap();
+        db.save_cached_episode_metadata("tmdb-ser", 1, 2,
+            Some("Ep2"), Some("Second ep"), Some("/still2.jpg"),
+            Some("2024-01-08"), Some(7.0)).unwrap();
+        db.save_cached_episode_metadata("tmdb-ser", 2, 1,
+            Some("S2E1"), Some("Season 2 opener"), Some("/s2e1.jpg"),
+            Some("2025-01-01"), Some(9.0)).unwrap();
+
+        // Single episode
+        let ep = db.get_cached_episode_metadata("tmdb-ser", 1, 1).unwrap().unwrap();
+        assert_eq!(ep.episode_title.as_deref(), Some("Pilot"));
+        assert_eq!(ep.vote_average, Some(8.5));
+
+        // has_cached
+        assert!(db.has_cached_metadata_for_series("tmdb-ser").unwrap());
+        assert!(!db.has_cached_metadata_for_series("tmdb-none").unwrap());
+
+        // get_all_cached_episodes_for_series
+        let all = db.get_all_cached_episodes_for_series("tmdb-ser").unwrap();
+        assert_eq!(all.len(), 3);
+
+        // get_cached_episodes_for_season
+        let s1 = db.get_cached_episodes_for_season("tmdb-ser", 1).unwrap();
+        assert_eq!(s1.len(), 2);
+        assert_eq!(s1[0].episode_number, 1);
+        assert_eq!(s1[0].season_number, 1);
+
+        // clear
+        let cleared = db.clear_cached_metadata_for_series("tmdb-ser").unwrap();
+        assert_eq!(cleared, 3);
+        assert!(!db.has_cached_metadata_for_series("tmdb-ser").unwrap());
+        cleanup(db, db_path);
+    }
+
+    // ==================== REMOVE MEDIA / SERIES EPISODES ====================
+
+    #[test]
+    fn remove_media_returns_poster_and_deletes() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, Some("/poster.jpg"), "/m.mkv", 0.0, None).unwrap();
+
+        let poster = db.remove_media(id).unwrap();
+        assert_eq!(poster.as_deref(), Some("/poster.jpg"));
+        assert!(db.get_media_by_id(id).is_err());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn remove_series_episodes_deletes_children() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_tvshow("Show", None, None, None, None, "/tv/s", None).unwrap();
+        let ep1 = db.insert_episode("E1", "/tv/s/s01e01.mkv", show_id, 1, 1, 0.0).unwrap();
+        let ep2 = db.insert_episode("E2", "/tv/s/s01e02.mkv", show_id, 1, 2, 0.0).unwrap();
+
+        db.remove_series_episodes(show_id).unwrap();
+        assert!(db.get_media_by_id(ep1).is_err());
+        assert!(db.get_media_by_id(ep2).is_err());
+        // Show itself still exists
+        assert!(db.get_media_by_id(show_id).is_ok());
+        cleanup(db, db_path);
+    }
+
+    // ==================== MEDIA DELETE INFO / PARENT SERIES / DELETE ENTRIES ====================
+
+    #[test]
+    fn get_media_delete_info_returns_info() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None).unwrap();
+
+        let info = db.get_media_delete_info(&[id]).unwrap();
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].0, id);
+        assert_eq!(info[0].1.as_deref(), Some("/m.mkv"));
+        assert!(!info[0].2); // not cloud
+
+        // Empty input
+        assert!(db.get_media_delete_info(&[]).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_parent_series_ids_returns_distinct_ids() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_tvshow("Show", None, None, None, None, "/tv/s", None).unwrap();
+        let ep1 = db.insert_episode("E1", "/tv/s/s01e01.mkv", show_id, 1, 1, 0.0).unwrap();
+        let ep2 = db.insert_episode("E2", "/tv/s/s01e02.mkv", show_id, 1, 2, 0.0).unwrap();
+
+        let parents = db.get_parent_series_ids(&[ep1, ep2]).unwrap();
+        assert_eq!(parents.len(), 1);
+        assert_eq!(parents[0], show_id);
+
+        assert!(db.get_parent_series_ids(&[]).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn delete_media_entries_removes_and_returns_paths() {
+        let (db, db_path) = make_db();
+        let id1 = db.insert_movie("A", None, None, None, None, None, "/a.mkv", 0.0, None).unwrap();
+        let id2 = db.insert_movie("B", None, None, None, None, None, "/b.mkv", 0.0, None).unwrap();
+
+        let paths = db.delete_media_entries(&[id1, id2]).unwrap();
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&"/a.mkv".to_string()));
+        assert!(paths.contains(&"/b.mkv".to_string()));
+        assert!(db.get_media_by_id(id1).is_err());
+        assert!(db.get_media_by_id(id2).is_err());
+
+        assert!(db.delete_media_entries(&[]).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn series_has_episodes_correct() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_tvshow("Show", None, None, None, None, "/tv/s", None).unwrap();
+        assert!(!db.series_has_episodes(show_id).unwrap());
+
+        db.insert_episode("E1", "/tv/s/s01e01.mkv", show_id, 1, 1, 0.0).unwrap();
+        assert!(db.series_has_episodes(show_id).unwrap());
+        cleanup(db, db_path);
+    }
+
+    // ==================== MERGE DUPLICATE TV SHOWS ====================
+
+    #[test]
+    fn merge_duplicate_tvshows_merges_by_tmdb_id() {
+        let (db, db_path) = make_db();
+        let s1 = db.insert_tvshow("Show", Some(2024), Some("Overview"), None, Some("/p.jpg"), "/tv/s1", Some("tmdb-merge")).unwrap();
+        let s2 = db.insert_tvshow("Show Copy", None, None, None, None, "/tv/s2", Some("tmdb-merge")).unwrap();
+        let ep = db.insert_episode("E1", "/tv/s2/s01e01.mkv", s2, 1, 1, 0.0).unwrap();
+
+        let merged = db.merge_duplicate_tvshows().unwrap();
+        assert!(merged >= 1);
+
+        // Episodes moved to s1 (the one with poster+overview)
+        let moved_ep = db.get_media_by_id(ep).unwrap();
+        assert_eq!(moved_ep.parent_id, Some(s1));
+
+        // s2 deleted
+        assert!(db.get_media_by_id(s2).is_err());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLEAR ALL DATA ====================
+
+    #[test]
+    fn clear_all_data_removes_everything_extended() {
+        let (db, db_path) = make_db();
+        db.insert_movie("M", None, None, None, None, None, "/m.mkv", 0.0, None).unwrap();
+        db.set_setting("key", "val").unwrap();
+        db.add_cloud_folder("fid", "fname").unwrap();
+        db.upsert_ddl_source("ddl", "url", "f.zip", 1, "zip", 1, 1, 0, 0, None).unwrap();
+        db.create_movie_reminder(NewMovieReminder {
+            tmdb_id: "tmdb", media_type: "movie", title: "R",
+            poster_path: None, season_number: None, episode_number: None,
+            release_date: None, reminder_at: "2025-01-01", source: "tmdb",
+            tracking_mode: "single", tracking_season_number: None, notes: None,
+            is_active: true,
+        }).unwrap();
+
+        let cache_path = db.clear_all_data().unwrap();
+        assert!(!cache_path.is_empty());
+
+        assert!(db.get_all_media().unwrap().is_empty());
+        assert!(db.get_setting("key").unwrap().is_none());
+        assert!(db.get_cloud_folders().unwrap().is_empty());
+        assert!(db.get_ddl_sources().unwrap().is_empty());
+        assert!(db.get_movie_reminders(true).unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== UPDATE FILE PATH ====================
+
+    #[test]
+    fn update_file_path_changes_path() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, None, "/old.mkv", 0.0, None).unwrap();
+
+        db.update_file_path(id, "/new/path.mkv").unwrap();
+
+        let item = db.get_media_by_id(id).unwrap();
+        assert_eq!(item.file_path.as_deref(), Some("/new/path.mkv"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== WATCH STATS ====================
+
+    #[test]
+    fn get_watch_stats_empty_db_returns_zeros() {
+        let (db, db_path) = make_db();
+        let stats = db.get_watch_stats().unwrap();
+        assert_eq!(stats.movies_watched, 0);
+        assert_eq!(stats.episodes_watched, 0);
+        assert_eq!(stats.total_watch_time_seconds, 0.0);
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn get_watch_stats_counts_completed_media_extended() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, None, "/m.mkv", 3600.0, None).unwrap();
+
+        // Mark as watched (>93% progress clears resume_position to 0)
+        db.update_progress(id, 3500.0, 3600.0).unwrap();
+
+        let stats = db.get_watch_stats().unwrap();
+        assert_eq!(stats.movies_watched, 1);
+        assert!(stats.total_watch_time_seconds > 0.0);
+        cleanup(db, db_path);
+    }
+
+    // ==================== RECENT WATCH ACTIVITIES ====================
+
+    #[test]
+    fn get_recent_watch_activities_returns_completed_items() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, Some("/p.jpg"), "/m.mkv", 7200.0, Some("tmdb-act")).unwrap();
+
+        // Mark as watched
+        db.update_progress(id, 7000.0, 7200.0).unwrap();
+
+        let activities = db.get_recent_watch_activities("2020-01-01T00:00:00Z").unwrap();
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].content_type, "movie");
+        assert_eq!(activities[0].activity_type, "watched_movie");
+        cleanup(db, db_path);
+    }
+
+    // ==================== ANALYTICS DATA ====================
+
+    #[test]
+    fn get_analytics_data_returns_struct() {
+        let (db, db_path) = make_db();
+        let id = db.insert_movie("M", None, None, None, None, None, "/m.mkv", 3600.0, None).unwrap();
+        db.update_progress(id, 3500.0, 3600.0).unwrap();
+
+        let data = db.get_analytics_data().unwrap();
+        // Just verify it doesn't error and returns reasonable structure
+        assert!(data.overview.movies_completed >= 0);
+        cleanup(db, db_path);
+    }
+
+    // ==================== REMOTE HELPERS ====================
+
+    #[test]
+    fn find_media_by_tmdb_id_returns_id() {
+        let (db, db_path) = make_db();
+        let id = db.insert_or_get_remote_movie("tmdb-fm", "Movie", Some(2024), None, None).unwrap();
+
+        let found = db.find_media_by_tmdb_id("tmdb-fm", "movie").unwrap();
+        assert_eq!(found, Some(id));
+
+        assert!(db.find_media_by_tmdb_id("tmdb-none", "movie").unwrap().is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn find_remote_episode_returns_ep_id() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_or_get_remote_tvshow("tmdb-show", "Show", None, None, None).unwrap();
+        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", Some("Pilot"), None, None).unwrap();
+
+        let found = db.find_remote_episode(show_id, 1, 1).unwrap();
+        assert_eq!(found, Some(ep_id));
+
+        assert!(db.find_remote_episode(show_id, 2, 1).unwrap().is_none());
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_or_get_remote_movie_creates_and_reuses() {
+        let (db, db_path) = make_db();
+        let id1 = db.insert_or_get_remote_movie("tmdb-rg", "Movie", Some(2024), Some("/p.jpg"), Some("overview")).unwrap();
+        let id2 = db.insert_or_get_remote_movie("tmdb-rg", "Movie", None, None, None).unwrap();
+        assert_eq!(id1, id2);
+
+        let item = db.get_media_by_id(id1).unwrap();
+        assert_eq!(item.media_type, "movie");
+        assert!(item.file_path.as_deref().unwrap().starts_with("remote://"));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_or_get_remote_tvshow_creates_and_reuses() {
+        let (db, db_path) = make_db();
+        let id1 = db.insert_or_get_remote_tvshow("tmdb-rts", "Show", Some(2023), Some("/s.jpg"), Some("desc")).unwrap();
+        let id2 = db.insert_or_get_remote_tvshow("tmdb-rts", "Show", None, None, None).unwrap();
+        assert_eq!(id1, id2);
+
+        let item = db.get_media_by_id(id1).unwrap();
+        assert_eq!(item.media_type, "tvshow");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn insert_or_get_remote_episode_creates_and_reuses() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_or_get_remote_tvshow("tmdb-re", "Show", None, None, None).unwrap();
+        let ep1 = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", Some("Pilot"), Some("/still.jpg"), Some("overview")).unwrap();
+        let ep2 = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
+        assert_eq!(ep1, ep2);
+
+        let item = db.get_media_by_id(ep1).unwrap();
+        assert_eq!(item.media_type, "tvepisode");
+        assert_eq!(item.season_number, Some(1));
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn update_remote_poster_updates_all_matching() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_or_get_remote_tvshow("tmdb-up", "Show", None, None, None).unwrap();
+        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
+
+        db.update_remote_poster("tmdb-up", Some("/new_poster.jpg"), None).unwrap();
+
+        // Only entries with matching tmdb_id get updated (show, not episodes which lack direct tmdb_id)
+        let show = db.get_media_by_id(show_id).unwrap();
+        assert_eq!(show.poster_path.as_deref(), Some("/new_poster.jpg"));
+        cleanup(db, db_path);
+    }
+
+    // ==================== REMOTE LIBRARY FLAG / GET ====================
+
+    #[test]
+    fn set_remote_library_flag_and_get_remote_library() {
+        let (db, db_path) = make_db();
+        let show_id = db.insert_or_get_remote_tvshow("tmdb-rl", "Show", Some(2024), None, None).unwrap();
+        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
+
+        // Not in library yet
+        assert!(db.get_remote_library().unwrap().is_empty());
+
+        db.set_remote_library_flag(show_id, true).unwrap();
+        let lib = db.get_remote_library().unwrap();
+        assert_eq!(lib.len(), 1);
+        assert_eq!(lib[0].id, show_id);
+
+        // Remote episodes
+        let eps = db.get_remote_episodes(show_id).unwrap();
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].id, ep_id);
+
+        // Unset flag
+        db.set_remote_library_flag(show_id, false).unwrap();
+        assert!(db.get_remote_library().unwrap().is_empty());
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLOUD FOLDERS ====================
+
+    #[test]
+    fn cloud_folder_add_get_remove() {
+        let (db, db_path) = make_db();
+
+        db.add_cloud_folder("cf-1", "My Folder").unwrap();
+        db.add_cloud_folder("cf-2", "Other").unwrap();
+
+        let folders = db.get_cloud_folders().unwrap();
+        assert_eq!(folders.len(), 2);
+        assert!(folders.iter().any(|(id, _, _)| id == "cf-1"));
+
+        db.remove_cloud_folder("cf-1").unwrap();
+        let folders = db.get_cloud_folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].0, "cf-2");
+        cleanup(db, db_path);
+    }
+
+    #[test]
+    fn update_cloud_folder_scanned_sets_timestamp() {
+        let (db, db_path) = make_db();
+        db.add_cloud_folder("cf-s", "Folder").unwrap();
+        // Should not error
+        db.update_cloud_folder_scanned("cf-s").unwrap();
+        cleanup(db, db_path);
+    }
+
+    // ==================== METADATA ENRICHMENT ====================
+
+    #[test]
+    fn get_media_needing_metadata_enrichment_finds_incomplete() {
+        let (db, db_path) = make_db();
+        // Movie with no tmdb_id
+        db.insert_movie("Incomplete", None, None, None, None, None, "/inc.mkv", 0.0, None).unwrap();
+        // Movie with all metadata
+        db.insert_movie("Complete", Some(2024), Some("Overview"), Some("Cast"), Some("Dir"),
+            Some("/p.jpg"), "/comp.mkv", 7200.0, Some("tmdb-full")).unwrap();
+
+        let candidates = db.get_media_needing_metadata_enrichment(100).unwrap();
+        assert!(candidates.iter().any(|c| c.title == "Incomplete"));
+        // Complete movie may still show up (duration 0 or other reasons), but we assert the incomplete one is there
+        cleanup(db, db_path);
+    }
+
+    // ==================== BROKEN FILE PATHS (with bare filename) ====================
+
+    #[test]
+    fn get_broken_file_paths_finds_bare_filenames() {
+        let (db, db_path) = make_db();
+        // Manually insert a media entry with a bare filename (no path separators)
+        db.conn.execute(
+            "INSERT INTO media (title, file_path, media_type) VALUES (?, ?, ?)",
+            rusqlite::params!["Bare", "barefile.mkv", "movie"],
+        ).unwrap();
+
+        let broken = db.get_broken_file_paths().unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].1, "barefile.mkv");
+        cleanup(db, db_path);
+    }
+
+    // ==================== CLOUD INDEX FAILURES (additional) ====================
+
+    #[test]
+    fn cloud_index_failure_upsert_updates_existing() {
+        let (db, db_path) = make_db();
+
+        db.upsert_cloud_index_failure("cf-u", "file.mkv", "old error").unwrap();
+        db.upsert_cloud_index_failure("cf-u", "file.mkv", "new error").unwrap();
+
+        let failures = db.get_cloud_index_failures(10).unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].last_error, "new error");
+        cleanup(db, db_path);
+    }
+
+    // ==================== ZIP ARCHIVE UPSERT ON CONFLICT ====================
+
+    #[test]
+    fn zip_archive_upsert_updates_on_conflict() {
+        let (db, db_path) = make_db();
+        let a1 = crate::zip_manager::ZipArchiveInfo {
+            zip_file_id: "zf-up".to_string(),
+            filename: "old.zip".to_string(),
+            archive_format: "zip".to_string(),
+            file_size_bytes: 1000,
+            compression_type: crate::zip_parser::ZipCompressionType::Store,
+            central_dir_offset: 0, central_dir_size: 0,
+            total_entries: 1, video_entries: 1,
+        };
+        db.insert_zip_archive(&a1).unwrap();
+
+        let a2 = crate::zip_manager::ZipArchiveInfo {
+            zip_file_id: "zf-up".to_string(),
+            filename: "new.zip".to_string(),
+            archive_format: "zip".to_string(),
+            file_size_bytes: 2000,
+            compression_type: crate::zip_parser::ZipCompressionType::Deflate,
+            central_dir_offset: 100, central_dir_size: 50,
+            total_entries: 5, video_entries: 3,
+        };
+        db.insert_zip_archive(&a2).unwrap();
+
+        let rec = db.get_zip_archive("zf-up").unwrap();
+        assert_eq!(rec.filename, "new.zip");
+        assert_eq!(rec.file_size_bytes, 2000);
+        assert_eq!(rec.total_entries, 5);
+        cleanup(db, db_path);
     }
 }

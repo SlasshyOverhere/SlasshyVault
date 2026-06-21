@@ -11,7 +11,7 @@ const AUTO_MARK_WATCHED_THRESHOLD_RATIO: f64 = 0.93;
 
 /// Calculate dynamic demuxer cache size for a given target buffer duration.
 /// Falls back to 200 MiB if file size or duration is unknown.
-fn calculate_dynamic_demuxer_bytes(file_size_bytes: Option<i64>, duration_seconds: Option<f64>, target_secs: f64) -> String {
+pub(crate) fn calculate_dynamic_demuxer_bytes(file_size_bytes: Option<i64>, duration_seconds: Option<f64>, target_secs: f64) -> String {
     const MIN_BYTES: u64 = 50 * 1024 * 1024;       // 50 MiB floor
     const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;  // 2 GiB ceiling
     const FALLBACK: &str = "200MiB";
@@ -1003,6 +1003,1028 @@ pub fn send_mpv_sync_command(session_id: &str, action: &str, position: f64) -> R
 
     println!("[MPV-SYNC] Sent command: {} at {:.2}s", action, position);
     Ok(())
+}
+
+/// Read sync command from file (test helper)
+pub fn read_sync_command(session_id: &str) -> Option<MpvSyncCommand> {
+    let command_file = get_sync_command_file(session_id);
+    if !command_file.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&command_file).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    // Serialize test setup/teardown since we mutate the APPDATA env var.
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn set_appdata_override(dir: &std::path::Path) -> Option<(String, String)> {
+        let key = "APPDATA";
+        let old = std::env::var_os(key).map(|v| v.into_string().unwrap_or_default());
+        unsafe { std::env::set_var(key, dir); }
+        old.map(|v| (key.to_string(), v))
+    }
+
+    fn restore_appdata(old: Option<(String, String)>) {
+        unsafe {
+            match old {
+                Some((key, val)) => std::env::set_var(&key, val),
+                None => std::env::remove_var("APPDATA"),
+            }
+        }
+    }
+
+    /// Create temp dir + override APPDATA. Returns (tempdir, old_env) for restore.
+    /// Also creates the app data subdirectory that get_app_data_dir() resolves to,
+    /// so tests can write files into the same paths the production code uses.
+    fn with_test_appdata() -> (TempDir, Option<(String, String)>) {
+        let tmp = TempDir::new().unwrap();
+        let old = set_appdata_override(tmp.path());
+        // Create the subdirectory that get_app_data_dir() resolves to
+        // (e.g. "SlasshyVault-Dev" in debug builds) so temp files are in the right place.
+        let _ = std::fs::create_dir_all(crate::database::get_app_data_dir());
+        (tmp, old)
+    }
+
+    // ==================== MpvProgressInfo ====================
+
+    #[test]
+    fn mpv_progress_info_default() {
+        let p = MpvProgressInfo::default();
+        assert_eq!(p.position, 0.0);
+        assert_eq!(p.duration, 0.0);
+        assert!(!p.paused);
+        assert!(!p.eof_reached);
+        assert!(p.quit_time.is_none());
+    }
+
+    #[test]
+    fn mpv_progress_info_construction() {
+        let p = MpvProgressInfo {
+            position: 123.456,
+            duration: 3600.0,
+            paused: true,
+            eof_reached: false,
+            quit_time: Some(1700000000),
+        };
+        assert_eq!(p.position, 123.456);
+        assert_eq!(p.duration, 3600.0);
+        assert!(p.paused);
+        assert!(!p.eof_reached);
+        assert_eq!(p.quit_time, Some(1700000000));
+    }
+
+    #[test]
+    fn mpv_progress_info_clone() {
+        let p = MpvProgressInfo {
+            position: 10.0,
+            duration: 100.0,
+            paused: false,
+            eof_reached: true,
+            quit_time: Some(42),
+        };
+        let p2 = p.clone();
+        assert_eq!(p2.position, p.position);
+        assert_eq!(p2.duration, p.duration);
+        assert_eq!(p2.eof_reached, p.eof_reached);
+        assert_eq!(p2.quit_time, p.quit_time);
+    }
+
+    #[test]
+    fn mpv_progress_info_serde_roundtrip() {
+        let p = MpvProgressInfo {
+            position: 42.5,
+            duration: 90.0,
+            paused: true,
+            eof_reached: false,
+            quit_time: Some(1234567890),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let p2: MpvProgressInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(p2.position, 42.5);
+        assert_eq!(p2.duration, 90.0);
+        assert!(p2.paused);
+        assert!(!p2.eof_reached);
+        assert_eq!(p2.quit_time, Some(1234567890));
+    }
+
+    #[test]
+    fn mpv_progress_info_serde_none_quit_time() {
+        let p = MpvProgressInfo {
+            position: 0.0,
+            duration: 0.0,
+            paused: false,
+            eof_reached: false,
+            quit_time: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"quit_time\":null"));
+        let p2: MpvProgressInfo = serde_json::from_str(&json).unwrap();
+        assert!(p2.quit_time.is_none());
+    }
+
+    #[test]
+    fn mpv_progress_info_deserialize_from_json_string() {
+        let json = r#"{"position":100.5,"duration":200.0,"paused":false,"eof_reached":true,"quit_time":999}"#;
+        let p: MpvProgressInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(p.position, 100.5);
+        assert_eq!(p.duration, 200.0);
+        assert!(!p.paused);
+        assert!(p.eof_reached);
+        assert_eq!(p.quit_time, Some(999));
+    }
+
+    #[test]
+    fn mpv_progress_info_deserialize_without_optional() {
+        let json = r#"{"position":5.0,"duration":10.0,"paused":false,"eof_reached":false}"#;
+        let p: MpvProgressInfo = serde_json::from_str(json).unwrap();
+        assert!(p.quit_time.is_none());
+    }
+
+    #[test]
+    fn mpv_progress_info_serde_special_values() {
+        let p = MpvProgressInfo {
+            position: 0.0,
+            duration: 7200.5,
+            paused: false,
+            eof_reached: true,
+            quit_time: Some(0),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let p2: MpvProgressInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(p2.position, 0.0);
+        assert_eq!(p2.duration, 7200.5);
+        assert_eq!(p2.quit_time, Some(0));
+    }
+
+    // ==================== MpvLaunchResult ====================
+
+    #[test]
+    fn mpv_launch_result_construction() {
+        let r = MpvLaunchResult {
+            success: true,
+            error: None,
+            final_position: Some(100.0),
+            final_duration: Some(200.0),
+            completed: true,
+        };
+        assert!(r.success);
+        assert!(r.error.is_none());
+        assert_eq!(r.final_position, Some(100.0));
+        assert_eq!(r.final_duration, Some(200.0));
+        assert!(r.completed);
+    }
+
+    #[test]
+    fn mpv_launch_result_serde_roundtrip() {
+        let r = MpvLaunchResult {
+            success: false,
+            error: Some("mpv crashed".to_string()),
+            final_position: Some(50.0),
+            final_duration: Some(100.0),
+            completed: false,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let r2: MpvLaunchResult = serde_json::from_str(&json).unwrap();
+        assert!(!r2.success);
+        assert_eq!(r2.error, Some("mpv crashed".to_string()));
+        assert_eq!(r2.final_position, Some(50.0));
+        assert_eq!(r2.final_duration, Some(100.0));
+        assert!(!r2.completed);
+    }
+
+    #[test]
+    fn mpv_launch_result_serde_none_fields() {
+        let r = MpvLaunchResult {
+            success: true,
+            error: None,
+            final_position: None,
+            final_duration: None,
+            completed: false,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let r2: MpvLaunchResult = serde_json::from_str(&json).unwrap();
+        assert!(r2.success);
+        assert!(r2.error.is_none());
+        assert!(r2.final_position.is_none());
+        assert!(r2.final_duration.is_none());
+    }
+
+    #[test]
+    fn mpv_launch_result_clone() {
+        let r = MpvLaunchResult {
+            success: true,
+            error: Some("test".to_string()),
+            final_position: Some(1.0),
+            final_duration: Some(2.0),
+            completed: true,
+        };
+        let r2 = r.clone();
+        assert_eq!(r2.success, r.success);
+        assert_eq!(r2.error, r.error);
+    }
+
+    #[test]
+    fn mpv_launch_result_deserialize_from_json() {
+        let json = r#"{"success":true,"error":null,"final_position":42.0,"final_duration":84.0,"completed":true}"#;
+        let r: MpvLaunchResult = serde_json::from_str(json).unwrap();
+        assert!(r.success);
+        assert!(r.completed);
+        assert_eq!(r.final_position, Some(42.0));
+    }
+
+    // ==================== CloudCacheSettings ====================
+
+    #[test]
+    fn cloud_cache_settings_construction() {
+        let c = CloudCacheSettings {
+            enabled: true,
+            cache_dir: "/tmp/cache".to_string(),
+            max_size_mb: 500,
+        };
+        assert!(c.enabled);
+        assert_eq!(c.cache_dir, "/tmp/cache");
+        assert_eq!(c.max_size_mb, 500);
+    }
+
+    #[test]
+    fn cloud_cache_settings_clone() {
+        let c = CloudCacheSettings {
+            enabled: false,
+            cache_dir: String::new(),
+            max_size_mb: 0,
+        };
+        let c2 = c.clone();
+        assert!(!c2.enabled);
+        assert_eq!(c2.cache_dir, "");
+        assert_eq!(c2.max_size_mb, 0);
+    }
+
+    #[test]
+    fn cloud_cache_settings_debug() {
+        let c = CloudCacheSettings {
+            enabled: true,
+            cache_dir: "test".to_string(),
+            max_size_mb: 100,
+        };
+        let debug_str = format!("{:?}", c);
+        assert!(debug_str.contains("CloudCacheSettings"));
+        assert!(debug_str.contains("true"));
+    }
+
+    // ==================== MpvSyncEvent ====================
+
+    #[test]
+    fn mpv_sync_event_construction() {
+        let e = MpvSyncEvent {
+            event_type: "play".to_string(),
+            position: 30.0,
+            timestamp: 1700000000,
+        };
+        assert_eq!(e.event_type, "play");
+        assert_eq!(e.position, 30.0);
+        assert_eq!(e.timestamp, 1700000000);
+    }
+
+    #[test]
+    fn mpv_sync_event_serde_roundtrip() {
+        let e = MpvSyncEvent {
+            event_type: "seek".to_string(),
+            position: 120.5,
+            timestamp: 1234567890,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"event_type\":\"seek\""));
+        let e2: MpvSyncEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(e2.event_type, "seek");
+        assert_eq!(e2.position, 120.5);
+        assert_eq!(e2.timestamp, 1234567890);
+    }
+
+    #[test]
+    fn mpv_sync_event_all_event_types() {
+        for etype in &["play", "pause", "seek"] {
+            let e = MpvSyncEvent {
+                event_type: etype.to_string(),
+                position: 0.0,
+                timestamp: 0,
+            };
+            let json = serde_json::to_string(&e).unwrap();
+            let e2: MpvSyncEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(e2.event_type, *etype);
+        }
+    }
+
+    #[test]
+    fn mpv_sync_event_deserialize_from_json() {
+        let json = r#"{"event_type":"pause","position":60.0,"timestamp":999}"#;
+        let e: MpvSyncEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(e.event_type, "pause");
+        assert_eq!(e.position, 60.0);
+        assert_eq!(e.timestamp, 999);
+    }
+
+    #[test]
+    fn mpv_sync_event_clone() {
+        let e = MpvSyncEvent {
+            event_type: "play".to_string(),
+            position: 10.0,
+            timestamp: 100,
+        };
+        let e2 = e.clone();
+        assert_eq!(e2.event_type, e.event_type);
+    }
+
+    // ==================== MpvSyncCommand ====================
+
+    #[test]
+    fn mpv_sync_command_construction() {
+        let c = MpvSyncCommand {
+            action: "play".to_string(),
+            position: 45.0,
+            processed: false,
+        };
+        assert_eq!(c.action, "play");
+        assert_eq!(c.position, 45.0);
+        assert!(!c.processed);
+    }
+
+    #[test]
+    fn mpv_sync_command_serde_roundtrip() {
+        let c = MpvSyncCommand {
+            action: "seek".to_string(),
+            position: 300.0,
+            processed: true,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"processed\":true"));
+        let c2: MpvSyncCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(c2.action, "seek");
+        assert_eq!(c2.position, 300.0);
+        assert!(c2.processed);
+    }
+
+    #[test]
+    fn mpv_sync_command_all_actions() {
+        for action in &["play", "pause", "seek"] {
+            let c = MpvSyncCommand {
+                action: action.to_string(),
+                position: 0.0,
+                processed: false,
+            };
+            let json = serde_json::to_string(&c).unwrap();
+            let c2: MpvSyncCommand = serde_json::from_str(&json).unwrap();
+            assert_eq!(c2.action, *action);
+        }
+    }
+
+    #[test]
+    fn mpv_sync_command_deserialize_from_json() {
+        let json = r#"{"action":"pause","position":0.0,"processed":false}"#;
+        let c: MpvSyncCommand = serde_json::from_str(json).unwrap();
+        assert_eq!(c.action, "pause");
+        assert!(!c.processed);
+    }
+
+    #[test]
+    fn mpv_sync_command_clone() {
+        let c = MpvSyncCommand {
+            action: "seek".to_string(),
+            position: 50.0,
+            processed: true,
+        };
+        let c2 = c.clone();
+        assert_eq!(c2.action, c.action);
+        assert_eq!(c2.position, c.position);
+        assert_eq!(c2.processed, c.processed);
+    }
+
+    // ==================== calculate_dynamic_demuxer_bytes ====================
+
+    #[test]
+    fn dynamic_demuxer_none_file_size_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(None, Some(100.0), 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_none_duration_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(1_000_000), None, 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_both_none_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(None, None, 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_zero_duration_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(1_000_000), Some(0.0), 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_negative_duration_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(1_000_000), Some(-10.0), 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_zero_file_size_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(0), Some(100.0), 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_negative_file_size_returns_fallback() {
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(-1), Some(100.0), 60.0), "200MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_small_result_clamps_to_min_50mib() {
+        // 1MB file, 3600s duration => ~284 B/s, * 60 target = ~17064 bytes => clamped to 50MiB
+        assert_eq!(calculate_dynamic_demuxer_bytes(Some(1_000_000), Some(3600.0), 60.0), "50MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_exact_calculation() {
+        // 300MB file, 300s => 1MB/s, target 60s => 60MB
+        let size = 300i64 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(300.0), 60.0);
+        assert_eq!(result, "60MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_large_file_clamps_to_2gib() {
+        // 10GB file, 600s => ~17MB/s, target 120s => ~2GB, clamped to 2048MiB
+        let size = 10i64 * 1024 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(600.0), 120.0);
+        assert_eq!(result, "2048MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_120s_target_standard_movie() {
+        // 4GB file, 7200s (2h) => ~582KB/s, target 120s => ~68MB
+        let size = 4i64 * 1024 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(7200.0), 120.0);
+        assert_eq!(result, "68MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_30s_target_clamped_to_min() {
+        let size = 4i64 * 1024 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(7200.0), 30.0);
+        // 4GB/7200s * 30s = ~17.9MB = 17MiB, but MIN_BYTES = 50MiB, so clamped to 50MiB
+        assert_eq!(result, "50MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_target_0s_returns_fallback_or_min() {
+        // target_secs = 0 => target bytes = 0 => clamped to 50MiB
+        let result = calculate_dynamic_demuxer_bytes(Some(1_000_000_000), Some(100.0), 0.0);
+        assert_eq!(result, "50MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_very_large_target_secs() {
+        // Very large target should still clamp to MAX
+        let size = 10i64 * 1024 * 1024 * 1024; // 10GB
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(100.0), 10000.0);
+        assert_eq!(result, "2048MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_boundary_at_min() {
+        // Exactly at the boundary: bytes_per_sec * target_secs = 50MiB
+        // 50*1024*1024 bytes in 100s => 524288 B/s => file_size = 524288 * 100 = 52428800
+        let size: i64 = 50 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(1.0), 1.0);
+        // 50MiB / 1s * 1s = 50MiB exactly => 50MiB
+        assert_eq!(result, "50MiB");
+    }
+
+    #[test]
+    fn dynamic_demuxer_just_above_min() {
+        // Slightly above 50MiB: 100MB file, 1s, target 1s => 100MiB
+        let size: i64 = 100 * 1024 * 1024;
+        let result = calculate_dynamic_demuxer_bytes(Some(size), Some(1.0), 1.0);
+        assert_eq!(result, "100MiB");
+    }
+
+    // ==================== is_mpv_running ====================
+
+    #[test]
+    fn is_mpv_running_invalid_pid_returns_false() {
+        // PID 0 / PID 1 / very large PID - none should be running
+        assert!(!is_mpv_running(0));
+        assert!(!is_mpv_running(u32::MAX));
+    }
+
+    #[test]
+    fn is_mpv_running_random_pid_returns_false() {
+        assert!(!is_mpv_running(99999999));
+    }
+
+    // ==================== read_mpv_progress ====================
+
+    #[test]
+    fn read_mpv_progress_no_file_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let result = read_mpv_progress(99999);
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_progress_with_valid_file() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let progress_dir = get_progress_dir();
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("42.json");
+        std::fs::write(&file_path, r#"{"position":42.0,"duration":100.0,"paused":false,"eof_reached":false,"quit_time":null}"#).unwrap();
+
+        let result = read_mpv_progress(42);
+        assert!(result.is_some());
+        let p = result.unwrap();
+        assert_eq!(p.position, 42.0);
+        assert_eq!(p.duration, 100.0);
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_progress_with_eof_file() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let progress_dir = get_progress_dir();
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("7.json");
+        std::fs::write(&file_path, r#"{"position":95.0,"duration":100.0,"paused":false,"eof_reached":true,"quit_time":1700000000}"#).unwrap();
+
+        let result = read_mpv_progress(7);
+        assert!(result.is_some());
+        let p = result.unwrap();
+        assert!(p.eof_reached);
+        assert_eq!(p.quit_time, Some(1700000000));
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_progress_invalid_json_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (tmp, old) = with_test_appdata();
+        let progress_dir = tmp.path().join("mpv_progress");
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("8.json");
+        std::fs::write(&file_path, "not valid json{{{").unwrap();
+
+        let result = read_mpv_progress(8);
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_progress_empty_file_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (tmp, old) = with_test_appdata();
+        let progress_dir = tmp.path().join("mpv_progress");
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("9.json");
+        std::fs::write(&file_path, "").unwrap();
+
+        let result = read_mpv_progress(9);
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_progress_partial_json_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (tmp, old) = with_test_appdata();
+        let progress_dir = tmp.path().join("mpv_progress");
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("10.json");
+        std::fs::write(&file_path, r#"{"position":10.0,"#).unwrap();
+
+        let result = read_mpv_progress(10);
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    // ==================== clear_mpv_progress ====================
+
+    #[test]
+    fn clear_mpv_progress_removes_files() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let progress_dir = get_progress_dir();
+        std::fs::create_dir_all(&progress_dir).unwrap();
+
+        let progress_file = progress_dir.join("55.json");
+        let script_file = progress_dir.join("tracker_55.lua");
+        std::fs::write(&progress_file, r#"{"position":5.0,"duration":10.0,"paused":false,"eof_reached":false,"quit_time":null}"#).unwrap();
+        std::fs::write(&script_file, "-- lua script").unwrap();
+
+        assert!(progress_file.exists());
+        assert!(script_file.exists());
+
+        clear_mpv_progress(55);
+
+        assert!(!progress_file.exists());
+        assert!(!script_file.exists());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn clear_mpv_progress_no_files_does_not_panic() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        // Should not panic when files don't exist
+        clear_mpv_progress(99999);
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn clear_mpv_progress_removes_only_specified_id() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let progress_dir = get_progress_dir();
+        std::fs::create_dir_all(&progress_dir).unwrap();
+
+        let file_a = progress_dir.join("1.json");
+        let file_b = progress_dir.join("2.json");
+        std::fs::write(&file_a, r#"{"position":1.0,"duration":2.0,"paused":false,"eof_reached":false,"quit_time":null}"#).unwrap();
+        std::fs::write(&file_b, r#"{"position":3.0,"duration":4.0,"paused":false,"eof_reached":false,"quit_time":null}"#).unwrap();
+
+        clear_mpv_progress(1);
+
+        assert!(!file_a.exists());
+        assert!(file_b.exists());
+        restore_appdata(old);
+    }
+
+    // ==================== get_cached_video_path ====================
+
+    #[test]
+    fn get_cached_video_path_no_dir_returns_none() {
+        let result = get_cached_video_path("/nonexistent_path_to_nowhere_12345", 42);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_cached_video_path_empty_dir_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().join("empty_cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let media_dir = cache_dir.join("media_1");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        // Empty dir - no files
+        let result = get_cached_video_path(cache_dir.to_str().unwrap(), 1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_cached_video_path_small_file_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().to_string_lossy().to_string();
+        let media_dir = std::path::Path::new(&cache_dir).join("media_5");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        // Write a small file (< 1MB)
+        std::fs::write(media_dir.join("video.mp4"), vec![0u8; 500]).unwrap();
+
+        let result = get_cached_video_path(&cache_dir, 5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_cached_video_path_large_file_returns_path() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().to_string_lossy().to_string();
+        let media_dir = std::path::Path::new(&cache_dir).join("media_10");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        // Write a file > 1MB
+        std::fs::write(media_dir.join("video.mp4"), vec![0u8; 1_100_000]).unwrap();
+
+        let result = get_cached_video_path(&cache_dir, 10);
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert!(path.contains("video.mp4"));
+    }
+
+    #[test]
+    fn get_cached_video_path_no_media_dir_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().to_string_lossy().to_string();
+        // media_99 dir doesn't exist
+        let result = get_cached_video_path(&cache_dir, 99);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_cached_video_path_exact_1mb_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().to_string_lossy().to_string();
+        let media_dir = std::path::Path::new(&cache_dir).join("media_20");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        // Exactly 1,000,000 bytes (not > 1MB)
+        std::fs::write(media_dir.join("video.mp4"), vec![0u8; 1_000_000]).unwrap();
+
+        let result = get_cached_video_path(&cache_dir, 20);
+        assert!(result.is_none()); // 1_000_000 is NOT > 1_000_000
+    }
+
+    #[test]
+    fn get_cached_video_path_just_above_1mb_returns_path() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().to_string_lossy().to_string();
+        let media_dir = std::path::Path::new(&cache_dir).join("media_21");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        std::fs::write(media_dir.join("video.mp4"), vec![0u8; 1_000_001]).unwrap();
+
+        let result = get_cached_video_path(&cache_dir, 21);
+        assert!(result.is_some());
+    }
+
+    // ==================== poll_mpv_progress ====================
+
+    #[test]
+    fn poll_mpv_progress_no_file_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let result = poll_mpv_progress(99998);
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn poll_mpv_progress_with_file_returns_info() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let progress_dir = get_progress_dir();
+        std::fs::create_dir_all(&progress_dir).unwrap();
+        let file_path = progress_dir.join("60.json");
+        std::fs::write(&file_path, r#"{"position":30.0,"duration":60.0,"paused":true,"eof_reached":false,"quit_time":null}"#).unwrap();
+
+        let result = poll_mpv_progress(60);
+        assert!(result.is_some());
+        let p = result.unwrap();
+        assert_eq!(p.position, 30.0);
+        assert!(p.paused);
+        restore_appdata(old);
+    }
+
+    // ==================== send_mpv_sync_command / read_mpv_sync_event ====================
+
+    #[test]
+    fn send_and_read_sync_command_roundtrip() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let sync_dir = get_sync_dir();
+        std::fs::create_dir_all(&sync_dir).unwrap();
+
+        let result = send_mpv_sync_command("test_session", "play", 42.0);
+        assert!(result.is_ok());
+
+        let cmd = read_sync_command("test_session");
+        assert!(cmd.is_some());
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.action, "play");
+        assert_eq!(cmd.position, 42.0);
+        assert!(!cmd.processed);
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_sync_event_no_file_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let result = read_mpv_sync_event("nonexistent_session");
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_sync_event_with_valid_file() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let sync_dir = get_sync_dir();
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let evt_file = sync_dir.join("evt_session1.json");
+        std::fs::write(&evt_file, r#"{"event_type":"play","position":10.5,"timestamp":12345}"#).unwrap();
+
+        let result = read_mpv_sync_event("session1");
+        assert!(result.is_some());
+        let evt = result.unwrap();
+        assert_eq!(evt.event_type, "play");
+        assert_eq!(evt.position, 10.5);
+        assert_eq!(evt.timestamp, 12345);
+        // File should be consumed (deleted)
+        assert!(!evt_file.exists());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_sync_event_invalid_json_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let sync_dir = get_sync_dir();
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let evt_file = sync_dir.join("evt_bad.json");
+        std::fs::write(&evt_file, "garbage data!!!").unwrap();
+
+        let result = read_mpv_sync_event("bad");
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn read_mpv_sync_event_empty_file_returns_none() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let sync_dir = get_sync_dir();
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let evt_file = sync_dir.join("evt_empty.json");
+        std::fs::write(&evt_file, "").unwrap();
+
+        let result = read_mpv_sync_event("empty");
+        assert!(result.is_none());
+        restore_appdata(old);
+    }
+
+    // ==================== cleanup_sync_files ====================
+
+    #[test]
+    fn cleanup_sync_files_removes_all() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        let sync_dir = get_sync_dir();
+        std::fs::create_dir_all(&sync_dir).unwrap();
+
+        let lua_file = sync_dir.join("sync_cleanup_test.lua");
+        let cmd_file = sync_dir.join("cmd_cleanup_test.json");
+        let evt_file = sync_dir.join("evt_cleanup_test.json");
+        std::fs::write(&lua_file, "-- lua").unwrap();
+        std::fs::write(&cmd_file, "{}").unwrap();
+        std::fs::write(&evt_file, "{}").unwrap();
+
+        cleanup_sync_files("cleanup_test");
+
+        assert!(!lua_file.exists());
+        assert!(!cmd_file.exists());
+        assert!(!evt_file.exists());
+        restore_appdata(old);
+    }
+
+    #[test]
+    fn cleanup_sync_files_no_files_does_not_panic() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, old) = with_test_appdata();
+        cleanup_sync_files("nonexistent_cleanup");
+        restore_appdata(old);
+    }
+
+    // ==================== Lua script generation ====================
+
+    #[test]
+    fn lua_script_contains_progress_file_path() {
+        let script = get_lua_script_content("C:\\Users\\test\\progress.json");
+        assert!(script.contains("C:/Users/test/progress.json"));
+    }
+
+    #[test]
+    fn lua_script_backslash_to_forward_slash() {
+        let script = get_lua_script_content("D:\\my\\path\\file.json");
+        assert!(script.contains("D:/my/path/file.json"));
+        assert!(!script.contains("D:\\my\\path\\file.json"));
+    }
+
+    #[test]
+    fn lua_script_contains_required_handlers() {
+        let script = get_lua_script_content("/tmp/test.json");
+        assert!(script.contains("mp.add_periodic_timer"));
+        assert!(script.contains("mp.register_event(\"shutdown\""));
+        assert!(script.contains("mp.register_event(\"end-file\""));
+        assert!(script.contains("mp.register_event(\"file-loaded\""));
+        assert!(script.contains("mp.register_event(\"seek\""));
+        assert!(script.contains("mp.observe_property(\"pause\""));
+    }
+
+    #[test]
+    fn sync_lua_script_contains_all_paths() {
+        let script = get_sync_lua_script_content(
+            "C:\\progress.json",
+            "C:\\event.json",
+            "C:\\command.json",
+        );
+        assert!(script.contains("C:/progress.json"));
+        assert!(script.contains("C:/event.json"));
+        assert!(script.contains("C:/command.json"));
+    }
+
+    #[test]
+    fn sync_lua_script_contains_command_check_timer() {
+        let script = get_sync_lua_script_content("/p.json", "/e.json", "/c.json");
+        assert!(script.contains("command_check_interval"));
+        assert!(script.contains("check_command"));
+    }
+
+    #[test]
+    fn sync_lua_script_contains_seek_debounce() {
+        let script = get_sync_lua_script_content("/p.json", "/e.json", "/c.json");
+        assert!(script.contains("seek_timer"));
+        assert!(script.contains("0.15"));
+    }
+
+    // ==================== AUTO_MARK_WATCHED_THRESHOLD_RATIO ====================
+
+    #[test]
+    fn watched_threshold_is_93_percent() {
+        assert_eq!(AUTO_MARK_WATCHED_THRESHOLD_RATIO, 0.93);
+    }
+
+    // ==================== launch_mpv_with_tracking edge cases ====================
+
+    #[test]
+    fn launch_mpv_nonexistent_local_file_returns_error() {
+        let result = launch_mpv_with_tracking(
+            "", // empty mpv_path so validate_executable_path passes
+            "/this/file/does/not/exist/video.mp4",
+            1,
+            None,
+            0.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("File does not exist"));
+    }
+
+    #[test]
+    fn launch_mpv_invalid_executable_returns_error() {
+        let result = launch_mpv_with_tracking(
+            "", // empty mpv_path
+            "https://example.com/video.mp4",
+            1,
+            None,
+            0.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    // ==================== Struct field access patterns ====================
+
+    #[test]
+    fn mpv_progress_info_with_max_values() {
+        let p = MpvProgressInfo {
+            position: f64::MAX,
+            duration: f64::MAX,
+            paused: true,
+            eof_reached: true,
+            quit_time: Some(i64::MAX),
+        };
+        assert_eq!(p.position, f64::MAX);
+        assert_eq!(p.duration, f64::MAX);
+        assert_eq!(p.quit_time, Some(i64::MAX));
+    }
+
+    #[test]
+    fn mpv_sync_event_debug_trait() {
+        let e = MpvSyncEvent {
+            event_type: "seek".to_string(),
+            position: 10.0,
+            timestamp: 100,
+        };
+        let debug = format!("{:?}", e);
+        assert!(debug.contains("MpvSyncEvent"));
+        assert!(debug.contains("seek"));
+    }
+
+    #[test]
+    fn mpv_sync_command_debug_trait() {
+        let c = MpvSyncCommand {
+            action: "pause".to_string(),
+            position: 0.0,
+            processed: true,
+        };
+        let debug = format!("{:?}", c);
+        assert!(debug.contains("MpvSyncCommand"));
+        assert!(debug.contains("pause"));
+    }
 }
 
 /// Read sync event from MPV
