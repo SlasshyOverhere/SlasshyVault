@@ -16836,6 +16836,47 @@ fn remove_addon_binary(state: State<'_, AppState>, source_id: String) -> Result<
     Ok(())
 }
 
+/// Restart the addon binary: kill any running process, reset crash state, and re-spawn.
+#[tauri::command]
+async fn restart_addon(state: State<'_, AppState>) -> Result<(), String> {
+    // Reset crash state
+    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+    if let Ok(mut guard) = ADDON_WATCHDOG_RUNNING.lock() { *guard = false; }
+
+    // Kill existing process
+    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+        if let Some(mut child) = proc.take() {
+            let _ = child.kill();
+        }
+    }
+
+    // Find the default binary source
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    let source = config.addon_sources.iter()
+        .find(|s| s.enabled && s.binary_path.is_some() && s.is_default)
+        .or_else(|| config.addon_sources.iter().find(|s| s.enabled && s.binary_path.is_some()))
+        .ok_or("No binary addon source found")?;
+    let bp = source.binary_path.clone().unwrap();
+    let port = source.url.split(':').last()
+        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+        .unwrap_or(51546);
+    let args: Vec<String> = vec!["--yes".to_string(), "--port".to_string(), port.to_string()];
+    drop(config);
+
+    // Spawn in background thread
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            match start_addon_process(&bp, &args).await {
+                Ok(_) => println!("[addon] Restart successful"),
+                Err(e) => eprintln!("[addon] Restart failed: {}", e),
+            }
+        });
+    });
+
+    Ok(())
+}
+
 /// Find a free TCP port on localhost
 async fn find_free_port() -> Result<u16, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -17089,7 +17130,10 @@ async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), S
         let addon_port: u16 = args_owned.windows(2)
             .find(|w| w[0] == "--port")
             .and_then(|w| w[1].parse().ok())
-            .unwrap_or(51546);
+            .unwrap_or_else(|| {
+                eprintln!("[addon] WARNING: --port not in args, defaulting to 51546. Health checks may probe the wrong port.");
+                51546
+            });
 
         std::thread::spawn(move || {
             const MAX_RESTARTS: u32 = 10;
@@ -17769,11 +17813,16 @@ fn main() {
             // Auto-start binary addon sources on app launch
             let mut addon_started = false;
             for source in &config.addon_sources {
+                if !source.enabled { continue; }
                 if let Some(ref bp) = source.binary_path {
                     let bp = bp.clone();
                     let url = source.url.clone();
-                    println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
-                    let args: Vec<String> = vec!["--yes".to_string()];
+                    // Extract port from saved URL so the binary binds to the correct port
+                    let port = url.split(':').last()
+                        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+                        .unwrap_or(51546);
+                    println!("[STARTUP] Auto-starting addon from binary: {} (url: {}, port: {})", bp, url, port);
+                    let args: Vec<String> = vec!["--yes".to_string(), "--port".to_string(), port.to_string()];
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -17785,7 +17834,7 @@ fn main() {
                         });
                     });
                     addon_started = true;
-                    break;
+                    break; // Only one addon process can run at a time (RUNNING_ADDON_PROCESS is single)
                 }
             }
             // Fallback: if addon_url is localhost and no binary source was started,
@@ -18127,6 +18176,7 @@ fn main() {
             auto_setup_addon,
             install_addon_binary,
             remove_addon_binary,
+            restart_addon,
             remote_clear_streams_cache,
             sentry_report_error,
             run_sync_validation,
