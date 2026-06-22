@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils"
 import {
   Settings,
   Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3, Radio,
-  Pin, PinOff
+  Pin, PinOff, ShieldCheck
 } from "lucide-react"
 import { LazyMotion, domAnimation, m } from "framer-motion"
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react"
@@ -25,6 +25,7 @@ interface SidebarProps {
   showCloudTab?: boolean
   betaEnabled?: boolean
   downloadJobCount?: number
+  onSyncValidator?: () => void
 }
 
 export function Sidebar({
@@ -38,6 +39,7 @@ export function Sidebar({
   showCloudTab = true,
   betaEnabled: _betaEnabled = false,
   downloadJobCount = 0,
+  onSyncValidator,
 }: SidebarProps) {
   const subscribeWindowResize = useCallback((callback: () => void) => {
     window.addEventListener("resize", callback);
@@ -242,8 +244,8 @@ export function Sidebar({
                 aria-label="Update Library"
                 className={cn(
                   "w-full flex items-center justify-between transition-all duration-300",
-                  isCollapsed 
-                    ? "size-10 justify-center rounded-full bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08]" 
+                  isCollapsed
+                    ? "size-10 justify-center rounded-full bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08]"
                     : "px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] hover:border-white/10 group",
                   isCloudIndexing ? "opacity-70 cursor-wait" : ""
                 )}
@@ -254,6 +256,28 @@ export function Sidebar({
                   {!isCollapsed && <span className="text-xs font-bold text-neutral-300">Update Library</span>}
                 </div>
                 {!isCollapsed && <div className="size-1.5 rounded-full bg-white animate-pulse shadow-[0_0_8px_rgba(255,255,255,0.5)]" />}
+              </button>
+            )}
+
+            {onSyncValidator && (
+              <button
+                type="button"
+                onClick={onSyncValidator}
+                disabled={isCloudIndexing || isScanning}
+                aria-label="Sync Validator"
+                className={cn(
+                  "w-full flex items-center justify-between transition-all duration-300",
+                  isCollapsed
+                    ? "size-10 justify-center rounded-full bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08]"
+                    : "px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] hover:border-white/10 group",
+                  (isCloudIndexing || isScanning) ? "opacity-50 cursor-not-allowed" : ""
+                )}
+                title={isCollapsed ? "Sync Validator" : ""}
+              >
+                <div className={cn("flex items-center gap-3", isCollapsed ? "justify-center" : "")}>
+                  <ShieldCheck className="size-4 text-emerald-400" />
+                  {!isCollapsed && <span className="text-xs font-bold text-neutral-300">Sync Validator</span>}
+                </div>
               </button>
             )}
 

@@ -378,7 +378,7 @@ function RemoteSourceViewInner() {
     let unlistenCrash: (() => void) | undefined
     const setup = async () => {
       try {
-        unlistenLog = await listen<string>('addon-log', (event) => {
+        unlistenLog = await listen<string>('addon-log', (_event) => {
           // If we're getting logs, addon is alive — fetch version if missing
           if (!addonVersion && activeSource) {
             invoke<string | null>('get_addon_version', { url: activeSource.url })

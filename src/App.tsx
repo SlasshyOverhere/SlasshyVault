@@ -102,11 +102,13 @@ const loadSettingsModal = () => import('@/components/SettingsModal')
 const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
 const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
 const loadFixMatchModal = () => import('@/components/FixMatchModal')
+const loadSyncValidatorModal = () => import('@/components/SyncValidatorModal')
 
 const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
 const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
+const SyncValidatorModal = lazy(() => loadSyncValidatorModal().then(module => ({ default: module.SyncValidatorModal })))
 
 
 
@@ -222,13 +224,6 @@ const LoadingFallback = () => (
     <Loader2 className="size-8 animate-spin text-muted-foreground" />
   </div>
 )
-
-const formatTimeDigits = (date: Date) => {
-  const h = date.getHours() % 12 || 12
-  const m = date.getMinutes()
-  const s = date.getSeconds()
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
 
 const formatTime = (seconds: number): string => {
   const h = Math.floor(seconds / 3600)
@@ -497,6 +492,7 @@ function App() {
 
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [showSyncValidator, setShowSyncValidator] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
@@ -2432,6 +2428,7 @@ function App() {
             }}
             onOpenSettings={() => setSettingsOpen(true)}
             onCloudScan={handleCloudScan}
+            onSyncValidator={() => setShowSyncValidator(true)}
             theme={theme}
             toggleTheme={toggleTheme}
             isScanning={isScanning}
@@ -3172,6 +3169,13 @@ function App() {
               onOpenChange={setFixMatchOpen}
               item={itemToFix}
               onSuccess={handleFixMatchSuccess}
+            />
+          </Suspense>
+
+          <Suspense fallback={null}>
+            <SyncValidatorModal
+              isOpen={showSyncValidator}
+              onClose={() => setShowSyncValidator(false)}
             />
           </Suspense>
 
