@@ -471,7 +471,34 @@ function RemoteSourceViewInner() {
   }, [])
 
   // Stream verification removed — causes rate limiting against addon servers.
-  // All streams are shown as available without probing.
+  // Pixeldrain URLs are verified separately (direct CDN, safe to HEAD-check).
+  const [pixeldrainStatus, setPixeldrainStatus] = useState<Record<string, boolean>>({})
+  const [pixeldrainVerifying, setPixeldrainVerifying] = useState(false)
+
+  const isPixeldrainUrl = (url: string) => /pixeldrain\.\w+/i.test(url)
+
+  useEffect(() => {
+    if (!qualityOpen || groupedStreams.length === 0) return
+    const pdUrls: string[] = []
+    for (const g of groupedStreams) {
+      for (const s of g.streams) {
+        if (isPixeldrainUrl(s.url) && !pixeldrainStatus[s.url]) {
+          pdUrls.push(s.url)
+        }
+      }
+    }
+    if (pdUrls.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      setPixeldrainVerifying(true)
+      try {
+        const results = await invoke<Record<string, boolean>>('verify_stream_urls', { urls: pdUrls })
+        if (!cancelled) setPixeldrainStatus(prev => ({ ...prev, ...results }))
+      } catch { /* ignore */ }
+      if (!cancelled) setPixeldrainVerifying(false)
+    })()
+    return () => { cancelled = true }
+  }, [qualityOpen, groupedStreams])
 
   // Movie: fetch streams and open quality selector
   const handleFetchMovieStreams = useCallback(async (imdbId: string, forceRefresh = false) => {
@@ -1238,8 +1265,10 @@ function RemoteSourceViewInner() {
         onOpenUrl={(url) => window.open(url, '_blank')}
         loading={fetching}
         error={streamError}
-        verifying={false}
-        streamStatus={{}}
+        verifying={pixeldrainVerifying}
+        streamStatus={pixeldrainStatus}
+        verifyingUrls={new Set(Object.keys(pixeldrainStatus))}
+        addonContext={imdbIdRef.current && currentSeason ? { imdbId: imdbIdRef.current, season: currentSeason } : null}
       />
 
 
