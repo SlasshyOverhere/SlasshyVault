@@ -3,6 +3,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { X, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { cn } from "../lib/utils";
 import { runSyncValidation, fixSyncIssues, SyncIssue } from "../services/api";
+import { useToast } from "@/components/ui/use-toast";
 
 interface SyncValidatorModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
 };
 
 export function SyncValidatorModal({ isOpen, onClose }: SyncValidatorModalProps) {
+  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
   const [issues, setIssues] = useState<Map<string, SyncIssue[]>>(new Map());
   const [isRunning, setIsRunning] = useState(false);
@@ -100,6 +102,18 @@ export function SyncValidatorModal({ isOpen, onClose }: SyncValidatorModalProps)
             const { category, fixed, failed } = event.payload;
             setFixResults((prev) => new Map(prev).set(category, { fixed, failed }));
             setFixingCategory(null);
+            if (fixed > 0) {
+              toast({
+                title: "Fix Applied",
+                description: `${fixed} ${CATEGORY_LABELS[category]?.toLowerCase() || category} issue${fixed === 1 ? "" : "s"} fixed${failed > 0 ? `, ${failed} failed` : ""}.`,
+              });
+            } else if (failed > 0) {
+              toast({
+                title: "Fix Failed",
+                description: `Could not fix ${failed} ${CATEGORY_LABELS[category]?.toLowerCase() || category} issue${failed === 1 ? "" : "s"}.`,
+                variant: "destructive",
+              });
+            }
           }
         )
       );
@@ -111,7 +125,7 @@ export function SyncValidatorModal({ isOpen, onClose }: SyncValidatorModalProps)
     return () => {
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [isOpen, startValidation]);
+  }, [isOpen, startValidation, toast]);
 
   const toggleCategory = (cat: string) => {
     setExpandedCategories((prev) => {
