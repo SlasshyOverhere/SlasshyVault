@@ -17411,6 +17411,90 @@ async fn run_sync_validation(
     Ok(report)
 }
 
+#[tauri::command]
+async fn fix_sync_issues(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    category: String,
+    file_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    // Validate that we have a recent report
+    let last_report = state.last_validation_report.lock().map_err(|e| e.to_string())?;
+    let report = last_report.as_ref().ok_or("No validation report available. Run sync validation first.")?;
+
+    // Get the issues for this category to verify file_ids are valid — clone to release the lock
+    let issues: Vec<database::SyncIssue> = match category.as_str() {
+        "ghost" => report.ghost_entries.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "missing" => report.missing_files.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "failed" => report.failed_indexings.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "orphaned_zip" => report.orphaned_zip_entries.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "stale_token" => report.stale_token.clone(),
+        _ => return Err(format!("Unknown category: {}", category)),
+    };
+    drop(last_report);
+
+    let total = issues.len();
+    let mut fixed: usize = 0;
+    let mut failed: usize = 0;
+
+    for issue in &issues {
+        let _ = app.emit_all("sync-fix-progress", serde_json::json!({
+            "category": category,
+            "current": fixed + failed + 1,
+            "total": total
+        }));
+
+        match category.as_str() {
+            "ghost" | "orphaned_zip" => {
+                if let Some(id_str) = &issue.file_id {
+                    if let Ok(id) = id_str.parse::<i64>() {
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        match db.remove_media_by_id(id) {
+                            Ok(_) => fixed += 1,
+                            Err(_) => failed += 1,
+                        }
+                    } else {
+                        // For ghosts, file_id is cloud_file_id string — delete by cloud_file_id
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        match db.remove_media_by_cloud_file_id(id_str) {
+                            Ok(_) => fixed += 1,
+                            Err(_) => failed += 1,
+                        }
+                    }
+                }
+            }
+            "failed" => {
+                if let Some(fid) = &issue.file_id {
+                    let db = state.db.lock().map_err(|e| e.to_string())?;
+                    let _ = db.clear_cloud_index_failure(fid);
+                    drop(db);
+                    fixed += 1;
+                }
+            }
+            "stale_token" => {
+                // ponytail: check_cloud_changes_inner does not exist yet; skip until it is added
+                // When adding, call: match crate::check_cloud_changes_inner(&app, &state).await { ... }
+                failed += 1;
+                break; // Only one stale_token issue
+            }
+            _ => {}
+        }
+    }
+
+    let _ = app.emit_all("sync-fix-result", serde_json::json!({
+        "category": category,
+        "fixed": fixed,
+        "failed": failed
+    }));
+
+    Ok(serde_json::json!({
+        "category": category,
+        "fixed": fixed,
+        "failed": failed,
+        "total": total
+    }))
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -18038,6 +18122,7 @@ fn main() {
             remote_clear_streams_cache,
             sentry_report_error,
             run_sync_validation,
+            fix_sync_issues,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
