@@ -92,6 +92,7 @@ pub struct AppState {
     pub oauth_listener: Arc<Mutex<Option<tokio::net::TcpListener>>>,
     pub oauth_nonce: Arc<Mutex<Option<String>>>,
     pub cache_manager: stream_cache::CacheManager,
+    pub last_validation_report: Mutex<Option<database::SyncValidationReport>>,
 }
 
 /// RAII guard that prevents concurrent cloud folder scans.
@@ -17199,6 +17200,217 @@ fn sentry_report_error(context: String, details: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn run_sync_validation(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<database::SyncValidationReport, String> {
+    // Acquire scan lock — validation cannot run during a scan
+    let _lock = crate::ScanLock::try_acquire(&state.is_scanning)
+        .ok_or_else(|| "Cannot validate during an active scan. Wait for scan to complete.".to_string())?;
+
+    let total_steps: u8 = 5;
+    let mut report = database::SyncValidationReport {
+        ghost_entries: Vec::new(),
+        missing_files: Vec::new(),
+        failed_indexings: Vec::new(),
+        orphaned_zip_entries: Vec::new(),
+        stale_token: Vec::new(),
+        total_issues: 0,
+    };
+
+    // --- Check 1: Ghost entries ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 1, "total": total_steps, "category": "ghost", "status": "checking"
+    }));
+
+    let ghost_result = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_all_cloud_media_ids().map_err(|e| e.to_string())?
+    };
+
+    if !ghost_result.is_empty() {
+        let file_ids: Vec<String> = ghost_result.iter().map(|(fid, _, _)| fid.clone()).collect();
+        match state.gdrive_client.batch_check_file_exists(&file_ids).await {
+            Ok(existing) => {
+                for (fid, title, _db_id) in &ghost_result {
+                    if !existing.contains(fid) {
+                        report.ghost_entries.push(database::SyncIssue {
+                            category: "ghost".to_string(),
+                            file_name: title.clone(),
+                            file_id: Some(fid.clone()),
+                            reason: "File was deleted or moved on Google Drive".to_string(),
+                            fixable: true,
+                            fix_action: "remove".to_string(),
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                report.ghost_entries.push(database::SyncIssue {
+                    category: "ghost".to_string(),
+                    file_name: "Google Drive API".to_string(),
+                    file_id: None,
+                    reason: "Drive API unavailable — ghost check skipped".to_string(),
+                    fixable: false,
+                    fix_action: "none".to_string(),
+                });
+            }
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "ghost",
+        "issues": report.ghost_entries,
+        "count": report.ghost_entries.len()
+    }));
+
+    // --- Check 2: Missing files ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 2, "total": total_steps, "category": "missing", "status": "checking"
+    }));
+
+    let (folders, existing_ids) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let folders = db.get_cloud_folders().map_err(|e| e.to_string())?;
+        let cloud_ids = db.get_all_cloud_media_ids().map_err(|e| e.to_string())?;
+        let ids: std::collections::HashSet<String> = cloud_ids.into_iter().map(|(fid, _, _)| fid).collect();
+        (folders, ids)
+    };
+
+    for (folder_id, folder_name, _) in &folders {
+        match state.gdrive_client.list_video_files(folder_id, false).await {
+            Ok(files) => {
+                for file in files {
+                    if !existing_ids.contains(&file.id) {
+                        report.missing_files.push(database::SyncIssue {
+                            category: "missing".to_string(),
+                            file_name: file.name.clone(),
+                            file_id: Some(file.id.clone()),
+                            reason: "File exists on Drive but is not in the library".to_string(),
+                            fixable: true,
+                            fix_action: "reindex".to_string(),
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                report.missing_files.push(database::SyncIssue {
+                    category: "missing".to_string(),
+                    file_name: folder_name.clone(),
+                    file_id: None,
+                    reason: format!("Could not list folder '{}' — Drive API error", folder_name),
+                    fixable: false,
+                    fix_action: "none".to_string(),
+                });
+            }
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "missing",
+        "issues": report.missing_files,
+        "count": report.missing_files.len()
+    }));
+
+    // --- Check 3: Failed indexings ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 3, "total": total_steps, "category": "failed", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let failures = db.get_cloud_index_failures(1000).map_err(|e| e.to_string())?;
+        for f in failures {
+            report.failed_indexings.push(database::SyncIssue {
+                category: "failed".to_string(),
+                file_name: f.file_name,
+                file_id: Some(f.cloud_file_id),
+                reason: f.last_error,
+                fixable: true,
+                fix_action: "retry".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "failed",
+        "issues": report.failed_indexings,
+        "count": report.failed_indexings.len()
+    }));
+
+    // --- Check 4: Orphaned ZIP entries ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 4, "total": total_steps, "category": "orphaned_zip", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let orphans = db.get_orphaned_zip_entries().map_err(|e| e.to_string())?;
+        for (id, title, entry_path) in orphans {
+            report.orphaned_zip_entries.push(database::SyncIssue {
+                category: "orphaned_zip".to_string(),
+                file_name: format!("{}:{}", title, entry_path),
+                file_id: Some(id.to_string()),
+                reason: "Parent ZIP archive was removed but child entry remains".to_string(),
+                fixable: true,
+                fix_action: "remove".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "orphaned_zip",
+        "issues": report.orphaned_zip_entries,
+        "count": report.orphaned_zip_entries.len()
+    }));
+
+    // --- Check 5: Stale changes token ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 5, "total": total_steps, "category": "stale_token", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let (has_token, _token) = db.get_changes_token_status().map_err(|e| e.to_string())?;
+        if !has_token {
+            report.stale_token.push(database::SyncIssue {
+                category: "stale_token".to_string(),
+                file_name: "gdrive_changes_token".to_string(),
+                file_id: None,
+                reason: "No changes token found — next scan will be a full re-scan".to_string(),
+                fixable: true,
+                fix_action: "refresh_token".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "stale_token",
+        "issues": report.stale_token,
+        "count": report.stale_token.len()
+    }));
+
+    // --- Complete ---
+    report.total_issues = report.ghost_entries.len()
+        + report.missing_files.len()
+        + report.failed_indexings.len()
+        + report.orphaned_zip_entries.len()
+        + report.stale_token.len();
+
+    let _ = app.emit_all("sync-validation-complete", serde_json::json!({
+        "total_issues": report.total_issues,
+        "report": report
+    }));
+
+    // Store in AppState for fix_sync_issues to reference
+    if let Ok(mut last_report) = state.last_validation_report.lock() {
+        *last_report = Some(report.clone());
+    }
+
+    Ok(report)
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -17317,6 +17529,7 @@ fn main() {
         oauth_listener: Arc::new(Mutex::new(None)),
         oauth_nonce: Arc::new(Mutex::new(None)),
         cache_manager: stream_cache::CacheManager::new(),
+        last_validation_report: Mutex::new(None),
     };
 
     // Create system tray menu
@@ -17824,6 +18037,7 @@ fn main() {
             remove_addon_binary,
             remote_clear_streams_cache,
             sentry_report_error,
+            run_sync_validation,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
