@@ -5244,6 +5244,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.title, m.zip_entry_path FROM media m
              WHERE m.parent_zip_id IS NOT NULL
+             AND m.ddl_source_id IS NULL
              AND NOT EXISTS (SELECT 1 FROM media p WHERE p.id = m.parent_zip_id)",
         )?;
         let items = stmt.query_map([], |row| {
