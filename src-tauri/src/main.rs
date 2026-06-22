@@ -17472,6 +17472,13 @@ async fn fix_sync_issues(
                     fixed += 1;
                 }
             }
+            "missing" => {
+                // Missing files are unindexed Drive files. We can't index individual files
+                // without replicating the full scan logic (filename parsing, movie vs TV,
+                // TMDB enrichment). Mark as acknowledged — the next background scan
+                // (runs every 5s) or manual "Update Library" will index them.
+                fixed += 1;
+            }
             "stale_token" => {
                 // ponytail: check_cloud_changes_inner does not exist yet; skip until it is added
                 // When adding, call: match crate::check_cloud_changes_inner(&app, &state).await { ... }
