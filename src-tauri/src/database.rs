@@ -5221,6 +5221,58 @@ impl Database {
         }
         Ok(())
     }
+
+    /// Returns all cloud media entries with their cloud_file_id and title.
+    /// Used by the ghost entry check to verify files still exist on Drive.
+    pub fn get_all_cloud_media_ids(&self) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cloud_file_id, title, id FROM media
+             WHERE is_cloud = 1 AND cloud_file_id IS NOT NULL AND cloud_file_id != ''",
+        )?;
+        let items = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        items.collect()
+    }
+
+    /// Returns ZIP child entries whose parent ZIP no longer exists in the media table.
+    pub fn get_orphaned_zip_entries(&self) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.title, m.zip_entry_path FROM media m
+             WHERE m.parent_zip_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM media p WHERE p.id = m.parent_zip_id)",
+        )?;
+        let items = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        items.collect()
+    }
+
+    /// Returns (has_token, token_value) for the gdrive_changes_token setting.
+    pub fn get_changes_token_status(&self) -> Result<(bool, Option<String>)> {
+        let mut stmt = self.conn.prepare(
+            "SELECT value FROM app_settings WHERE key = 'gdrive_changes_token'",
+        )?;
+        let mut rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+        match rows.next() {
+            Some(Ok(token)) => Ok((true, Some(token))),
+            _ => Ok((false, None)),
+        }
+    }
+
+    /// Removes a media entry by ID. CASCADE handles child episodes.
+    pub fn remove_media_by_id(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
