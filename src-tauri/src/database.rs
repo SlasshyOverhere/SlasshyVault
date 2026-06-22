@@ -400,6 +400,26 @@ pub struct NewWatchlistItem<'a> {
     pub notify_at: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncIssue {
+    pub category: String,
+    pub file_name: String,
+    pub file_id: Option<String>,
+    pub reason: String,
+    pub fixable: bool,
+    pub fix_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncValidationReport {
+    pub ghost_entries: Vec<SyncIssue>,
+    pub missing_files: Vec<SyncIssue>,
+    pub failed_indexings: Vec<SyncIssue>,
+    pub orphaned_zip_entries: Vec<SyncIssue>,
+    pub stale_token: Vec<SyncIssue>,
+    pub total_issues: usize,
+}
+
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -1071,7 +1091,10 @@ impl Database {
         if search.is_some() {
             sql.push_str(" AND title LIKE ?");
         }
-        sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
+        // Only exclude remote:// items when explicitly requesting local-only content
+        if is_cloud == Some(false) {
+            sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
+        }
         sql.push_str(" ORDER BY title");
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -1154,7 +1177,10 @@ impl Database {
             }
         }
 
-        sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
+        // Only exclude remote:// items when explicitly requesting local-only content
+        if is_cloud == Some(false) {
+            sql.push_str(" AND (file_path IS NULL OR file_path NOT LIKE 'remote://%')");
+        }
         sql.push_str(" ORDER BY id DESC LIMIT ?");
 
         let mut stmt = self.conn.prepare(&sql)?;
