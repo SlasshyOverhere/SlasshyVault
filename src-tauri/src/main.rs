@@ -17418,11 +17418,13 @@ async fn fix_sync_issues(
     category: String,
     file_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
-    // Validate that we have a recent report
-    let last_report = state.last_validation_report.lock().map_err(|e| e.to_string())?;
-    let report = last_report.as_ref().ok_or("No validation report available. Run sync validation first.")?;
+    // Validate that we have a recent report — clone to release the lock
+    let report = {
+        let guard = state.last_validation_report.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No validation report available. Run sync validation first.")?
+    };
 
-    // Get the issues for this category to verify file_ids are valid — clone to release the lock
+    // Get the issues for this category to verify file_ids are valid
     let issues: Vec<database::SyncIssue> = match category.as_str() {
         "ghost" => report.ghost_entries.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
         "missing" => report.missing_files.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
@@ -17431,7 +17433,6 @@ async fn fix_sync_issues(
         "stale_token" => report.stale_token.clone(),
         _ => return Err(format!("Unknown category: {}", category)),
     };
-    drop(last_report);
 
     let total = issues.len();
     let mut fixed: usize = 0;

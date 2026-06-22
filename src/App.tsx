@@ -2658,18 +2658,20 @@ function App() {
                           {/* 1. Header Row: Clock + Branding + Date */}
                            <div className="pt-16 pb-6 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
                             <div className="flex flex-col items-center gap-2">
-                                <div className="flex items-baseline gap-2">
-                                    <h1 className="text-5xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
-                                        {formatTimeDigits(currentTime)}
+                                <div className="flex items-baseline gap-3">
+                                    <h1 className="text-5xl font-black text-white tabular-nums drop-shadow-2xl flex items-center gap-2">
+                                        <span>{String(currentTime.getHours()).padStart(2, '0')}</span>
+                                        <span className="text-white/40">:</span>
+                                        <span>{String(currentTime.getMinutes()).padStart(2, '0')}</span>
+                                        <span className="text-white/40">:</span>
+                                        <span>{String(currentTime.getSeconds()).padStart(2, '0')}</span>
                                     </h1>
-                                    <span className="text-sm font-bold text-white/30 tracking-[0.15em] uppercase">
-                                        {currentTime.getHours() >= 12 ? 'pm' : 'am'}
-                                    </span>
                                 </div>
                                 <p className="text-xs font-bold text-white/20 uppercase tracking-[0.25em]">
                                     {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                                 </p>
-                            </div>                          </div>
+                            </div>
+                          </div>
 
                           {/* 2. Centered Sleek Search Bar */}
                           <div className="flex justify-center px-6 pb-12 flex-shrink-0 w-full">
