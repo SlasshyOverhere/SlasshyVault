@@ -99,12 +99,12 @@ export function Sidebar({
 
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
-    { id: "remote", label: "External", icon: Radio },
     { id: "cloud", label: "Library", icon: Cloud, hidden: !showCloudTab },
-    { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
+    { id: "remote", label: "External", icon: Radio },
     { id: "directlinks", label: "Direct Links", icon: Link2 },
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
-    { id: "analytics", label: "History & Analytics", icon: BarChart3 },
+    { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
+    { id: "history", label: "History & Analytics", icon: BarChart3 },
   ].filter(item => !item.hidden);
 
   return (
