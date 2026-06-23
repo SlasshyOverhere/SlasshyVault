@@ -102,6 +102,27 @@ pub struct MediaItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteBookmark {
+    pub tmdb_id: String,
+    pub media_type: String,
+    pub title: String,
+    pub year: Option<i32>,
+    pub poster_path: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemotePlaybackProgress {
+    pub tmdb_id: String,
+    pub media_type: String,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub resume_position_seconds: f64,
+    pub duration_seconds: f64,
+    pub last_watched: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZipArchiveRecord {
     pub zip_file_id: String,
     pub filename: String,
@@ -651,6 +672,52 @@ impl Database {
             )",
             [],
         )?;
+
+        // Lightweight bookmark table for External tab "My Library"
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS remote_bookmarks (
+                tmdb_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                year INTEGER,
+                poster_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tmdb_id, media_type)
+            )",
+            [],
+        )?;
+
+        // Playback progress for remote content (movies and individual episodes)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS remote_playback_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tmdb_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                season_number INTEGER DEFAULT -1,
+                episode_number INTEGER DEFAULT -1,
+                resume_position_seconds REAL DEFAULT 0,
+                duration_seconds REAL DEFAULT 0,
+                last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tmdb_id, media_type, season_number, episode_number)
+            )",
+            [],
+        )?;
+
+        // One-time migration: copy existing remote library items to bookmarks table
+        let bookmark_count: i64 = self.conn
+            .query_row("SELECT COUNT(*) FROM remote_bookmarks", [], |r| r.get(0))
+            .unwrap_or(0);
+        if bookmark_count == 0 {
+            let _ = self.conn.execute(
+                "INSERT OR IGNORE INTO remote_bookmarks (tmdb_id, media_type, title, year, poster_path)
+                 SELECT tmdb_id,
+                        CASE WHEN media_type = 'tvshow' THEN 'tv' ELSE 'movie' END,
+                        title, year, poster_path
+                 FROM media
+                 WHERE file_path LIKE 'remote://%' AND is_remote_library = 1 AND tmdb_id IS NOT NULL",
+                [],
+            );
+        }
 
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS watch_history_events (
@@ -3494,6 +3561,42 @@ impl Database {
         rows.collect()
     }
 
+    /// Look up a media entry by cloud_file_id. Returns (id, title, media_type, parent_id).
+    pub fn get_media_info_by_cloud_file_id(
+        &self,
+        cloud_file_id: &str,
+    ) -> Result<Option<(i64, String, String, Option<i64>)>> {
+        self.conn
+            .query_row(
+                "SELECT id, title, media_type, parent_id FROM media WHERE cloud_file_id = ?",
+                params![cloud_file_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other.into()),
+            })
+    }
+
+    /// Preserve watch progress for ZIP children of a given archive before they get deleted.
+    pub fn preserve_watch_progress_for_zip_children(&self, cloud_file_id: &str) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(resume_position_seconds, 0), COALESCE(duration_seconds, 0)
+             FROM media WHERE parent_zip_id = ? AND last_watched IS NOT NULL",
+        )?;
+        let children: Vec<(i64, f64, f64)> = stmt
+            .query_map(params![cloud_file_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (child_id, resume, duration) in children {
+            let _ = self.record_watch_event(child_id, resume, duration);
+        }
+        Ok(())
+    }
+
     /// Remove media by cloud file ID and return basic info
     pub fn remove_media_by_cloud_file_id(
         &self,
@@ -3898,58 +4001,6 @@ impl Database {
             .into_iter()
             .map(Ok)
             .collect()
-    }
-
-    /// Get remote source library: all TV show and movie records created by the External tab.
-    pub fn get_remote_library(&self) -> Result<Vec<MediaItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
-                    duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id
-             FROM media
-             WHERE file_path LIKE 'remote://%'
-               AND media_type IN ('movie', 'tvshow')
-               AND is_remote_library = 1
-             ORDER BY COALESCE(last_watched, '1970-01-01') DESC, id DESC",
-        )?;
-
-        let items = stmt.query_map([], Self::map_media_item)?;
-        items
-            .filter_map(|r| r.ok())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(Ok)
-            .collect()
-    }
-
-    /// Get remote episodes for a specific TV show, ordered by season/episode.
-    pub fn get_remote_episodes(&self, show_id: i64) -> Result<Vec<MediaItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
-                    duration_seconds, resume_position_seconds, last_watched,
-                    season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id
-             FROM media
-             WHERE parent_id = ? AND media_type = 'tvepisode' AND file_path LIKE 'remote://%'
-             ORDER BY season_number, episode_number",
-        )?;
-        let items = stmt.query_map(params![show_id], Self::map_media_item)?;
-        items
-            .filter_map(|r| r.ok())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(Ok)
-            .collect()
-    }
-
-    /// Set the is_remote_library flag for a media item.
-    pub fn set_remote_library_flag(&self, media_id: i64, in_library: bool) -> Result<()> {
-        self.conn.execute(
-            "UPDATE media SET is_remote_library = ?1 WHERE id = ?2",
-            params![if in_library { 1 } else { 0 }, media_id],
-        )?;
-        Ok(())
     }
 
     /// Get all poster paths currently in use (including still_paths and cached episode images)
@@ -5088,137 +5139,176 @@ impl Database {
 
     // ── Remote Source (External tab) helpers ──
 
-    pub fn find_media_by_tmdb_id(&self, tmdb_id: &str, media_type: &str) -> Result<Option<i64>> {
+    pub fn add_remote_bookmark(
+        &self,
+        tmdb_id: &str,
+        media_type: &str,
+        title: &str,
+        year: Option<i32>,
+        poster_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO remote_bookmarks (tmdb_id, media_type, title, year, poster_path)
+             VALUES (?, ?, ?, ?, ?)",
+            params![tmdb_id, media_type, title, year, poster_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_remote_bookmark(&self, tmdb_id: &str, media_type: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM remote_bookmarks WHERE tmdb_id = ? AND media_type = ?",
+            params![tmdb_id, media_type],
+        )?;
+        let _ = self.conn.execute(
+            "DELETE FROM remote_playback_progress WHERE tmdb_id = ? AND media_type = ?",
+            params![tmdb_id, media_type],
+        );
+        Ok(())
+    }
+
+    pub fn get_remote_bookmarks(&self) -> Result<Vec<RemoteBookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE tmdb_id = ? AND media_type = ? AND file_path LIKE 'remote://%' LIMIT 1"
+            "SELECT tmdb_id, media_type, title, year, poster_path, created_at
+             FROM remote_bookmarks
+             ORDER BY created_at DESC",
+        )?;
+        let items = stmt.query_map([], |row| {
+            Ok(RemoteBookmark {
+                tmdb_id: row.get(0)?,
+                media_type: row.get(1)?,
+                title: row.get(2)?,
+                year: row.get(3)?,
+                poster_path: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+    }
+
+    pub fn is_remote_bookmarked(&self, tmdb_id: &str, media_type: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare(
+            "SELECT 1 FROM remote_bookmarks WHERE tmdb_id = ? AND media_type = ? LIMIT 1"
         )?;
         let mut rows = stmt.query(params![tmdb_id, media_type])?;
+        Ok(rows.next()?.is_some())
+    }
+
+    pub fn upsert_playback_progress(
+        &self,
+        tmdb_id: &str,
+        media_type: &str,
+        season_number: Option<i32>,
+        episode_number: Option<i32>,
+        resume_position_seconds: f64,
+        duration_seconds: f64,
+    ) -> Result<()> {
+        let sn = season_number.unwrap_or(-1);
+        let en = episode_number.unwrap_or(-1);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO remote_playback_progress
+             (tmdb_id, media_type, season_number, episode_number, resume_position_seconds, duration_seconds, last_watched)
+             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            params![tmdb_id, media_type, sn, en, resume_position_seconds, duration_seconds],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_progress_for_item(
+        &self,
+        tmdb_id: &str,
+        media_type: &str,
+        season_number: Option<i32>,
+        episode_number: Option<i32>,
+    ) -> Result<Option<RemotePlaybackProgress>> {
+        let sn = season_number.unwrap_or(-1);
+        let en = episode_number.unwrap_or(-1);
+        let mut stmt = self.conn.prepare(
+            "SELECT tmdb_id, media_type, season_number, episode_number, resume_position_seconds, duration_seconds, last_watched
+             FROM remote_playback_progress
+             WHERE tmdb_id = ? AND media_type = ?
+               AND season_number = ? AND episode_number = ?
+             LIMIT 1"
+        )?;
+        let mut rows = stmt.query(params![tmdb_id, media_type, sn, en])?;
         match rows.next()? {
-            Some(row) => Ok(Some(row.get(0)?)),
+            Some(row) => {
+                let sn: i32 = row.get(2)?;
+                let en: i32 = row.get(3)?;
+                Ok(Some(RemotePlaybackProgress {
+                    tmdb_id: row.get(0)?,
+                    media_type: row.get(1)?,
+                    season_number: if sn < 0 { None } else { Some(sn) },
+                    episode_number: if en < 0 { None } else { Some(en) },
+                    resume_position_seconds: row.get(4)?,
+                    duration_seconds: row.get(5)?,
+                    last_watched: row.get(6)?,
+                }))
+            }
             None => Ok(None),
         }
     }
 
-    pub fn find_remote_episode(&self, parent_id: i64, season: i32, episode: i32) -> Result<Option<i64>> {
+    pub fn get_all_progress_for_show(&self, tmdb_id: &str) -> Result<Vec<RemotePlaybackProgress>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE parent_id = ? AND season_number = ? AND episode_number = ? AND media_type = 'tvepisode' AND file_path LIKE 'remote://%' LIMIT 1"
+            "SELECT tmdb_id, media_type, season_number, episode_number, resume_position_seconds, duration_seconds, last_watched
+             FROM remote_playback_progress
+             WHERE tmdb_id = ? AND media_type = 'tv'
+             ORDER BY season_number, episode_number"
         )?;
-        let mut rows = stmt.query(params![parent_id, season, episode])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row.get(0)?)),
-            None => Ok(None),
-        }
+        let items = stmt.query_map(params![tmdb_id], |row| {
+            let sn: i32 = row.get(2)?;
+            let en: i32 = row.get(3)?;
+            Ok(RemotePlaybackProgress {
+                tmdb_id: row.get(0)?,
+                media_type: row.get(1)?,
+                season_number: if sn < 0 { None } else { Some(sn) },
+                episode_number: if en < 0 { None } else { Some(en) },
+                resume_position_seconds: row.get(4)?,
+                duration_seconds: row.get(5)?,
+                last_watched: row.get(6)?,
+            })
+        })?;
+        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
     }
 
-    pub fn insert_or_get_remote_movie(
+    pub fn get_all_playback_progress(&self) -> Result<Vec<RemotePlaybackProgress>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tmdb_id, media_type, season_number, episode_number, resume_position_seconds, duration_seconds, last_watched
+             FROM remote_playback_progress
+             ORDER BY last_watched DESC"
+        )?;
+        let items = stmt.query_map([], |row| {
+            let sn: i32 = row.get(2)?;
+            let en: i32 = row.get(3)?;
+            Ok(RemotePlaybackProgress {
+                tmdb_id: row.get(0)?,
+                media_type: row.get(1)?,
+                season_number: if sn < 0 { None } else { Some(sn) },
+                episode_number: if en < 0 { None } else { Some(en) },
+                resume_position_seconds: row.get(4)?,
+                duration_seconds: row.get(5)?,
+                last_watched: row.get(6)?,
+            })
+        })?;
+        items.filter_map(|r| r.ok()).collect::<Vec<_>>().into_iter().map(Ok).collect()
+    }
+
+    pub fn clear_playback_progress(
         &self,
         tmdb_id: &str,
-        title: &str,
-        year: Option<i32>,
-        poster_path: Option<&str>,
-        overview: Option<&str>,
-    ) -> Result<i64> {
-        if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "movie")? {
-            if poster_path.is_some() || overview.is_some() || year.is_some() {
-                let _ = self.conn.execute(
-                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
-                    params![poster_path, overview, year, id],
-                );
-            }
-            return Ok(id);
-        }
-        let file_path = format!("remote://movie/{}", tmdb_id);
+        media_type: &str,
+        season_number: Option<i32>,
+        episode_number: Option<i32>,
+    ) -> Result<()> {
+        let sn = season_number.unwrap_or(-1);
+        let en = episode_number.unwrap_or(-1);
         self.conn.execute(
-            "INSERT INTO media (title, year, poster_path, overview, file_path, media_type, tmdb_id)
-             VALUES (?, ?, ?, ?, ?, 'movie', ?)",
-            params![title, year, poster_path, overview, file_path, tmdb_id],
+            "DELETE FROM remote_playback_progress
+             WHERE tmdb_id = ? AND media_type = ?
+               AND season_number = ? AND episode_number = ?",
+            params![tmdb_id, media_type, sn, en],
         )?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    pub fn insert_or_get_remote_tvshow(
-        &self,
-        tmdb_id: &str,
-        title: &str,
-        year: Option<i32>,
-        poster_path: Option<&str>,
-        overview: Option<&str>,
-    ) -> Result<i64> {
-        if let Some(id) = self.find_media_by_tmdb_id(tmdb_id, "tvshow")? {
-            if poster_path.is_some() || overview.is_some() || year.is_some() {
-                let _ = self.conn.execute(
-                    "UPDATE media SET poster_path = COALESCE(?, poster_path), overview = COALESCE(?, overview), year = COALESCE(?, year) WHERE id = ?",
-                    params![poster_path, overview, year, id],
-                );
-            }
-            return Ok(id);
-        }
-        let file_path = format!("remote://tvshow/{}", tmdb_id);
-        self.conn.execute(
-            "INSERT INTO media (title, year, poster_path, overview, file_path, media_type, tmdb_id)
-             VALUES (?, ?, ?, ?, ?, 'tvshow', ?)",
-            params![title, year, poster_path, overview, file_path, tmdb_id],
-        )?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    pub fn insert_or_get_remote_episode(
-        &self,
-        parent_id: i64,
-        season: i32,
-        episode: i32,
-        show_title: &str,
-        episode_title: Option<&str>,
-        still_path: Option<&str>,
-        overview: Option<&str>,
-    ) -> Result<i64> {
-        if let Some(id) = self.find_remote_episode(parent_id, season, episode)? {
-            // Update metadata in case it changed
-            if let Err(e) = self.conn.execute(
-                "UPDATE media SET episode_title = COALESCE(?, episode_title), still_path = COALESCE(?, still_path), overview = COALESCE(?, overview) WHERE id = ?",
-                params![episode_title, still_path, overview, id],
-            ) {
-                println!("[DB] Warning: failed to update remote episode metadata: {}", e);
-            }
-            return Ok(id);
-        }
-        let parent_tmdb: Option<String> = self.conn
-            .query_row(
-                "SELECT tmdb_id FROM media WHERE id = ?",
-                params![parent_id],
-                |row| row.get(0),
-            )
-            .ok();
-        let tmdb_part = parent_tmdb.as_deref().unwrap_or("unknown");
-        let file_path = format!("remote://tvshow/{}/S{:02}E{:02}", tmdb_part, season, episode);
-        let ep_name = episode_title.unwrap_or("");
-        self.conn.execute(
-            "INSERT INTO media (title, file_path, media_type, parent_id, season_number, episode_number, episode_title, still_path, overview)
-             VALUES (?, ?, 'tvepisode', ?, ?, ?, ?, ?, ?)",
-            params![show_title, file_path, parent_id, season, episode, ep_name, still_path, overview],
-        )?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    pub fn update_remote_poster(&self, tmdb_id: &str, poster_path: Option<&str>, _backdrop_path: Option<&str>) -> Result<()> {
-        // Update poster for ALL remote entries matching this tmdb_id (show + episodes),
-        // not just one. backdrop_path is accepted for API compatibility but the media
-        // table has no backdrop_path column yet.
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM media WHERE tmdb_id = ? AND file_path LIKE 'remote://%'"
-        )?;
-        let ids: Vec<i64> = {
-            let mut rows = stmt.query(params![tmdb_id])?;
-            std::iter::from_fn(|| rows.next().ok().flatten().map(|r| r.get::<_, i64>(0).unwrap())).collect()
-        };
-        for id in ids {
-            if let Some(pp) = poster_path {
-                let _ = self.conn.execute(
-                    "UPDATE media SET poster_path = COALESCE(?, poster_path) WHERE id = ?",
-                    params![pp, id],
-                );
-            }
-        }
         Ok(())
     }
 
@@ -5267,6 +5357,46 @@ impl Database {
             Some(Ok(token)) => Ok((true, Some(token))),
             _ => Ok((false, None)),
         }
+    }
+
+    /// Preserve watch progress for a media entry (and its children) before deletion.
+    /// Snapshots current progress into watch_history_events so Continue Watching
+    /// survives ghost/orphan cleanup. No-op if the entry has no last_watched.
+    pub fn preserve_watch_progress_for_media(&self, media_id: i64) -> Result<()> {
+        // Preserve for the entry itself
+        let (resume, duration, last_watched): (f64, f64, Option<String>) = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(resume_position_seconds, 0), COALESCE(duration_seconds, 0), last_watched FROM media WHERE id = ?",
+                params![media_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap_or((0.0, 0.0, None));
+
+        if last_watched.is_some() && (resume > 0.0 || duration > 0.0) {
+            let _ = self.record_watch_event(media_id, resume, duration);
+        }
+
+        // Preserve for child episodes (CASCADE will delete them too)
+        let children: Vec<(i64, f64, f64)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, COALESCE(resume_position_seconds, 0), COALESCE(duration_seconds, 0)
+                 FROM media WHERE parent_id = ? AND last_watched IS NOT NULL",
+            )?;
+            let rows: Vec<(i64, f64, f64)> = stmt
+                .query_map(params![media_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+
+        for (child_id, child_resume, child_duration) in children {
+            let _ = self.record_watch_event(child_id, child_resume, child_duration);
+        }
+
+        Ok(())
     }
 
     /// Removes a media entry by ID. CASCADE handles child episodes.
@@ -7533,110 +7663,77 @@ mod tests {
         cleanup(db, db_path);
     }
 
-    // ==================== REMOTE HELPERS ====================
+    // ==================== REMOTE BOOKMARKS ====================
 
     #[test]
-    fn find_media_by_tmdb_id_returns_id() {
+    fn remote_bookmark_add_get_remove() {
         let (db, db_path) = make_db();
-        let id = db.insert_or_get_remote_movie("tmdb-fm", "Movie", Some(2024), None, None).unwrap();
 
-        let found = db.find_media_by_tmdb_id("tmdb-fm", "movie").unwrap();
-        assert_eq!(found, Some(id));
+        db.add_remote_bookmark("12345", "movie", "Test Movie", Some(2024), Some("/poster.jpg")).unwrap();
+        db.add_remote_bookmark("67890", "tv", "Test Show", Some(2023), None).unwrap();
 
-        assert!(db.find_media_by_tmdb_id("tmdb-none", "movie").unwrap().is_none());
+        let bookmarks = db.get_remote_bookmarks().unwrap();
+        assert_eq!(bookmarks.len(), 2);
+
+        assert!(db.is_remote_bookmarked("12345", "movie").unwrap());
+        assert!(db.is_remote_bookmarked("67890", "tv").unwrap());
+        assert!(!db.is_remote_bookmarked("99999", "movie").unwrap());
+
+        db.remove_remote_bookmark("12345", "movie").unwrap();
+        let bookmarks = db.get_remote_bookmarks().unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        assert!(!db.is_remote_bookmarked("12345", "movie").unwrap());
+
         cleanup(db, db_path);
     }
 
     #[test]
-    fn find_remote_episode_returns_ep_id() {
+    fn remote_bookmark_upsert_replaces() {
         let (db, db_path) = make_db();
-        let show_id = db.insert_or_get_remote_tvshow("tmdb-show", "Show", None, None, None).unwrap();
-        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", Some("Pilot"), None, None).unwrap();
 
-        let found = db.find_remote_episode(show_id, 1, 1).unwrap();
-        assert_eq!(found, Some(ep_id));
+        db.add_remote_bookmark("111", "movie", "Old Title", None, None).unwrap();
+        db.add_remote_bookmark("111", "movie", "New Title", Some(2025), Some("/new.jpg")).unwrap();
 
-        assert!(db.find_remote_episode(show_id, 2, 1).unwrap().is_none());
+        let bookmarks = db.get_remote_bookmarks().unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].title, "New Title");
+        assert_eq!(bookmarks[0].year, Some(2025));
+
+        cleanup(db, db_path);
+    }
+
+    // ==================== REMOTE PLAYBACK PROGRESS ====================
+
+    #[test]
+    fn remote_progress_upsert_and_get() {
+        let (db, db_path) = make_db();
+
+        db.upsert_playback_progress("123", "tv", Some(1), Some(5), 300.0, 2400.0).unwrap();
+        db.upsert_playback_progress("123", "tv", Some(1), Some(6), 0.0, 2400.0).unwrap();
+
+        let ep5 = db.get_progress_for_item("123", "tv", Some(1), Some(5)).unwrap().unwrap();
+        assert_eq!(ep5.resume_position_seconds, 300.0);
+        assert_eq!(ep5.duration_seconds, 2400.0);
+
+        let all = db.get_all_progress_for_show("123").unwrap();
+        assert_eq!(all.len(), 2);
+
+        let everything = db.get_all_playback_progress().unwrap();
+        assert_eq!(everything.len(), 2);
+
         cleanup(db, db_path);
     }
 
     #[test]
-    fn insert_or_get_remote_movie_creates_and_reuses() {
+    fn remote_progress_clear() {
         let (db, db_path) = make_db();
-        let id1 = db.insert_or_get_remote_movie("tmdb-rg", "Movie", Some(2024), Some("/p.jpg"), Some("overview")).unwrap();
-        let id2 = db.insert_or_get_remote_movie("tmdb-rg", "Movie", None, None, None).unwrap();
-        assert_eq!(id1, id2);
 
-        let item = db.get_media_by_id(id1).unwrap();
-        assert_eq!(item.media_type, "movie");
-        assert!(item.file_path.as_deref().unwrap().starts_with("remote://"));
-        cleanup(db, db_path);
-    }
+        db.upsert_playback_progress("999", "movie", None, None, 500.0, 7200.0).unwrap();
+        assert!(db.get_progress_for_item("999", "movie", None, None).unwrap().is_some());
 
-    #[test]
-    fn insert_or_get_remote_tvshow_creates_and_reuses() {
-        let (db, db_path) = make_db();
-        let id1 = db.insert_or_get_remote_tvshow("tmdb-rts", "Show", Some(2023), Some("/s.jpg"), Some("desc")).unwrap();
-        let id2 = db.insert_or_get_remote_tvshow("tmdb-rts", "Show", None, None, None).unwrap();
-        assert_eq!(id1, id2);
+        db.clear_playback_progress("999", "movie", None, None).unwrap();
+        assert!(db.get_progress_for_item("999", "movie", None, None).unwrap().is_none());
 
-        let item = db.get_media_by_id(id1).unwrap();
-        assert_eq!(item.media_type, "tvshow");
-        cleanup(db, db_path);
-    }
-
-    #[test]
-    fn insert_or_get_remote_episode_creates_and_reuses() {
-        let (db, db_path) = make_db();
-        let show_id = db.insert_or_get_remote_tvshow("tmdb-re", "Show", None, None, None).unwrap();
-        let ep1 = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", Some("Pilot"), Some("/still.jpg"), Some("overview")).unwrap();
-        let ep2 = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
-        assert_eq!(ep1, ep2);
-
-        let item = db.get_media_by_id(ep1).unwrap();
-        assert_eq!(item.media_type, "tvepisode");
-        assert_eq!(item.season_number, Some(1));
-        cleanup(db, db_path);
-    }
-
-    #[test]
-    fn update_remote_poster_updates_all_matching() {
-        let (db, db_path) = make_db();
-        let show_id = db.insert_or_get_remote_tvshow("tmdb-up", "Show", None, None, None).unwrap();
-        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
-
-        db.update_remote_poster("tmdb-up", Some("/new_poster.jpg"), None).unwrap();
-
-        // Only entries with matching tmdb_id get updated (show, not episodes which lack direct tmdb_id)
-        let show = db.get_media_by_id(show_id).unwrap();
-        assert_eq!(show.poster_path.as_deref(), Some("/new_poster.jpg"));
-        cleanup(db, db_path);
-    }
-
-    // ==================== REMOTE LIBRARY FLAG / GET ====================
-
-    #[test]
-    fn set_remote_library_flag_and_get_remote_library() {
-        let (db, db_path) = make_db();
-        let show_id = db.insert_or_get_remote_tvshow("tmdb-rl", "Show", Some(2024), None, None).unwrap();
-        let ep_id = db.insert_or_get_remote_episode(show_id, 1, 1, "Show", None, None, None).unwrap();
-
-        // Not in library yet
-        assert!(db.get_remote_library().unwrap().is_empty());
-
-        db.set_remote_library_flag(show_id, true).unwrap();
-        let lib = db.get_remote_library().unwrap();
-        assert_eq!(lib.len(), 1);
-        assert_eq!(lib[0].id, show_id);
-
-        // Remote episodes
-        let eps = db.get_remote_episodes(show_id).unwrap();
-        assert_eq!(eps.len(), 1);
-        assert_eq!(eps[0].id, ep_id);
-
-        // Unset flag
-        db.set_remote_library_flag(show_id, false).unwrap();
-        assert!(db.get_remote_library().unwrap().is_empty());
         cleanup(db, db_path);
     }
 

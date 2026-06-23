@@ -16336,26 +16336,6 @@ async fn remote_play_with_mpv(
 }
 
 #[tauri::command]
-async fn remote_play_with_resume(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    media_id: i64,
-) -> Result<RemotePlaybackResponse, String> {
-    // Called after user chooses "Resume" from the dialog
-    // Just returns the resume info so the frontend can re-call remote_play_with_mpv
-    // with the appropriate resume flag
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
-    Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: info.has_progress,
-        position: info.position,
-        duration: info.duration,
-        progress_percent: info.progress_percent,
-    })
-}
-
-#[tauri::command]
 async fn remote_clear_progress(
     state: State<'_, AppState>,
     media_id: i64,
@@ -16365,7 +16345,7 @@ async fn remote_clear_progress(
 }
 
 /// Check resume info for a remote media item BEFORE launching playback.
-/// Looks up the media record by tmdb_id (and season/episode for TV).
+/// Looks up resume progress from the remote_playback_progress table.
 #[tauri::command]
 async fn remote_get_resume_info(
     state: State<'_, AppState>,
@@ -16376,48 +16356,21 @@ async fn remote_get_resume_info(
 ) -> Result<RemotePlaybackResponse, String> {
     let tmdb_str = tmdb_id.to_string();
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let media_id = if media_type == "tv" {
-        // Find the show first, then the episode
-        let show_id = match db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
-        };
-        match db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+    let progress = db.get_progress_for_item(&tmdb_str, &media_type, season_number, episode_number)
+        .map_err(|e| e.to_string())?;
+    match progress {
+        Some(p) if p.duration_seconds > 0.0 => {
+            let percent = (p.resume_position_seconds / p.duration_seconds * 100.0).min(100.0);
+            Ok(RemotePlaybackResponse {
+                media_id: 0,
+                has_resume: true,
+                position: p.resume_position_seconds,
+                duration: p.duration_seconds,
+                progress_percent: percent,
+            })
         }
-    } else {
-        match db.find_media_by_tmdb_id(&tmdb_str, "movie")
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
-        }
-    };
-    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
-    Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: info.has_progress,
-        position: info.position,
-        duration: info.duration,
-        progress_percent: info.progress_percent,
-    })
-}
-
-#[tauri::command]
-async fn remote_update_poster(
-    state: State<'_, AppState>,
-    tmdb_id: i64,
-    poster_path: Option<String>,
-) -> Result<(), String> {
-    let tmdb_str = tmdb_id.to_string();
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.update_remote_poster(&tmdb_str, poster_path.as_deref(), None)
-        .map_err(|e| e.to_string())
+        _ => Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+    }
 }
 
 #[tauri::command]
@@ -16480,21 +16433,19 @@ async fn remote_cleanup_all_cache(
 #[tauri::command]
 async fn remote_get_library(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::database::MediaItem>, String> {
+) -> Result<Vec<crate::database::RemoteBookmark>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_remote_library().map_err(|e| e.to_string())
+    db.get_remote_bookmarks().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn remote_remove_from_library(
     state: State<'_, AppState>,
-    media_id: i64,
+    tmdb_id: String,
+    media_type: String,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    // Remove episodes first if this is a TV show parent
-    db.remove_series_episodes(media_id).map_err(|e| e.to_string()).ok();
-    db.remove_media(media_id).map_err(|e| e.to_string())?;
-    Ok(())
+    db.remove_remote_bookmark(&tmdb_id, &media_type).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -16505,25 +16456,52 @@ async fn remote_add_to_library(
     media_type: String,
     year: Option<i32>,
     poster_path: Option<String>,
-    overview: Option<String>,
-) -> Result<i64, String> {
+) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let id = if media_type == "movie" {
-        db.insert_or_get_remote_movie(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
-    } else {
-        db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
-    }.map_err(|e| e.to_string())?;
-    db.set_remote_library_flag(id, true).map_err(|e| e.to_string())?;
-    Ok(id)
+    db.add_remote_bookmark(&tmdb_id, &media_type, &title, year, poster_path.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn remote_get_episodes(
+async fn remote_is_bookmarked(
     state: State<'_, AppState>,
-    show_id: i64,
-) -> Result<Vec<crate::database::MediaItem>, String> {
+    tmdb_id: String,
+    media_type: String,
+) -> Result<bool, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_remote_episodes(show_id).map_err(|e| e.to_string())
+    db.is_remote_bookmarked(&tmdb_id, &media_type).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_update_progress(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+    media_type: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    resume_position_seconds: f64,
+    duration_seconds: f64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.upsert_playback_progress(&tmdb_id, &media_type, season_number, episode_number, resume_position_seconds, duration_seconds)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_get_show_progress(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+) -> Result<Vec<crate::database::RemotePlaybackProgress>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_all_progress_for_show(&tmdb_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_get_all_progress(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::database::RemotePlaybackProgress>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_all_playback_progress().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -17494,13 +17472,20 @@ async fn fix_sync_issues(
                 if let Some(id_str) = &issue.file_id {
                     if let Ok(id) = id_str.parse::<i64>() {
                         let db = state.db.lock().map_err(|e| e.to_string())?;
+                        let _ = db.preserve_watch_progress_for_media(id);
                         match db.remove_media_by_id(id) {
                             Ok(_) => fixed += 1,
                             Err(_) => failed += 1,
                         }
                     } else {
-                        // For ghosts, file_id is cloud_file_id string — delete by cloud_file_id
+                        // For ghosts, file_id is cloud_file_id string — preserve progress then delete
                         let db = state.db.lock().map_err(|e| e.to_string())?;
+                        // Preserve watch progress for any media with this cloud_file_id
+                        if let Ok(Some((media_id, _, _, _))) = db.get_media_info_by_cloud_file_id(id_str) {
+                            let _ = db.preserve_watch_progress_for_media(media_id);
+                        }
+                        // Also preserve for ZIP children (parent_zip_id = cloud_file_id)
+                        let _ = db.preserve_watch_progress_for_zip_children(id_str);
                         match db.remove_media_by_cloud_file_id(id_str) {
                             Ok(_) => fixed += 1,
                             Err(_) => failed += 1,
@@ -18147,14 +18132,15 @@ fn main() {
             verify_stream_url,
             verify_stream_urls,
             remote_play_with_mpv,
-            remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,
             remote_get_resume_info,
-            remote_update_poster,
             remote_get_library,
-            remote_get_episodes,
             remote_remove_from_library,
             remote_add_to_library,
+            remote_is_bookmarked,
+            remote_update_progress,
+            remote_get_show_progress,
+            remote_get_all_progress,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
