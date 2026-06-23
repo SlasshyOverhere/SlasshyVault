@@ -478,7 +478,6 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     config.zip_cache_max_gb = config.zip_cache_max_gb.min(500);
     config.cloud_scan_interval_minutes = config.cloud_scan_interval_minutes.max(1);
     // Migrate legacy addon_url into addon_sources if needed
-    // Clear addon_url after migration to prevent re-migration on every load
     if config.addon_sources.is_empty() {
         if let Some(ref url) = config.addon_url {
             if !url.is_empty() {
@@ -491,6 +490,9 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
                     binary_path: None,
                 });
                 config.addon_url = None;
+                // Persist migration so addon_url is cleared from the file
+                // and doesn't re-create the source on every restart
+                let _ = save_config(&config);
             }
         }
     }

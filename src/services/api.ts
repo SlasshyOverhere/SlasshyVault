@@ -2314,3 +2314,44 @@ export const wtSendMpvCommand = async (
     throw error;
   }
 };
+
+// ==================== SYNC VALIDATOR ====================
+
+export interface SyncIssue {
+  category: string;
+  file_name: string;
+  file_id: string | null;
+  reason: string;
+  fixable: boolean;
+  fix_action: string;
+}
+
+export interface SyncValidationReport {
+  ghost_entries: SyncIssue[];
+  missing_files: SyncIssue[];
+  failed_indexings: SyncIssue[];
+  orphaned_zip_entries: SyncIssue[];
+  stale_token: SyncIssue[];
+  total_issues: number;
+}
+
+export const runSyncValidation = async (): Promise<SyncValidationReport> => {
+  try {
+    return await invoke<SyncValidationReport>("run_sync_validation");
+  } catch (error) {
+    console.error("Sync validation failed:", error);
+    throw error;
+  }
+};
+
+export const fixSyncIssues = async (
+  category: string,
+  fileIds: string[],
+): Promise<{ category: string; fixed: number; failed: number; total: number }> => {
+  try {
+    return await invoke("fix_sync_issues", { category, fileIds });
+  } catch (error) {
+    console.error("Fix sync issues failed:", error);
+    throw error;
+  }
+};

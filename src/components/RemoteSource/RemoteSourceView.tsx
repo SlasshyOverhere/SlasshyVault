@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, memo, Component, type ReactNode, type ErrorInfo } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { listen } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/api/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
 import { RemoteSearchBar } from './RemoteSearchBar'
@@ -38,35 +39,43 @@ function getMediaIdentifier(item: TmdbSearchResult, season?: number, episode?: n
   return base
 }
 
-interface RemoteLibraryItem {
-  id: number
+interface RemoteBookmark {
+  tmdb_id: string
+  media_type: string   // 'movie' or 'tv'
   title: string
   year: number | null
-  overview: string | null
   poster_path: string | null
-  media_type: string
-  tmdb_id: string | null
-  last_watched: string | null
-  resume_position_seconds: number
-  duration_seconds: number
-  season_number: number | null
-  episode_number: number | null
-  episode_title: string | null
+  created_at: string
 }
 
-function toSearchResult(item: RemoteLibraryItem): TmdbSearchResult {
-  const tmdbId = item.tmdb_id ? parseInt(item.tmdb_id) : item.id
-  // DB stores "tvshow"/"tvepisode"/"movie" — normalize to what the app expects
-  const normalType: 'movie' | 'tv' = item.media_type === 'tvshow' || item.media_type === 'tvepisode'
-    ? 'tv'
-    : 'movie'
+interface RemoteProgress {
+  tmdb_id: string
+  media_type: string
+  season_number: number | null
+  episode_number: number | null
+  resume_position_seconds: number
+  duration_seconds: number
+  last_watched: string
+}
+
+interface TmdbEpisode {
+  episode_number: number
+  name: string
+  overview: string
+  still_path: string | null
+  runtime: number | null
+  season_number: number
+}
+
+function toSearchResult(item: RemoteBookmark): TmdbSearchResult {
+  const tmdbId = parseInt(item.tmdb_id)
+  const normalType: 'movie' | 'tv' = item.media_type === 'tv' ? 'tv' : 'movie'
   return {
-    id: Number.isFinite(tmdbId) ? tmdbId : item.id,
+    id: Number.isFinite(tmdbId) ? tmdbId : 0,
     title: normalType === 'movie' ? item.title : undefined,
     name: normalType === 'tv' ? item.title : undefined,
     media_type: normalType,
     poster_path: item.poster_path ?? undefined,
-    overview: item.overview ?? undefined,
     release_date: item.year ? String(item.year) : undefined,
     first_air_date: item.year ? String(item.year) : undefined,
     vote_average: undefined,
@@ -159,16 +168,19 @@ function RemoteSourceViewInner() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  const [remoteLibrary, setRemoteLibrary] = useState<RemoteLibraryItem[]>([])
+  const [remoteBookmarks, setRemoteBookmarks] = useState<RemoteBookmark[]>([])
+  const [remoteProgress, setRemoteProgress] = useState<RemoteProgress[]>([])
   const [libraryLimit, setLibraryLimit] = useState(50)
   const [addonUrlConfigured, setAddonUrlConfigured] = useState<boolean | null>(null)
   const [setupAddonUrl, setSetupAddonUrl] = useState('')
   const [activeSource, setActiveSource] = useState<{ name: string; url: string } | null>(null)
+  const [addonVersion, setAddonVersion] = useState<string | null>(null)
+  const [addonCrashed, setAddonCrashed] = useState(false)
 
   const [pageState, setPageState] = useState<PageState>('library')
   const [selectedItem, setSelectedItem] = useState<TmdbSearchResult | null>(null)
-  const [selectedShow, setSelectedShow] = useState<RemoteLibraryItem | null>(null)
-  const [showEpisodes, setShowEpisodes] = useState<RemoteLibraryItem[]>([])
+  const [selectedShow, setSelectedShow] = useState<RemoteBookmark | null>(null)
+  const [showEpisodes, setShowEpisodes] = useState<TmdbEpisode[]>([])
   const [loadingEpisodes, setLoadingEpisodes] = useState(false)
 
   // Stream fetching
@@ -236,8 +248,12 @@ function RemoteSourceViewInner() {
   // Load remote library on mount
   const loadRemoteLibrary = useCallback(async () => {
     try {
-      const items = await invoke<RemoteLibraryItem[]>('remote_get_library')
-      setRemoteLibrary(items)
+      const [bookmarks, progress] = await Promise.all([
+        invoke<RemoteBookmark[]>('remote_get_library'),
+        invoke<RemoteProgress[]>('remote_get_all_progress'),
+      ])
+      setRemoteBookmarks(bookmarks)
+      setRemoteProgress(progress)
     } catch (e) { console.error('[RemoteSourceView] loadRemoteLibrary:', e) }
   }, [])
 
@@ -258,56 +274,42 @@ function RemoteSourceViewInner() {
     }
   }, [])
 
-  const loadShowEpisodes = useCallback(async (showId: number, tmdbId?: number) => {
+  const loadShowEpisodes = useCallback(async (tmdbId: number) => {
     setLoadingEpisodes(true)
     try {
-      // Fetch all episodes from TMDB and merge with DB progress
-      if (tmdbId) {
-        const dbEpisodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
-        const dbMap = new Map<string, RemoteLibraryItem>()
-        for (const ep of dbEpisodes) {
-          dbMap.set(`${ep.season_number}x${ep.episode_number}`, ep)
-        }
-        const details = await invoke<any>('get_tv_details', { tvId: tmdbId })
-        const tvSeasons = (details.seasons || []).filter((s: any) => s.season_number > 0)
-        const allEpisodes: RemoteLibraryItem[] = []
-        for (const season of tvSeasons) {
-          try {
-            const seasonData = await invoke<any>('get_tv_season_episodes', { tvId: tmdbId, seasonNumber: season.season_number })
-            for (const ep of (seasonData.episodes || [])) {
-              const key = `${season.season_number}x${ep.episode_number}`
-              const dbEp = dbMap.get(key)
-              allEpisodes.push({
-                id: dbEp?.id ?? 0,
-                title: ep.name || '',
-                year: null,
-                overview: ep.overview ?? null,
-                poster_path: ep.still_path ?? null,
-                media_type: 'tvepisode',
-                tmdb_id: String(tmdbId),
-                last_watched: dbEp?.last_watched ?? null,
-                resume_position_seconds: dbEp?.resume_position_seconds ?? 0,
-                duration_seconds: dbEp?.duration_seconds ?? (ep.runtime ? ep.runtime * 60 : 0),
-                season_number: season.season_number,
-                episode_number: ep.episode_number,
-                episode_title: ep.name ?? null,
-              })
-            }
-          } catch (e) { console.debug(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
-        }
-        setShowEpisodes(allEpisodes)
-        // Pre-fetch season streams in background for instant episode playback
-        if (tmdbId) {
-          const imdbId = await invoke<string | null>('resolve_imdb_id', { tmdbId, mediaType: 'tv' }).catch(() => null)
-          if (imdbId) {
-            for (const season of tvSeasons) {
-              handleFetchSeasonStreams(imdbId, season.season_number).catch(() => {})
-            }
+      // Fetch progress for this show from the progress table
+      const showProgress = await invoke<RemoteProgress[]>('remote_get_show_progress', { tmdbId: String(tmdbId) })
+      const progressMap = new Map<string, RemoteProgress>()
+      for (const p of showProgress) {
+        progressMap.set(`${p.season_number}x${p.episode_number}`, p)
+      }
+
+      const details = await invoke<any>('get_tv_details', { tvId: tmdbId })
+      const tvSeasons = (details.seasons || []).filter((s: any) => s.season_number > 0)
+      const allEpisodes: TmdbEpisode[] = []
+      for (const season of tvSeasons) {
+        try {
+          const seasonData = await invoke<any>('get_tv_season_episodes', { tvId: tmdbId, seasonNumber: season.season_number })
+          for (const ep of (seasonData.episodes || [])) {
+            allEpisodes.push({
+              episode_number: ep.episode_number,
+              name: ep.name || '',
+              overview: ep.overview ?? '',
+              still_path: ep.still_path ?? null,
+              runtime: ep.runtime ?? null,
+              season_number: season.season_number,
+            })
           }
+        } catch (e) { console.debug(`[RemoteSourceView] Failed to fetch season ${season.season_number}:`, e) }
+      }
+      setShowEpisodes(allEpisodes)
+
+      // Pre-fetch season streams in background for instant episode playback
+      const imdbId = await invoke<string | null>('resolve_imdb_id', { tmdbId, mediaType: 'tv' }).catch(() => null)
+      if (imdbId) {
+        for (const season of tvSeasons) {
+          handleFetchSeasonStreams(imdbId, season.season_number).catch(() => {})
         }
-      } else {
-        const episodes = await invoke<RemoteLibraryItem[]>('remote_get_episodes', { showId })
-        setShowEpisodes(episodes)
       }
     } catch (e) { console.error('[RemoteSourceView] loadShowEpisodes:', e) }
     finally { setLoadingEpisodes(false) }
@@ -328,13 +330,23 @@ function RemoteSourceViewInner() {
         const defaultSrc = config.addon_sources.find((s: any) => s.is_default)
         const src = defaultSrc || config.addon_sources[0]
         setActiveSource({ name: src.name, url: src.url })
+        try {
+          const ver = await invoke<string | null>('get_addon_version', { url: src.url })
+          setAddonVersion(ver)
+        } catch { setAddonVersion(null) }
       } else if (hasLegacyUrl) {
         setActiveSource({ name: 'Addon', url: config.addon_url })
+        try {
+          const ver = await invoke<string | null>('get_addon_version', { url: config.addon_url })
+          setAddonVersion(ver)
+        } catch { setAddonVersion(null) }
       } else {
         setActiveSource(null)
+        setAddonVersion(null)
       }
     } catch {
       setAddonUrlConfigured(false)
+      setAddonVersion(null)
     }
   }, [])
 
@@ -346,6 +358,50 @@ function RemoteSourceViewInner() {
     window.addEventListener('config-saved', handler)
     return () => window.removeEventListener('config-saved', handler)
   }, [checkAddonConfig])
+
+  // Periodically check addon health (version = alive proxy)
+  useEffect(() => {
+    if (!activeSource) return
+    const interval = setInterval(() => {
+      invoke<string | null>('get_addon_version', { url: activeSource.url })
+        .then((ver) => {
+          if (ver) {
+            setAddonVersion(ver)
+            setAddonCrashed(false)
+          } else {
+            setAddonVersion(null)
+          }
+        })
+        .catch(() => {
+          setAddonVersion(null)
+        })
+    }, addonVersion ? 30000 : 15000) // 30s when healthy, 15s when waiting for first contact
+    return () => clearInterval(interval)
+  }, [activeSource, addonVersion])
+
+  // Listen for addon log events and crash notifications
+  useEffect(() => {
+    let unlistenLog: (() => void) | undefined
+    let unlistenCrash: (() => void) | undefined
+    const setup = async () => {
+      try {
+        unlistenLog = await listen<string>('addon-log', (_event) => {
+          // If we're getting logs, addon is alive — fetch version if missing
+          if (!addonVersion && activeSource) {
+            invoke<string | null>('get_addon_version', { url: activeSource.url })
+              .then(setAddonVersion)
+              .catch(() => {})
+          }
+        })
+        unlistenCrash = await listen<number>('addon-crashed', () => {
+          setAddonCrashed(true)
+          toast({ title: 'Addon crashed', description: 'The addon binary has crashed too many times. Please restart the app.', variant: 'destructive' })
+        })
+      } catch {}
+    }
+    setup()
+    return () => { unlistenLog?.(); unlistenCrash?.() }
+  }, [toast, addonVersion, activeSource])
 
   // Search (with race condition guard via searchReqIdRef)
   useEffect(() => {
@@ -397,7 +453,7 @@ function RemoteSourceViewInner() {
       // Refresh library to reflect updated progress
       loadRemoteLibrary()
       // Also refresh episode list if viewing episodes
-      if (selectedShow) loadShowEpisodes(selectedShow.id, selectedShow.tmdb_id ? parseInt(selectedShow.tmdb_id) : undefined)
+      if (selectedShow) loadShowEpisodes(parseInt(selectedShow.tmdb_id))
       if (data.completed && data.media_type === 'tv' && data.season_number != null && data.episode_number != null) {
         const nextEp = data.episode_number + 1
         setNextEpisodePrompt({
@@ -422,7 +478,34 @@ function RemoteSourceViewInner() {
   }, [])
 
   // Stream verification removed — causes rate limiting against addon servers.
-  // All streams are shown as available without probing.
+  // Pixeldrain URLs are verified separately (direct CDN, safe to HEAD-check).
+  const [pixeldrainStatus, setPixeldrainStatus] = useState<Record<string, boolean>>({})
+  const [pixeldrainVerifying, setPixeldrainVerifying] = useState(false)
+
+  const isPixeldrainUrl = (url: string) => /pixeldrain\.\w+/i.test(url)
+
+  useEffect(() => {
+    if (!qualityOpen || groupedStreams.length === 0) return
+    const pdUrls: string[] = []
+    for (const g of groupedStreams) {
+      for (const s of g.streams) {
+        if (isPixeldrainUrl(s.url) && !pixeldrainStatus[s.url]) {
+          pdUrls.push(s.url)
+        }
+      }
+    }
+    if (pdUrls.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      setPixeldrainVerifying(true)
+      try {
+        const results = await invoke<Record<string, boolean>>('verify_stream_urls', { urls: pdUrls })
+        if (!cancelled) setPixeldrainStatus(prev => ({ ...prev, ...results }))
+      } catch { /* ignore */ }
+      if (!cancelled) setPixeldrainVerifying(false)
+    })()
+    return () => { cancelled = true }
+  }, [qualityOpen, groupedStreams])
 
   // Movie: fetch streams and open quality selector
   const handleFetchMovieStreams = useCallback(async (imdbId: string, forceRefresh = false) => {
@@ -560,8 +643,9 @@ function RemoteSourceViewInner() {
   // User selects a quality => check resume, maybe show dialog, then play
   const isInLibrary = useCallback((item: TmdbSearchResult) => {
     const tmdbId = String(item.id)
-    return remoteLibrary.some(lib => lib.tmdb_id === tmdbId && lib.media_type === (item.media_type === 'tv' ? 'tvshow' : 'movie'))
-  }, [remoteLibrary])
+    const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+    return remoteBookmarks.some(b => b.tmdb_id === tmdbId && b.media_type === mediaType)
+  }, [remoteBookmarks])
 
   const handleQualitySelect = useCallback(async (stream: RemoteStreamData) => {
     if (!selectedItem) return
@@ -576,7 +660,6 @@ function RemoteSourceViewInner() {
           mediaType: selectedItem.media_type === 'tv' ? 'tv' : 'movie',
           year: getYear(selectedItem.release_date || selectedItem.first_air_date) ? parseInt(getYear(selectedItem.release_date || selectedItem.first_air_date)) : null,
           posterPath: selectedItem.poster_path || null,
-          overview: selectedItem.overview || null,
         })
         await loadRemoteLibrary()
       } catch (e) { console.error('[RemoteSourceView] auto-add to library:', e) }
@@ -599,72 +682,46 @@ function RemoteSourceViewInner() {
     toast({ title: 'Kept', description: 'File will be auto-cleaned based on cache settings.' })
   }, [toast])
 
-  const handleRemoveFromLibrary = useCallback(async (item: RemoteLibraryItem, e: React.MouseEvent) => {
+  const handleRemoveFromLibrary = useCallback(async (item: RemoteBookmark, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      await invoke('remote_remove_from_library', { mediaId: item.id })
-      setRemoteLibrary((prev) => prev.filter((i) => i.id !== item.id))
+      await invoke('remote_remove_from_library', { tmdbId: item.tmdb_id, mediaType: item.media_type })
+      setRemoteBookmarks((prev) => prev.filter((b) => b.tmdb_id !== item.tmdb_id || b.media_type !== item.media_type))
       toast({ title: 'Removed', description: `${item.title} removed from library.` })
     } catch (err: any) {
       toast({ title: 'Remove failed', description: typeof err === 'string' ? err : 'Failed to remove', variant: 'destructive' })
     }
   }, [toast])
 
-  const handleLibraryCardClick = useCallback(async (item: RemoteLibraryItem) => {
-    // For TV shows, open episode browser instead of detail view
-    if (item.media_type === 'tvshow') {
-      setSelectedShow(item)
-      setShowEpisodes([])
-      setPageState('episodes')
-      setShowCleanup(false)
-      loadShowEpisodes(item.id, item.tmdb_id ? parseInt(item.tmdb_id) : undefined)
-      return
-    }
-
+  const handleLibraryCardClick = useCallback(async (item: RemoteBookmark) => {
     const reqId = ++detailReqId.current
     const searchItem = toSearchResult(item)
 
-    // Navigate immediately so the user sees feedback right away
+    // Navigate immediately to detail view (same as search flow)
     setSelectedItem(searchItem)
     setPageState('detail')
-    setShowCleanup(false) // Dismiss cleanup dialog if open
+    setShowCleanup(false)
 
-    // Fetch fresh TMDB details in the background to enrich poster/backdrop
+    // Fetch fresh TMDB details in the background to enrich poster/backdrop/imdb_id
     try {
-      if (item.media_type === 'movie') {
-        const details = await invoke<any>('get_movie_details', { movieId: searchItem.id })
-        if (reqId !== detailReqId.current) return
-        if (details.poster_path) {
-          setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.debug('[RemoteSourceView] remote_update_poster:', e))
-        }
-        if (details.backdrop_path) {
-          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
-        }
-        if (details.imdb_id) {
-          setSelectedItem((prev) => prev ? { ...prev, imdb_id: details.imdb_id } as TmdbSearchResult : prev)
-        }
-      } else {
+      if (item.media_type === 'tv') {
         const [details, extIds] = await Promise.all([
           invoke<any>('get_tv_details', { tvId: searchItem.id }),
-          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch((e) => { console.debug('[RemoteSourceView] get_imdb_details:', e); return null }),
+          invoke<any>('get_imdb_details', { imdbId: null, tmdbId: searchItem.id, mediaType: 'tv' }).catch(() => null),
         ])
         if (reqId !== detailReqId.current) return
-        if (details.poster_path) {
-          setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
-          invoke('remote_update_poster', { tmdbId: searchItem.id, posterPath: details.poster_path }).catch((e) => console.debug('[RemoteSourceView] remote_update_poster:', e))
-        }
-        if (details.backdrop_path) {
-          setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } : prev)
-        }
-        if (extIds?.imdb_id) {
-          setSelectedItem((prev) => prev ? { ...prev, imdb_id: extIds.imdb_id } : prev)
-        }
+        if (details.poster_path) setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
+        if (details.backdrop_path) setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
+        if (extIds?.imdb_id) setSelectedItem((prev) => prev ? { ...prev, imdb_id: extIds.imdb_id } as TmdbSearchResult : prev)
+      } else {
+        const details = await invoke<any>('get_movie_details', { movieId: searchItem.id })
+        if (reqId !== detailReqId.current) return
+        if (details.poster_path) setSelectedItem((prev) => prev ? { ...prev, poster_path: details.poster_path } : prev)
+        if (details.backdrop_path) setSelectedItem((prev) => prev ? { ...prev, backdrop_path: details.backdrop_path } as TmdbSearchResult : prev)
+        if (details.imdb_id) setSelectedItem((prev) => prev ? { ...prev, imdb_id: details.imdb_id } as TmdbSearchResult : prev)
       }
     } catch (e) { console.warn('[RemoteSourceView] handleLibraryCardClick TMDB details:', e) }
-    if (reqId !== detailReqId.current) return
-    loadRemoteLibrary()
-  }, [loadRemoteLibrary])
+  }, [])
 
   const handleBackFromEpisodes = useCallback(() => {
     setSelectedShow(null)
@@ -672,13 +729,13 @@ function RemoteSourceViewInner() {
     setPageState('library')
   }, [])
 
-  const handleEpisodeClick = useCallback(async (episode: RemoteLibraryItem) => {
+  const handleEpisodeClick = useCallback(async (episode: TmdbEpisode) => {
     if (!selectedShow) return
     const showSearchItem = toSearchResult(selectedShow)
     // Set episode context
-    if (episode.season_number != null) setCurrentSeason(episode.season_number)
-    if (episode.episode_number != null) setCurrentEpisode(episode.episode_number)
-    if (episode.episode_title) setCurrentEpisodeTitle(episode.episode_title)
+    setCurrentSeason(episode.season_number)
+    setCurrentEpisode(episode.episode_number)
+    setCurrentEpisodeTitle(episode.name)
     setSelectedItem(showSearchItem)
     setPageState('detail')
     // Fetch streams in background
@@ -710,29 +767,6 @@ function RemoteSourceViewInner() {
 
   // Check if a TMDB item is already in the library
 
-  // Add content to library without playing
-  const [addingToLibrary, setAddingToLibrary] = useState(false)
-  const handleAddToLibrary = useCallback(async () => {
-    if (!selectedItem || addingToLibrary) return
-    setAddingToLibrary(true)
-    try {
-      await invoke('remote_add_to_library', {
-        tmdbId: String(selectedItem.id),
-        title: selectedItem.title || selectedItem.name || '',
-        mediaType: selectedItem.media_type === 'tv' ? 'tv' : 'movie',
-        year: getYear(selectedItem.release_date || selectedItem.first_air_date) ? parseInt(getYear(selectedItem.release_date || selectedItem.first_air_date)) : null,
-        posterPath: selectedItem.poster_path || null,
-        overview: selectedItem.overview || null,
-      })
-      await loadRemoteLibrary()
-      toast({ title: 'Added to library' })
-    } catch (e: any) {
-      toast({ title: 'Failed to add', description: typeof e === 'string' ? e : 'Could not add to library', variant: 'destructive' })
-    } finally {
-      setAddingToLibrary(false)
-    }
-  }, [selectedItem, addingToLibrary, loadRemoteLibrary, toast])
-
   // Save addon URL from setup wizard (uses new add_addon_source command)
   const handleSaveAddonUrl = useCallback(async () => {
     const url = setupAddonUrl.trim()
@@ -748,29 +782,57 @@ function RemoteSourceViewInner() {
     }
   }, [setupAddonUrl, loadRemoteLibrary, toast])
 
-  // npm install handler
-  const [npmPackage, setNpmPackage] = useState('')
-  const [npmArgs, setNpmArgs] = useState('--yes')
-  const [npmInstalling, setNpmInstalling] = useState(false)
+  const [binaryInstalling, setBinaryInstalling] = useState(false)
 
-  // npm package install handler
-  const handleNpmInstall = useCallback(async () => {
-    if (!npmPackage.trim()) return
-    setNpmInstalling(true)
+  // Binary install handler (Go binary drag-and-drop)
+  const handleBinaryInstall = useCallback(async (filePath: string) => {
+    setBinaryInstalling(true)
+    setAddonCrashed(false)
     try {
-      const args = npmArgs.trim() ? npmArgs.trim().split(/\s+/) : []
-      const result = await invoke<any>('install_npm_addon', { package: npmPackage.trim(), args })
-      await invoke('add_addon_source', { name: result.name, url: result.url, npmPackage: result.npm_package, npmArgs: result.npm_args })
+      const result = await invoke<any>('install_addon_binary', { filePath, name: 'Custom Addon Binary' })
       setAddonUrlConfigured(true)
       loadRemoteLibrary()
       window.dispatchEvent(new CustomEvent('config-saved'))
-      toast({ title: 'Addon installed & running', description: `Connected to ${result.url}` })
+      // Fetch version after install
+      try {
+        const ver = await invoke<string | null>('get_addon_version', { url: result.url })
+        setAddonVersion(ver)
+      } catch {}
+      toast({ title: 'Binary installed', description: `Addon running at ${result.url}${addonVersion ? ` (v${addonVersion})` : ''}` })
     } catch (e: any) {
-      toast({ title: 'Installation failed', description: e?.message || String(e), variant: 'destructive' })
+      const msg = String(e?.message || e)
+      let description = msg
+      if (msg.includes('--version')) description = 'The dropped file is not a valid addon binary. Please drop a vault-addon compatible .exe file.'
+      else if (msg.includes('too large')) description = 'File is too large. Addon binaries should be under 50MB.'
+      else if (msg.includes('.exe')) description = 'On Windows, the file must have an .exe extension.'
+      else if (msg.includes('Failed to start')) description = 'The binary failed to start. Check that no other instance is running and the port is not in use.'
+      toast({ title: 'Installation failed', description, variant: 'destructive' })
     } finally {
-      setNpmInstalling(false)
+      setBinaryInstalling(false)
     }
-  }, [npmPackage, npmArgs, loadRemoteLibrary, toast])
+  }, [loadRemoteLibrary, toast])
+
+  // Listen for window-level file drops (Tauri tauri://file-drop event)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    const setup = async () => {
+      try {
+        unlisten = await listen<{ paths: string[] }>('tauri://file-drop', (event) => {
+          const paths = event.payload.paths
+          if (paths.length > 0) {
+            const filePath = paths[0]
+            if (filePath.endsWith('.exe')) {
+              handleBinaryInstall(filePath)
+            } else {
+              toast({ title: 'Invalid file', description: 'Please drop an .exe addon binary file.', variant: 'destructive' })
+            }
+          }
+        })
+      } catch {}
+    }
+    setup()
+    return () => { unlisten?.() }
+  }, [handleBinaryInstall, toast])
 
   // Show setup wizard if addon URL is not configured
   if (addonUrlConfigured === false) {
@@ -789,34 +851,60 @@ function RemoteSourceViewInner() {
                 To stream content, you need to add your SlasshyVault addon URL.
               </p>
             </div>
+            {addonCrashed && (
+              <div className="rounded-lg bg-red-950/40 border border-red-900/40 px-3 py-2 flex items-center justify-between gap-2">
+                <span className="text-xs text-red-400">Addon binary crashed too many times.</span>
+                <button
+                  onClick={async () => {
+                    try {
+                      await invoke('restart_addon')
+                      setAddonCrashed(false)
+                      setAddonVersion(null)
+                      toast({ title: 'Restarting addon', description: 'Attempting to restart the addon binary...' })
+                    } catch (e) {
+                      toast({ title: 'Restart failed', description: String(e), variant: 'destructive' })
+                    }
+                  }}
+                  className="shrink-0 rounded-md bg-red-900/60 px-2.5 py-1 text-xs text-red-300 hover:bg-red-800/60 transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="space-y-3">
-              <input
-                type="text"
-                value={npmPackage}
-                onChange={(e) => setNpmPackage(e.target.value)}
-                placeholder="npm package name"
-                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
-              />
-              <input
-                type="text"
-                value={npmArgs}
-                onChange={(e) => setNpmArgs(e.target.value)}
-                placeholder="arguments (e.g. --yes)"
-                className="w-full h-12 px-4 text-sm bg-[#0A0A0A] border border-neutral-800 rounded-xl text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-700/50 focus:ring-1 focus:ring-amber-700/30"
-                onKeyDown={(e) => { if (e.key === 'Enter') handleNpmInstall() }}
-              />
               <button
-                onClick={handleNpmInstall}
-                disabled={!npmPackage.trim() || npmInstalling}
-                className="w-full h-11 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2"
+                onClick={async () => {
+                  const selected = await open({
+                    multiple: false,
+                    filters: [{ name: 'Executable', extensions: ['exe'] }]
+                  })
+                  if (selected && typeof selected === 'string') {
+                    handleBinaryInstall(selected)
+                  }
+                }}
+                disabled={binaryInstalling}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const file = e.dataTransfer.files[0]
+                  if (file) {
+                    const path = (file as any).path || file.name
+                    handleBinaryInstall(path)
+                  }
+                }}
+                className="w-full h-16 rounded-xl border-2 border-dashed border-neutral-700 hover:border-neutral-500 disabled:opacity-40 disabled:cursor-not-allowed bg-white/[0.02] hover:bg-white/[0.04] text-neutral-400 hover:text-neutral-200 text-sm transition-all duration-200 flex flex-col items-center justify-center gap-1"
               >
-                {npmInstalling ? (
+                {binaryInstalling ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Installing & starting...
+                    Installing binary...
                   </>
                 ) : (
-                  "Install & Run"
+                  <>
+                    <span className="text-xs">Drop addon binary here or click to browse</span>
+                    <span className="text-[10px] text-neutral-600">.exe file — no console window</span>
+                  </>
                 )}
               </button>
               <div className="flex items-center gap-3">
@@ -892,11 +980,18 @@ function RemoteSourceViewInner() {
               </div>
             ) : (
               (() => {
-                const grouped: Record<number, RemoteLibraryItem[]> = {}
+                const grouped: Record<number, TmdbEpisode[]> = {}
                 for (const ep of showEpisodes) {
                   const s = ep.season_number ?? 0
                   if (!grouped[s]) grouped[s] = []
                   grouped[s].push(ep)
+                }
+                // Load progress for this show
+                const showTmdbId = selectedShow?.tmdb_id || ''
+                const progressForShow = remoteProgress.filter(p => p.tmdb_id === showTmdbId && p.media_type === 'tv')
+                const progressMap = new Map<string, RemoteProgress>()
+                for (const p of progressForShow) {
+                  progressMap.set(`${p.season_number}x${p.episode_number}`, p)
                 }
                 const seasons = Object.keys(grouped).map(Number).sort((a, b) => a - b)
                 return seasons.map((seasonNum) => (
@@ -906,22 +1001,25 @@ function RemoteSourceViewInner() {
                     </h3>
                     <div className="space-y-2">
                       {grouped[seasonNum].map((ep) => {
-                        const progress = ep.duration_seconds > 0 ? Math.min(100, (ep.resume_position_seconds / ep.duration_seconds) * 100) : 0
+                        const epProgress = progressMap.get(`${ep.season_number}x${ep.episode_number}`)
+                        const durSec = epProgress?.duration_seconds ?? (ep.runtime ? ep.runtime * 60 : 0)
+                        const posSec = epProgress?.resume_position_seconds ?? 0
+                        const progress = durSec > 0 ? Math.min(100, (posSec / durSec) * 100) : 0
                         const isCompleted = progress >= 90
-                        const inProgress = ep.resume_position_seconds > 0 && !isCompleted
-                        const stillUrl = ep.poster_path
-                          ? ep.poster_path.startsWith('http') ? ep.poster_path
-                          : ep.poster_path.startsWith('/') ? `https://image.tmdb.org/t/p/w185${ep.poster_path}`
+                        const inProgress = posSec > 0 && !isCompleted
+                        const stillUrl = ep.still_path
+                          ? ep.still_path.startsWith('http') ? ep.still_path
+                          : ep.still_path.startsWith('/') ? `https://image.tmdb.org/t/p/w185${ep.still_path}`
                           : null : null
                         return (
                           <button
-                            key={ep.id}
+                            key={`${ep.season_number}x${ep.episode_number}`}
                             onClick={() => handleEpisodeClick(ep)}
                             className="w-full flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-[#0A0A0A] border border-neutral-800/80 hover:bg-[#0D0D0D] hover:border-neutral-700/50 transition-all text-left group"
                           >
                             <div className="shrink-0 w-full sm:w-44 aspect-video rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
                               {stillUrl ? (
-                                <img src={stillUrl} alt={ep.episode_title || ''} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                                <img src={stillUrl} alt={ep.name || ''} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center"><Film className="size-5 text-neutral-400" /></div>
                               )}
@@ -932,7 +1030,7 @@ function RemoteSourceViewInner() {
                                   S{String(seasonNum).padStart(2, '0')} &middot; E{String(ep.episode_number ?? 0).padStart(2, '0')}
                                 </span>
                                 <h3 className={`text-sm font-semibold truncate ${isCompleted ? 'text-neutral-500' : 'text-neutral-200'}`}>
-                                  {ep.episode_title || `Episode ${ep.episode_number}`}
+                                  {ep.name || `Episode ${ep.episode_number}`}
                                 </h3>
                                 {isCompleted && <Check className="size-3.5 text-emerald-500 shrink-0" />}
                                 {inProgress && <Clock className="size-3.5 text-amber-500 shrink-0" />}
@@ -941,8 +1039,8 @@ function RemoteSourceViewInner() {
                                 <p className="text-xs text-neutral-300 leading-relaxed line-clamp-2">{ep.overview}</p>
                               )}
                               <div className="flex items-center gap-3 mt-0.5">
-                                {ep.duration_seconds > 0 && (
-                                  <span className="text-[10px] text-neutral-600">{Math.floor(ep.duration_seconds / 60)}m</span>
+                                {durSec > 0 && (
+                                  <span className="text-[10px] text-neutral-600">{Math.floor(durSec / 60)}m</span>
                                 )}
                                 {inProgress && (
                                   <div className="flex-1 max-w-32 h-1 rounded-full bg-neutral-800 overflow-hidden">
@@ -979,9 +1077,6 @@ function RemoteSourceViewInner() {
               onFetchSeasonStreams={handleFetchSeasonStreams}
               onFetchSeasonPack={handleFetchSeasonPack}
               fetching={fetching}
-              isInLibrary={isInLibrary(selectedItem!)}
-              onAddToLibrary={handleAddToLibrary}
-              addingToLibrary={addingToLibrary}
             />
           </div>
         </ScrollArea>
@@ -997,10 +1092,31 @@ function RemoteSourceViewInner() {
                   <span>External Sources</span>
                   <span className="h-px w-6 bg-neutral-800" />
                 </div>
+                {addonCrashed && (
+                  <div className="mx-auto max-w-md rounded-lg bg-red-950/40 border border-red-900/40 px-3 py-2 flex items-center justify-between gap-2">
+                    <span className="text-xs text-red-400">Addon binary crashed too many times.</span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await invoke('restart_addon')
+                          setAddonCrashed(false)
+                          setAddonVersion(null)
+                          toast({ title: 'Restarting addon', description: 'Attempting to restart the addon binary...' })
+                        } catch (e) {
+                          toast({ title: 'Restart failed', description: String(e), variant: 'destructive' })
+                        }
+                      }}
+                      className="shrink-0 rounded-md bg-red-900/60 px-2.5 py-1 text-xs text-red-300 hover:bg-red-800/60 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
                 {activeSource && (
                   <div className="flex items-center justify-center gap-2">
-                    <div className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <div className={`size-1.5 rounded-full ${addonCrashed ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
                     <span className="text-xs text-neutral-400">{activeSource.name}</span>
+                    {addonVersion && <span className="text-[10px] text-neutral-600">v{addonVersion}</span>}
                     <span className="text-[10px] text-neutral-600 truncate max-w-[200px]">{activeSource.url}</span>
                   </div>
                 )}
@@ -1040,13 +1156,21 @@ function RemoteSourceViewInner() {
           </div>
 
           {/* Library cards - shown when no search query */}
-          {!searchQuery && remoteLibrary.length > 0 && (
+          {!searchQuery && remoteBookmarks.length > 0 && (
             <div className="px-8 pb-4">
               <h2 className="text-[11px] font-bold uppercase tracking-widest text-neutral-600 mb-4">My Library</h2>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5">
-                {remoteLibrary.slice(0, libraryLimit).map((item) => (
+                {remoteBookmarks.slice(0, libraryLimit).map((item) => {
+                  // Find latest in-progress episode/movie for the resume bar
+                  const itemProgress = remoteProgress.filter(p =>
+                    p.tmdb_id === item.tmdb_id &&
+                    (item.media_type === 'tv' ? p.media_type === 'tv' : p.media_type === 'movie') &&
+                    p.duration_seconds > 0 && p.resume_position_seconds > 0
+                  ).sort((a, b) => new Date(b.last_watched).getTime() - new Date(a.last_watched).getTime())[0]
+                  const resumePercent = itemProgress ? Math.min(100, (itemProgress.resume_position_seconds / itemProgress.duration_seconds) * 100) : 0
+                  return (
                   <button
-                    key={item.id}
+                    key={`${item.tmdb_id}-${item.media_type}`}
                     onClick={() => handleLibraryCardClick(item)}
                     className="group text-left focus:outline-none"
                   >
@@ -1057,11 +1181,11 @@ function RemoteSourceViewInner() {
                         {item.media_type === 'movie' ? 'Movie' : 'Series'}
                       </div>
                       {/* Resume progress bar */}
-                      {item.resume_position_seconds > 0 && item.duration_seconds > 0 && (
+                      {resumePercent > 0 && (
                         <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-neutral-800">
                           <div
                             className="h-full bg-amber-500/70 transition-all"
-                            style={{ width: `${Math.min(100, (item.resume_position_seconds / item.duration_seconds) * 100)}%` }}
+                            style={{ width: `${resumePercent}%` }}
                           />
                         </div>
                       )}
@@ -1076,7 +1200,7 @@ function RemoteSourceViewInner() {
                       {/* Play/Browse overlay on hover */}
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all duration-300 flex items-center justify-center">
                         <div className="size-8 rounded-full bg-amber-600/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
-                          {item.media_type === 'tvshow' ? (
+                          {item.media_type === 'tv' ? (
                             <Film className="size-3.5" />
                           ) : (
                             <Play className="size-3.5 fill-white ml-0.5" />
@@ -1091,15 +1215,15 @@ function RemoteSourceViewInner() {
                       <p className="text-[10px] text-neutral-600">{item.year}</p>
                     )}
                   </button>
-                ))}
+                )})}
               </div>
-              {remoteLibrary.length > libraryLimit && (
+              {remoteBookmarks.length > libraryLimit && (
                 <div className="flex justify-center mt-4">
                   <button
                     onClick={() => setLibraryLimit((prev) => prev + 50)}
                     className="px-4 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs font-semibold text-neutral-400 hover:text-neutral-200 hover:border-neutral-700 transition-all"
                   >
-                    Load More ({remoteLibrary.length - libraryLimit} remaining)
+                    Load More ({remoteBookmarks.length - libraryLimit} remaining)
                   </button>
                 </div>
               )}
@@ -1107,7 +1231,7 @@ function RemoteSourceViewInner() {
           )}
 
           {/* Empty library */}
-          {!searchQuery && remoteLibrary.length === 0 && (
+          {!searchQuery && remoteBookmarks.length === 0 && (
             <div className="flex-1 flex items-center justify-center px-8">
               <div className="text-center space-y-4">
                 <div className="size-16 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center mx-auto">
@@ -1144,8 +1268,10 @@ function RemoteSourceViewInner() {
         onOpenUrl={(url) => window.open(url, '_blank')}
         loading={fetching}
         error={streamError}
-        verifying={false}
-        streamStatus={{}}
+        verifying={pixeldrainVerifying}
+        streamStatus={pixeldrainStatus}
+        verifyingUrls={new Set(Object.keys(pixeldrainStatus))}
+        addonContext={imdbIdRef.current && currentSeason ? { imdbId: imdbIdRef.current, season: currentSeason } : null}
       />
 
 

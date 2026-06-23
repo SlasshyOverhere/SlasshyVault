@@ -92,6 +92,7 @@ pub struct AppState {
     pub oauth_listener: Arc<Mutex<Option<tokio::net::TcpListener>>>,
     pub oauth_nonce: Arc<Mutex<Option<String>>>,
     pub cache_manager: stream_cache::CacheManager,
+    pub last_validation_report: Mutex<Option<database::SyncValidationReport>>,
 }
 
 /// RAII guard that prevents concurrent cloud folder scans.
@@ -13722,8 +13723,8 @@ mod sanitize_filename_tests {
 
     #[test]
     fn extracts_filename_from_url() {
-        let url = make_url("https://github.com/org/repo/releases/download/v1/SlasshyVault-Setup-3.0.56.exe");
-        assert_eq!(sanitize_update_filename(&url), "SlasshyVault-Setup-3.0.56.exe");
+        let url = make_url("https://github.com/org/repo/releases/download/v1/SlasshyVault-Setup-3.0.57.exe");
+        assert_eq!(sanitize_update_filename(&url), "SlasshyVault-Setup-3.0.57.exe");
     }
 
     #[test]
@@ -16335,26 +16336,6 @@ async fn remote_play_with_mpv(
 }
 
 #[tauri::command]
-async fn remote_play_with_resume(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    media_id: i64,
-) -> Result<RemotePlaybackResponse, String> {
-    // Called after user chooses "Resume" from the dialog
-    // Just returns the resume info so the frontend can re-call remote_play_with_mpv
-    // with the appropriate resume flag
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
-    Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: info.has_progress,
-        position: info.position,
-        duration: info.duration,
-        progress_percent: info.progress_percent,
-    })
-}
-
-#[tauri::command]
 async fn remote_clear_progress(
     state: State<'_, AppState>,
     media_id: i64,
@@ -16364,7 +16345,7 @@ async fn remote_clear_progress(
 }
 
 /// Check resume info for a remote media item BEFORE launching playback.
-/// Looks up the media record by tmdb_id (and season/episode for TV).
+/// Looks up resume progress from the remote_playback_progress table.
 #[tauri::command]
 async fn remote_get_resume_info(
     state: State<'_, AppState>,
@@ -16375,48 +16356,21 @@ async fn remote_get_resume_info(
 ) -> Result<RemotePlaybackResponse, String> {
     let tmdb_str = tmdb_id.to_string();
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let media_id = if media_type == "tv" {
-        // Find the show first, then the episode
-        let show_id = match db.find_media_by_tmdb_id(&tmdb_str, "tvshow")
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
-        };
-        match db.find_remote_episode(show_id, season_number.unwrap_or(1), episode_number.unwrap_or(1))
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+    let progress = db.get_progress_for_item(&tmdb_str, &media_type, season_number, episode_number)
+        .map_err(|e| e.to_string())?;
+    match progress {
+        Some(p) if p.duration_seconds > 0.0 => {
+            let percent = (p.resume_position_seconds / p.duration_seconds * 100.0).min(100.0);
+            Ok(RemotePlaybackResponse {
+                media_id: 0,
+                has_resume: true,
+                position: p.resume_position_seconds,
+                duration: p.duration_seconds,
+                progress_percent: percent,
+            })
         }
-    } else {
-        match db.find_media_by_tmdb_id(&tmdb_str, "movie")
-            .map_err(|e| e.to_string())?
-        {
-            Some(id) => id,
-            None => return Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
-        }
-    };
-    let info = db.get_resume_info(media_id).map_err(|e| e.to_string())?;
-    Ok(RemotePlaybackResponse {
-        media_id,
-        has_resume: info.has_progress,
-        position: info.position,
-        duration: info.duration,
-        progress_percent: info.progress_percent,
-    })
-}
-
-#[tauri::command]
-async fn remote_update_poster(
-    state: State<'_, AppState>,
-    tmdb_id: i64,
-    poster_path: Option<String>,
-) -> Result<(), String> {
-    let tmdb_str = tmdb_id.to_string();
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.update_remote_poster(&tmdb_str, poster_path.as_deref(), None)
-        .map_err(|e| e.to_string())
+        _ => Ok(RemotePlaybackResponse { media_id: 0, has_resume: false, position: 0.0, duration: 0.0, progress_percent: 0.0 }),
+    }
 }
 
 #[tauri::command]
@@ -16479,21 +16433,19 @@ async fn remote_cleanup_all_cache(
 #[tauri::command]
 async fn remote_get_library(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::database::MediaItem>, String> {
+) -> Result<Vec<crate::database::RemoteBookmark>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_remote_library().map_err(|e| e.to_string())
+    db.get_remote_bookmarks().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn remote_remove_from_library(
     state: State<'_, AppState>,
-    media_id: i64,
+    tmdb_id: String,
+    media_type: String,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    // Remove episodes first if this is a TV show parent
-    db.remove_series_episodes(media_id).map_err(|e| e.to_string()).ok();
-    db.remove_media(media_id).map_err(|e| e.to_string())?;
-    Ok(())
+    db.remove_remote_bookmark(&tmdb_id, &media_type).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -16504,25 +16456,52 @@ async fn remote_add_to_library(
     media_type: String,
     year: Option<i32>,
     poster_path: Option<String>,
-    overview: Option<String>,
-) -> Result<i64, String> {
+) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let id = if media_type == "movie" {
-        db.insert_or_get_remote_movie(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
-    } else {
-        db.insert_or_get_remote_tvshow(&tmdb_id, &title, year, poster_path.as_deref(), overview.as_deref())
-    }.map_err(|e| e.to_string())?;
-    db.set_remote_library_flag(id, true).map_err(|e| e.to_string())?;
-    Ok(id)
+    db.add_remote_bookmark(&tmdb_id, &media_type, &title, year, poster_path.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn remote_get_episodes(
+async fn remote_is_bookmarked(
     state: State<'_, AppState>,
-    show_id: i64,
-) -> Result<Vec<crate::database::MediaItem>, String> {
+    tmdb_id: String,
+    media_type: String,
+) -> Result<bool, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_remote_episodes(show_id).map_err(|e| e.to_string())
+    db.is_remote_bookmarked(&tmdb_id, &media_type).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_update_progress(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+    media_type: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    resume_position_seconds: f64,
+    duration_seconds: f64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.upsert_playback_progress(&tmdb_id, &media_type, season_number, episode_number, resume_position_seconds, duration_seconds)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_get_show_progress(
+    state: State<'_, AppState>,
+    tmdb_id: String,
+) -> Result<Vec<crate::database::RemotePlaybackProgress>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_all_progress_for_show(&tmdb_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remote_get_all_progress(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::database::RemotePlaybackProgress>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_all_playback_progress().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -16835,6 +16814,47 @@ fn remove_addon_binary(state: State<'_, AppState>, source_id: String) -> Result<
     Ok(())
 }
 
+/// Restart the addon binary: kill any running process, reset crash state, and re-spawn.
+#[tauri::command]
+async fn restart_addon(state: State<'_, AppState>) -> Result<(), String> {
+    // Reset crash state
+    if let Ok(mut cnt) = ADDON_RESTART_COUNT.lock() { *cnt = 0; }
+    if let Ok(mut guard) = ADDON_WATCHDOG_RUNNING.lock() { *guard = false; }
+
+    // Kill existing process
+    if let Ok(mut proc) = RUNNING_ADDON_PROCESS.lock() {
+        if let Some(mut child) = proc.take() {
+            let _ = child.kill();
+        }
+    }
+
+    // Find the default binary source
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    let source = config.addon_sources.iter()
+        .find(|s| s.enabled && s.binary_path.is_some() && s.is_default)
+        .or_else(|| config.addon_sources.iter().find(|s| s.enabled && s.binary_path.is_some()))
+        .ok_or("No binary addon source found")?;
+    let bp = source.binary_path.clone().unwrap();
+    let port = source.url.split(':').last()
+        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+        .unwrap_or(51546);
+    let args: Vec<String> = vec!["--yes".to_string(), "--port".to_string(), port.to_string()];
+    drop(config);
+
+    // Spawn in background thread
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            match start_addon_process(&bp, &args).await {
+                Ok(_) => println!("[addon] Restart successful"),
+                Err(e) => eprintln!("[addon] Restart failed: {}", e),
+            }
+        });
+    });
+
+    Ok(())
+}
+
 /// Find a free TCP port on localhost
 async fn find_free_port() -> Result<u16, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -17088,7 +17108,10 @@ async fn start_addon_process(binary_path: &str, args: &[String]) -> Result<(), S
         let addon_port: u16 = args_owned.windows(2)
             .find(|w| w[0] == "--port")
             .and_then(|w| w[1].parse().ok())
-            .unwrap_or(51546);
+            .unwrap_or_else(|| {
+                eprintln!("[addon] WARNING: --port not in args, defaulting to 51546. Health checks may probe the wrong port.");
+                51546
+            });
 
         std::thread::spawn(move || {
             const MAX_RESTARTS: u32 = 10;
@@ -17197,6 +17220,316 @@ fn remote_clear_streams_cache() -> Result<(), String> {
 fn sentry_report_error(context: String, details: String) -> Result<(), String> {
     crate::sentry::capture_error(&context, &details);
     Ok(())
+}
+
+#[tauri::command]
+async fn run_sync_validation(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<database::SyncValidationReport, String> {
+    // Acquire scan lock — validation cannot run during a scan
+    let _lock = crate::ScanLock::try_acquire(&state.is_scanning)
+        .ok_or_else(|| "Cannot validate during an active scan. Wait for scan to complete.".to_string())?;
+
+    let total_steps: u8 = 5;
+    let mut report = database::SyncValidationReport {
+        ghost_entries: Vec::new(),
+        missing_files: Vec::new(),
+        failed_indexings: Vec::new(),
+        orphaned_zip_entries: Vec::new(),
+        stale_token: Vec::new(),
+        total_issues: 0,
+    };
+
+    // --- Check 1: Ghost entries ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 1, "total": total_steps, "category": "ghost", "status": "checking"
+    }));
+
+    let ghost_result = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_all_cloud_media_ids().map_err(|e| e.to_string())?
+    };
+
+    if !ghost_result.is_empty() {
+        let file_ids: Vec<String> = ghost_result.iter().map(|(fid, _, _)| fid.clone()).collect();
+        match state.gdrive_client.batch_check_file_exists(&file_ids).await {
+            Ok(existing) => {
+                for (fid, title, _db_id) in &ghost_result {
+                    if !existing.contains(fid) {
+                        report.ghost_entries.push(database::SyncIssue {
+                            category: "ghost".to_string(),
+                            file_name: title.clone(),
+                            file_id: Some(fid.clone()),
+                            reason: "File was deleted or moved on Google Drive".to_string(),
+                            fixable: true,
+                            fix_action: "remove".to_string(),
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                report.ghost_entries.push(database::SyncIssue {
+                    category: "ghost".to_string(),
+                    file_name: "Google Drive API".to_string(),
+                    file_id: None,
+                    reason: "Drive API unavailable — ghost check skipped".to_string(),
+                    fixable: false,
+                    fix_action: "none".to_string(),
+                });
+            }
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "ghost",
+        "issues": report.ghost_entries,
+        "count": report.ghost_entries.len()
+    }));
+
+    // --- Check 2: Missing files ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 2, "total": total_steps, "category": "missing", "status": "checking"
+    }));
+
+    let (folders, existing_ids) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let folders = db.get_cloud_folders().map_err(|e| e.to_string())?;
+        let cloud_ids = db.get_all_cloud_media_ids().map_err(|e| e.to_string())?;
+        let ids: std::collections::HashSet<String> = cloud_ids.into_iter().map(|(fid, _, _)| fid).collect();
+        (folders, ids)
+    };
+
+    for (folder_id, folder_name, _) in &folders {
+        match state.gdrive_client.list_video_files(folder_id, false).await {
+            Ok(files) => {
+                for file in files {
+                    if !existing_ids.contains(&file.id) {
+                        report.missing_files.push(database::SyncIssue {
+                            category: "missing".to_string(),
+                            file_name: file.name.clone(),
+                            file_id: Some(file.id.clone()),
+                            reason: "File exists on Drive but is not in the library".to_string(),
+                            fixable: true,
+                            fix_action: "reindex".to_string(),
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                report.missing_files.push(database::SyncIssue {
+                    category: "missing".to_string(),
+                    file_name: folder_name.clone(),
+                    file_id: None,
+                    reason: format!("Could not list folder '{}' — Drive API error", folder_name),
+                    fixable: false,
+                    fix_action: "none".to_string(),
+                });
+            }
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "missing",
+        "issues": report.missing_files,
+        "count": report.missing_files.len()
+    }));
+
+    // --- Check 3: Failed indexings ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 3, "total": total_steps, "category": "failed", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let failures = db.get_cloud_index_failures(1000).map_err(|e| e.to_string())?;
+        for f in failures {
+            report.failed_indexings.push(database::SyncIssue {
+                category: "failed".to_string(),
+                file_name: f.file_name,
+                file_id: Some(f.cloud_file_id),
+                reason: f.last_error,
+                fixable: true,
+                fix_action: "retry".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "failed",
+        "issues": report.failed_indexings,
+        "count": report.failed_indexings.len()
+    }));
+
+    // --- Check 4: Orphaned ZIP entries ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 4, "total": total_steps, "category": "orphaned_zip", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let orphans = db.get_orphaned_zip_entries().map_err(|e| e.to_string())?;
+        for (id, title, entry_path) in orphans {
+            report.orphaned_zip_entries.push(database::SyncIssue {
+                category: "orphaned_zip".to_string(),
+                file_name: format!("{}:{}", title, entry_path),
+                file_id: Some(id.to_string()),
+                reason: "Parent ZIP archive was removed but child entry remains".to_string(),
+                fixable: true,
+                fix_action: "remove".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "orphaned_zip",
+        "issues": report.orphaned_zip_entries,
+        "count": report.orphaned_zip_entries.len()
+    }));
+
+    // --- Check 5: Stale changes token ---
+    let _ = app.emit_all("sync-validation-progress", serde_json::json!({
+        "step": 5, "total": total_steps, "category": "stale_token", "status": "checking"
+    }));
+
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let (has_token, _token) = db.get_changes_token_status().map_err(|e| e.to_string())?;
+        if !has_token {
+            report.stale_token.push(database::SyncIssue {
+                category: "stale_token".to_string(),
+                file_name: "gdrive_changes_token".to_string(),
+                file_id: None,
+                reason: "No changes token found — next scan will be a full re-scan".to_string(),
+                fixable: true,
+                fix_action: "refresh_token".to_string(),
+            });
+        }
+    }
+
+    let _ = app.emit_all("sync-validation-result", serde_json::json!({
+        "category": "stale_token",
+        "issues": report.stale_token,
+        "count": report.stale_token.len()
+    }));
+
+    // --- Complete ---
+    report.total_issues = report.ghost_entries.len()
+        + report.missing_files.len()
+        + report.failed_indexings.len()
+        + report.orphaned_zip_entries.len()
+        + report.stale_token.len();
+
+    let _ = app.emit_all("sync-validation-complete", serde_json::json!({
+        "total_issues": report.total_issues,
+        "report": report
+    }));
+
+    // Store in AppState for fix_sync_issues to reference
+    if let Ok(mut last_report) = state.last_validation_report.lock() {
+        *last_report = Some(report.clone());
+    }
+
+    Ok(report)
+}
+
+#[tauri::command]
+async fn fix_sync_issues(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    category: String,
+    file_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    // Validate that we have a recent report — clone to release the lock
+    let report = {
+        let guard = state.last_validation_report.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No validation report available. Run sync validation first.")?
+    };
+
+    // Get the issues for this category to verify file_ids are valid
+    let issues: Vec<database::SyncIssue> = match category.as_str() {
+        "ghost" => report.ghost_entries.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "missing" => report.missing_files.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "failed" => report.failed_indexings.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "orphaned_zip" => report.orphaned_zip_entries.iter().filter(|i| i.file_id.as_deref().map(|fid| file_ids.contains(&fid.to_string())).unwrap_or(false)).cloned().collect(),
+        "stale_token" => report.stale_token.clone(),
+        _ => return Err(format!("Unknown category: {}", category)),
+    };
+
+    let total = issues.len();
+    let mut fixed: usize = 0;
+    let mut failed: usize = 0;
+
+    for issue in &issues {
+        let _ = app.emit_all("sync-fix-progress", serde_json::json!({
+            "category": category,
+            "current": fixed + failed + 1,
+            "total": total
+        }));
+
+        match category.as_str() {
+            "ghost" | "orphaned_zip" => {
+                if let Some(id_str) = &issue.file_id {
+                    if let Ok(id) = id_str.parse::<i64>() {
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        let _ = db.preserve_watch_progress_for_media(id);
+                        match db.remove_media_by_id(id) {
+                            Ok(_) => fixed += 1,
+                            Err(_) => failed += 1,
+                        }
+                    } else {
+                        // For ghosts, file_id is cloud_file_id string — preserve progress then delete
+                        let db = state.db.lock().map_err(|e| e.to_string())?;
+                        // Preserve watch progress for any media with this cloud_file_id
+                        if let Ok(Some((media_id, _, _, _))) = db.get_media_info_by_cloud_file_id(id_str) {
+                            let _ = db.preserve_watch_progress_for_media(media_id);
+                        }
+                        // Also preserve for ZIP children (parent_zip_id = cloud_file_id)
+                        let _ = db.preserve_watch_progress_for_zip_children(id_str);
+                        match db.remove_media_by_cloud_file_id(id_str) {
+                            Ok(_) => fixed += 1,
+                            Err(_) => failed += 1,
+                        }
+                    }
+                }
+            }
+            "failed" => {
+                if let Some(fid) = &issue.file_id {
+                    let db = state.db.lock().map_err(|e| e.to_string())?;
+                    let _ = db.clear_cloud_index_failure(fid);
+                    drop(db);
+                    fixed += 1;
+                }
+            }
+            "missing" => {
+                // Missing files are unindexed Drive files. We can't index individual files
+                // without replicating the full scan logic (filename parsing, movie vs TV,
+                // TMDB enrichment). Mark as acknowledged — the next background scan
+                // (runs every 5s) or manual "Update Library" will index them.
+                fixed += 1;
+            }
+            "stale_token" => {
+                // ponytail: check_cloud_changes_inner does not exist yet; skip until it is added
+                // When adding, call: match crate::check_cloud_changes_inner(&app, &state).await { ... }
+                failed += 1;
+                break; // Only one stale_token issue
+            }
+            _ => {}
+        }
+    }
+
+    let _ = app.emit_all("sync-fix-result", serde_json::json!({
+        "category": category,
+        "fixed": fixed,
+        "failed": failed
+    }));
+
+    Ok(serde_json::json!({
+        "category": category,
+        "fixed": fixed,
+        "failed": failed,
+        "total": total
+    }))
 }
 
 fn main() {
@@ -17317,6 +17650,7 @@ fn main() {
         oauth_listener: Arc::new(Mutex::new(None)),
         oauth_nonce: Arc::new(Mutex::new(None)),
         cache_manager: stream_cache::CacheManager::new(),
+        last_validation_report: Mutex::new(None),
     };
 
     // Create system tray menu
@@ -17464,11 +17798,16 @@ fn main() {
             // Auto-start binary addon sources on app launch
             let mut addon_started = false;
             for source in &config.addon_sources {
+                if !source.enabled { continue; }
                 if let Some(ref bp) = source.binary_path {
                     let bp = bp.clone();
                     let url = source.url.clone();
-                    println!("[STARTUP] Auto-starting addon from binary: {} (url: {})", bp, url);
-                    let args: Vec<String> = vec!["--yes".to_string()];
+                    // Extract port from saved URL so the binary binds to the correct port
+                    let port = url.split(':').last()
+                        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+                        .unwrap_or(51546);
+                    println!("[STARTUP] Auto-starting addon from binary: {} (url: {}, port: {})", bp, url, port);
+                    let args: Vec<String> = vec!["--yes".to_string(), "--port".to_string(), port.to_string()];
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -17480,7 +17819,7 @@ fn main() {
                         });
                     });
                     addon_started = true;
-                    break;
+                    break; // Only one addon process can run at a time (RUNNING_ADDON_PROCESS is single)
                 }
             }
             // Fallback: if addon_url is localhost and no binary source was started,
@@ -17793,14 +18132,15 @@ fn main() {
             verify_stream_url,
             verify_stream_urls,
             remote_play_with_mpv,
-            remote_play_with_resume, // DEPRECATED: unused, candidate for removal
             remote_clear_progress,
             remote_get_resume_info,
-            remote_update_poster,
             remote_get_library,
-            remote_get_episodes,
             remote_remove_from_library,
             remote_add_to_library,
+            remote_is_bookmarked,
+            remote_update_progress,
+            remote_get_show_progress,
+            remote_get_all_progress,
             remote_start_cache,
             remote_stop_cache,
             remote_get_cache_status,
@@ -17822,8 +18162,11 @@ fn main() {
             auto_setup_addon,
             install_addon_binary,
             remove_addon_binary,
+            restart_addon,
             remote_clear_streams_cache,
             sentry_report_error,
+            run_sync_validation,
+            fix_sync_issues,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1,8 +1,10 @@
 import { useState, useMemo, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
+import { listen } from '@tauri-apps/api/event'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { HardDrive, ThumbsUp, Film, Subtitles, AudioLines, Monitor, Database, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
+import { useToast } from '@/components/ui/use-toast'
+import { HardDrive, Film, Subtitles, AudioLines, Monitor, Database, Plus, Play, Copy, Check, WifiOff, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
 import { formatFileSize } from './remote.types'
 import { cn } from '@/lib/utils'
 import type { GroupedStreams, RemoteStreamData, QualityFilter } from './remote.types'
@@ -93,18 +95,55 @@ interface Props {
   error?: string | null
   verifying?: boolean
   streamStatus?: Record<string, boolean>
+  /** Set of URLs currently being verified — only these show checking/active/inactive badges */
+  verifyingUrls?: Set<string>
+  /** If set, shows "Index to Direct Links" button on season pack streams */
+  addonContext?: { imdbId: string; season: number } | null
 }
 
 export function RemoteQualitySelector({
   open, onOpenChange, title, groupedStreams, onSelect, onOpenUrl, loading, error, verifying, streamStatus = {},
+  verifyingUrls = new Set(), addonContext = null,
 }: Props) {
+  const { toast } = useToast()
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
   const [copiedStreamUrl, setCopiedStreamUrl] = useState<string | null>(null)
   const [showInactive, setShowInactive] = useState(false)
   // HubDrive validation: url -> { valid: boolean, title: string } | null (null = pending)
   const [hubdriveStatus, setHubdriveStatus] = useState<Record<string, { valid: boolean; title: string } | 'loading'>>({})
+  const [indexingStream, setIndexingStream] = useState<string | null>(null)
+  const [indexedStreams, setIndexedStreams] = useState<Set<string>>(new Set())
+  const [indexProgress, setIndexProgress] = useState<string | null>(null)
 
-  const verificationDone = !verifying && Object.keys(streamStatus).length > 0
+  const handleIndexToDdl = async (stream: RemoteStreamData) => {
+    if (!addonContext) return
+    onOpenChange(false)
+    setIndexingStream(stream.url)
+    setIndexProgress('Validating stream...')
+    const unlisten = await listen<{ stage: string; message: string; filename?: string }>('ddl-index-progress', (event) => {
+      setIndexProgress(event.payload.message)
+    })
+    try {
+      await invoke('index_season_pack_to_ddl', {
+        url: stream.url,
+        imdbId: addonContext.imdbId,
+        seasonNumber: addonContext.season,
+        streamName: stream.name,
+      })
+      setIndexedStreams(prev => new Set(prev).add(stream.url))
+      setIndexProgress('Done!')
+      window.dispatchEvent(new CustomEvent('navigate-to-ddl'))
+    } catch (e: any) {
+      setIndexProgress(null)
+      toast({ title: 'Indexing failed', description: String(e), variant: 'destructive' })
+    } finally {
+      unlisten()
+      setIndexingStream(null)
+      setTimeout(() => setIndexProgress(null), 1000)
+    }
+  }
+
+  const verificationDone = !verifying && verifyingUrls.size > 0 && Object.keys(streamStatus).length > 0
 
   const totalUrls = useMemo(() => {
     const urls = new Set<string>()
@@ -122,16 +161,14 @@ export function RemoteQualitySelector({
 
   const inactiveCount = useMemo(() => {
     let count = 0
-    for (const g of groupedStreams) {
-      for (const s of g.streams) {
-        if (streamStatus[s.url] === false) count++
-      }
+    for (const url of verifyingUrls) {
+      if (streamStatus[url] === false) count++
     }
     return count
-  }, [groupedStreams, streamStatus])
+  }, [verifyingUrls, streamStatus])
 
   const isStreamActive = (url: string): boolean => {
-    if (Object.keys(streamStatus).length === 0) return true
+    if (!verifyingUrls.has(url)) return true
     return streamStatus[url] !== false
   }
 
@@ -184,7 +221,7 @@ export function RemoteQualitySelector({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl bg-[#0A0A0A] border-neutral-800 text-neutral-100 shadow-2xl">
+      <DialogContent className="sm:max-w-2xl bg-[#0A0A0A] border-neutral-800 text-neutral-100 shadow-2xl">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold text-neutral-100 flex items-center gap-2">
             <Film className="size-4 text-amber-500/70" />
@@ -212,9 +249,9 @@ export function RemoteQualitySelector({
               <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-700/20">
                 <Loader2 className="size-4 text-amber-400 animate-spin shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-amber-300/90">Verifying stream links...</p>
+                  <p className="text-sm font-semibold text-amber-300/90">Checking Pixeldrain links...</p>
                   <p className="text-[11px] text-neutral-500 font-medium">
-                    Checked {verifiedCount} of {totalUrls} &middot; {inactiveCount} inactive
+                    {verifiedCount} of {verifyingUrls.size} checked &middot; {inactiveCount} expired
                   </p>
                 </div>
               </div>
@@ -323,14 +360,14 @@ export function RemoteQualitySelector({
                       <div className="space-y-2">
                         {group.streams.map((stream) => {
                           const active = isStreamActive(stream.url)
-                          const checkPending = Object.keys(streamStatus).length > 0 && streamStatus[stream.url] === undefined
+                          const checkPending = verifyingUrls.has(stream.url) && streamStatus[stream.url] === undefined
 
                           return (
                             <button
                               key={stream.url}
                               role="option"
                               aria-selected={false}
-                              aria-label={`${stream.name}${!active ? ' (unreachable)' : ''}${stream.recommended ? ' (recommended)' : ''}`}
+                              aria-label={`${stream.name}${!active ? ' (unreachable)' : ''}`}
                               onClick={() => active && onSelect(stream)}
                               className={cn(
                                 'w-full text-left p-4 rounded-2xl bg-[#0D0D0D] border group transition-all duration-200',
@@ -349,17 +386,17 @@ export function RemoteQualitySelector({
                                   </span>
 
                                   {/* Active badge */}
-                                  {verificationDone && active && (
+                                  {verificationDone && verifyingUrls.has(stream.url) && active && (
                                     <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-green-500/10 text-green-500/70 border border-green-700/20">
                                       Active
                                     </span>
                                   )}
 
                                   {/* Inactive badge */}
-                                  {verificationDone && !active && (
+                                  {verificationDone && verifyingUrls.has(stream.url) && !active && (
                                     <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-red-500/10 text-red-400/70 border border-red-800/20">
                                       <WifiOff className="size-3" />
-                                      Unreachable
+                                      {/pixeldrain\.\w+/i.test(stream.url) ? 'Expired' : 'Unreachable'}
                                     </span>
                                   )}
 
@@ -371,15 +408,28 @@ export function RemoteQualitySelector({
                                     </span>
                                   )}
 
-                                  {stream.recommended && active && (
-                                    <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-600/10 text-amber-500/80 border border-amber-700/20">
-                                      <ThumbsUp className="size-3" />
-                                      Recommended
-                                    </span>
-                                  )}
                                 </div>
 
-                                <div className="flex items-center gap-3 shrink-0">
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {addonContext && (
+                                    <div
+                                      role="button"
+                                      tabIndex={0}
+                                      aria-label={indexedStreams.has(stream.url) ? "Indexed to Direct Links" : "Index to Direct Links"}
+                                      onClick={(e) => { e.stopPropagation(); if (!indexedStreams.has(stream.url) && !indexingStream) handleIndexToDdl(stream) }}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (!indexedStreams.has(stream.url) && !indexingStream) handleIndexToDdl(stream) } }}
+                                      className={cn(
+                                        'size-9 flex items-center justify-center rounded-xl transition-all duration-200 cursor-pointer',
+                                        indexedStreams.has(stream.url)
+                                          ? 'bg-emerald-600/10 text-emerald-500'
+                                          : indexingStream === stream.url
+                                            ? 'bg-neutral-800/50 text-neutral-400'
+                                            : 'bg-neutral-800/50 text-neutral-500 hover:bg-neutral-700/50 hover:text-neutral-300'
+                                      )}
+                                    >
+                                      {indexedStreams.has(stream.url) ? <Check className="size-4" /> : indexingStream === stream.url ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                                    </div>
+                                  )}
                                   <div
                                     role="button"
                                     tabIndex={0}
@@ -424,6 +474,16 @@ export function RemoteQualitySelector({
           </div>
         )}
       </DialogContent>
+
+      {/* Indexing progress overlay */}
+      {indexProgress && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 px-8 py-6 rounded-2xl bg-[#0D0D0D] border border-neutral-800">
+            <div className="size-8 rounded-full border-2 border-neutral-700 border-t-amber-600/60 animate-spin" />
+            <div className="text-sm text-neutral-300 font-medium text-center max-w-[280px]">{indexProgress}</div>
+          </div>
+        </div>
+      )}
     </Dialog>
   )
 }

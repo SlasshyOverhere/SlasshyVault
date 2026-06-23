@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo, RefreshCw, Bookmark } from 'lucide-react'
+import { Film, Star, Calendar, ChevronLeft, Play, Loader2, ListVideo, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/tauri'
 import { getCachedImageUrl } from '@/services/api'
@@ -15,9 +15,6 @@ interface Props {
   onFetchSeasonStreams?: (imdbId: string, season: number) => void
   onFetchSeasonPack?: (imdbId: string, season: number) => void
   fetching?: boolean
-  isInLibrary?: boolean
-  onAddToLibrary?: () => void
-  addingToLibrary?: boolean
 }
 
 interface TvSeason {
@@ -118,7 +115,7 @@ const EpisodeThumbnail = memo(function EpisodeThumbnail({
   )
 })
 
-export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMovieStreams, onFetchEpisodeStreams, onFetchSeasonStreams, onFetchSeasonPack, fetching, isInLibrary, onAddToLibrary, addingToLibrary }: Props) {
+export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMovieStreams, onFetchEpisodeStreams, onFetchSeasonStreams, onFetchSeasonPack, fetching }: Props) {
   const [localImdbId, setLocalImdbId] = useState<string | null>(null)
   const [seasons, setSeasons] = useState<TvSeason[]>([])
   const [activeSeason, setActiveSeason] = useState<number>(1)
@@ -331,22 +328,6 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
                 >
                   <RefreshCw className={cn("size-4", fetching && "animate-spin")} />
                 </Button>
-                {onAddToLibrary && (
-                  <Button
-                    onClick={onAddToLibrary}
-                    disabled={isInLibrary || addingToLibrary}
-                    variant="outline"
-                    className={cn(
-                      "h-11 px-4 rounded-xl border-neutral-800 transition-all duration-200 text-sm font-medium",
-                      isInLibrary
-                        ? "text-white bg-white/10 border-white/20 cursor-default"
-                        : "text-neutral-300 hover:text-neutral-100 hover:bg-neutral-900"
-                    )}
-                  >
-                    <Bookmark className={cn("size-4 mr-2", isInLibrary && "fill-current", addingToLibrary && "animate-pulse")} />
-                    {isInLibrary ? "In Library" : "Add to Library"}
-                  </Button>
-                )}
               </div>
             </div>
           </div>
@@ -420,23 +401,6 @@ export function RemoteMediaDetail({ item, imdbId: propImdbId, onBack, onFetchMov
               <p className="text-sm text-neutral-300 leading-relaxed line-clamp-2 max-w-xl">{item.overview}</p>
             )}
             <div className="pt-1 flex items-center gap-2">
-              {onAddToLibrary && (
-                <Button
-                  onClick={onAddToLibrary}
-                  disabled={isInLibrary || addingToLibrary}
-                  variant="outline"
-                  className={cn(
-                    "h-10 px-4 rounded-xl border-neutral-800 transition-all duration-200 text-sm font-medium",
-                    isInLibrary
-                      ? "text-white bg-white/10 border-white/20 cursor-default"
-                      : "text-neutral-300 hover:text-neutral-100 hover:bg-neutral-900"
-                  )}
-                  title={isInLibrary ? "In your library" : "Add to library"}
-                >
-                  <Bookmark className={cn("size-4 mr-2", isInLibrary && "fill-current", addingToLibrary && "animate-pulse")} />
-                  {isInLibrary ? "In Library" : "Add to Library"}
-                </Button>
-              )}
               {onFetchSeasonPack && imdbId && seasons.length > 0 && (
                 <Button
                   onClick={() => {

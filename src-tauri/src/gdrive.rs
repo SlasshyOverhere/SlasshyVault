@@ -1097,6 +1097,46 @@ impl GoogleDriveClient {
 
         Ok(all_ids)
     }
+
+    /// Checks if multiple files exist on Google Drive. Returns a set of file_ids that DO exist.
+    /// Uses concurrent individual requests (Drive API has no batch-exists endpoint).
+    pub async fn batch_check_file_exists(&self, file_ids: &[String]) -> Result<std::collections::HashSet<String>, String> {
+        use std::collections::HashSet;
+        use tokio::task::JoinSet;
+
+        let access_token = self.get_access_token().await?;
+        let mut join_set = JoinSet::new();
+
+        for fid in file_ids {
+            let fid = fid.clone();
+            let token = access_token.clone();
+            let client = self.http_client.clone();
+            join_set.spawn(async move {
+                let url = format!(
+                    "{}/files/{}?fields=id&supportsAllDrives=true",
+                    DRIVE_API_BASE, fid
+                );
+                let resp = client
+                    .get(&url)
+                    .header("Authorization", format!("Bearer {}", token))
+                    .send()
+                    .await;
+                match resp {
+                    Ok(r) if r.status().is_success() => Some(fid),
+                    _ => None,
+                }
+            });
+        }
+
+        let mut existing = HashSet::new();
+        while let Some(result) = join_set.join_next().await {
+            if let Ok(Some(fid)) = result {
+                existing.insert(fid);
+            }
+        }
+
+        Ok(existing)
+    }
 }
 
 // ==================== OAuth Flow ====================

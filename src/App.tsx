@@ -102,11 +102,13 @@ const loadSettingsModal = () => import('@/components/SettingsModal')
 const loadEpisodeBrowser = () => import('@/components/EpisodeBrowser')
 const loadWatchTogetherModal = () => import('@/components/WatchTogether/WatchTogetherModal')
 const loadFixMatchModal = () => import('@/components/FixMatchModal')
+const loadSyncValidatorModal = () => import('@/components/SyncValidatorModal')
 
 const SettingsModal = lazy(() => loadSettingsModal().then(module => ({ default: module.SettingsModal })))
 const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default: module.EpisodeBrowser })))
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
+const SyncValidatorModal = lazy(() => loadSyncValidatorModal().then(module => ({ default: module.SyncValidatorModal })))
 
 
 
@@ -222,13 +224,6 @@ const LoadingFallback = () => (
     <Loader2 className="size-8 animate-spin text-muted-foreground" />
   </div>
 )
-
-const formatTimeDigits = (date: Date) => {
-  const h = date.getHours() % 12 || 12
-  const m = date.getMinutes()
-  const s = date.getSeconds()
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
 
 const formatTime = (seconds: number): string => {
   const h = Math.floor(seconds / 3600)
@@ -497,6 +492,7 @@ function App() {
 
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [showSyncValidator, setShowSyncValidator] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
@@ -2432,6 +2428,7 @@ function App() {
             }}
             onOpenSettings={() => setSettingsOpen(true)}
             onCloudScan={handleCloudScan}
+            onSyncValidator={() => setShowSyncValidator(true)}
             theme={theme}
             toggleTheme={toggleTheme}
             isScanning={isScanning}
@@ -2658,18 +2655,20 @@ function App() {
                           {/* 1. Header Row: Clock + Branding + Date */}
                            <div className="pt-16 pb-6 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
                             <div className="flex flex-col items-center gap-2">
-                                <div className="flex items-baseline gap-2">
-                                    <h1 className="text-5xl font-black tracking-tighter text-white tabular-nums drop-shadow-2xl">
-                                        {formatTimeDigits(currentTime)}
+                                <div className="flex items-baseline gap-3">
+                                    <h1 className="text-5xl font-black text-white tabular-nums drop-shadow-2xl flex items-center gap-2">
+                                        <span>{String(currentTime.getHours()).padStart(2, '0')}</span>
+                                        <span className="text-white/40">:</span>
+                                        <span>{String(currentTime.getMinutes()).padStart(2, '0')}</span>
+                                        <span className="text-white/40">:</span>
+                                        <span>{String(currentTime.getSeconds()).padStart(2, '0')}</span>
                                     </h1>
-                                    <span className="text-sm font-bold text-white/30 tracking-[0.15em] uppercase">
-                                        {currentTime.getHours() >= 12 ? 'pm' : 'am'}
-                                    </span>
                                 </div>
                                 <p className="text-xs font-bold text-white/20 uppercase tracking-[0.25em]">
                                     {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                                 </p>
-                            </div>                          </div>
+                            </div>
+                          </div>
 
                           {/* 2. Centered Sleek Search Bar */}
                           <div className="flex justify-center px-6 pb-12 flex-shrink-0 w-full">
@@ -3170,6 +3169,13 @@ function App() {
               onOpenChange={setFixMatchOpen}
               item={itemToFix}
               onSuccess={handleFixMatchSuccess}
+            />
+          </Suspense>
+
+          <Suspense fallback={null}>
+            <SyncValidatorModal
+              isOpen={showSyncValidator}
+              onClose={() => setShowSyncValidator(false)}
             />
           </Suspense>
 
