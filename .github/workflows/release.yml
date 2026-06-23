@@ -56,24 +56,12 @@ jobs:
             $previousTag = (git describe --tags --abbrev=0 "$tag^" 2>$null).Trim()
           } catch {}
 
-          $body = @{
-            tag_name = $tag
-            target_commitish = "${{ github.sha }}"
-          }
-          if ($previousTag) {
-            $body.previous_tag_name = $previousTag
-          }
-
-          $headers = @{
-            Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-
-          $response = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/${{ github.repository }}/releases/generate-notes" -Headers $headers -Body ($body | ConvertTo-Json)
-          $notes = $response.body
-          if (-not $notes) {
-            $notes = "## What's Changed`n`n- Release notes were not generated."
+          $logRange = if ($previousTag) { "$previousTag..$tag" } else { "HEAD" }
+          $commits = git log $logRange --oneline --no-decorate
+          $notes = if ($commits) {
+            "## What's Changed`n" + ($commits | ForEach-Object { "- $_" }) -join "`n"
+          } else {
+            "## What's Changed`n`n- Release notes were not generated."
           }
 
           "notes<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
