@@ -58,8 +58,9 @@ jobs:
 
           $logRange = if ($previousTag) { "$previousTag..$tag" } else { "HEAD" }
           $commits = git log $logRange --oneline --no-decorate
-          $notes = if ($commits) {
-            "## What's Changed`n" + ($commits | ForEach-Object { "- $_" }) -join "`n"
+          $lines = $commits | ForEach-Object { "- $_" }
+          $notes = if ($lines) {
+            "## What's Changed`n" + ($lines -join "`n")
           } else {
             "## What's Changed`n`n- Release notes were not generated."
           }
