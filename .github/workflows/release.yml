@@ -58,6 +58,7 @@ jobs:
 
           $body = @{
             tag_name = $tag
+            target_commitish = "${{ github.sha }}"
           }
           if ($previousTag) {
             $body.previous_tag_name = $previousTag
