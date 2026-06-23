@@ -13723,8 +13723,8 @@ mod sanitize_filename_tests {
 
     #[test]
     fn extracts_filename_from_url() {
-        let url = make_url("https://github.com/org/repo/releases/download/v1/SlasshyVault-Setup-3.0.56.exe");
-        assert_eq!(sanitize_update_filename(&url), "SlasshyVault-Setup-3.0.56.exe");
+        let url = make_url("https://github.com/org/repo/releases/download/v1/SlasshyVault-Setup-3.0.57.exe");
+        assert_eq!(sanitize_update_filename(&url), "SlasshyVault-Setup-3.0.57.exe");
     }
 
     #[test]
