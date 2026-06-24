@@ -19,6 +19,7 @@ import {
   RemindersView,
   DownloadsView,
   DeveloperConsole,
+  SmartCollections,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
@@ -65,12 +66,13 @@ import {
   AnalyticsData,
   playMediaNative,
   getConfig,
+  consumePendingSubtitlePath,
 } from '@/services/api'
 import {
   Search, Loader2, Film, Tv,
   ChevronRight, LayoutGrid, List,
   TrendingUp, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
-  Maximize2, Minimize2, Archive, AlertCircle
+  Maximize2, Minimize2, Archive, AlertCircle, FolderOpen
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -216,7 +218,7 @@ const classifyNotificationCategory = (title: string, message: string): Notificat
 
 type ViewMode = 'grid' | 'list'
 type SortOption = 'title' | 'year' | 'recent' | 'progress'
-type MediaSubTab = 'movies' | 'tv'
+type MediaSubTab = 'movies' | 'tv' | 'collections'
 const LARGE_LIBRARY_THRESHOLD = 120
 const CLOUD_INITIAL_RENDER_COUNT = 48
 const CLOUD_CHUNK_RENDER_COUNT = 96
@@ -976,7 +978,7 @@ function App() {
   const fetchData = useCallback(async () => {
     try {
       let data: MediaItem[] = []
-      if (view === 'cloud') {
+      if (view === 'cloud' && cloudSubTab !== 'collections') {
         // Cloud view - filter by is_cloud = true
         const mediaType = cloudSubTab === 'movies' ? 'movie' : 'tv'
         data = await getLibraryFiltered(mediaType, searchQuery, true)
@@ -1533,11 +1535,12 @@ function App() {
     try {
       // Check player mode config — use native libmpv if enabled
       const config = await getConfig()
+      const subtitleFilePath = consumePendingSubtitlePath(item.id)
       if (config.player_mode === 'native') {
         await playMediaNative(item.id, resume, audioPreference, subtitlePreference)
         setIsNativePlaying(true)
       } else {
-        await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize)
+        await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize, subtitleFilePath)
       }
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
@@ -2514,6 +2517,17 @@ function App() {
                       <Tv className="size-3.5" />
                       <span>TV Shows</span>
                     </motion.button>
+                    <motion.button
+                      onClick={() => setCloudSubTab('collections')}
+                      whileTap={{ scale: 0.95 }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${cloudSubTab === 'collections'
+                        ? 'bg-white text-black shadow-md'
+                        : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                      <FolderOpen className="size-3.5" />
+                      <span>Collections</span>
+                    </motion.button>
                   </div>
 
                   {/* Search Input */}
@@ -3004,7 +3018,24 @@ function App() {
                     )}
 
                     {/* Cloud Media Grid */}
-                    {view === 'cloud' && (
+                    {view === 'cloud' && cloudSubTab === 'collections' && (
+                      <motion.div
+                        key="cloud-collections"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <SmartCollections
+                          onItemClick={handleItemClick}
+                          onFixMatch={handleFixMatch}
+                          onDownload={handleStartDownload}
+                          onDelete={handleDelete}
+                          viewMode={viewMode}
+                        />
+                      </motion.div>
+                    )}
+
+                    {view === 'cloud' && cloudSubTab !== 'collections' && (
                       <motion.div
                         key={`cloud-${cloudSubTab}`}
                         initial={{ opacity: 0 }}

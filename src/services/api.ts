@@ -867,6 +867,7 @@ export const playMedia = async (
   subtitleLanguage?: string | null,
   durationSeconds?: number | null,
   fileSizeBytes?: number | null,
+  subtitleFilePath?: string | null,
 ): Promise<void> => {
   try {
     await invoke("play_with_mpv", {
@@ -874,6 +875,7 @@ export const playMedia = async (
       resume,
       audioLanguage: audioLanguage?.trim() || null,
       subtitleLanguage: subtitleLanguage?.trim() || null,
+      subtitleFilePath: subtitleFilePath?.trim() || null,
       durationSecondsOverride: durationSeconds && durationSeconds > 0 ? durationSeconds : null,
       fileSizeBytesOverride: fileSizeBytes && fileSizeBytes > 0 ? fileSizeBytes : null,
     });
@@ -2091,6 +2093,19 @@ export const getGdriveAccountInfo =
     }
   };
 
+// ==================== STORAGE ANALYTICS ====================
+
+export const getTopSpaceConsumers = async (
+  limit: number = 10,
+): Promise<MediaItem[]> => {
+  try {
+    return await invoke<MediaItem[]>("get_top_space_consumers", { limit });
+  } catch (error) {
+    console.error("Failed to get top space consumers:", error);
+    return [];
+  }
+};
+
 // ==================== AUTO-UPDATE ====================
 
 export interface UpdateInfo {
@@ -2395,3 +2410,48 @@ export const fixSyncIssues = async (
     throw error;
   }
 };
+
+// ==================== OPEN SUBTITLES ====================
+
+export interface SubtitleEntry {
+  id: string;
+  url: string;
+  lang: string;
+}
+
+export const fetchSubtitles = async (
+  imdbId: string,
+  mediaType: string,
+): Promise<SubtitleEntry[]> => {
+  try {
+    return await invoke<SubtitleEntry[]>("fetch_subtitles", { imdbId, mediaType });
+  } catch (error) {
+    console.error("Failed to fetch subtitles:", error);
+    return [];
+  }
+};
+
+export const downloadSubtitle = async (
+  url: string,
+  filename: string,
+): Promise<string> => {
+  try {
+    return await invoke<string>("download_subtitle", { url, filename });
+  } catch (error) {
+    console.error("Failed to download subtitle:", error);
+    throw error;
+  }
+};
+
+// Session-scoped subtitle file path store (per media ID)
+const pendingSubtitlePaths = new Map<number, string>()
+
+export const setPendingSubtitlePath = (mediaId: number, path: string): void => {
+  pendingSubtitlePaths.set(mediaId, path)
+}
+
+export const consumePendingSubtitlePath = (mediaId: number): string | null => {
+  const path = pendingSubtitlePaths.get(mediaId) ?? null
+  pendingSubtitlePaths.delete(mediaId)
+  return path
+}

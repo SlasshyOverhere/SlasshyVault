@@ -19,3 +19,5 @@ export * from './AnalyticsView';
 export * from './DuplicateDetector';
 export * from './CastMemberPanel';
 export * from './CalendarView';
+export * from './SmartCollections';
+export * from './SubtitleSelector';

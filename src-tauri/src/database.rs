@@ -1311,6 +1311,27 @@ impl Database {
             .collect()
     }
 
+    pub fn get_top_space_consumers(&self, limit: i32) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes, ddl_source_id
+             FROM media WHERE file_size_bytes IS NOT NULL AND media_type IN ('movie', 'tvshow')
+             ORDER BY file_size_bytes DESC LIMIT ?",
+        )?;
+        let items = stmt.query_map(params![limit], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
     pub fn get_continue_watching_items(&self, limit: i32) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT

@@ -262,6 +262,7 @@ pub fn launch_mpv_with_tracking(
     cache_settings: Option<&CloudCacheSettings>,
     audio_language: Option<&str>,
     subtitle_language: Option<&str>,
+    subtitle_file_path: Option<&str>,
     ipc_server: Option<&str>,
     file_size_bytes: Option<i64>,
     duration_seconds: Option<f64>,
@@ -395,6 +396,30 @@ pub fn launch_mpv_with_tracking(
             } else {
                 println!("[MPV] Security warning: Rejected invalid slang parameter");
             }
+        }
+    }
+
+    // External subtitle file (downloaded from OpenSubtitles)
+    if let Some(sub_path) = subtitle_file_path.filter(|v| !v.trim().is_empty()) {
+        let trimmed = sub_path.trim();
+        // Validate path characters (alphanumeric, slash, backslash, dot, hyphen, underscore, colon, space, percent)
+        if trimmed
+            .chars()
+            .all(|c| {
+                c.is_ascii_alphanumeric()
+                    || c == '/'
+                    || c == '\\'
+                    || c == '.'
+                    || c == '-'
+                    || c == '_'
+                    || c == ':'
+                    || c == ' '
+                    || c == '%'
+            })
+        {
+            cmd.arg(format!("--sub-file={}", trimmed));
+        } else {
+            println!("[MPV] Security warning: Rejected invalid subtitle file path");
         }
     }
 

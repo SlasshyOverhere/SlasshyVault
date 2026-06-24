@@ -12,6 +12,7 @@ import {
   resolveSeriesAudioPreferenceForPlayback,
   resolveSeriesSubtitlePreferenceForPlayback,
   getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
+  consumePendingSubtitlePath,
 } from "@/services/api"
 import { useToast } from "@/components/ui/use-toast"
 import { ResumeDialog } from "@/components/ResumeDialog"
@@ -329,7 +330,8 @@ export function EpisodeBrowser({
         : (tmdbEp?.runtime && tmdbEp.runtime > 0 ? tmdbEp.runtime * 60 : null))
       const effectiveSize = ep.zip_uncompressed_size ?? ep.zip_compressed_size ?? ep.file_size_bytes ?? null
       try {
-        await playMedia(ep.id, resume, audio, sub, effectiveDuration, effectiveSize)
+        const subtitleFilePath = consumePendingSubtitlePath(ep.id)
+        await playMedia(ep.id, resume, audio, sub, effectiveDuration, effectiveSize, subtitleFilePath)
         if (ls) { await waitForMpvPlaybackStart(ep.id); await waitForMinimumZipOverlayVisibility(t) }
       } finally { if (ls) setZipPlaybackLoading(null) }
     },

@@ -22,6 +22,7 @@ import {
   Radio,
   Shield,
   Archive,
+  HardDrive,
   Loader2,
   Bug,
   Wifi,
@@ -41,6 +42,16 @@ import {
   getBundledMpvInfo,
   downloadBundledMpv,
   BundledMpvInfo,
+  getTopSpaceConsumers,
+  getGdriveAccountInfo,
+  getCloudCacheInfo,
+  cleanupCloudCache,
+  clearCloudCache,
+  getDownloadJobs,
+  MediaItem,
+  DriveAccountInfo,
+  CloudCacheInfo,
+  DownloadJob,
 } from "@/services/api";
 
 import { useToast } from "@/components/ui/use-toast";
@@ -72,6 +83,7 @@ type SettingsSection =
   | "beta"
   | "updates"
   | "cloud"
+  | "storage"
   | "api"
   | "external"
   | "danger"
@@ -98,6 +110,11 @@ const sections: {
     id: "cloud",
     label: "Cache & Storage",
     icon: <Cloud className="size-4" />,
+  },
+  {
+    id: "storage",
+    label: "Storage & Bandwidth",
+    icon: <Archive className="size-4" />,
   },
   { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
   { id: "external", label: "External", icon: <Radio className="size-4" /> },
@@ -382,6 +399,11 @@ export function SettingsModal({
   const [showCustomMpv, setShowCustomMpv] = useState(false);
   const [useOwnApiKey, setUseOwnApiKey] = useState(false);
   const [showZipGuide, setShowZipGuide] = useState(false);
+  const [driveInfo, setDriveInfo] = useState<DriveAccountInfo | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<CloudCacheInfo | null>(null);
+  const [topMedia, setTopMedia] = useState<MediaItem[]>([]);
+  const [recentDownloads, setRecentDownloads] = useState<DownloadJob[]>([]);
+  const [storageLoading, setStorageLoading] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
   const [showDevConsole, setShowDevConsole] = useState(() => {
     return localStorage.getItem("slasshyvault_show_dev_console") === "true";
@@ -419,6 +441,24 @@ export function SettingsModal({
       handleCheckUpdate();
     }
   }, [open, autoCheckUpdate, activeSection]);
+
+  // Fetch storage & bandwidth data when section is opened
+  useEffect(() => {
+    if (open && activeSection === "storage") {
+      setStorageLoading(true);
+      Promise.all([
+        getGdriveAccountInfo(),
+        getCloudCacheInfo(),
+        getTopSpaceConsumers(10),
+        getDownloadJobs(),
+      ]).then(([drive, cache, media, downloads]) => {
+        setDriveInfo(drive);
+        setCacheInfo(cache);
+        setTopMedia(media);
+        setRecentDownloads(downloads.filter(d => d.status === "completed" || d.status === "downloading").slice(0, 5));
+      }).finally(() => setStorageLoading(false));
+    }
+  }, [open, activeSection]);
 
   const loadAppVersion = async () => {
     try {
@@ -1443,6 +1483,177 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
+                    </m.div>
+                  )}
+
+                  {/* ===== Storage & Bandwidth ===== */}
+                  {activeSection === "storage" && (
+                    <m.div
+                      key="storage"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Storage & Bandwidth
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Monitor storage usage, cache sizes, and download activity
+                        </p>
+                      </div>
+
+                      {storageLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : (
+                        <>
+                          {/* Google Drive Storage */}
+                          <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 rounded-lg bg-white/10">
+                                <Cloud className="size-5 text-white" />
+                              </div>
+                              <div>
+                                <Label className="text-base font-medium">Google Drive Storage</Label>
+                                {driveInfo && (
+                                  <p className="text-xs text-muted-foreground">{driveInfo.email}</p>
+                                )}
+                              </div>
+                            </div>
+                            {driveInfo?.storage_used != null && driveInfo?.storage_limit != null ? (
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Used</span>
+                                  <span className="font-medium">
+                                    {(driveInfo.storage_used / (1024 ** 3)).toFixed(1)} GB / {(driveInfo.storage_limit / (1024 ** 3)).toFixed(0)} GB
+                                  </span>
+                                </div>
+                                <div className="h-2 rounded-full bg-muted overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-white/70 transition-all"
+                                    style={{ width: `${Math.min(100, (driveInfo.storage_used / driveInfo.storage_limit) * 100)}%` }}
+                                  />
+                                </div>
+                                <p className="text-xs text-muted-foreground text-right">
+                                  {((driveInfo.storage_used / driveInfo.storage_limit) * 100).toFixed(1)}% used
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Connect Google Drive to view storage stats.</p>
+                            )}
+                          </div>
+
+                          {/* Cloud Cache */}
+                          <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 rounded-lg bg-white/10">
+                                <HardDrive className="size-5 text-white" />
+                              </div>
+                              <div className="flex-1">
+                                <Label className="text-base font-medium">Cloud Cache</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  {cacheInfo?.enabled ? `${cacheInfo.file_count} files, ${cacheInfo.total_size_mb.toFixed(1)} MB used` : "Disabled"}
+                                </p>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = await cleanupCloudCache();
+                                    toast({ title: "Cache cleaned", description: res.message });
+                                    const fresh = await getCloudCacheInfo();
+                                    setCacheInfo(fresh);
+                                  } catch { toast({ title: "Cleanup failed", variant: "destructive" }); }
+                                }}
+                              >
+                                <RefreshCw className="size-3 mr-1.5" /> Cleanup
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = await clearCloudCache();
+                                    toast({ title: "Cache cleared", description: res.message });
+                                    const fresh = await getCloudCacheInfo();
+                                    setCacheInfo(fresh);
+                                  } catch { toast({ title: "Clear failed", variant: "destructive" }); }
+                                }}
+                              >
+                                <Trash2 className="size-3 mr-1.5" /> Clear
+                              </Button>
+                            </div>
+                            {cacheInfo?.enabled && (
+                              <div className="h-2 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-white/50 transition-all"
+                                  style={{ width: `${Math.min(100, (cacheInfo.total_size_mb / cacheInfo.max_size_mb) * 100)}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Top Space Consumers */}
+                          {topMedia.length > 0 && (
+                            <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-white/10">
+                                  <Archive className="size-5 text-white" />
+                                </div>
+                                <Label className="text-base font-medium">Largest Library Items</Label>
+                              </div>
+                              <div className="space-y-1">
+                                {topMedia.map((item) => (
+                                  <div key={item.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-muted/30">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm truncate">{item.title}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {item.media_type === "tvshow" ? "TV Show" : "Movie"}{item.year ? ` (${item.year})` : ""}
+                                      </p>
+                                    </div>
+                                    <span className="text-sm font-mono text-muted-foreground ml-3">
+                                      {item.file_size_bytes ? `${(item.file_size_bytes / (1024 ** 3)).toFixed(2)} GB` : "—"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Recent Downloads */}
+                          {recentDownloads.length > 0 && (
+                            <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-white/10">
+                                  <Download className="size-5 text-white" />
+                                </div>
+                                <Label className="text-base font-medium">Recent Downloads</Label>
+                              </div>
+                              <div className="space-y-1">
+                                {recentDownloads.map((job) => (
+                                  <div key={job.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-muted/30">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm truncate">{job.title}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {job.status === "completed" ? "Completed" : `${(job.progress * 100).toFixed(0)}%`}
+                                      </p>
+                                    </div>
+                                    {job.speedBytesPerSecond != null && job.speedBytesPerSecond > 0 && (
+                                      <span className="text-xs font-mono text-muted-foreground ml-3">
+                                        {(job.speedBytesPerSecond / (1024 ** 2)).toFixed(1)} MB/s
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </m.div>
                   )}
 

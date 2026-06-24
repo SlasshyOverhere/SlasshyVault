@@ -481,6 +481,16 @@ async fn get_library_stats(
     db.get_library_stats(is_cloud).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_top_space_consumers(
+    state: State<'_, AppState>,
+    limit: Option<i32>,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_top_space_consumers(limit.unwrap_or(10))
+        .map_err(|e| e.to_string())
+}
+
 // Remove a single item from watch history
 #[tauri::command]
 async fn remove_from_watch_history(
@@ -6200,6 +6210,7 @@ async fn play_with_mpv(
     resume: bool,
     audio_language: Option<String>,
     subtitle_language: Option<String>,
+    subtitle_file_path: Option<String>,
     duration_seconds_override: Option<f64>,
     file_size_bytes_override: Option<i64>,
 ) -> Result<ApiResponse, String> {
@@ -6244,6 +6255,14 @@ async fn play_with_mpv(
         }
     });
     let subtitle_language = subtitle_language.and_then(|value| {
+        let normalized = value.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
+    let subtitle_file_path = subtitle_file_path.and_then(|value| {
         let normalized = value.trim().to_string();
         if normalized.is_empty() {
             None
@@ -6642,6 +6661,7 @@ async fn play_with_mpv(
         cache_settings.as_ref(),
         audio_language.as_deref(),
         subtitle_language.as_deref(),
+        subtitle_file_path.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
         effective_file_size,
         effective_duration,
@@ -17658,6 +17678,116 @@ fn refresh_tray_continue_watching(app: tauri::AppHandle, state: tauri::State<'_,
     Ok(())
 }
 
+// ==================== SUBTITLE MANAGEMENT ====================
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SubtitleEntry {
+    id: String,
+    url: String,
+    lang: String,
+}
+
+#[tauri::command]
+async fn fetch_subtitles(imdb_id: String, media_type: String) -> Result<Vec<SubtitleEntry>, String> {
+    let type_str = match media_type.as_str() {
+        "movie" => "movie",
+        "tvshow" | "tvepisode" => "series",
+        _ => return Err("Unsupported media type".into()),
+    };
+
+    let clean_id = imdb_id.trim().trim_start_matches("tt");
+    let url = format!(
+        "https://opensubtitles-v3.strem.io/subtitles/{}/tt{}.json",
+        type_str, clean_id
+    );
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = http_client::shared_client();
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("Failed to fetch subtitles: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Subtitle API returned status {}", response.status()));
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .map_err(|e| format!("Failed to parse subtitle response: {}", e))?;
+
+        let subtitles_raw = body
+            .get("subtitles")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let entries: Vec<SubtitleEntry> = subtitles_raw
+            .iter()
+            .filter_map(|entry| {
+                let id = entry.get("id")?.as_str()?.to_string();
+                let url = entry.get("url")?.as_str()?.to_string();
+                let lang = entry
+                    .get("lang")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                Some(SubtitleEntry { id, url, lang })
+            })
+            .collect();
+
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    result
+}
+
+#[tauri::command]
+async fn download_subtitle(url: String, filename: String) -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let client = http_client::shared_client();
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("Failed to download subtitle: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Subtitle download returned status {}", response.status()));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| format!("Failed to read subtitle bytes: {}", e))?;
+
+        let temp_dir = std::env::temp_dir().join("slasshyvault_subtitles");
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create subtitle temp dir: {}", e))?;
+
+        // Ensure filename has a subtitle extension
+        let safe_filename = if filename.ends_with(".srt")
+            || filename.ends_with(".vtt")
+            || filename.ends_with(".sub")
+            || filename.ends_with(".ass")
+        {
+            filename
+        } else {
+            format!("{}.srt", filename)
+        };
+
+        let file_path = temp_dir.join(&safe_filename);
+        std::fs::write(&file_path, &bytes)
+            .map_err(|e| format!("Failed to write subtitle file: {}", e))?;
+
+        Ok(file_path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    result
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -18152,6 +18282,7 @@ fn main() {
             search_media_by_cast,
             get_ddl_media,
             get_library_stats,
+            get_top_space_consumers,
             get_episodes,
             get_watch_history,
             get_watch_history_events,
@@ -18337,6 +18468,8 @@ fn main() {
             run_sync_validation,
             fix_sync_issues,
             refresh_tray_continue_watching,
+            fetch_subtitles,
+            download_subtitle,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
