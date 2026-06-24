@@ -432,6 +432,12 @@ pub struct SyncIssue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub items: Vec<MediaItem>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncValidationReport {
     pub ghost_entries: Vec<SyncIssue>,
     pub missing_files: Vec<SyncIssue>,
@@ -1261,6 +1267,29 @@ impl Database {
             .collect()
     }
 
+    pub fn search_media_by_cast(&self, cast_name: &str) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, ddl_source_id
+             FROM media WHERE cast_names LIKE '%' || ? || '%' AND media_type IN ('movie', 'tvshow')
+             ORDER BY last_watched DESC",
+        )?;
+
+        let items = stmt.query_map(params![cast_name], Self::map_media_item)?;
+
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
     pub fn get_episodes(&self, series_id: i64) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
@@ -1274,6 +1303,60 @@ impl Database {
         )?;
 
         let items = stmt.query_map(params![series_id], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
+    pub fn get_continue_watching_items(&self, limit: i32) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                m.id,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.title ELSE m.title END as title,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END as year,
+                m.overview,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.cast_names ELSE m.cast_names END as cast_names,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.director ELSE m.director END as director,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END as poster_path,
+                m.file_path,
+                m.media_type,
+                m.duration_seconds,
+                m.resume_position_seconds,
+                m.last_watched,
+                m.season_number,
+                m.episode_number,
+                m.parent_id,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.tmdb_id ELSE m.tmdb_id END as tmdb_id,
+                m.episode_title,
+                m.still_path,
+                m.archive_format,
+                m.is_cloud,
+                m.cloud_file_id,
+                m.parent_zip_id,
+                m.zip_entry_path,
+                m.zip_local_header_offset,
+                m.zip_data_start_offset,
+                m.zip_compressed_size,
+                m.zip_uncompressed_size,
+                m.zip_crc32,
+                m.zip_compression_method,
+                m.ddl_source_id
+             FROM media m
+             LEFT JOIN media p ON m.parent_id = p.id
+             WHERE COALESCE(m.resume_position_seconds, 0) > 0
+               AND m.last_watched IS NOT NULL
+               AND m.media_type IN ('movie', 'tvepisode')
+               AND (m.duration_seconds IS NULL
+                    OR m.duration_seconds <= 0
+                    OR (m.resume_position_seconds / m.duration_seconds) < 0.93)
+             ORDER BY m.last_watched DESC
+             LIMIT ?"
+        )?;
+
+        let items = stmt.query_map(params![limit], Self::map_media_item)?;
         items
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>()
@@ -4201,6 +4284,101 @@ impl Database {
     /// Merge duplicate TV shows into a single entry.
     /// Groups by TMDB ID first, then by normalized title.
     /// Keeps the entry with the most complete metadata as the primary.
+    /// Find duplicate media entries: same tmdb_id or similar normalized titles.
+    /// Only checks movies and tvshows (not episodes).
+    pub fn find_duplicate_media(&self) -> Result<Vec<DuplicateGroup>> {
+        let select_cols = "id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes, ddl_source_id";
+
+        let mut groups: Vec<DuplicateGroup> = Vec::new();
+
+        // 1) Exact tmdb_id duplicates (movies + tvshows, not episodes)
+        {
+            let sql = format!(
+                "SELECT {} FROM media WHERE media_type IN ('movie','tvshow') AND tmdb_id IS NOT NULL AND tmdb_id != '' ORDER BY tmdb_id, id",
+                select_cols
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let items: Vec<MediaItem> = stmt
+                .query_map([], Self::map_media_item)?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Group by tmdb_id
+            let mut by_tmdb: std::collections::HashMap<String, Vec<MediaItem>> = std::collections::HashMap::new();
+            for item in items {
+                if let Some(ref tid) = item.tmdb_id {
+                    by_tmdb.entry(tid.clone()).or_default().push(item);
+                }
+            }
+            for (tid, mut dupes) in by_tmdb {
+                if dupes.len() > 1 {
+                    dupes.sort_by(|a, b| a.id.cmp(&b.id));
+                    groups.push(DuplicateGroup {
+                        items: dupes,
+                        reason: format!("Same TMDB ID ({})", tid),
+                    });
+                }
+            }
+        }
+
+        // 2) Fuzzy title matches: normalized lowercase title for same media_type
+        {
+            let sql = format!(
+                "SELECT {} FROM media WHERE media_type IN ('movie','tvshow') ORDER BY media_type, id",
+                select_cols
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let items: Vec<MediaItem> = stmt
+                .query_map([], Self::map_media_item)?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Normalize: lowercase, strip non-alphanumeric
+            let normalize = |s: &str| -> String {
+                s.to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect()
+            };
+
+            // Group by (media_type, normalized_title)
+            let mut by_title: std::collections::HashMap<(String, String), Vec<MediaItem>> = std::collections::HashMap::new();
+            for item in items {
+                let key = (item.media_type.clone(), normalize(&item.title));
+                by_title.entry(key).or_default().push(item);
+            }
+            for ((_mt, _norm_title), dupes) in by_title {
+                if dupes.len() > 1 {
+                    // Avoid adding if all items already covered by tmdb_id groups
+                    let all_ids: Vec<i64> = dupes.iter().map(|d| d.id).collect();
+                    let already_covered = groups.iter().any(|g| {
+                        let group_ids: Vec<i64> = g.items.iter().map(|i| i.id).collect();
+                        all_ids.iter().all(|id| group_ids.contains(id))
+                    });
+                    if !already_covered {
+                        let sample_title = dupes[0].title.clone();
+                        let mut sorted = dupes;
+                        sorted.sort_by(|a, b| a.id.cmp(&b.id));
+                        groups.push(DuplicateGroup {
+                            items: sorted,
+                            reason: format!("Similar title (\"{}\")", sample_title),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort groups by count descending
+        groups.sort_by(|a, b| b.items.len().cmp(&a.items.len()));
+        Ok(groups)
+    }
+
     pub fn merge_duplicate_tvshows(&self) -> Result<i32> {
         println!("[MERGE] Looking for duplicate TV shows to merge...");
         let mut merged_count = 0;
