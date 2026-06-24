@@ -212,6 +212,27 @@ export function EpisodeBrowser({
     [episodes, selectedSeason],
   )
 
+  const watchStats = useMemo(() => {
+    const isWatched = (e: MediaItem) => isProgressPastAutoCompleteThreshold(e.progress_percent ?? 0)
+    const seasonWatched = filteredEpisodes.filter(isWatched)
+    const totalSeconds = seasonWatched.reduce((s, e) => s + (e.duration_seconds ?? 0), 0)
+    const allWatchedCount = episodes.filter(isWatched).length
+    const h = Math.floor(totalSeconds / 3600)
+    const m = Math.round((totalSeconds % 3600) / 60)
+    const rated = seasonWatched.filter(e => imdbRatings[(e.episode_number ?? 0)])
+    const avgImdb = rated.length > 0
+      ? rated.reduce((s, e) => s + (imdbRatings[(e.episode_number ?? 0)]?.imdb_rating ?? 0), 0) / rated.length
+      : null
+    return {
+      watched: seasonWatched.length,
+      total: filteredEpisodes.length,
+      totalSeconds,
+      timeFormatted: totalSeconds > 0 ? (h > 0 ? `${h}h ${m}m` : `${m}m`) : "--",
+      avgImdb,
+      overallPercent: episodes.length > 0 ? Math.round((allWatchedCount / episodes.length) * 100) : 0,
+    }
+  }, [episodes, filteredEpisodes, imdbRatings])
+
   const toggleSpoiler = useCallback(() => {
     setSpoilerEnabled(prev => {
       const next = !prev
@@ -444,6 +465,44 @@ export function EpisodeBrowser({
             </div>
           </div>
         </div>
+
+        {/* Watch stats bar */}
+        {!loading && filteredEpisodes.length > 0 && (
+          <motion.div
+            key={`stats-${selectedSeason}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.25 }}
+            className="shrink-0 px-6 sm:px-10 pb-3"
+          >
+            <div className="flex items-center gap-4 sm:gap-6 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-bold tracking-[0.2em] uppercase text-zinc-500">Watched</span>
+                <span className="text-xs font-black text-white/80">{watchStats.watched}</span>
+                <span className="text-[10px] text-zinc-600">/ {watchStats.total}</span>
+              </div>
+              <div className="w-px h-4 bg-white/[0.08]" />
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-bold tracking-[0.2em] uppercase text-zinc-500">Time</span>
+                <span className="text-xs font-black text-white/80">{watchStats.timeFormatted}</span>
+              </div>
+              {watchStats.avgImdb !== null && (
+                <>
+                  <div className="w-px h-4 bg-white/[0.08]" />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-bold tracking-[0.2em] uppercase text-zinc-500">Avg IMDb</span>
+                    <span className="text-xs font-black text-amber-400/80">{watchStats.avgImdb.toFixed(1)}</span>
+                  </div>
+                </>
+              )}
+              <div className="w-px h-4 bg-white/[0.08]" />
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-bold tracking-[0.2em] uppercase text-zinc-500">Overall</span>
+                <span className="text-xs font-black text-white/80">{watchStats.overallPercent}%</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
 
         {/* Episode grid */}
         <div
