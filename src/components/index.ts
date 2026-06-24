@@ -16,3 +16,6 @@ export * from './Reminders';
 export * from './DownloadsView';
 export * from './DeveloperConsole';
 export * from './AnalyticsView';
+export * from './DuplicateDetector';
+export * from './CastMemberPanel';
+export * from './CalendarView';

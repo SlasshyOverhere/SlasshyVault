@@ -90,9 +90,11 @@ import {
   waitForZipLoadingOverlayPaint,
 } from '@/utils/zipPlayback'
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
+import { CommandPalette } from '@/components/CommandPalette'
 import { FullHistoryView } from '@/components/FullHistoryView'
 import DirectLinksView from '@/components/DirectLinksView'
 import { RemoteSourceView } from '@/components/RemoteSource/RemoteSourceView'
+import { CalendarView } from '@/components/CalendarView'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -109,6 +111,7 @@ const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 const SyncValidatorModal = lazy(() => loadSyncValidatorModal().then(module => ({ default: module.SyncValidatorModal })))
+const DuplicateDetector = lazy(() => import('@/components/DuplicateDetector').then(module => ({ default: module.DuplicateDetector })))
 
 
 
@@ -493,9 +496,11 @@ function App() {
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showSyncValidator, setShowSyncValidator] = useState(false)
+  const [showDuplicateDetector, setShowDuplicateDetector] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
 
@@ -815,6 +820,12 @@ function App() {
         } else {
           searchInputRef.current?.focus()
         }
+      }
+
+      // CTRL+K or CMD+K to open command palette
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen((prev) => !prev)
       }
     }
 
@@ -1983,6 +1994,13 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
+  const handleToggleSidebarPin = useCallback(() => {
+    const current = localStorage.getItem('slasshyvault_sidebar_pinned') === 'true'
+    localStorage.setItem('slasshyvault_sidebar_pinned', String(!current))
+    window.dispatchEvent(new CustomEvent('sidebar-pin-toggle'))
+    toast({ title: current ? 'Sidebar Unpinned' : 'Sidebar Pinned' })
+  }, [toast])
+
   const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing'
   const showUpdateNotice = isUpdateNoticeVisible && (Boolean(updateInfo) || updateGateStatus === 'error')
 
@@ -2429,6 +2447,7 @@ function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             onCloudScan={handleCloudScan}
             onSyncValidator={() => setShowSyncValidator(true)}
+            onDuplicateDetector={() => setShowDuplicateDetector(true)}
             theme={theme}
             toggleTheme={toggleTheme}
             isScanning={isScanning}
@@ -2612,6 +2631,22 @@ function App() {
                       className="h-full"
                     >
                       <RemoteSourceView />
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </div>
+            ) : view === 'calendar' ? (
+              <div className="flex-1 overflow-hidden">
+                <div className="h-full min-h-0">
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key="calendar"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full"
+                    >
+                      <CalendarView />
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -3179,6 +3214,13 @@ function App() {
             />
           </Suspense>
 
+          <Suspense fallback={null}>
+            <DuplicateDetector
+              isOpen={showDuplicateDetector}
+              onClose={() => setShowDuplicateDetector(false)}
+            />
+          </Suspense>
+
           <ContentDetailsModal
             open={contentDetailsOpen}
             onOpenChange={handleContentDetailsOpenChange}
@@ -3349,6 +3391,24 @@ function App() {
             activeFilter={notificationFilter}
             onFilterChange={setNotificationFilter}
             onClearAll={clearNotifications}
+          />
+
+          <CommandPalette
+            open={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            setView={(v) => {
+              setView(v)
+              setSelectedShow(null)
+              setSearchQuery('')
+              setHomeSearchQuery('')
+              setHomeSearchResults([])
+            }}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onCloudScan={handleCloudScan}
+            onSyncValidator={() => setShowSyncValidator(true)}
+            onToggleSidebarPin={handleToggleSidebarPin}
+            continueWatching={continueWatching}
+            onPlayItem={startPlaybackFlow}
           />
 
           <Toaster />

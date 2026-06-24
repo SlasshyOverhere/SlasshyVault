@@ -945,6 +945,17 @@ export const fixMatch = async (
   }
 };
 
+// Search library by cast member name
+export const searchMediaByCast = async (castName: string): Promise<MediaItem[]> => {
+  try {
+    const items = await invoke<MediaItem[]>("search_media_by_cast", { castName });
+    return items;
+  } catch (error) {
+    console.error("Failed to search media by cast:", error);
+    return [];
+  }
+};
+
 // Search TMDB by title
 export const searchTmdb = async (
   query: string,
@@ -1873,6 +1884,20 @@ export const getImdbDetails = async (params: {
   }
 };
 
+export interface ParentsGuideCategory {
+  category: string;
+  severity_breakdowns: { severity_level: string; vote_count: number }[] | null;
+}
+
+export const getParentsGuide = async (imdbId: string): Promise<ParentsGuideCategory[] | null> => {
+  try {
+    return await invoke<ParentsGuideCategory[]>("get_parents_guide", { imdbId });
+  } catch (error) {
+    console.error("Failed to fetch parents guide:", error);
+    return null;
+  }
+};
+
 export interface TmdbReview {
   author: string;
   content: string;
@@ -2316,6 +2341,21 @@ export const wtSendMpvCommand = async (
 };
 
 // ==================== SYNC VALIDATOR ====================
+
+// Duplicate detection types
+export interface DuplicateGroup {
+  items: MediaItem[];
+  reason: string;
+}
+
+export const findDuplicateMedia = async (): Promise<DuplicateGroup[]> => {
+  try {
+    return await invoke<DuplicateGroup[]>("find_duplicate_media");
+  } catch (error) {
+    console.error("Failed to find duplicate media:", error);
+    return [];
+  }
+};
 
 export interface SyncIssue {
   category: string;

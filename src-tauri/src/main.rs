@@ -380,6 +380,19 @@ async fn get_library_filtered(
     Ok(enrich_media_items_archive_assessment(items))
 }
 
+// Search library by cast member name
+#[tauri::command]
+async fn search_media_by_cast(
+    state: State<'_, AppState>,
+    cast_name: String,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let items = db
+        .search_media_by_cast(&cast_name)
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
 // Get DDL library items
 #[tauri::command]
 async fn get_ddl_media(
@@ -3897,6 +3910,12 @@ async fn merge_duplicate_shows(state: State<'_, AppState>) -> Result<ApiResponse
     Ok(ApiResponse {
         message: format!("Merged {} duplicate TV shows", merged_count),
     })
+}
+
+#[tauri::command]
+async fn find_duplicate_media(state: State<'_, AppState>) -> Result<Vec<database::DuplicateGroup>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.find_duplicate_media().map_err(|e| e.to_string())
 }
 
 // Get resume info for a media item
@@ -8445,6 +8464,64 @@ async fn get_imdb_details(
     }).await.map_err(|e| e.to_string())?;
 
     details
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct SeverityBreakdown {
+    severity_level: String,
+    vote_count: i32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct ParentsGuideCategory {
+    category: String,
+    severity_breakdowns: Option<Vec<SeverityBreakdown>>,
+}
+
+#[tauri::command]
+async fn get_parents_guide(imdb_id: String) -> Result<Vec<ParentsGuideCategory>, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let url = format!("https://api.imdbapi.dev/titles/{}/parentsGuide", imdb_id);
+        println!("[IMDBAPI] Fetching parentsGuide for {}", imdb_id);
+        let client = http_client::shared_client();
+        let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send().map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("parentsGuide API error: {}", resp.status()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ApiParentsGuideResponse {
+            parentsGuide: Option<Vec<ApiParentsGuideCategory>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiParentsGuideCategory {
+            category: Option<String>,
+            severityBreakdowns: Option<Vec<ApiSeverityBreakdown>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiSeverityBreakdown {
+            severityLevel: Option<String>,
+            voteCount: Option<i32>,
+        }
+
+        let data: ApiParentsGuideResponse = resp.json().map_err(|e| e.to_string())?;
+        let categories = data.parentsGuide.unwrap_or_default().into_iter().map(|cat| {
+            ParentsGuideCategory {
+                category: cat.category.unwrap_or_default(),
+                severity_breakdowns: cat.severityBreakdowns.map(|v| v.into_iter().map(|s| {
+                    SeverityBreakdown {
+                        severity_level: s.severityLevel.unwrap_or_default(),
+                        vote_count: s.voteCount.unwrap_or(0),
+                    }
+                }).collect()),
+            }
+        }).collect();
+
+        println!("[IMDBAPI] Got parentsGuide data for {}", imdb_id);
+        Ok(categories)
+    }).await.map_err(|e| e.to_string())?;
+
+    result
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
@@ -17532,6 +17609,55 @@ async fn fix_sync_issues(
     }))
 }
 
+#[tauri::command]
+fn refresh_tray_continue_watching(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
+    let quit = CustomMenuItem::new("quit".to_string(), "Quit");
+    let mut tray_menu = SystemTrayMenu::new()
+        .add_item(show)
+        .add_native_item(SystemTrayMenuItem::Separator);
+
+    let continue_items = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_continue_watching_items(3).unwrap_or_default()
+    };
+    if !continue_items.is_empty() {
+        for item in &continue_items {
+            let label = if item.media_type == "tvepisode" {
+                let sn = item.season_number.unwrap_or(0);
+                let en = item.episode_number.unwrap_or(0);
+                let ep_title = item.episode_title.as_deref().unwrap_or("");
+                let display = if ep_title.is_empty() {
+                    format!("{} S{:02}E{:02}", item.title, sn, en)
+                } else {
+                    format!("{} S{:02}E{:02} - {}", item.title, sn, en, ep_title)
+                };
+                if display.len() > 45 {
+                    format!("{}...", &display[..42])
+                } else {
+                    display
+                }
+            } else {
+                if item.title.len() > 45 {
+                    format!("{}...", &item.title[..42])
+                } else {
+                    item.title.clone()
+                }
+            };
+            let menu_item = CustomMenuItem::new(
+                format!("continue_{}", item.id),
+                format!("▶ {}", label),
+            );
+            tray_menu = tray_menu.add_item(menu_item);
+        }
+        tray_menu = tray_menu.add_native_item(SystemTrayMenuItem::Separator);
+    }
+    tray_menu = tray_menu.add_item(quit);
+
+    app.tray_handle().set_menu(tray_menu).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -17653,13 +17779,50 @@ fn main() {
         last_validation_report: Mutex::new(None),
     };
 
-    // Create system tray menu
+    // Create system tray menu with continue-watching items
     let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
-    let tray_menu = SystemTrayMenu::new()
+    let mut tray_menu = SystemTrayMenu::new()
         .add_item(show)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(quit);
+        .add_native_item(SystemTrayMenuItem::Separator);
+
+    // Add continue-watching items from database
+    let continue_items = {
+        let db_guard = state.db.lock().unwrap();
+        db_guard.get_continue_watching_items(3).unwrap_or_default()
+    };
+    if !continue_items.is_empty() {
+        for item in &continue_items {
+            let label = if item.media_type == "tvepisode" {
+                let sn = item.season_number.unwrap_or(0);
+                let en = item.episode_number.unwrap_or(0);
+                let ep_title = item.episode_title.as_deref().unwrap_or("");
+                let display = if ep_title.is_empty() {
+                    format!("{} S{:02}E{:02}", item.title, sn, en)
+                } else {
+                    format!("{} S{:02}E{:02} - {}", item.title, sn, en, ep_title)
+                };
+                if display.len() > 45 {
+                    format!("{}...", &display[..42])
+                } else {
+                    display
+                }
+            } else {
+                if item.title.len() > 45 {
+                    format!("{}...", &item.title[..42])
+                } else {
+                    item.title.clone()
+                }
+            };
+            let menu_item = CustomMenuItem::new(
+                format!("continue_{}", item.id),
+                format!("▶ {}", label),
+            );
+            tray_menu = tray_menu.add_item(menu_item);
+        }
+        tray_menu = tray_menu.add_native_item(SystemTrayMenuItem::Separator);
+    }
+    tray_menu = tray_menu.add_item(quit);
 
     let system_tray = SystemTray::new().with_menu(tray_menu);
 
@@ -17679,14 +17842,17 @@ fn main() {
                     restore_or_create_main_window(app);
                 }
                 SystemTrayEvent::MenuItemClick { id, .. } => {
-                    match id.as_str() {
-                        "show" => {
+                    if id == "show" {
+                        restore_or_create_main_window(app);
+                    } else if id == "quit" {
+                        std::process::exit(0);
+                    } else if let Some(media_id_str) = id.strip_prefix("continue_") {
+                        if let Ok(media_id) = media_id_str.parse::<i64>() {
                             restore_or_create_main_window(app);
+                            let _ = app.emit_all("play-continue-watching", serde_json::json!({
+                                "media_id": media_id,
+                            }));
                         }
-                        "quit" => {
-                            std::process::exit(0);
-                        }
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -17983,6 +18149,7 @@ fn main() {
             get_recently_added,
             get_library,
             get_library_filtered,
+            search_media_by_cast,
             get_ddl_media,
             get_library_stats,
             get_episodes,
@@ -18048,6 +18215,7 @@ fn main() {
             get_tv_season_episodes,
             get_episode_imdb_ratings,
             get_imdb_details,
+            get_parents_guide,
             get_tmdb_reviews,
             refresh_series_metadata,
             get_tmdb_release_schedule,
@@ -18062,6 +18230,7 @@ fn main() {
             delete_watchlist_item,
             sync_watchlist,
             merge_duplicate_shows,
+            find_duplicate_media,
             // Google Drive commands
             gdrive_is_connected,
             gdrive_get_access_token,
@@ -18167,6 +18336,7 @@ fn main() {
             sentry_report_error,
             run_sync_validation,
             fix_sync_issues,
+            refresh_tray_continue_watching,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
