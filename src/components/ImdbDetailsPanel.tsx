@@ -2,7 +2,8 @@ import { useState, useEffect } from "react"
 import { Star, Loader2, Trophy, Film, Globe, Clock, Calendar, Users, ExternalLink, MessageSquare } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { getImdbDetails, getTmdbReviews, type ImdbDetails, type TmdbReview } from "@/services/api"
+import { getImdbDetails, getTmdbReviews, getParentsGuide, type ImdbDetails, type TmdbReview, type ParentsGuideCategory } from "@/services/api"
+import { ParentsGuideSection } from "@/components/ParentsGuideSection"
 
 interface ImdbDetailsPanelProps {
   open: boolean
@@ -29,6 +30,7 @@ const metacriticColor = (score: number | null) => {
 export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType }: ImdbDetailsPanelProps) {
   const [data, setData] = useState<ImdbDetails | null>(null)
   const [reviews, setReviews] = useState<TmdbReview[]>([])
+  const [parentsGuide, setParentsGuide] = useState<ParentsGuideCategory[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
 
@@ -36,6 +38,7 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
     if (!open) {
       setData(null)
       setReviews([])
+      setParentsGuide(null)
       setError(false)
       return
     }
@@ -46,6 +49,8 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
     getImdbDetails({ imdbId, tmdbId, mediaType }).then(result => {
       if (result) {
         setData(result)
+        // Fetch parents guide once we have the imdb_id
+        getParentsGuide(result.imdb_id).then(setParentsGuide)
       } else {
         setError(true)
       }
@@ -312,6 +317,11 @@ export function ImdbDetailsPanel({ open, onOpenChange, imdbId, tmdbId, mediaType
                       ))}
                     </div>
                   </div>
+                )}
+
+                {/* Content Warnings */}
+                {parentsGuide && parentsGuide.length > 0 && (
+                  <ParentsGuideSection categories={parentsGuide} />
                 )}
 
                 {/* TMDB Reviews */}

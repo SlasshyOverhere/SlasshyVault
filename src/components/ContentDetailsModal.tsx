@@ -23,6 +23,7 @@ import { ShareDialog } from "@/components/ShareDialog"
 import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
 import { getZipCompressionLabel } from "@/utils/zip"
 import { ImdbDetailsPanel } from "@/components/ImdbDetailsPanel"
+import { CastMemberPanel } from "@/components/CastMemberPanel"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -214,6 +215,7 @@ export function ContentDetailsModal({
   const [shareFileName, setShareFileName] = useState<string>("")
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
   const [imdbPanelImdbId, setImdbPanelImdbId] = useState<string | null>(null)
+  const [castPanelName, setCastPanelName] = useState<string | null>(null)
   const [refreshCounter, setRefreshCounter] = useState(0)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
@@ -1222,11 +1224,15 @@ export function ContentDetailsModal({
                       </div>
                     )}
                     {(director || creator) && (
-                      <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCastPanelName(isShow ? creator : director)}
+                        className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                      >
                         <User className="size-3.5 text-white/25" />
                         <span className="text-white/80">{isShow ? creator : director}</span>
                         <span className="text-[9px] uppercase tracking-widest opacity-25">{isShow ? "Creator" : "Director"}</span>
-                      </div>
+                      </button>
                     )}
                     {zipCompressionLabel && (
                       <div className="px-2.5 py-1 rounded bg-white/5 border border-white/5 text-[9px] font-bold text-white/50 tracking-widest ml-1">
@@ -1240,9 +1246,14 @@ export function ContentDetailsModal({
                       <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20">Cast</p>
                       <div className="flex flex-wrap gap-x-3 gap-y-1.5">
                         {castList.slice(0, 8).map(name => (
-                          <span key={name} className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-default">
+                          <button
+                            type="button"
+                            key={name}
+                            onClick={() => setCastPanelName(name)}
+                            className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-pointer"
+                          >
                             {name}
-                          </span>
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -1648,6 +1659,17 @@ export function ContentDetailsModal({
         imdbId={imdbPanelImdbId}
         tmdbId={item?.tmdb_id ? Number(item.tmdb_id) : undefined}
         mediaType={item?.media_type === "tvshow" ? "tv" : "movie"}
+      />
+    )}
+    {castPanelName && (
+      <CastMemberPanel
+        open={true}
+        onOpenChange={() => setCastPanelName(null)}
+        castName={castPanelName}
+        onItemClick={(clickedItem) => {
+          setCastPanelName(null)
+          onPrimaryAction(clickedItem)
+        }}
       />
     )}
     </>
