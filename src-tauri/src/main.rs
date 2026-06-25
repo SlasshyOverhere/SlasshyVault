@@ -6238,6 +6238,7 @@ async fn play_with_mpv(
 
     let is_cloud = media.is_cloud.unwrap_or(false);
     let title = media.title.clone();
+    let episode_title = media.episode_title.clone();
     let season_number = media.season_number;
     let episode_number = media.episode_number;
     let media_type = media.media_type.clone();
@@ -6753,6 +6754,7 @@ async fn play_with_mpv(
                 serde_json::json!({
                     "media_id": media_id,
                     "title": title,
+                    "episode_title": episode_title,
                     "season_number": season_number,
                     "episode_number": episode_number,
                     "media_type": media_type,

@@ -132,6 +132,7 @@ interface ScanCompletePayload {
 interface MpvPlaybackEndedPayload {
   media_id: number
   title: string
+  episode_title?: string
   season_number?: number
   episode_number?: number
   media_type?: string
@@ -246,6 +247,11 @@ const formatUpdateError = (error: unknown) => {
     return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
   }
   return 'Unknown update error.'
+}
+
+/** Get display title for a MediaItem — prefers episode_title for episodes */
+function displayTitleFor(item: MediaItem): string {
+  return item.episode_title || item.title
 }
 
 function App() {
@@ -1128,12 +1134,13 @@ function App() {
       })
 
       unlistenMpvEnded = await listen<MpvPlaybackEndedPayload>('mpv-playback-ended', async (event) => {
-        const { media_id, title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
+        const { media_id, title, episode_title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
 
         const seasonEpisode = media_type === 'tvepisode' && season_number && episode_number
           ? `S${String(season_number).padStart(2, '0')}E${String(episode_number).padStart(2, '0')}`
           : undefined
-        const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
+        const resolvedTitle = episode_title || title
+        const displayTitle = seasonEpisode ? `${resolvedTitle} (${seasonEpisode})` : resolvedTitle
         const autoMarkAsWatched = async () => {
           await markAsComplete(media_id)
           await emit('media-marked-complete', { media_id })
@@ -1160,14 +1167,13 @@ function App() {
           } else if (shouldPromptToMarkComplete(progressPercent)) {
             setMarkCompleteData({
               mediaId: media_id,
-              title,
+              title: resolvedTitle,
               seasonEpisode,
               progressPercent,
               isCompletionConfirmation: false
             })
             setMarkCompleteDialogOpen(true)
           } else {
-            const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
             toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
           }
         }
@@ -1950,11 +1956,13 @@ function App() {
 
   const handleMarkComplete = async () => {
     if (!markCompleteData) return
+    const data = markCompleteData
+    setMarkCompleteData(null)
     try {
-      await markAsComplete(markCompleteData.mediaId)
-      toast({ title: "Marked Complete", description: `${markCompleteData.title} marked as watched` })
+      await markAsComplete(data.mediaId)
+      toast({ title: "Marked Complete", description: `${data.title} marked as watched` })
       // Emit event so EpisodeBrowser and other components can refresh
-      await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
+      await emit('media-marked-complete', { media_id: data.mediaId })
       await Promise.all([loadContinueWatching(), loadRecentlyAdded(), loadHistoryEvents(), runWatchHistorySync()])
       // Refresh library items to update progress display on cards
       await fetchData()
@@ -3269,7 +3277,7 @@ function App() {
             <ResumeDialog
               open={resumeDialogOpen}
               onOpenChange={setResumeDialogOpen}
-              title={resumeDialogData.item.title}
+              title={displayTitleFor(resumeDialogData.item)}
               mediaType={resumeDialogData.item.media_type}
               seasonEpisode={
                 resumeDialogData.item.season_number !== undefined && resumeDialogData.item.episode_number !== undefined
@@ -3287,8 +3295,8 @@ function App() {
           {playConfirmData && (
             <PlayConfirmDialog
               open={playConfirmOpen}
-              onOpenChange={setPlayConfirmOpen}
-              title={playConfirmData.title}
+              onOpenChange={(open) => { setPlayConfirmOpen(open); if (!open) setPlayConfirmData(null) }}
+              title={displayTitleFor(playConfirmData)}
               mediaType={playConfirmData.media_type}
               seasonEpisode={
                 playConfirmData.season_number !== undefined && playConfirmData.episode_number !== undefined
@@ -3381,6 +3389,7 @@ function App() {
               progressPercent={markCompleteData.progressPercent}
               onMarkComplete={handleMarkComplete}
               onKeepProgress={() => {
+                setMarkCompleteData(null)
                 toast({ title: "Progress Saved", description: `${markCompleteData.title} - ${markCompleteData.progressPercent.toFixed(0)}% watched` })
               }}
             />
