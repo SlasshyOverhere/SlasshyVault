@@ -20,11 +20,13 @@ import {
   DownloadsView,
   DeveloperConsole,
   SmartCollections,
+  Clock,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
 import {
   getLibraryFiltered,
+  searchAllLibraries,
   getLibraryStats,
   getWatchHistory,
   getWatchHistoryEvents,
@@ -296,6 +298,7 @@ function App() {
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([])
+  const downloadJobCount = useMemo(() => downloadJobs.filter((j) => j.status !== 'completed' && j.status !== 'failed' && j.status !== 'cancelled').length, [downloadJobs])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
@@ -606,15 +609,9 @@ function App() {
     }
   }, [])
 
-  const [currentTime, setCurrentTime] = useState(new Date())
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
   const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all')
   const [notifications, setNotifications] = useState<AppNotificationItem[]>(() => loadStoredNotifications())
-
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(timer)
-  }, [])
 
   const notificationIdCounter = useRef(0)
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
@@ -639,11 +636,14 @@ function App() {
   )
 
   useEffect(() => {
-    try {
-      localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
-    } catch {
-      console.warn('[App] Failed to persist notifications')
-    }
+    const id = setTimeout(() => {
+      try {
+        localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
+      } catch {
+        console.warn('[App] Failed to persist notifications')
+      }
+    }, 2000)
+    return () => clearTimeout(id)
   }, [notifications])
 
   const handleOpenNotificationCenter = useCallback(() => {
@@ -939,15 +939,8 @@ function App() {
 
     setIsHomeSearching(true)
     try {
-      // Search across all 4 entities: Local Movies, Local TV, Cloud Movies, Cloud TV
-      const [localMovies, localTv, cloudMovies, cloudTv] = await Promise.all([
-        getLibraryFiltered('movie', homeSearchQuery, false),
-        getLibraryFiltered('tv', homeSearchQuery, false),
-        getLibraryFiltered('movie', homeSearchQuery, true),
-        getLibraryFiltered('tv', homeSearchQuery, true)
-      ])
-
-      const combined = [...localMovies, ...localTv, ...cloudMovies, ...cloudTv]
+      // Single IPC call instead of 4 parallel calls
+      const combined = await searchAllLibraries(homeSearchQuery)
       const query = homeSearchQuery.toLowerCase()
 
       // Use Schwartzian transform to pre-calculate lowercase titles for faster sorting
@@ -2466,7 +2459,7 @@ function App() {
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
             betaEnabled={betaEnabled}
-            downloadJobCount={downloadJobs.filter((job) => job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled').length}
+            downloadJobCount={downloadJobCount}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
@@ -2711,20 +2704,7 @@ function App() {
                         <div className="relative flex-1 flex flex-col min-h-0">
                           {/* 1. Header Row: Clock + Branding + Date */}
                            <div className="pt-16 pb-6 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
-                            <div className="flex flex-col items-center gap-2">
-                                <div className="flex items-baseline gap-3">
-                                    <h1 className="text-5xl font-black text-white tabular-nums drop-shadow-2xl flex items-center gap-2">
-                                        <span>{String(currentTime.getHours()).padStart(2, '0')}</span>
-                                        <span className="text-white/40">:</span>
-                                        <span>{String(currentTime.getMinutes()).padStart(2, '0')}</span>
-                                        <span className="text-white/40">:</span>
-                                        <span>{String(currentTime.getSeconds()).padStart(2, '0')}</span>
-                                    </h1>
-                                </div>
-                                <p className="text-xs font-bold text-white/20 uppercase tracking-[0.25em]">
-                                    {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-                                </p>
-                            </div>
+                            <Clock />
                           </div>
 
                           {/* 2. Centered Sleek Search Bar */}

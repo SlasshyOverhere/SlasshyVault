@@ -380,6 +380,26 @@ async fn get_library_filtered(
     Ok(enrich_media_items_archive_assessment(items))
 }
 
+// Combined search across all libraries (local + cloud, movies + TV) in one IPC call
+#[tauri::command]
+async fn search_all_libraries(
+    state: State<'_, AppState>,
+    search: String,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut results = Vec::new();
+    for (db_type, is_cloud) in [("movie", Some(false)), ("tvshow", Some(false)), ("movie", Some(true)), ("tvshow", Some(true))] {
+        results.extend(
+            db.get_library_filtered(db_type, Some(search.as_str()), is_cloud)
+                .map_err(|e| e.to_string())?
+        );
+    }
+    // Deduplicate by id
+    results.sort_by_key(|item| item.id);
+    results.dedup_by_key(|item| item.id);
+    Ok(enrich_media_items_archive_assessment(results))
+}
+
 // Search library by cast member name
 #[tauri::command]
 async fn search_media_by_cast(
@@ -18281,6 +18301,7 @@ fn main() {
             get_recently_added,
             get_library,
             get_library_filtered,
+            search_all_libraries,
             search_media_by_cast,
             get_ddl_media,
             get_library_stats,

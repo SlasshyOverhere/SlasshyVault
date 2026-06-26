@@ -1095,6 +1095,19 @@ impl Database {
               )",
             [],
         )?;
+        // Indexes for streaming_history and remote_playback_progress
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_streaming_history_last_watched ON streaming_history(last_watched DESC)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_remote_playback_last_watched ON remote_playback_progress(last_watched DESC)",
+            [],
+        )?;
+
+        // One-time reconciliation of legacy watch history events (moved from get_watch_history_events)
+        let _ = self.reconcile_legacy_watch_history_events();
+
         Ok(())
     }
 
@@ -1437,8 +1450,6 @@ impl Database {
     }
 
     pub fn get_watch_history_events(&self, limit: i32) -> Result<Vec<WatchHistoryEvent>> {
-        self.reconcile_legacy_watch_history_events()?;
-
         let mut stmt = self.conn.prepare(
             "SELECT
                 event_id,
@@ -1882,51 +1893,21 @@ impl Database {
     }
 
     pub fn upsert_watch_history_events(&self, events: &[WatchHistoryEvent]) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        self.conn.execute("BEGIN", [])?;
+
         let mut merged = 0usize;
-
-        for event in events {
-            let existing_updated_at: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT updated_at FROM watch_history_events WHERE event_id = ?",
-                    params![event.event_id],
-                    |row| row.get(0),
-                )
-                .ok();
-
-            if existing_updated_at
-                .as_deref()
-                .map(|value| value >= event.updated_at.as_str())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
-            self.conn.execute(
+        {
+            let mut stmt = self.conn.prepare(
                 "INSERT INTO watch_history_events (
-                    event_id,
-                    media_id,
-                    parent_media_id,
-                    title,
-                    parent_title,
-                    media_type,
-                    year,
-                    overview,
-                    poster_path,
-                    still_path,
-                    tmdb_id,
-                    parent_tmdb_id,
-                    episode_title,
-                    season_number,
-                    episode_number,
-                    is_cloud,
-                    progress_percent,
-                    resume_position_seconds,
-                    duration_seconds,
-                    completed,
-                    started_at,
-                    ended_at,
-                    updated_at
+                    event_id, media_id, parent_media_id, title, parent_title,
+                    media_type, year, overview, poster_path, still_path,
+                    tmdb_id, parent_tmdb_id, episode_title, season_number, episode_number,
+                    is_cloud, progress_percent, resume_position_seconds, duration_seconds,
+                    completed, started_at, ended_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id) DO UPDATE SET
                     media_id = excluded.media_id,
@@ -1950,8 +1931,12 @@ impl Database {
                     completed = excluded.completed,
                     started_at = excluded.started_at,
                     ended_at = excluded.ended_at,
-                    updated_at = excluded.updated_at",
-                params![
+                    updated_at = excluded.updated_at
+                WHERE excluded.updated_at > watch_history_events.updated_at",
+            )?;
+
+            for event in events {
+                let rows = stmt.execute(params![
                     event.event_id,
                     event.media_id,
                     event.parent_media_id,
@@ -1975,11 +1960,12 @@ impl Database {
                     event.started_at,
                     event.ended_at,
                     event.updated_at,
-                ],
-            )?;
-            merged += 1;
+                ])?;
+                merged += rows;
+            }
         }
 
+        self.conn.execute("COMMIT", [])?;
         Ok(merged)
     }
 

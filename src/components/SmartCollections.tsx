@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Trash2, X, FolderOpen } from 'lucide-react'
 import { MediaItem, getLibraryFiltered } from '@/services/api'
@@ -126,7 +126,6 @@ export function SmartCollections({ onItemClick, onFixMatch, onDownload, onDelete
   const [collections, setCollections] = useState<SmartCollection[]>(getCollections)
   const [editing, setEditing] = useState<SmartCollection | null>(null)
   const [activeCollection, setActiveCollection] = useState<string | null>(null)
-  const [matchedItems, setMatchedItems] = useState<MediaItem[]>([])
   const [allItems, setAllItems] = useState<MediaItem[]>([])
 
   // Load all cloud items once for matching
@@ -144,12 +143,12 @@ export function SmartCollections({ onItemClick, onFixMatch, onDownload, onDelete
 
   useEffect(() => { loadAllItems() }, [loadAllItems])
 
-  // When active collection changes, re-match
-  useEffect(() => {
-    if (!activeCollection) { setMatchedItems([]); return }
+  // Memoized filter — no extra state, no extra re-render cycle
+  const matchedItems = useMemo(() => {
+    if (!activeCollection) return []
     const col = collections.find(c => c.id === activeCollection)
-    if (!col) { setMatchedItems([]); return }
-    setMatchedItems(allItems.filter(item => matchCollectionRules(item, col.rules)))
+    if (!col) return []
+    return allItems.filter(item => matchCollectionRules(item, col.rules))
   }, [activeCollection, collections, allItems])
 
   const refresh = () => setCollections(getCollections())

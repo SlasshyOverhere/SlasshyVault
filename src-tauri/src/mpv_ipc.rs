@@ -602,17 +602,21 @@ pub fn monitor_mpv_and_save_progress(
     );
 
     // Wait for MPV to exit
+    let mut ticks_since_save = 0u32;
     while is_mpv_running(pid) {
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_secs(5));
+        ticks_since_save += 1;
 
-        // Periodically check progress and save to database
-        if let Some(progress) = read_mpv_progress(media_id) {
-            if progress.duration > 0.0 {
-                // Save to database
-                if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
-                    println!("[MPV] Failed to update progress during playback: {}", e);
+        // Save progress every 5 seconds (matching the Lua script's 2s cadence with margin)
+        if ticks_since_save >= 1 {
+            if let Some(progress) = read_mpv_progress(media_id) {
+                if progress.duration > 0.0 {
+                    if let Err(e) = db.update_progress(media_id, progress.position, progress.duration) {
+                        println!("[MPV] Failed to update progress during playback: {}", e);
+                    }
                 }
             }
+            ticks_since_save = 0;
         }
     }
 
@@ -1987,6 +1991,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("File does not exist"));
@@ -2000,6 +2005,7 @@ mod tests {
             1,
             None,
             0.0,
+            None,
             None,
             None,
             None,

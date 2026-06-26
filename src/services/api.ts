@@ -340,6 +340,18 @@ export const getLibraryFiltered = async (
   }
 };
 
+// Combined search across all libraries (local + cloud, movies + TV) in one IPC call
+export const searchAllLibraries = async (
+  search: string,
+): Promise<MediaItem[]> => {
+  try {
+    return await invoke<MediaItem[]>("search_all_libraries", { search });
+  } catch (error) {
+    console.error("Failed to search all libraries:", error);
+    return [];
+  }
+};
+
 // Get DDL library items
 export const getDdlMedia = async (
   type: "movie" | "tv",
