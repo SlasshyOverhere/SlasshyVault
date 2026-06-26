@@ -4615,6 +4615,33 @@ impl Database {
         Ok(merged)
     }
 
+    /// Delete all media entries (local + cloud) and related data, preserving watch history and settings.
+    /// Returns (cloud_file_ids, image_cache_path) for the caller to handle file cleanup.
+    pub fn delete_all_media_entries(&self) -> Result<(Vec<String>, String)> {
+        // Collect cloud file IDs for GDrive deletion
+        let cloud_file_ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT cloud_file_id FROM media WHERE cloud_file_id IS NOT NULL AND cloud_file_id != ''"
+            )?;
+            let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            ids
+        };
+
+        // Delete related data first (foreign keys)
+        self.conn.execute("DELETE FROM cached_episode_metadata", [])?;
+        self.conn.execute("DELETE FROM zip_archives", [])?;
+        self.conn.execute("DELETE FROM ddl_sources", [])?;
+        self.conn.execute("DELETE FROM cloud_folders", [])?;
+        self.conn.execute("DELETE FROM cloud_index_failures", [])?;
+
+        // Delete all media entries
+        self.conn.execute("DELETE FROM media", [])?;
+
+        Ok((cloud_file_ids, get_image_cache_dir()))
+    }
+
     /// Clear ALL app data - deletes every table and returns paths for file cleanup
     /// Returns the image cache path for the caller to delete
     pub fn clear_all_data(&self) -> Result<String> {

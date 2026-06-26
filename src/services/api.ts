@@ -570,6 +570,19 @@ export const deleteMediaFiles = async (
   }
 };
 
+// Delete ALL media files (cloud from Drive + all media entries from DB)
+export const deleteAllMediaFiles = async (): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_all_media_files", {
+      confirmed: true,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete all media files:", error);
+    throw error;
+  }
+};
+
 // Get episodes for delete selection modal
 export const getEpisodesForDelete = async (
   seriesId: number,

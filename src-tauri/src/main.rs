@@ -3303,6 +3303,96 @@ async fn delete_media_files(
     })
 }
 
+// Delete ALL media files — cloud files from Drive + all media entries from DB
+// Preserves watch history, streaming history, settings, reminders, watchlist
+#[tauri::command]
+async fn delete_all_media_files(
+    state: State<'_, AppState>,
+    window: Window,
+    confirmed: bool,
+) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
+
+    println!("[DELETE-ALL] Starting delete all media files");
+
+    // Get cloud file IDs and clear DB entries
+    let (cloud_file_ids, image_cache_path) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.delete_all_media_entries().map_err(|e| e.to_string())?
+    };
+
+    let total_cloud = cloud_file_ids.len();
+    let mut deleted_count = 0usize;
+    let mut failed_count = 0usize;
+
+    // Delete cloud files from Google Drive
+    if !cloud_file_ids.is_empty() {
+        println!(
+            "[DELETE-ALL] Deleting {} cloud files from Google Drive",
+            total_cloud
+        );
+        for cloud_file_id in &cloud_file_ids {
+            match state.gdrive_client.delete_file(cloud_file_id).await {
+                Ok(_) => {
+                    deleted_count += 1;
+                }
+                Err(e) => {
+                    let is_permission_error =
+                        e.contains("403") || e.contains("insufficientFilePermissions");
+                    if is_permission_error {
+                        println!(
+                            "[DELETE-ALL] Permission denied for {} (removing from DB anyway)",
+                            cloud_file_id
+                        );
+                        deleted_count += 1;
+                    } else {
+                        println!("[DELETE-ALL] Failed to delete {}: {}", cloud_file_id, e);
+                        failed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up image cache directory
+    let cache_path = std::path::Path::new(&image_cache_path);
+    if cache_path.exists() {
+        match std::fs::remove_dir_all(cache_path) {
+            Ok(_) => {
+                let _ = std::fs::create_dir_all(cache_path);
+                println!("[DELETE-ALL] Cleared image cache: {}", image_cache_path);
+            }
+            Err(e) => println!("[DELETE-ALL] Failed to clear image cache: {}", e),
+        }
+    }
+
+    // Notify frontend
+    window.emit("library-updated", ()).ok();
+
+    let message = if failed_count == 0 {
+        format!(
+            "Deleted all media files. {} cloud file(s) removed from Drive.",
+            deleted_count
+        )
+    } else {
+        format!(
+            "Deleted all media. {} cloud file(s) removed, {} failed.",
+            deleted_count, failed_count
+        )
+    };
+
+    println!("[DELETE-ALL] Complete: {}", message);
+
+    Ok(DeleteResponse {
+        success: failed_count == 0,
+        deleted_count,
+        failed_count,
+        message,
+    })
+}
+
 // Episode info for delete selection modal
 #[derive(serde::Serialize)]
 struct EpisodeDeleteInfo {
@@ -18324,6 +18414,7 @@ fn main() {
             cleanup_missing_metadata,
             // Other commands
             delete_media_files,
+            delete_all_media_files,
             delete_series,
             delete_series_cloud_folder,
             get_episodes_for_delete,

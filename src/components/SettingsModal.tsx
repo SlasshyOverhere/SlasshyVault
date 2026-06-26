@@ -32,6 +32,7 @@ import {
   getConfig,
   saveConfig,
   clearAllAppData,
+  deleteAllMediaFiles,
   TabVisibility,
   checkForUpdates,
   downloadUpdate,
@@ -383,6 +384,8 @@ export function SettingsModal({
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [activeSection, setActiveSection] =
@@ -648,6 +651,28 @@ export function SettingsModal({
       });
     } finally {
       setResetting(false);
+    }
+  };
+
+  const handleDeleteAllMedia = async () => {
+    setDeletingAll(true);
+    try {
+      const result = await deleteAllMediaFiles();
+      setShowDeleteAllConfirm(false);
+      toast({
+        title: "All Media Deleted",
+        description: result.message,
+      });
+      emit("library-updated");
+    } catch (error) {
+      console.error("Failed to delete all media", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete all media files",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingAll(false);
     }
   };
 
@@ -2188,6 +2213,69 @@ export function SettingsModal({
                                 {resetting
                                   ? "Resetting..."
                                   : "Yes, Delete Everything"}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Delete All Media Files */}
+                      <div className="p-4 rounded-xl border border-destructive/30 bg-destructive/5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-destructive/20">
+                            <Trash2 className="size-5 text-destructive" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium text-destructive">
+                              Delete All Media Files
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Remove all media from your library and cloud
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          This will permanently delete all SlasshyVault-managed
+                          files from Google Drive and remove all media entries
+                          (local and cloud) from your library. Watch history,
+                          settings, and reminders will be preserved. This action
+                          cannot be undone.
+                        </p>
+
+                        {!showDeleteAllConfirm ? (
+                          <Button
+                            variant="destructive"
+                            onClick={() => setShowDeleteAllConfirm(true)}
+                            className="w-full"
+                          >
+                            <Trash2 className="mr-2 size-4" />
+                            Delete All Media Files
+                          </Button>
+                        ) : (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-medium text-destructive text-center">
+                              Are you sure? This will delete all cloud files from
+                              Drive and remove every media entry from your
+                              library!
+                            </p>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => setShowDeleteAllConfirm(false)}
+                                className="flex-1"
+                                disabled={deletingAll}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={handleDeleteAllMedia}
+                                className="flex-1"
+                                disabled={deletingAll}
+                              >
+                                {deletingAll
+                                  ? "Deleting..."
+                                  : "Yes, Delete All Media"}
                               </Button>
                             </div>
                           </div>
