@@ -52,8 +52,12 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     { id: null, name: "My Drive" },
   ]);
 
-  // Selection: Drive file IDs
+  // Selection: Drive file IDs + folder IDs
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set());
+  // Map folderId -> all descendant file IDs (cached after recursive fetch)
+  const [folderFileCache, setFolderFileCache] = useState<Map<string, string[]>>(new Map());
+  const [loadingFolder, setLoadingFolder] = useState<string | null>(null);
   // Delete confirmation
   const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -92,6 +96,8 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     if (open) {
       loadData();
       setSelectedFiles(new Set());
+      setSelectedFolders(new Set());
+      setFolderFileCache(new Map());
       setDeleteStep(0);
       setDeleteConfirmText("");
     }
@@ -155,6 +161,37 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     });
   }, [currentFiles]);
 
+  // ==================== Recursive file collection ====================
+
+  const collectAllFileIds = useCallback(async (folderId: string): Promise<string[]> => {
+    const ids: string[] = [];
+    const queue = [folderId];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      try {
+        const [subFolders, files] = await Promise.all([
+          listGDriveFolders(currentId),
+          listGDriveFiles(currentId),
+        ]);
+        // Add all non-folder file IDs
+        for (const f of files.files ?? []) {
+          const mt = f.mimeType?.toLowerCase() ?? "";
+          if (mt !== "application/vnd.google-apps.folder") {
+            ids.push(f.id);
+          }
+        }
+        // Queue subfolders for traversal
+        for (const sub of subFolders) {
+          queue.push(sub.id);
+        }
+      } catch (error) {
+        console.error(`[SelectiveDelete] Failed to list folder ${currentId}:`, error);
+      }
+    }
+    return ids;
+  }, []);
+
   // ==================== Selection ====================
 
   const toggleFile = useCallback((fileId: string) => {
@@ -184,13 +221,59 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     });
   }, [videoFiles, selectedFiles]);
 
+  const toggleFolder = useCallback(async (folderId: string) => {
+    const isSelected = selectedFolders.has(folderId);
+
+    if (isSelected) {
+      // Deselect folder: remove its cached file IDs from selectedFiles
+      const cachedIds = folderFileCache.get(folderId) ?? [];
+      setSelectedFiles((prev) => {
+        const next = new Set(prev);
+        cachedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      setSelectedFolders((prev) => {
+        const next = new Set(prev);
+        next.delete(folderId);
+        return next;
+      });
+    } else {
+      // Select folder: recursively collect all file IDs
+      setLoadingFolder(folderId);
+      try {
+        const ids = await collectAllFileIds(folderId);
+        setFolderFileCache((prev) => {
+          const next = new Map(prev);
+          next.set(folderId, ids);
+          return next;
+        });
+        setSelectedFiles((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.add(id));
+          return next;
+        });
+        setSelectedFolders((prev) => {
+          const next = new Set(prev);
+          next.add(folderId);
+          return next;
+        });
+      } catch (error) {
+        console.error("[SelectiveDelete] Failed to collect folder files:", error);
+      } finally {
+        setLoadingFolder(null);
+      }
+    }
+  }, [selectedFolders, folderFileCache, collectAllFileIds]);
+
   // ==================== Delete ====================
 
   const handleDelete = useCallback(async () => {
-    if (selectedFiles.size === 0) return;
+    if (selectedFiles.size === 0 && selectedFolders.size === 0) return;
+    // Combine file IDs + folder IDs for deletion
+    const allIds = [...selectedFiles, ...selectedFolders];
     setDeleting(true);
     try {
-      const result = await deleteCloudFilesByDriveIds(Array.from(selectedFiles));
+      const result = await deleteCloudFilesByDriveIds(allIds);
       setDeleteStep(0);
       setDeleteConfirmText("");
       toast({
@@ -208,7 +291,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     } finally {
       setDeleting(false);
     }
-  }, [selectedFiles, toast, onOpenChange]);
+  }, [selectedFiles, selectedFolders, toast, onOpenChange]);
 
   // ==================== Navigation ====================
 
@@ -286,6 +369,11 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
                   key={child.id}
                   className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50"
                 >
+                  <Checkbox
+                    checked={selectedFolders.has(child.id)}
+                    disabled={loadingFolder === child.id}
+                    onCheckedChange={() => toggleFolder(child.id)}
+                  />
                   <button
                     className="flex items-center gap-2 flex-1 text-left"
                     onClick={() => toggleExpand(child.id)}
@@ -298,6 +386,9 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
                     <FolderOpen className="size-5 text-blue-400 shrink-0" />
                     <span className="font-medium truncate">{child.name}</span>
                   </button>
+                  {loadingFolder === child.id && (
+                    <Loader2 className="size-4 animate-spin text-muted-foreground shrink-0" />
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -362,6 +453,9 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
         <div className="border-t p-4 space-y-3">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
+              {selectedFolders.size > 0 && (
+                <>{selectedFolders.size} folder{selectedFolders.size !== 1 ? "s" : ""} + </>
+              )}
               {selectedFiles.size} file{selectedFiles.size !== 1 ? "s" : ""} selected for permanent deletion
             </span>
           </div>
@@ -370,11 +464,11 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
             <Button
               variant="destructive"
               className="w-full"
-              disabled={selectedFiles.size === 0}
+              disabled={selectedFiles.size === 0 && selectedFolders.size === 0}
               onClick={() => setDeleteStep(1)}
             >
               <Trash2 className="mr-2 size-4" />
-              Delete {selectedFiles.size} Selected File{selectedFiles.size !== 1 ? "s" : ""}
+              Delete {selectedFolders.size > 0 && <>{selectedFolders.size} Folder{selectedFolders.size !== 1 ? "s" : ""} + </>}{selectedFiles.size} File{selectedFiles.size !== 1 ? "s" : ""}
             </Button>
           )}
 
