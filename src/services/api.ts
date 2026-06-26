@@ -27,6 +27,7 @@ export interface MediaItem {
   // Cloud storage fields
   is_cloud?: boolean;
   cloud_file_id?: string;
+  cloud_folder_id?: string;
   parent_zip_id?: string;
   zip_entry_path?: string;
   zip_local_header_offset?: number;

@@ -84,6 +84,7 @@ pub struct MediaItem {
     // Cloud storage fields
     pub is_cloud: Option<bool>,
     pub cloud_file_id: Option<String>,
+    pub cloud_folder_id: Option<String>,
     pub archive_format: Option<String>,
     pub parent_zip_id: Option<String>,
     pub zip_entry_path: Option<String>,
@@ -1117,7 +1118,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
@@ -1159,7 +1160,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
@@ -1213,7 +1214,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ? AND ddl_source_id IS NOT NULL",
@@ -1249,7 +1250,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type IN ('movie', 'tvshow')"
@@ -1286,7 +1287,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE cast_names LIKE '%' || ? || '%' AND media_type IN ('movie', 'tvshow')
@@ -1309,7 +1310,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
@@ -1330,7 +1331,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE file_size_bytes IS NOT NULL AND media_type IN ('movie', 'tvshow')
@@ -1569,7 +1570,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE id = ?",
@@ -2936,7 +2937,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE ddl_source_id = ?
@@ -3798,7 +3799,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    archive_format, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes
              FROM media
@@ -3823,7 +3824,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    archive_format, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes
              FROM media
@@ -4192,7 +4193,7 @@ impl Database {
         })
     }
 
-    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, parent_zip_id)
+    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id)
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
@@ -4203,7 +4204,7 @@ impl Database {
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id, ddl_source_id FROM media WHERE id IN ({})",
+            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, ddl_source_id FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
 
@@ -4298,7 +4299,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id";
 
@@ -5254,6 +5255,7 @@ impl Database {
             archive_format: Self::get_optional_named(row, "archive_format"),
             is_cloud,
             cloud_file_id: Self::get_optional_named(row, "cloud_file_id"),
+            cloud_folder_id: Self::get_optional_named(row, "cloud_folder_id"),
             parent_zip_id: Self::get_optional_named(row, "parent_zip_id"),
             zip_entry_path: Self::get_optional_named(row, "zip_entry_path"),
             zip_local_header_offset: Self::get_optional_named(row, "zip_local_header_offset"),

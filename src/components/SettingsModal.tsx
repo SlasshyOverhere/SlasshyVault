@@ -64,6 +64,7 @@ import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings";
 import { ZipGuideModal } from "@/components/ZipGuideModal";
+import { SelectiveDeleteModal } from "@/components/SelectiveDeleteModal";
 
 interface SettingsModalProps {
   open: boolean;
@@ -387,6 +388,7 @@ export function SettingsModal({
   const [deleteAllStep, setDeleteAllStep] = useState<0 | 1 | 2>(0);
   const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
+  const [showSelectiveDelete, setShowSelectiveDelete] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [activeSection, setActiveSection] =
@@ -2337,6 +2339,35 @@ export function SettingsModal({
                     </m.div>
                   )}
 
+                      {/* Selective Delete */}
+                      <div className="p-4 rounded-xl border border-orange-500/30 bg-orange-500/5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-orange-500/20">
+                            <FolderOpen className="size-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium text-orange-400">
+                              Selective Delete
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Browse and choose specific files to delete
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Browse your cloud folders, select individual files or
+                          entire folders to permanently delete from Google Drive.
+                          Files will NOT go to Trash.
+                        </p>
+                        <Button
+                          variant="outline"
+                          onClick={() => setShowSelectiveDelete(true)}
+                          className="w-full border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                        >
+                          <FolderOpen className="mr-2 size-4" />
+                          Browse & Select Files to Delete
+                        </Button>
+                      </div>
 
                 </AnimatePresence>
               </div>
@@ -2366,6 +2397,7 @@ export function SettingsModal({
           </div>
         </DialogContent>
         <ZipGuideModal open={showZipGuide} onOpenChange={setShowZipGuide} />
+        <SelectiveDeleteModal open={showSelectiveDelete} onOpenChange={setShowSelectiveDelete} />
       </LazyMotion>
     </Dialog>
   );
