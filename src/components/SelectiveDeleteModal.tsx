@@ -69,6 +69,9 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
         listGDriveFiles(),
       ]);
 
+      console.log("[SelectiveDelete] Root folders:", driveFolders.length, driveFolders.map(f => f.name));
+      console.log("[SelectiveDelete] Root files:", driveFiles.files?.length ?? 0, driveFiles.files?.map(f => f.name));
+
       const tree: FolderNode[] = driveFolders.map((f) => ({
         id: f.id,
         name: f.name,
@@ -139,22 +142,15 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     return folderFiles.get(currentFolderId) ?? [];
   }, [currentFolderId, rootFiles, folderFiles]);
 
-  // Only show video files (not images, subtitles, etc.)
+  // Show all non-folder, non-hidden files (not just videos)
   const videoFiles = useMemo(() => {
     return currentFiles.filter((f) => {
       const mt = f.mimeType?.toLowerCase() ?? "";
-      const name = f.name?.toLowerCase() ?? "";
+      // Exclude folders and Google Docs types
       return (
-        mt.startsWith("video/") ||
-        mt === "application/x-matroska" ||
-        name.endsWith(".mkv") ||
-        name.endsWith(".mp4") ||
-        name.endsWith(".avi") ||
-        name.endsWith(".mov") ||
-        name.endsWith(".webm") ||
-        name.endsWith(".flv") ||
-        name.endsWith(".wmv") ||
-        name.endsWith(".m4v")
+        mt !== "application/vnd.google-apps.folder" &&
+        !mt.startsWith("application/vnd.google-apps.") &&
+        !f.name?.startsWith(".")
       );
     });
   }, [currentFiles]);
