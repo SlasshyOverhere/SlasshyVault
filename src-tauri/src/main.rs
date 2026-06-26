@@ -3434,13 +3434,17 @@ async fn delete_cloud_files_by_drive_ids(
         }
     }
 
-    // Remove matching entries from DB
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.delete_media_by_cloud_file_ids(&drive_file_ids)
-        .map_err(|e| e.to_string())?;
-
-    // Clean up image cache for deleted items
-    // (individual image cleanup happens lazily via missing files)
+    // Remove matching entries from DB (non-fatal — Drive deletion already succeeded)
+    match state.db.lock() {
+        Ok(db) => {
+            if let Err(e) = db.delete_media_by_cloud_file_ids(&drive_file_ids) {
+                println!("[DELETE-SELECTIVE] DB cleanup failed (files already deleted from Drive): {}", e);
+            }
+        }
+        Err(e) => {
+            println!("[DELETE-SELECTIVE] Could not acquire DB lock for cleanup (will be cleaned by next scan): {}", e);
+        }
+    }
 
     // Notify frontend
     window.emit("library-updated", ()).ok();
