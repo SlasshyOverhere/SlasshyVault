@@ -4643,6 +4643,26 @@ impl Database {
         Ok((cloud_file_ids, get_image_cache_dir()))
     }
 
+    /// Delete media entries by their Google Drive file IDs
+    pub fn delete_media_by_cloud_file_ids(&self, cloud_file_ids: &[String]) -> Result<usize> {
+        if cloud_file_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut deleted = 0usize;
+        for cloud_file_id in cloud_file_ids {
+            deleted += self.conn.execute(
+                "DELETE FROM media WHERE cloud_file_id = ?",
+                params![cloud_file_id],
+            )?;
+        }
+        // Also clean up orphaned cached_episode_metadata
+        self.conn.execute(
+            "DELETE FROM cached_episode_metadata WHERE NOT EXISTS (SELECT 1 FROM media WHERE media.id = cached_episode_metadata.media_id)",
+            [],
+        )?;
+        Ok(deleted)
+    }
+
     /// Clear ALL app data - deletes every table and returns paths for file cleanup
     /// Returns the image cache path for the caller to delete
     pub fn clear_all_data(&self) -> Result<String> {

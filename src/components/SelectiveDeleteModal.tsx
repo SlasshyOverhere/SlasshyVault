@@ -12,11 +12,11 @@ import {
   X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { getLibraryFiltered, deleteMediaFiles, MediaItem } from "@/services/api";
+import { deleteCloudFilesByDriveIds } from "@/services/api";
 import {
-  getCloudFolders,
   listGDriveFolders,
-  CloudFolder,
+  listGDriveFiles,
+  DriveItem,
 } from "@/services/gdrive";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -30,17 +30,9 @@ interface SelectiveDeleteModalProps {
 interface FolderNode {
   id: string;
   name: string;
-  driveId: string;
   children: FolderNode[];
   loaded: boolean;
   expanded: boolean;
-}
-
-interface SelectionState {
-  // folderId -> set of excluded media IDs (everything else in folder is selected)
-  folderExclusions: Map<string, Set<number>>;
-  // Which folders are explicitly unchecked (no children selected)
-  uncheckedFolders: Set<string>;
 }
 
 // ==================== Component ====================
@@ -49,23 +41,19 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
   const { toast } = useToast();
 
   // Data
-  const [trackedFolders, setTrackedFolders] = useState<CloudFolder[]>([]);
   const [folderTree, setFolderTree] = useState<FolderNode[]>([]);
-  const [allCloudMedia, setAllCloudMedia] = useState<MediaItem[]>([]);
+  const [rootFiles, setRootFiles] = useState<DriveItem[]>([]);
+  const [folderFiles, setFolderFiles] = useState<Map<string, DriveItem[]>>(new Map());
   const [loading, setLoading] = useState(true);
 
   // Navigation
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<{ id: string | null; name: string }[]>([
-    { id: null, name: "All Folders" },
+    { id: null, name: "My Drive" },
   ]);
 
-  // Selection
-  const [selection, setSelection] = useState<SelectionState>({
-    folderExclusions: new Map(),
-    uncheckedFolders: new Set(),
-  });
-
+  // Selection: Drive file IDs
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   // Delete confirmation
   const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -76,24 +64,20 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [folders, movies, tv] = await Promise.all([
-        getCloudFolders(),
-        getLibraryFiltered("movie", "", true),
-        getLibraryFiltered("tv", "", true),
+      const [driveFolders, driveFiles] = await Promise.all([
+        listGDriveFolders(),
+        listGDriveFiles(),
       ]);
-      setTrackedFolders(folders);
-      setAllCloudMedia([...movies, ...tv]);
 
-      // Build initial tree from tracked folders
-      const tree: FolderNode[] = folders.map((f) => ({
+      const tree: FolderNode[] = driveFolders.map((f) => ({
         id: f.id,
         name: f.name,
-        driveId: f.id,
         children: [],
         loaded: false,
         expanded: false,
       }));
       setFolderTree(tree);
+      setRootFiles(driveFiles.files ?? []);
     } catch (error) {
       console.error("[SelectiveDelete] Failed to load data:", error);
     } finally {
@@ -102,181 +86,115 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
   }, []);
 
   useEffect(() => {
-    if (open) loadData();
+    if (open) {
+      loadData();
+      setSelectedFiles(new Set());
+      setDeleteStep(0);
+      setDeleteConfirmText("");
+    }
   }, [open, loadData]);
 
   // ==================== Folder Tree ====================
 
-  const loadSubfolders = useCallback(
-    async (folderId: string) => {
-      try {
-        const driveFolders = await listGDriveFolders(folderId);
-        const children: FolderNode[] = driveFolders.map((f) => ({
-          id: f.id,
-          name: f.name,
-          driveId: f.id,
-          children: [],
-          loaded: false,
-          expanded: false,
-        }));
+  const loadSubfolders = useCallback(async (folderId: string) => {
+    try {
+      const [driveFolders, driveFiles] = await Promise.all([
+        listGDriveFolders(folderId),
+        listGDriveFiles(folderId),
+      ]);
+      const children: FolderNode[] = driveFolders.map((f) => ({
+        id: f.id,
+        name: f.name,
+        children: [],
+        loaded: false,
+        expanded: false,
+      }));
 
-        setFolderTree((prev) => updateTreeNode(prev, folderId, { children, loaded: true }));
-      } catch (error) {
-        console.error("[SelectiveDelete] Failed to load subfolders:", error);
-      }
-    },
-    [],
-  );
-
-  const toggleExpand = useCallback(
-    async (folderId: string) => {
-      const node = findNode(folderTree, folderId);
-      if (!node) return;
-
-      if (!node.expanded && !node.loaded) {
-        await loadSubfolders(folderId);
-      }
-
-      setFolderTree((prev) => updateTreeNode(prev, folderId, { expanded: !node.expanded }));
-    },
-    [folderTree, loadSubfolders],
-  );
-
-  // ==================== Media by Folder ====================
-
-  // Group media by cloud_folder_id
-  const mediaByFolder = useMemo(() => {
-    const map = new Map<string, MediaItem[]>();
-    for (const item of allCloudMedia) {
-      const fid = item.cloud_folder_id;
-      if (!fid) continue;
-      if (!map.has(fid)) map.set(fid, []);
-      map.get(fid)!.push(item);
-    }
-    return map;
-  }, [allCloudMedia]);
-
-  // Get media items for the currently viewed folder
-  const currentFolderMedia = useMemo(() => {
-    if (!currentFolderId) {
-      // Show all folders at top level
-      return [];
-    }
-    // Find the tracked folder this folder belongs to
-    const trackedId = findTrackedFolderId(folderTree, currentFolderId, trackedFolders);
-    if (!trackedId) return [];
-    return mediaByFolder.get(trackedId) ?? [];
-  }, [currentFolderId, folderTree, trackedFolders, mediaByFolder]);
-
-  // Get all descendant folder IDs for a folder
-  const getDescendantFolderIds = useCallback(
-    (folderId: string): string[] => {
-      const node = findNode(folderTree, folderId);
-      if (!node) return [folderId];
-      const ids = [folderId];
-      for (const child of node.children) {
-        ids.push(...getDescendantFolderIds(child.id));
-      }
-      return ids;
-    },
-    [folderTree],
-  );
-
-  // ==================== Selection Logic ====================
-
-  const isFolderSelected = useCallback(
-    (folderId: string): boolean => {
-      return !selection.uncheckedFolders.has(folderId);
-    },
-    [selection],
-  );
-
-  const isFolderIndeterminate = useCallback(
-    (folderId: string): boolean => {
-      const exclusions = selection.folderExclusions.get(folderId);
-      return !!exclusions && exclusions.size > 0;
-    },
-    [selection],
-  );
-
-  const isMediaSelected = useCallback(
-    (mediaId: number, folderId: string): boolean => {
-      if (selection.uncheckedFolders.has(folderId)) return false;
-      const exclusions = selection.folderExclusions.get(folderId);
-      return !exclusions || !exclusions.has(mediaId);
-    },
-    [selection],
-  );
-
-  const toggleFolder = useCallback(
-    (folderId: string) => {
-      setSelection((prev) => {
-        const next = { ...prev, folderExclusions: new Map(prev.folderExclusions), uncheckedFolders: new Set(prev.uncheckedFolders) };
-        if (next.uncheckedFolders.has(folderId)) {
-          // Was unchecked -> check it
-          next.uncheckedFolders.delete(folderId);
-          next.folderExclusions.delete(folderId);
-        } else {
-          // Was checked -> uncheck it
-          next.uncheckedFolders.add(folderId);
-          next.folderExclusions.delete(folderId);
-        }
+      setFolderTree((prev) => updateTreeNode(prev, folderId, { children, loaded: true }));
+      setFolderFiles((prev) => {
+        const next = new Map(prev);
+        next.set(folderId, driveFiles.files ?? []);
         return next;
       });
-    },
-    [],
-  );
-
-  const toggleMedia = useCallback(
-    (mediaId: number, folderId: string) => {
-      setSelection((prev) => {
-        const next = { ...prev, folderExclusions: new Map(prev.folderExclusions), uncheckedFolders: new Set(prev.uncheckedFolders) };
-        const exclusions = new Set(next.folderExclusions.get(folderId) ?? []);
-
-        if (exclusions.has(mediaId)) {
-          exclusions.delete(mediaId);
-        } else {
-          exclusions.add(mediaId);
-        }
-
-        if (exclusions.size === 0) {
-          next.folderExclusions.delete(folderId);
-        } else {
-          next.folderExclusions.set(folderId, exclusions);
-        }
-
-        // Ensure folder is not in unchecked
-        next.uncheckedFolders.delete(folderId);
-
-        return next;
-      });
-    },
-    [],
-  );
-
-  // ==================== Selected Count ====================
-
-  const selectedMediaIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const [trackedId, mediaList] of mediaByFolder) {
-      if (selection.uncheckedFolders.has(trackedId)) continue;
-      const exclusions = selection.folderExclusions.get(trackedId);
-      for (const item of mediaList) {
-        if (!exclusions || !exclusions.has(item.id)) {
-          ids.add(item.id);
-        }
-      }
+    } catch (error) {
+      console.error("[SelectiveDelete] Failed to load subfolders:", error);
     }
-    return ids;
-  }, [mediaByFolder, selection]);
+  }, []);
+
+  const toggleExpand = useCallback(async (folderId: string) => {
+    const node = findNode(folderTree, folderId);
+    if (!node) return;
+
+    if (!node.expanded && !node.loaded) {
+      await loadSubfolders(folderId);
+    }
+
+    setFolderTree((prev) => updateTreeNode(prev, folderId, { expanded: !node.expanded }));
+  }, [folderTree, loadSubfolders]);
+
+  // ==================== Files in current view ====================
+
+  const currentFiles = useMemo(() => {
+    if (!currentFolderId) return rootFiles;
+    return folderFiles.get(currentFolderId) ?? [];
+  }, [currentFolderId, rootFiles, folderFiles]);
+
+  // Only show video files (not images, subtitles, etc.)
+  const videoFiles = useMemo(() => {
+    return currentFiles.filter((f) => {
+      const mt = f.mimeType?.toLowerCase() ?? "";
+      const name = f.name?.toLowerCase() ?? "";
+      return (
+        mt.startsWith("video/") ||
+        mt === "application/x-matroska" ||
+        name.endsWith(".mkv") ||
+        name.endsWith(".mp4") ||
+        name.endsWith(".avi") ||
+        name.endsWith(".mov") ||
+        name.endsWith(".webm") ||
+        name.endsWith(".flv") ||
+        name.endsWith(".wmv") ||
+        name.endsWith(".m4v")
+      );
+    });
+  }, [currentFiles]);
+
+  // ==================== Selection ====================
+
+  const toggleFile = useCallback((fileId: string) => {
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllCurrentFolder = useCallback(() => {
+    const currentIds = videoFiles.map((f) => f.id);
+    const allSelected = currentIds.every((id) => selectedFiles.has(id));
+
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        currentIds.forEach((id) => next.delete(id));
+      } else {
+        currentIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }, [videoFiles, selectedFiles]);
 
   // ==================== Delete ====================
 
   const handleDelete = useCallback(async () => {
-    if (selectedMediaIds.size === 0) return;
+    if (selectedFiles.size === 0) return;
     setDeleting(true);
     try {
-      const result = await deleteMediaFiles(Array.from(selectedMediaIds));
+      const result = await deleteCloudFilesByDriveIds(Array.from(selectedFiles));
       setDeleteStep(0);
       setDeleteConfirmText("");
       toast({
@@ -294,7 +212,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     } finally {
       setDeleting(false);
     }
-  }, [selectedMediaIds, toast, onOpenChange]);
+  }, [selectedFiles, toast, onOpenChange]);
 
   // ==================== Navigation ====================
 
@@ -302,11 +220,10 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     (folderId: string | null) => {
       setCurrentFolderId(folderId);
       if (folderId === null) {
-        setBreadcrumbs([{ id: null, name: "All Folders" }]);
+        setBreadcrumbs([{ id: null, name: "My Drive" }]);
       } else {
-        // Build breadcrumbs by walking up the tree
         const path = findPathToNode(folderTree, folderId);
-        setBreadcrumbs([{ id: null, name: "All Folders" }, ...path]);
+        setBreadcrumbs([{ id: null, name: "My Drive" }, ...path]);
       }
     },
     [folderTree],
@@ -320,6 +237,9 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
     return node?.children ?? [];
   }, [currentFolderId, folderTree]);
 
+  const allCurrentSelected = videoFiles.length > 0 && videoFiles.every((f) => selectedFiles.has(f.id));
+  const someCurrentSelected = videoFiles.some((f) => selectedFiles.has(f.id));
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col p-0 gap-0">
@@ -332,7 +252,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
             <div>
               <h2 className="text-lg font-semibold">Selective Delete</h2>
               <p className="text-sm text-muted-foreground">
-                Choose files to permanently delete from Google Drive
+                Browse Google Drive and choose files to permanently delete
               </p>
             </div>
           </div>
@@ -362,120 +282,80 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
             <div className="flex items-center justify-center h-40">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
-          ) : currentFolderId === null ? (
-            // Top-level: show tracked folders
-            <div className="space-y-1">
-              {folderTree.map((folder) => {
-                const mediaCount = (mediaByFolder.get(folder.id) ?? []).length;
-                return (
-                  <div
-                    key={folder.id}
-                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50 group"
-                  >
-                    <Checkbox
-                      checked={isFolderSelected(folder.id)}
-                      // @ts-ignore - indeterminate prop
-                      indeterminate={isFolderIndeterminate(folder.id)}
-                      onCheckedChange={() => toggleFolder(folder.id)}
-                    />
-                    <button
-                      className="flex items-center gap-2 flex-1 text-left"
-                      onClick={() => navigateToFolder(folder.id)}
-                    >
-                      <FolderOpen className="size-5 text-blue-400 shrink-0" />
-                      <span className="font-medium truncate">{folder.name}</span>
-                      <span className="text-xs text-muted-foreground ml-auto">
-                        {mediaCount} item{mediaCount !== 1 ? "s" : ""}
-                      </span>
-                      <ChevronRight className="size-4 text-muted-foreground shrink-0" />
-                    </button>
-                  </div>
-                );
-              })}
-              {folderTree.length === 0 && (
-                <p className="text-center text-muted-foreground py-8">
-                  No cloud folders tracked. Add a Google Drive folder first.
-                </p>
-              )}
-            </div>
           ) : (
-            // Inside a folder: show subfolders + media files
             <div className="space-y-1">
-              {/* Subfolders */}
-              {currentChildren.map((child) => {
-                const childMediaCount = (mediaByFolder.get(child.id) ?? []).length;
-                return (
-                  <div
-                    key={child.id}
-                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50"
+              {/* Folders */}
+              {currentChildren.map((child) => (
+                <div
+                  key={child.id}
+                  className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50"
+                >
+                  <button
+                    className="flex items-center gap-2 flex-1 text-left"
+                    onClick={() => toggleExpand(child.id)}
                   >
-                    <Checkbox
-                      checked={isFolderSelected(child.id)}
-                      // @ts-ignore - indeterminate prop
-                      indeterminate={isFolderIndeterminate(child.id)}
-                      onCheckedChange={() => toggleFolder(child.id)}
-                    />
-                    <button
-                      className="flex items-center gap-2 flex-1 text-left"
-                      onClick={() => toggleExpand(child.id)}
-                    >
-                      {child.expanded ? (
-                        <ChevronDown className="size-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="size-4 shrink-0" />
-                      )}
-                      <FolderOpen className="size-5 text-blue-400 shrink-0" />
-                      <span className="font-medium truncate">{child.name}</span>
-                      <span className="text-xs text-muted-foreground ml-auto">
-                        {childMediaCount} item{childMediaCount !== 1 ? "s" : ""}
-                      </span>
-                    </button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs"
-                      onClick={() => navigateToFolder(child.id)}
-                    >
-                      Open
-                    </Button>
-                  </div>
-                );
-              })}
+                    {child.expanded ? (
+                      <ChevronDown className="size-4 shrink-0" />
+                    ) : (
+                      <ChevronRight className="size-4 shrink-0" />
+                    )}
+                    <FolderOpen className="size-5 text-blue-400 shrink-0" />
+                    <span className="font-medium truncate">{child.name}</span>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => navigateToFolder(child.id)}
+                  >
+                    Open
+                  </Button>
+                </div>
+              ))}
 
-              {/* Media files in this folder */}
-              {currentFolderMedia.length > 0 && (
+              {/* Video files */}
+              {videoFiles.length > 0 && (
                 <>
-                  {currentChildren.length > 0 && (
-                    <div className="border-t my-2" />
-                  )}
-                  {currentFolderMedia.map((item) => {
-                    const trackedId = item.cloud_folder_id ?? currentFolderId;
-                    return (
-                      <div
-                        key={item.id}
-                        className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50"
-                      >
-                        <Checkbox
-                          checked={isMediaSelected(item.id, trackedId)}
-                          onCheckedChange={() => toggleMedia(item.id, trackedId)}
-                        />
-                        <FileVideo className="size-5 text-purple-400 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{item.title}</p>
+                  {currentChildren.length > 0 && <div className="border-t my-2" />}
+                  {/* Select all row */}
+                  <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30 mb-1">
+                    <Checkbox
+                      checked={allCurrentSelected}
+                      // @ts-ignore
+                      indeterminate={someCurrentSelected && !allCurrentSelected}
+                      onCheckedChange={toggleAllCurrentFolder}
+                    />
+                    <span className="text-sm font-medium text-muted-foreground">
+                      Select all ({videoFiles.length} video{videoFiles.length !== 1 ? "s" : ""})
+                    </span>
+                  </div>
+                  {videoFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent/50"
+                    >
+                      <Checkbox
+                        checked={selectedFiles.has(file.id)}
+                        onCheckedChange={() => toggleFile(file.id)}
+                      />
+                      <FileVideo className="size-5 text-purple-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{file.name}</p>
+                        {file.size && (
                           <p className="text-xs text-muted-foreground">
-                            {item.media_type === "movie" ? "Movie" : "TV Show"}
-                            {item.year ? ` · ${item.year}` : ""}
+                            {formatFileSize(Number(file.size))}
                           </p>
-                        </div>
+                        )}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </>
               )}
 
-              {currentChildren.length === 0 && currentFolderMedia.length === 0 && (
+              {/* Empty state */}
+              {currentChildren.length === 0 && videoFiles.length === 0 && (
                 <p className="text-center text-muted-foreground py-8">
-                  This folder is empty.
+                  No video files in this folder.
                 </p>
               )}
             </div>
@@ -486,7 +366,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
         <div className="border-t p-4 space-y-3">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
-              {selectedMediaIds.size} file{selectedMediaIds.size !== 1 ? "s" : ""} selected for permanent deletion
+              {selectedFiles.size} file{selectedFiles.size !== 1 ? "s" : ""} selected for permanent deletion
             </span>
           </div>
 
@@ -494,11 +374,11 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
             <Button
               variant="destructive"
               className="w-full"
-              disabled={selectedMediaIds.size === 0}
+              disabled={selectedFiles.size === 0}
               onClick={() => setDeleteStep(1)}
             >
               <Trash2 className="mr-2 size-4" />
-              Delete {selectedMediaIds.size} Selected File{selectedMediaIds.size !== 1 ? "s" : ""}
+              Delete {selectedFiles.size} Selected File{selectedFiles.size !== 1 ? "s" : ""}
             </Button>
           )}
 
@@ -509,7 +389,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
               </p>
               <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
                 <li>
-                  <strong>{selectedMediaIds.size}</strong> file{selectedMediaIds.size !== 1 ? "s" : ""} will be <strong>permanently deleted</strong> from Google Drive
+                  <strong>{selectedFiles.size}</strong> file{selectedFiles.size !== 1 ? "s" : ""} will be <strong>permanently deleted</strong> from Google Drive
                 </li>
                 <li>Files will <strong>NOT</strong> go to Trash — they will be gone forever</li>
                 <li>Media entries will also be removed from your SlasshyVault library</li>
@@ -533,7 +413,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
               </p>
               <p className="text-sm text-muted-foreground text-center">
                 Type <strong>DELETE</strong> below to permanently erase{" "}
-                <strong>{selectedMediaIds.size}</strong> file{selectedMediaIds.size !== 1 ? "s" : ""} from Google Drive.
+                <strong>{selectedFiles.size}</strong> file{selectedFiles.size !== 1 ? "s" : ""} from Google Drive.
               </p>
               <Input
                 placeholder='Type "DELETE" to confirm'
@@ -578,7 +458,7 @@ export function SelectiveDeleteModal({ open, onOpenChange }: SelectiveDeleteModa
   );
 }
 
-// ==================== Tree Helpers ====================
+// ==================== Helpers ====================
 
 function updateTreeNode(
   tree: FolderNode[],
@@ -619,22 +499,9 @@ function findPathToNode(
   return [];
 }
 
-function findTrackedFolderId(
-  tree: FolderNode[],
-  folderId: string,
-  trackedFolders: CloudFolder[],
-): string | null {
-  // If this folder is a tracked folder, return it
-  if (trackedFolders.some((f) => f.id === folderId)) return folderId;
-  // Walk up the tree to find the tracked ancestor
-  for (const tracked of trackedFolders) {
-    if (isDescendant(tree, tracked.id, folderId)) return tracked.id;
-  }
-  return null;
-}
-
-function isDescendant(tree: FolderNode[], ancestorId: string, targetId: string): boolean {
-  const ancestor = findNode(tree, ancestorId);
-  if (!ancestor) return false;
-  return !!findNode(ancestor.children, targetId) || ancestorId === targetId;
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }

@@ -3393,6 +3393,74 @@ async fn delete_all_media_files(
     })
 }
 
+// Delete cloud files by Google Drive file IDs (for selective delete)
+// Deletes from Drive + removes matching DB entries. Works without needing media IDs.
+#[tauri::command]
+async fn delete_cloud_files_by_drive_ids(
+    state: State<'_, AppState>,
+    window: Window,
+    drive_file_ids: Vec<String>,
+    confirmed: bool,
+) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
+    if drive_file_ids.is_empty() {
+        return Err("No files selected".to_string());
+    }
+
+    println!("[DELETE-SELECTIVE] Starting deletion of {} Drive files", drive_file_ids.len());
+
+    let mut deleted_count = 0usize;
+    let mut failed_count = 0usize;
+
+    // Delete each file from Google Drive
+    for drive_file_id in &drive_file_ids {
+        match state.gdrive_client.delete_file(drive_file_id).await {
+            Ok(_) => {
+                deleted_count += 1;
+            }
+            Err(e) => {
+                let is_permission_error =
+                    e.contains("403") || e.contains("insufficientFilePermissions");
+                if is_permission_error {
+                    println!("[DELETE-SELECTIVE] Permission denied for {} (removing anyway)", drive_file_id);
+                    deleted_count += 1;
+                } else {
+                    println!("[DELETE-SELECTIVE] Failed to delete {}: {}", drive_file_id, e);
+                    failed_count += 1;
+                }
+            }
+        }
+    }
+
+    // Remove matching entries from DB
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.delete_media_by_cloud_file_ids(&drive_file_ids)
+        .map_err(|e| e.to_string())?;
+
+    // Clean up image cache for deleted items
+    // (individual image cleanup happens lazily via missing files)
+
+    // Notify frontend
+    window.emit("library-updated", ()).ok();
+
+    let message = if failed_count == 0 {
+        format!("Deleted {} file(s) from Google Drive and library", deleted_count)
+    } else {
+        format!("Deleted {} file(s), {} failed", deleted_count, failed_count)
+    };
+
+    println!("[DELETE-SELECTIVE] Complete: {}", message);
+
+    Ok(DeleteResponse {
+        success: failed_count == 0,
+        deleted_count,
+        failed_count,
+        message,
+    })
+}
+
 // Episode info for delete selection modal
 #[derive(serde::Serialize)]
 struct EpisodeDeleteInfo {
@@ -18415,6 +18483,7 @@ fn main() {
             // Other commands
             delete_media_files,
             delete_all_media_files,
+            delete_cloud_files_by_drive_ids,
             delete_series,
             delete_series_cloud_folder,
             get_episodes_for_delete,

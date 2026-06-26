@@ -584,6 +584,22 @@ export const deleteAllMediaFiles = async (): Promise<DeleteResponse> => {
   }
 };
 
+// Delete cloud files by Drive file IDs (for selective delete)
+export const deleteCloudFilesByDriveIds = async (
+  driveFileIds: string[],
+): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_cloud_files_by_drive_ids", {
+      driveFileIds,
+      confirmed: true,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete cloud files:", error);
+    throw error;
+  }
+};
+
 // Get episodes for delete selection modal
 export const getEpisodesForDelete = async (
   seriesId: number,
