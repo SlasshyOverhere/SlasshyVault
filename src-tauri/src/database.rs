@@ -2560,7 +2560,7 @@ impl Database {
         cast_names: Option<&str>,
         director: Option<&str>,
         poster_path: Option<&str>,
-        file_name: &str,
+        _file_name: &str,
         cloud_file_id: &str,
         cloud_folder_id: &str,
         duration: f64,
@@ -2619,7 +2619,7 @@ impl Database {
     pub fn insert_cloud_episode(
         &self,
         title: &str,
-        file_name: &str,
+        _file_name: &str,
         parent_id: i64,
         season: i32,
         episode: i32,

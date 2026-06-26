@@ -3309,7 +3309,7 @@ mod tests {
         let result = cache_image_organized("/test.jpg", tmp.to_str().unwrap(), "My Show", ImageType::SeriesBanner);
         // Subfolder should have been created (even if download fails)
         let slug = create_slug("My Show");
-        let subfolder = tmp.join(&slug);
+        let _subfolder = tmp.join(&slug);
         // Directory creation is attempted before download
         assert!(result.is_some() || result.is_none());
         let _ = std::fs::remove_dir_all(&tmp);

@@ -183,7 +183,7 @@ const MAX_DRIVE_RETRIES: u32 = 3;
 
 /// Execute a Drive API request with retry logic for rate limits (429) and server errors (5xx)
 async fn drive_request_with_retry(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     request_builder: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, String> {
     let mut last_error = String::new();

@@ -6154,7 +6154,7 @@ async fn fix_match(
     };
 
     let api_key = tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default());
-    let omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
+    let _omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
     let image_cache_dir = database::get_image_cache_dir();
 
     println!("[META] fix_match called for media_id={}, tmdb_id={}, imdb_id={:?}", media_id, tmdb_id, imdb_id);
@@ -10303,7 +10303,7 @@ struct HybridSearchResponse {
 async fn search_content(
     state: State<'_, AppState>,
     query: String,
-    year: Option<i32>,
+    _year: Option<i32>,
     media_type: Option<String>,
 ) -> Result<HybridSearchResponse, String> {
     let config = {
@@ -16294,7 +16294,7 @@ async fn progressive_download(url: &str, dest_path: &std::path::Path, buffer_byt
 }
 
 /// Continue downloading from `buffer_bytes` offset to the end of the file.
-async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, total_bytes: u64) -> Result<(), String> {
+async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, _total_bytes: u64) -> Result<(), String> {
     use reqwest::header;
 
     let client = reqwest::Client::builder()
@@ -16532,20 +16532,20 @@ async fn remote_play_with_mpv(
     state: State<'_, AppState>,
     url: String,
     title: String,
-    video_size: i64,
-    media_identifier: String,
+    _video_size: i64,
+    _media_identifier: String,
     quality_label: String,
     // Netflix-style metadata
     media_type: String,
     tmdb_id: i64,
-    season_number: Option<i32>,
-    episode_number: Option<i32>,
-    episode_title: Option<String>,
-    poster_path: Option<String>,
-    still_path: Option<String>,
-    overview: Option<String>,
-    year: Option<i32>,
-    start_position: f64,
+    _season_number: Option<i32>,
+    _episode_number: Option<i32>,
+    _episode_title: Option<String>,
+    _poster_path: Option<String>,
+    _still_path: Option<String>,
+    _overview: Option<String>,
+    _year: Option<i32>,
+    _start_position: f64,
 ) -> Result<RemotePlaybackResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
