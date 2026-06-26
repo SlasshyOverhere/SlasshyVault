@@ -384,7 +384,8 @@ export function SettingsModal({
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [deleteAllStep, setDeleteAllStep] = useState<0 | 1 | 2>(0);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -658,7 +659,8 @@ export function SettingsModal({
     setDeletingAll(true);
     try {
       const result = await deleteAllMediaFiles();
-      setShowDeleteAllConfirm(false);
+      setDeleteAllStep(0);
+      setDeleteAllConfirmText("");
       toast({
         title: "All Media Deleted",
         description: result.message,
@@ -2242,26 +2244,77 @@ export function SettingsModal({
                           cannot be undone.
                         </p>
 
-                        {!showDeleteAllConfirm ? (
+                        {deleteAllStep === 0 && (
                           <Button
                             variant="destructive"
-                            onClick={() => setShowDeleteAllConfirm(true)}
+                            onClick={() => setDeleteAllStep(1)}
                             className="w-full"
                           >
                             <Trash2 className="mr-2 size-4" />
                             Delete All Media Files
                           </Button>
-                        ) : (
+                        )}
+
+                        {deleteAllStep === 1 && (
                           <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
-                            <p className="text-sm font-medium text-destructive text-center">
-                              Are you sure? This will delete all cloud files from
-                              Drive and remove every media entry from your
-                              library!
+                            <p className="text-sm font-bold text-destructive text-center">
+                              ⚠️ WARNING: PERMANENT DELETION
                             </p>
+                            <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                              <li>
+                                All cloud files will be <strong>permanently deleted</strong> from Google Drive — they will <strong>NOT</strong> go to Trash
+                              </li>
+                              <li>
+                                All media entries (local + cloud) will be removed from your library
+                              </li>
+                              <li>
+                                Watch history, settings, and reminders will be preserved
+                              </li>
+                              <li>
+                                This action is <strong>irreversible</strong>
+                              </li>
+                            </ul>
                             <div className="flex gap-2">
                               <Button
                                 variant="outline"
-                                onClick={() => setShowDeleteAllConfirm(false)}
+                                onClick={() => setDeleteAllStep(0)}
+                                className="flex-1"
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={() => setDeleteAllStep(2)}
+                                className="flex-1"
+                              >
+                                I Understand, Continue
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {deleteAllStep === 2 && (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-bold text-destructive text-center">
+                              FINAL CONFIRMATION
+                            </p>
+                            <p className="text-sm text-muted-foreground text-center">
+                              Type <strong>DELETE</strong> below to permanently erase all media files from Google Drive and your library.
+                            </p>
+                            <Input
+                              placeholder='Type "DELETE" to confirm'
+                              value={deleteAllConfirmText}
+                              onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                              className="text-center font-mono"
+                              autoFocus
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setDeleteAllStep(0);
+                                  setDeleteAllConfirmText("");
+                                }}
                                 className="flex-1"
                                 disabled={deletingAll}
                               >
@@ -2271,11 +2324,11 @@ export function SettingsModal({
                                 variant="destructive"
                                 onClick={handleDeleteAllMedia}
                                 className="flex-1"
-                                disabled={deletingAll}
+                                disabled={deletingAll || deleteAllConfirmText !== "DELETE"}
                               >
                                 {deletingAll
                                   ? "Deleting..."
-                                  : "Yes, Delete All Media"}
+                                  : "Permanently Delete Everything"}
                               </Button>
                             </div>
                           </div>
