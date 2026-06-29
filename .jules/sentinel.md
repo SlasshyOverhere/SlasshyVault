@@ -1,0 +1,4 @@
+## 2024-05-24 — PowerShell Command Injection via String Interpolation
+Vulnerability: Command injection vectors found where user-controlled or external paths were directly interpolated into PowerShell script strings (e.g., `Get-ChildItem`, `Expand-Archive`, `Start-Process`).
+Learning: Passing arguments by replacing substrings (e.g. `replace('\'', "''")`) or using format macros directly in a `-Command` argument fails to fully sanitize input, allowing arbitrary command execution within the spawned shell.
+Prevention: Use environment variables (e.g., `.env("VAR_NAME", value)`) to securely pass data to the child PowerShell process and access them via `$env:VAR_NAME`. For nested elevated processes (`Start-Process -Verb RunAs`), which don't inherit the parent's environment, serialize the command into a base64-encoded UTF-16LE string and execute it via `-EncodedCommand`.

@@ -3761,12 +3761,10 @@ async fn download_bundled_mpv(
         use std::process::Command;
         let mpv_dir_str = mpv_dir.to_string_lossy().to_string();
         let _ = Command::new("powershell")
+            .env("TARGET_DIR", &mpv_dir_str)
             .args([
                 "-Command",
-                &format!(
-                    "Get-ChildItem -Recurse -LiteralPath '{}' | Unblock-File -ErrorAction SilentlyContinue",
-                    mpv_dir_str.replace('\'', "''")
-                ),
+                "Get-ChildItem -Recurse -LiteralPath $env:TARGET_DIR | Unblock-File -ErrorAction SilentlyContinue",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -6146,9 +6144,15 @@ fn ensure_zip_proxy_firewall_rule() {
         port = port,
         exe = exe,
     );
+
+    // Elevate with Start-Process, passing the payload safely as an EncodedCommand
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let utf16: Vec<u8> = netsh_script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = STANDARD.encode(&utf16);
+
     let ps = format!(
-        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"{}\")",
-        netsh_script.replace('"', "`\"")
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-EncodedCommand','{}')",
+        encoded
     );
 
     match Command::new("powershell").args(["-Command", &ps]).spawn() {
@@ -13390,18 +13394,14 @@ fn resolve_windows_installer_from_package(
     let zip_str = package_path.to_string_lossy().replace(r"\\?\", "");
     let dest_str = extract_dir.to_string_lossy().replace(r"\\?\", "");
 
-    let ps_script = format!(
-        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-        zip_str.replace('\'', "''"),
-        dest_str.replace('\'', "''"),
-    );
-
     let output = extract_cmd
+        .env("ZIP_PATH", &zip_str)
+        .env("DEST_PATH", &dest_str)
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            &ps_script,
+            "Expand-Archive -LiteralPath $env:ZIP_PATH -DestinationPath $env:DEST_PATH -Force",
         ])
         .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
