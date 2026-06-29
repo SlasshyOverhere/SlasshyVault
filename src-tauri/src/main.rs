@@ -13662,22 +13662,18 @@ fn resolve_windows_installer_from_package(
     let mut extract_cmd = std::process::Command::new("powershell");
     config::apply_hidden_process_flags(&mut extract_cmd);
 
-    // Build the zip path and dest as PowerShell strings — \\?\ prefix confuses Expand-Archive
+    // Build the zip path and dest as strings — \\?\ prefix confuses Expand-Archive
     let zip_str = package_path.to_string_lossy().replace(r"\\?\", "");
     let dest_str = extract_dir.to_string_lossy().replace(r"\\?\", "");
 
-    let ps_script = format!(
-        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-        zip_str.replace('\'', "''"),
-        dest_str.replace('\'', "''"),
-    );
-
     let output = extract_cmd
+        .env("ZIP_PATH", &zip_str)
+        .env("DEST_PATH", &dest_str)
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            &ps_script,
+            "Expand-Archive -LiteralPath $env:ZIP_PATH -DestinationPath $env:DEST_PATH -Force",
         ])
         .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
