@@ -53,13 +53,17 @@ export function KebabMenu({ items }: KebabMenuProps) {
         ref={btnRef}
         type="button"
         onClick={handleToggle}
-        className="flex items-center justify-center size-8 rounded-lg bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all duration-200"
+        aria-label="More options"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="flex items-center justify-center size-8 rounded-lg bg-white/10 hover:bg-white/20 text-white/70 hover:text-white focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:outline-none transition-all duration-200"
       >
-        <MoreHorizontal className="size-4" />
+        <MoreHorizontal className="size-4" aria-hidden="true" />
       </button>
       {open && createPortal(
         <div
           ref={menuRef}
+          role="menu"
           className="fixed z-[9999] bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 p-1.5 min-w-[170px]"
           style={{ top: pos.top, right: pos.right }}
         >
@@ -67,10 +71,11 @@ export function KebabMenu({ items }: KebabMenuProps) {
             <button
               key={item.label}
               type="button"
+              role="menuitem"
               onClick={handleAction(item.onClick)}
-              className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-xs font-semibold text-white/70 hover:text-white hover:bg-white/10 transition-colors text-left"
+              className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-xs font-semibold text-white/70 hover:text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none transition-colors text-left"
             >
-              <item.icon className="size-3.5" />
+              <item.icon className="size-3.5" aria-hidden="true" />
               {item.label}
             </button>
           ))}
