@@ -3761,12 +3761,10 @@ async fn download_bundled_mpv(
         use std::process::Command;
         let mpv_dir_str = mpv_dir.to_string_lossy().to_string();
         let _ = Command::new("powershell")
+            .env("MPV_UNBLOCK_DIR", mpv_dir_str)
             .args([
                 "-Command",
-                &format!(
-                    "Get-ChildItem -Recurse -LiteralPath '{}' | Unblock-File -ErrorAction SilentlyContinue",
-                    mpv_dir_str.replace('\'', "''")
-                ),
+                "Get-ChildItem -Recurse -LiteralPath $env:MPV_UNBLOCK_DIR | Unblock-File -ErrorAction SilentlyContinue",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -6140,18 +6138,31 @@ fn ensure_zip_proxy_firewall_rule() {
     };
     let port = zip_stream_proxy::ZIP_PROXY_PORT;
 
+    // Base64 encode the command to avoid string injection issues entirely,
+    // and since the nested process runs as admin, it won't inherit process-level
+    // environment variables, so we must bake the arguments safely.
+    // Convert to UTF-16LE as required by PowerShell -EncodedCommand.
     let netsh_script = format!(
-        "& {{ netsh advfirewall firewall delete rule name=\"{rule}\"; netsh advfirewall firewall add rule name=\"{rule}\" dir=in action=allow protocol=TCP localport={port} program=\"{exe}\" remoteip=127.0.0.1,::1 enable=yes }}",
+        "& {{ netsh advfirewall firewall delete rule name='{rule}'; netsh advfirewall firewall add rule name='{rule}' dir=in action=allow protocol=TCP localport={port} program='{exe}' remoteip=127.0.0.1,::1 enable=yes }}",
         rule = rule_name,
         port = port,
-        exe = exe,
+        exe = exe.replace('\'', "''"), // Escape single quotes in path
     );
-    let ps = format!(
-        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"{}\")",
-        netsh_script.replace('"', "`\"")
+    let encoded_script = base64::encode(
+        netsh_script
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect::<Vec<u8>>(),
     );
 
-    match Command::new("powershell").args(["-Command", &ps]).spawn() {
+    let ps = format!(
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-EncodedCommand','{}')",
+        encoded_script
+    );
+
+    match Command::new("powershell")
+        .args(["-Command", &ps])
+        .spawn() {
         Ok(_) => println!("[ZIP PROXY] Firewall rule requested — accept the UAC prompt to allow MPV loopback connections"),
         Err(e) => println!("[ZIP PROXY] Could not launch PowerShell to set up firewall: {}", e),
     }
@@ -13390,18 +13401,16 @@ fn resolve_windows_installer_from_package(
     let zip_str = package_path.to_string_lossy().replace(r"\\?\", "");
     let dest_str = extract_dir.to_string_lossy().replace(r"\\?\", "");
 
-    let ps_script = format!(
-        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-        zip_str.replace('\'', "''"),
-        dest_str.replace('\'', "''"),
-    );
+    let ps_script = "Expand-Archive -LiteralPath $env:ZIP_ARCHIVE_PATH -DestinationPath $env:ZIP_DEST_PATH -Force";
 
     let output = extract_cmd
+        .env("ZIP_ARCHIVE_PATH", zip_str)
+        .env("ZIP_DEST_PATH", dest_str)
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            &ps_script,
+            ps_script,
         ])
         .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
