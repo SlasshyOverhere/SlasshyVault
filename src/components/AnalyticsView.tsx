@@ -361,12 +361,14 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
           <div>
             <SectionLabel title="By Type" />
             <div className="space-y-2.5">
-              {data.content_breakdown.map((b) => {
-                const label = b.content_type === "movie" ? "Movies" : b.content_type === "tvepisode" ? "Episodes" : b.content_type
+              {/* Lily: Performance improvement - cached maxCount outside map to convert O(N^2) max logic to O(N) */}
+              {(() => {
                 const maxCount = Math.max(...data.content_breakdown.map((x) => x.count), 1)
-                const pct = (b.count / maxCount) * 100
-                return (
-                  <div key={b.content_type}>
+                return data.content_breakdown.map((b) => {
+                  const label = b.content_type === "movie" ? "Movies" : b.content_type === "tvepisode" ? "Episodes" : b.content_type
+                  const pct = (b.count / maxCount) * 100
+                  return (
+                    <div key={b.content_type}>
                     <div className="flex items-baseline justify-between mb-1">
                       <span className="text-xs text-white/60">{label}</span>
                       <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
@@ -376,28 +378,32 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
                     </div>
                   </div>
                 )
-              })}
+              })
+            })()}
             </div>
 
             <div className="mt-6">
               <SectionLabel title="By Source" />
               <div className="space-y-2.5">
-                {data.source_breakdown.map((b) => {
-                  const label = b.source === "cloud" ? "Cloud" : "Local"
+                {/* Lily: Performance improvement - cached maxCount outside map to convert O(N^2) max logic to O(N) */}
+                {(() => {
                   const maxCount = Math.max(...data.source_breakdown.map((x) => x.count), 1)
-                  const pct = (b.count / maxCount) * 100
-                  return (
-                    <div key={b.source}>
+                  return data.source_breakdown.map((b) => {
+                    const label = b.source === "cloud" ? "Cloud" : "Local"
+                    const pct = (b.count / maxCount) * 100
+                    return (
+                      <div key={b.source}>
                       <div className="flex items-baseline justify-between mb-1">
                         <span className="text-xs text-white/60">{label}</span>
                         <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
                       </div>
-                      <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                        <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
+                        <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+                          <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                })()}
               </div>
             </div>
           </div>
