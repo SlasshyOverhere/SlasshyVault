@@ -1615,10 +1615,15 @@ fn derive_encryption_key() -> [u8; 32] {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    const APP_SECRET: &[u8] = b"SlasshyVault-TokenEncrypt-v1-2024";
+    let secret_str = std::env::var("GDRIVE_ENCRYPTION_SECRET").unwrap_or_default();
+    let app_secret: &[u8] = if secret_str.is_empty() {
+        env!("CARGO_PKG_NAME").as_bytes()
+    } else {
+        secret_str.as_bytes()
+    };
 
     let mut hasher = DefaultHasher::new();
-    APP_SECRET.hash(&mut hasher);
+    app_secret.hash(&mut hasher);
 
     if let Ok(user) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
         user.hash(&mut hasher);
@@ -1637,7 +1642,7 @@ fn derive_encryption_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     for i in 0..32 {
         key[i] = seed_bytes[i % 8]
-            .wrapping_add(APP_SECRET[i % APP_SECRET.len()])
+            .wrapping_add(app_secret[i % app_secret.len()])
             .wrapping_mul(i as u8 + 1);
     }
     key
