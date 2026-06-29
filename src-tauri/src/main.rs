@@ -23,7 +23,7 @@ mod remote_source;
 mod sentry;
 mod stream_cache;
 
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 use chrono::{
     DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
@@ -4049,7 +4049,7 @@ async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String
 // Save configuration
 #[tauri::command]
 async fn save_config(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     state: State<'_, AppState>,
     new_config: config::Config,
     confirmed: bool,
@@ -4069,7 +4069,6 @@ async fn save_config(
         .map(|s| s.url.clone());
     *config = merged.clone();
     config::save_config(&merged).map_err(|e| e.to_string())?;
-    apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
     })
@@ -10967,22 +10966,6 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
         if let Err(err) = notification.show() {
             println!("[NOTIFY] notify-rust failed: {}", err);
         }
-    }
-}
-
-fn apply_autostart_for_notifications(app_handle: &AppHandle, enabled: bool) {
-    let result = if enabled {
-        app_handle.autolaunch().enable()
-    } else {
-        app_handle.autolaunch().disable()
-    };
-
-    if let Err(error) = result {
-        println!(
-            "[AUTOSTART] Failed to {} autostart: {}",
-            if enabled { "enable" } else { "disable" },
-            error
-        );
     }
 }
 
@@ -18146,8 +18129,6 @@ fn main() {
     } else {
         builder
     };
-    let notifications_enabled_on_startup = config.notifications_enabled;
-
     builder
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| {
@@ -18201,8 +18182,6 @@ fn main() {
                     }
                 }
             }
-
-            apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
 
             // Store global app handle for background thread event emission
             if let Ok(mut h) = GLOBAL_APP_HANDLE.lock() {
