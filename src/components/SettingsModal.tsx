@@ -52,6 +52,7 @@ import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings";
 import { ZipGuideModal } from "@/components/ZipGuideModal";
+import { BetaConfirmDialog } from "@/components/BetaConfirmDialog";
 
 interface SettingsModalProps {
   open: boolean;
@@ -343,6 +344,7 @@ export function SettingsModal({
   autoCheckUpdate = false,
   onSimulateUpdate: _onSimulateUpdate,
 }: SettingsModalProps) {
+  const [showBetaConfirm, setShowBetaConfirm] = useState(false);
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
     vlc_path: "",
@@ -720,6 +722,7 @@ export function SettingsModal({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <LazyMotion features={domAnimation}>
         <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
@@ -1036,19 +1039,7 @@ export function SettingsModal({
                             checked={betaEnabled}
                             onCheckedChange={(checked) => {
                               if (checked) {
-                                // TODO: Replace browser confirm() with custom modal
-                                const confirmed = window.confirm(
-                                  "Beta Features Warning\n\n" +
-                                    "These features are experimental and for public testing only:\n\n" +
-                                    "\u2022 Watch Together - Watch with friends in sync\n" +
-                                    "\u2022 Social Features - Friends, chat, activity feed\n\n" +
-                                    "These features may not work properly, may have bugs, " +
-                                    "and could stop working at any time.\n\n" +
-                                    "Do you want to enable beta features?",
-                                );
-                                if (confirmed) {
-                                  onBetaToggle?.(true);
-                                }
+                                setShowBetaConfirm(true);
                               } else {
                                 onBetaToggle?.(false);
                               }
@@ -2016,5 +2007,14 @@ export function SettingsModal({
         <ZipGuideModal open={showZipGuide} onOpenChange={setShowZipGuide} />
       </LazyMotion>
     </Dialog>
+
+    <BetaConfirmDialog
+      open={showBetaConfirm}
+      onOpenChange={setShowBetaConfirm}
+      onConfirm={() => {
+        onBetaToggle?.(true);
+      }}
+    />
+    </>
   );
 }
