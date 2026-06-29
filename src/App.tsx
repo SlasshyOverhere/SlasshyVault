@@ -18,7 +18,6 @@ import {
   NotificationCenter,
   RemindersView,
   DownloadsView,
-  DeveloperConsole,
   SmartCollections,
   Clock,
 } from '@/components'
@@ -95,10 +94,13 @@ import {
 } from '@/utils/zipPlayback'
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 import { CommandPalette } from '@/components/CommandPalette'
-import { FullHistoryView } from '@/components/FullHistoryView'
-import DirectLinksView from '@/components/DirectLinksView'
-import { RemoteSourceView } from '@/components/RemoteSource/RemoteSourceView'
-import { CalendarView } from '@/components/CalendarView'
+const FullHistoryView = lazy(() => import('@/components/FullHistoryView').then(m => ({ default: m.FullHistoryView })))
+const DirectLinksView = lazy(() => import('@/components/DirectLinksView').then(m => ({ default: m.default })))
+const RemoteSourceView = lazy(() => import('@/components/RemoteSource/RemoteSourceView').then(m => ({ default: m.RemoteSourceView })))
+const CalendarView = lazy(() => import('@/components/CalendarView').then(m => ({ default: m.CalendarView })))
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { OptimizationContext } from '@/lib/OptimizationContext'
+import { useAutoOptimize, saveCachedLibrarySize } from '@/lib/optimization'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -116,6 +118,7 @@ const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 const SyncValidatorModal = lazy(() => loadSyncValidatorModal().then(module => ({ default: module.SyncValidatorModal })))
 const DuplicateDetector = lazy(() => import('@/components/DuplicateDetector').then(module => ({ default: module.DuplicateDetector })))
+const DeveloperConsole = lazy(() => import('@/components/DeveloperConsole').then(m => ({ default: m.DeveloperConsole })))
 
 
 
@@ -514,6 +517,12 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
+  const optim = useAutoOptimize()
+
+  // Confirm dialog state for delete confirmations
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [confirmDeleteAction, setConfirmDeleteAction] = useState<(() => void) | null>(null)
+  const [confirmDeleteDesc, setConfirmDeleteDesc] = useState('')
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => {
@@ -863,6 +872,7 @@ function App() {
     try {
       const stats = await getLibraryStats(true)
       setLibraryStats(stats)
+      saveCachedLibrarySize(stats.movies + stats.shows + stats.episodes)
     } catch (error) {
       console.error('Failed to load stats', error)
     }
@@ -1890,14 +1900,13 @@ function App() {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
     } else {
-      const deletePrompt = item.ddl_source_id
+      const desc = item.ddl_source_id
         ? `"${item.title}" is a direct-link item. Deleting it will remove it from your library. Continue?`
         : item.parent_zip_id
           ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
           : `Are you sure you want to permanently delete "${item.title}"?`
-      // TODO: Replace with custom modal
-      const confirmed = confirm(deletePrompt)
-      if (confirmed) {
+      setConfirmDeleteDesc(desc)
+      setConfirmDeleteAction(() => async () => {
         try {
           const result = await deleteMediaFiles([item.id])
           if (result.success) {
@@ -1911,7 +1920,8 @@ function App() {
           console.error('[App] Failed to delete file:', e)
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
-      }
+      })
+      setConfirmDeleteOpen(true)
     }
   }, [toast])
 
@@ -2009,6 +2019,7 @@ function App() {
   const showUpdateNotice = isUpdateNoticeVisible && (Boolean(updateInfo) || updateGateStatus === 'error')
 
   return (
+    <OptimizationContext.Provider value={optim}>
     <div className={`flex h-screen text-foreground overflow-hidden ${isNativePlaying ? 'bg-transparent' : 'bg-background bg-gradient-mesh'}`}>
       {/* Indexing confirmation dialog for first-time users */}
       <Dialog open={showIndexingPrompt} onOpenChange={declineIndexing}>
@@ -2898,45 +2909,37 @@ function App() {
                                   </motion.div>
                                 )}
 
-                                {/* Empty state - Fixed scale */}
+                                {/* Empty state */}
                                 {continueWatching.length === 0 && libraryStats.movies === 0 && libraryStats.shows === 0 && (
                                   <motion.div
-                                    className="empty-state glass py-12 rounded-[40px] shadow-2xl border border-white/5 flex-1 flex flex-col justify-center"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="flex flex-col items-center justify-center flex-1 py-16"
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
                                   >
-                                    <div className="empty-state-icon mb-10 relative flex justify-center">
-                                      {/* Animated rings matching Cloud View indexing aesthetic */}
-                                      <motion.div
-                                        className="absolute rounded-full border-2 border-white/10"
-                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
-                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut" }}
-                                        style={{ width: 100, height: 100 }}
-                                      />
-                                      <motion.div
-                                        className="absolute rounded-full border-2 border-white/10"
-                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
-                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut", delay: 0.8 }}
-                                        style={{ width: 100, height: 100 }}
-                                      />
-                                      <div className="p-8 rounded-[32px] bg-white/5 border border-white/10 backdrop-blur-3xl relative z-10">
-                                        <Film className="size-16 text-white/40" />
-                                      </div>
+                                    {/* Subtle radial glow */}
+                                    <div className="absolute w-[400px] h-[200px] bg-white/[0.02] rounded-full blur-[80px] pointer-events-none" />
+
+                                    {/* Icon */}
+                                    <div className="mb-8 p-6 rounded-[28px] bg-white/[0.03] border border-white/[0.06]">
+                                      <Film className="size-14 text-white/30" strokeWidth={1.5} />
                                     </div>
-                                    <h3 className="text-3xl font-black text-white tracking-tighter mb-3">Your library is waiting</h3>
-                                    <p className="text-base text-white/30 max-w-sm mb-10 leading-relaxed font-medium mx-auto">
-                                      Connect your Google Drive account to transform this space into your ultimate private library.
+
+                                    {/* Copy */}
+                                    <h3 className="text-2xl font-bold text-white tracking-tight mb-2">Your library is waiting</h3>
+                                    <p className="text-sm text-white/20 mb-8 max-w-xs">
+                                      Connect Google Drive to start building your collection.
                                     </p>
-                                    <div className="flex justify-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => setSettingsOpen(true)}
-                                        className="btn-primary-compact py-4 px-10 rounded-2xl inline-flex items-center gap-3 text-base font-bold shadow-glow-sm hover:shadow-glow transition-all"
-                                      >
-                                        <Sparkles className="size-5 text-black" />
-                                        <span>Start Your Collection</span>
-                                      </button>
-                                    </div>
+
+                                    {/* CTA */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setSettingsOpen(true)}
+                                      className="btn-primary py-3 px-8 rounded-xl inline-flex items-center gap-2.5 text-sm font-semibold shadow-glow-sm hover:shadow-glow transition-all"
+                                    >
+                                      <Sparkles className="size-4 text-black" />
+                                      <span>Start Your Collection</span>
+                                    </button>
                                   </motion.div>
                                 )}
                               </div>
@@ -3433,10 +3436,21 @@ function App() {
 
           <Toaster />
 
+          <ConfirmDialog
+            open={confirmDeleteOpen}
+            onOpenChange={setConfirmDeleteOpen}
+            title="Delete Media"
+            description={confirmDeleteDesc}
+            confirmLabel="Delete"
+            variant="destructive"
+            onConfirm={() => confirmDeleteAction?.()}
+          />
+
           {import.meta.env.DEV && <DeveloperConsole />}
         </>
       )}
     </div>
+    </OptimizationContext.Provider>
   )
 }
 
