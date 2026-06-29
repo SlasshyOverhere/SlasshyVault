@@ -57,7 +57,8 @@ fn find_mpv_recursive(dir: &Path) -> Option<PathBuf> {
                 }
             } else if path.is_file() {
                 let name = path.file_stem()?.to_str()?;
-                if name.eq_ignore_ascii_case("mpv") || name.eq_ignore_ascii_case("slasshyvault-mpv") {
+                if name.eq_ignore_ascii_case("mpv") || name.eq_ignore_ascii_case("slasshyvault-mpv")
+                {
                     let ext = path.extension()?.to_str()?;
                     if ext.eq_ignore_ascii_case("exe") {
                         return Some(path);
@@ -252,7 +253,9 @@ pub fn validate_executable_path(path: &str, expected_name: &str) -> Result<(), S
     }
 
     let path = Path::new(path);
-    let canonical = path.canonicalize().map_err(|e| format!("Invalid executable path: {}", e))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Invalid executable path: {}", e))?;
 
     // Extract the file stem (filename without extension)
     let file_stem = canonical
@@ -453,7 +456,10 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     let mut file = match fs::File::open(&config_path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[CONFIG] Failed to open config file: {}. Recreating with defaults.", e);
+            eprintln!(
+                "[CONFIG] Failed to open config file: {}. Recreating with defaults.",
+                e
+            );
             heal_corrupted_config(&config_path);
             return Ok(Config::default());
         }
@@ -468,7 +474,10 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     let mut config: Config = match serde_json::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[CONFIG] Corrupted config ({:?}), backing up and recreating with defaults.", e);
+            eprintln!(
+                "[CONFIG] Corrupted config ({:?}), backing up and recreating with defaults.",
+                e
+            );
             heal_corrupted_config(&config_path);
             Config::default()
         }
@@ -689,13 +698,25 @@ mod tests {
         assert_eq!(deserialized.cloud_cache_enabled, cfg.cloud_cache_enabled);
         assert_eq!(deserialized.cloud_cache_dir, cfg.cloud_cache_dir);
         assert_eq!(deserialized.cloud_cache_max_mb, cfg.cloud_cache_max_mb);
-        assert_eq!(deserialized.cloud_cache_expiry_hours, cfg.cloud_cache_expiry_hours);
-        assert_eq!(deserialized.cloud_scan_interval_minutes, cfg.cloud_scan_interval_minutes);
+        assert_eq!(
+            deserialized.cloud_cache_expiry_hours,
+            cfg.cloud_cache_expiry_hours
+        );
+        assert_eq!(
+            deserialized.cloud_scan_interval_minutes,
+            cfg.cloud_scan_interval_minutes
+        );
         assert_eq!(deserialized.zip_indexing_enabled, cfg.zip_indexing_enabled);
         assert_eq!(deserialized.zip_cache_dir, cfg.zip_cache_dir);
         assert_eq!(deserialized.zip_cache_max_gb, cfg.zip_cache_max_gb);
-        assert_eq!(deserialized.zip_cache_expiry_days, cfg.zip_cache_expiry_days);
-        assert_eq!(deserialized.notifications_enabled, cfg.notifications_enabled);
+        assert_eq!(
+            deserialized.zip_cache_expiry_days,
+            cfg.zip_cache_expiry_days
+        );
+        assert_eq!(
+            deserialized.notifications_enabled,
+            cfg.notifications_enabled
+        );
         assert_eq!(deserialized.dev_backend_url, cfg.dev_backend_url);
         assert_eq!(deserialized.player_mode, cfg.player_mode);
         assert_eq!(deserialized.addon_url, cfg.addon_url);
@@ -968,12 +989,19 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let user_dir = tmp.path().join("testuser");
         fs::create_dir(&user_dir).unwrap();
-        let mpv_dir = user_dir.join("scoop").join("apps").join("mpv").join("current");
+        let mpv_dir = user_dir
+            .join("scoop")
+            .join("apps")
+            .join("mpv")
+            .join("current");
         fs::create_dir_all(&mpv_dir).unwrap();
         let exe = mpv_dir.join("mpv.exe");
         fs::write(&exe, b"fake").unwrap();
 
-        let pattern = format!("{}\\*\\scoop\\apps\\mpv\\current\\mpv.exe", tmp.path().display());
+        let pattern = format!(
+            "{}\\*\\scoop\\apps\\mpv\\current\\mpv.exe",
+            tmp.path().display()
+        );
         let found = expand_and_check_pattern(&pattern);
         assert!(found.is_some());
     }
@@ -1078,11 +1106,19 @@ mod tests {
         assert!(!MPV_SEARCH_PATHS.is_empty());
         // All entries should contain "mpv"
         for path in MPV_SEARCH_PATHS {
-            assert!(path.to_lowercase().contains("mpv"), "Search path missing 'mpv': {}", path);
+            assert!(
+                path.to_lowercase().contains("mpv"),
+                "Search path missing 'mpv': {}",
+                path
+            );
         }
         // All entries should end with mpv.exe
         for path in MPV_SEARCH_PATHS {
-            assert!(path.ends_with("mpv.exe"), "Search path doesn't end with mpv.exe: {}", path);
+            assert!(
+                path.ends_with("mpv.exe"),
+                "Search path doesn't end with mpv.exe: {}",
+                path
+            );
         }
     }
 
