@@ -1,0 +1,4 @@
+## 2025-01-20 - Hardcoded App Secret in Token Encryption
+**Vulnerability:** A static symmetric encryption key (`b"SlasshyVault-TokenEncrypt-v1-2024"`) was hardcoded in `src-tauri/src/gdrive.rs` and used to derive the encryption key for securing Google Drive OAuth tokens locally.
+**Learning:** Hardcoded cryptographic materials provide a false sense of security, allowing any local attacker with the source code or binary to reverse engineer the derivation key and decrypt stolen credentials.
+**Prevention:** Always rely on secure local storage APIs (e.g., Keyring/Keychain) or dynamically provisioned environment variables/configuration. If fallback values are required to prevent application crashes, they should never be statically embedded high-entropy secrets, but rather dynamically generated or explicit environment warnings.
