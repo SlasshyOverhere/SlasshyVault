@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback, startTransition } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/tauri'
 import { appWindow } from '@tauri-apps/api/window'
@@ -521,16 +521,24 @@ function App() {
 
   // Confirm dialog state for delete confirmations
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
-  const [confirmDeleteAction, setConfirmDeleteAction] = useState<(() => void) | null>(null)
+  const confirmDeleteActionRef = useRef<(() => void) | null>(null)
   const [confirmDeleteDesc, setConfirmDeleteDesc] = useState('')
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => {
+      // Preload ALL lazy components so they don't suspend during user interaction
       void loadSettingsModal()
       void loadEpisodeBrowser()
       void loadWatchTogetherModal()
       void loadFixMatchModal()
-    }, 1500)
+      void loadSyncValidatorModal()
+      import('@/components/DuplicateDetector')
+      import('@/components/CalendarView')
+      import('@/components/DeveloperConsole')
+      import('@/components/FullHistoryView')
+      import('@/components/DirectLinksView')
+      import('@/components/RemoteSource/RemoteSourceView')
+    }, 500)
 
     return () => window.clearTimeout(preloadTimer)
   }, [])
@@ -644,6 +652,10 @@ function App() {
     [notifications],
   )
 
+  // Persist notification center state to localStorage (debounced)
+  const notificationsRef = useRef(notifications)
+  notificationsRef.current = notifications
+
   useEffect(() => {
     const id = setTimeout(() => {
       try {
@@ -654,6 +666,21 @@ function App() {
     }, 2000)
     return () => clearTimeout(id)
   }, [notifications])
+
+  // Flush pending notification writes on tab/window close
+  useEffect(() => {
+    const flush = () => {
+      try {
+        localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notificationsRef.current))
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      // Also flush on unmount in React's case
+      flush()
+    }
+  }, [])
 
   const handleOpenNotificationCenter = useCallback(() => {
     setNotificationCenterOpen(true)
@@ -1723,8 +1750,10 @@ function App() {
   }
 
   const handleFixMatch = useCallback((item: MediaItem) => {
-    setItemToFix(item)
-    setFixMatchOpen(true)
+    startTransition(() => {
+      setItemToFix(item)
+      setFixMatchOpen(true)
+    })
   }, [])
 
   const handleStartDownload = useCallback(async (item: MediaItem) => {
@@ -1906,7 +1935,7 @@ function App() {
           ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
           : `Are you sure you want to permanently delete "${item.title}"?`
       setConfirmDeleteDesc(desc)
-      setConfirmDeleteAction(() => async () => {
+      confirmDeleteActionRef.current = async () => {
         try {
           const result = await deleteMediaFiles([item.id])
           if (result.success) {
@@ -1920,7 +1949,7 @@ function App() {
           console.error('[App] Failed to delete file:', e)
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
-      })
+      }
       setConfirmDeleteOpen(true)
     }
   }, [toast])
@@ -1979,8 +2008,10 @@ function App() {
   const handleWatchTogether = useCallback((item: MediaItem) => {
     // Only allow if beta is enabled
     if (!betaEnabled) return
-    setWatchTogetherMedia(item)
-    setWatchTogetherOpen(true)
+    startTransition(() => {
+      setWatchTogetherMedia(item)
+      setWatchTogetherOpen(true)
+    })
   }, [betaEnabled])
 
   // Watch Together session change handler
@@ -2459,10 +2490,10 @@ function App() {
               setHomeSearchQuery('')
               setHomeSearchResults([])
             }}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
             onCloudScan={handleCloudScan}
-            onSyncValidator={() => setShowSyncValidator(true)}
-            onDuplicateDetector={() => setShowDuplicateDetector(true)}
+            onSyncValidator={() => startTransition(() => setShowSyncValidator(true))}
+            onDuplicateDetector={() => startTransition(() => setShowDuplicateDetector(true))}
             theme={theme}
             toggleTheme={toggleTheme}
             isScanning={isScanning}
@@ -2656,7 +2687,9 @@ function App() {
                       exit={{ opacity: 0 }}
                       className="h-full"
                     >
-                      <RemoteSourceView />
+                      <Suspense fallback={<LoadingFallback />}>
+                        <RemoteSourceView />
+                      </Suspense>
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -2672,7 +2705,9 @@ function App() {
                       exit={{ opacity: 0 }}
                       className="h-full"
                     >
-                      <CalendarView />
+                      <Suspense fallback={<LoadingFallback />}>
+                        <CalendarView />
+                      </Suspense>
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -2934,7 +2969,7 @@ function App() {
                                     {/* CTA */}
                                     <button
                                       type="button"
-                                      onClick={() => setSettingsOpen(true)}
+                                      onClick={() => startTransition(() => setSettingsOpen(true))}
                                       className="btn-primary py-3 px-8 rounded-xl inline-flex items-center gap-2.5 text-sm font-semibold shadow-glow-sm hover:shadow-glow transition-all"
                                     >
                                       <Sparkles className="size-4 text-black" />
@@ -2960,10 +2995,12 @@ function App() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                       >
+                      <Suspense fallback={<LoadingFallback />}>
                         <FullHistoryView
                           analyticsData={analyticsData}
                           onAnalyticsTabActive={loadAnalytics}
                         />
+                      </Suspense>
                       </motion.div>
                     )}
 
@@ -2996,6 +3033,7 @@ function App() {
                         {/* Background Decorative Layer - Matching Home View Aesthetic */}
                         <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
                         <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
+                      <Suspense fallback={<LoadingFallback />}>
                         <DirectLinksView
                           onIndexComplete={handleDdlIndexComplete}
                           viewMode={viewMode}
@@ -3005,6 +3043,7 @@ function App() {
                           onDelete={handleDelete}
                           onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                         />
+                      </Suspense>
                       </motion.div>
                     )}
 
@@ -3175,10 +3214,10 @@ function App() {
                                       ) : (
                                         <button
                                           type="button"
-                                          onClick={() => {
+                                          onClick={() => startTransition(() => {
                                             setSettingsInitialTab('cloud')
                                             setSettingsOpen(true)
-                                          }}
+                                          })}
                                           className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
                                           <Sparkles className="size-5" />
@@ -3402,7 +3441,7 @@ function App() {
             <WatchTogetherBanner
               room={wtActiveRoom}
               isPlaying={wtIsPlaying}
-              onOpenModal={() => setWatchTogetherOpen(true)}
+              onOpenModal={() => startTransition(() => setWatchTogetherOpen(true))}
               onLeave={handleWtLeave}
             />
           )}
@@ -3426,9 +3465,9 @@ function App() {
               setHomeSearchQuery('')
               setHomeSearchResults([])
             }}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
             onCloudScan={handleCloudScan}
-            onSyncValidator={() => setShowSyncValidator(true)}
+            onSyncValidator={() => startTransition(() => setShowSyncValidator(true))}
             onToggleSidebarPin={handleToggleSidebarPin}
             continueWatching={continueWatching}
             onPlayItem={startPlaybackFlow}
@@ -3443,7 +3482,7 @@ function App() {
             description={confirmDeleteDesc}
             confirmLabel="Delete"
             variant="destructive"
-            onConfirm={() => confirmDeleteAction?.()}
+            onConfirm={() => confirmDeleteActionRef.current?.()}
           />
 
           {import.meta.env.DEV && <DeveloperConsole />}

@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { X, ChevronDown, ChevronRight, Copy, Loader2, Trash2, HardDrive, Cloud, Search } from "lucide-react";
 import { cn } from "../lib/utils";
 import { findDuplicateMedia, deleteMediaFiles, DuplicateGroup, MediaItem } from "../services/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface DuplicateDetectorProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export function DuplicateDetector({ isOpen, onClose, onDeleted }: DuplicateDetec
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteResults, setDeleteResults] = useState<string | null>(null);
+  const [confirmItem, setConfirmItem] = useState<MediaItem | null>(null);
 
   const handleScan = useCallback(async () => {
     setIsScanning(true);
@@ -53,7 +55,13 @@ export function DuplicateDetector({ isOpen, onClose, onDeleted }: DuplicateDetec
   };
 
   const handleDelete = async (item: MediaItem) => {
-    if (!confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
+    setConfirmItem(item);
+  };
+
+  const executeDelete = async () => {
+    const item = confirmItem;
+    if (!item) return;
+    setConfirmItem(null);
     setDeletingId(item.id);
     try {
       const result = await deleteMediaFiles([item.id]);
@@ -224,6 +232,16 @@ export function DuplicateDetector({ isOpen, onClose, onDeleted }: DuplicateDetec
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmItem}
+        onOpenChange={() => setConfirmItem(null)}
+        title="Delete Media"
+        description={confirmItem ? `Delete "${confirmItem.title}"? This cannot be undone.` : ''}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={executeDelete}
+      />
     </div>
   );
 }

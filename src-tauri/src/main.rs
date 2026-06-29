@@ -3072,7 +3072,7 @@ async fn delete_media_files(
     let mut db_media_ids_to_delete: Vec<i64> = Vec::new();
 
     // Separate cloud and local files
-    for (id, file_path, is_cloud, cloud_file_id, parent_zip_id, ddl_source_id) in media_info {
+    for (id, file_path, is_cloud, cloud_file_id, _cloud_folder_id, parent_zip_id, ddl_source_id) in media_info {
         if is_cloud {
             if ddl_source_id.is_some() {
                 // DDL item - no cloud file to delete on Google Drive, just remove from DB
@@ -3172,8 +3172,12 @@ async fn delete_media_files(
             "[DELETE] Deleting {} cloud files from Google Drive",
             cloud_file_ids_to_delete.len()
         );
-        for cloud_file_id in cloud_file_ids_to_delete {
-            match state.gdrive_client.delete_file(&cloud_file_id).await {
+        let delete_futures: Vec<_> = cloud_file_ids_to_delete.iter().map(|cloud_file_id| {
+            state.gdrive_client.delete_file(cloud_file_id)
+        }).collect();
+        let results = futures_util::future::join_all(delete_futures).await;
+        for (cloud_file_id, result) in cloud_file_ids_to_delete.iter().zip(results) {
+            match result {
                 Ok(_) => {
                     println!(
                         "[DELETE] Successfully deleted cloud file: {}",
@@ -3333,8 +3337,12 @@ async fn delete_all_media_files(
             "[DELETE-ALL] Deleting {} cloud files from Google Drive",
             total_cloud
         );
-        for cloud_file_id in &cloud_file_ids {
-            match state.gdrive_client.delete_file(cloud_file_id).await {
+        let delete_futures: Vec<_> = cloud_file_ids.iter().map(|cloud_file_id| {
+            state.gdrive_client.delete_file(cloud_file_id)
+        }).collect();
+        let results = futures_util::future::join_all(delete_futures).await;
+        for (cloud_file_id, result) in cloud_file_ids.iter().zip(results) {
+            match result {
                 Ok(_) => {
                     deleted_count += 1;
                 }
@@ -3415,8 +3423,12 @@ async fn delete_cloud_files_by_drive_ids(
     let mut failed_count = 0usize;
 
     // Delete each file from Google Drive
-    for drive_file_id in &drive_file_ids {
-        match state.gdrive_client.delete_file(drive_file_id).await {
+    let delete_futures: Vec<_> = drive_file_ids.iter().map(|drive_file_id| {
+        state.gdrive_client.delete_file(drive_file_id)
+    }).collect();
+    let results = futures_util::future::join_all(delete_futures).await;
+    for (drive_file_id, result) in drive_file_ids.iter().zip(results) {
+        match result {
             Ok(_) => {
                 deleted_count += 1;
             }
@@ -3681,7 +3693,7 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+            for (_id, file_path, is_cloud, cloud_file_id, _cloud_folder_id, _parent_zip_id, ddl_source_id) in
                 episode_info
             {
                 if is_cloud && ddl_source_id.is_none() {
@@ -3808,7 +3820,7 @@ async fn delete_series_cloud_folder(
                     .map_err(|e| e.to_string())?
             };
 
-            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+            for (_id, _file_path, _is_cloud, cloud_file_id, _cloud_folder_id, _parent_zip_id, ddl_source_id) in
                 episode_info
             {
                 if let Some(cloud_id) = cloud_file_id {

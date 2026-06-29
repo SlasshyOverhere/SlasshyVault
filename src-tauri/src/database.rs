@@ -1107,7 +1107,9 @@ impl Database {
         )?;
 
         // One-time reconciliation of legacy watch history events (moved from get_watch_history_events)
-        let _ = self.reconcile_legacy_watch_history_events();
+        if let Err(e) = self.reconcile_legacy_watch_history_events() {
+            eprintln!("[DB] Warning: Failed to reconcile legacy watch history events: {}", e);
+        }
 
         Ok(())
     }
@@ -4193,11 +4195,11 @@ impl Database {
         })
     }
 
-    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id)
+    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, ddl_source_id)
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
-    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>, Option<String>)>> {
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>, Option<String>, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -4220,6 +4222,7 @@ impl Database {
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })?;
 

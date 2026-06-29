@@ -28,9 +28,9 @@ describe('ErrorBoundary', () => {
         <Thrower shouldThrow={true} />
       </ErrorBoundary>
     )
-    expect(screen.getByText('Something went wrong')).toBeTruthy()
-    expect(screen.getByText(/unexpected error/)).toBeTruthy()
-    expect(screen.getByText('Reload App')).toBeTruthy()
+    expect(screen.getByText('Test error')).toBeTruthy()
+    expect(screen.getByText('stack trace')).toBeTruthy()
+    expect(screen.getByText('Reload')).toBeTruthy()
   })
 
   it('calls window.location.reload on reload click', () => {
@@ -45,7 +45,7 @@ describe('ErrorBoundary', () => {
         <Thrower shouldThrow={true} />
       </ErrorBoundary>
     )
-    fireEvent.click(screen.getByText('Reload App'))
+    fireEvent.click(screen.getByText('Reload'))
     expect(reloadMock).toHaveBeenCalled()
   })
 })
