@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 /// design would require per-stream routing and is out of scope for now.
 static ACTIVE_PROXY: Mutex<Option<RemoteStreamProxyHandle>> = Mutex::new(None);
 
+
 /// Allowed Content-Type prefixes for proxied responses.
 const ALLOWED_CONTENT_TYPES: &[&str] = &[
     "video/",
@@ -92,7 +93,10 @@ pub fn start_proxy(
     let (file_path, final_path) = if let Some(ref cp) = cache_path {
         let parent = cp.parent().unwrap_or(&cache_dir);
         let stem = cp.file_stem().unwrap_or_default().to_string_lossy();
-        (parent.join(format!("{}.part", stem)), cp.clone())
+        (
+            parent.join(format!("{}.part", stem)),
+            cp.clone(),
+        )
     } else {
         let sanitized = sanitize_filename(&title);
         let file_name = format!("{}_{}", cache_key, sanitized);
@@ -138,8 +142,7 @@ pub fn start_proxy(
         let resp = match client.get(&dl_url).send() {
             Ok(r) => r,
             Err(e) => {
-                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!("Request: {}", e));
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("Request: {}", e));
                 println!("[REMOTE-PROXY] Download request failed: {}", e);
                 return;
             }
@@ -153,22 +156,17 @@ pub fn start_proxy(
         );
 
         if !resp.status().is_success() {
-            *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
-                Some(format!("HTTP {}", resp.status()));
+            *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("HTTP {}", resp.status()));
             return;
         }
 
         // P1 fix: Validate Content-Type of the upstream response is media.
-        let upstream_ct = resp
-            .headers()
+        let upstream_ct = resp.headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if !ALLOWED_CONTENT_TYPES
-            .iter()
-            .any(|allowed| upstream_ct.starts_with(allowed))
-        {
+        if !ALLOWED_CONTENT_TYPES.iter().any(|allowed| upstream_ct.starts_with(allowed)) {
             println!(
                 "[REMOTE-PROXY] WARNING: unexpected Content-Type from upstream: '{}'",
                 upstream_ct
@@ -181,8 +179,7 @@ pub fn start_proxy(
         let mut file = match std::fs::File::create(&dl_state.file_path) {
             Ok(f) => f,
             Err(e) => {
-                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) =
-                    Some(format!("File: {}", e));
+                *dl_state.error.write().unwrap_or_else(|e| e.into_inner()) = Some(format!("File: {}", e));
                 return;
             }
         };
@@ -192,9 +189,7 @@ pub fn start_proxy(
         let mut written: u64 = 0;
 
         loop {
-            if dl_stop.load(Ordering::Relaxed) {
-                return;
-            }
+            if dl_stop.load(Ordering::Relaxed) { return; }
             match body.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -227,14 +222,9 @@ pub fn start_proxy(
     let req_stop = stop_flag.clone();
 
     let server_handle = std::thread::spawn(move || {
-        println!(
-            "[REMOTE-PROXY] Listening on http://127.0.0.1:{}/stream",
-            port
-        );
+        println!("[REMOTE-PROXY] Listening on http://127.0.0.1:{}/stream", port);
         for request in server.incoming_requests() {
-            if req_stop.load(Ordering::Relaxed) {
-                break;
-            }
+            if req_stop.load(Ordering::Relaxed) { break; }
             let path = request.url().split('?').next().unwrap_or("").to_string();
             if path != "/stream" {
                 let response = tiny_http::Response::from_string("Not Found")
@@ -269,12 +259,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
         && waited < 30000
     {
         // P1 fix: use unwrap_or_else to survive poisoned locks without panicking.
-        if let Some(err) = state
-            .error
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
+        if let Some(err) = state.error.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             let response = tiny_http::Response::from_string(format!("Error: {}", err))
                 .with_status_code(502)
                 .with_header(
@@ -307,9 +292,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
     let total_size = state.total_size.load(Ordering::Relaxed);
 
     // Parse Range header
-    let range_header = request
-        .headers()
-        .iter()
+    let range_header = request.headers().iter()
         .find(|h| h.field.as_str().to_ascii_lowercase() == "range")
         .map(|h| h.value.as_str().to_string());
 
@@ -350,8 +333,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
                     let response = tiny_http::Response::from_string(format!("File error: {}", e))
                         .with_status_code(500)
                         .with_header(
-                            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*")
-                                .unwrap(),
+                            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
                         );
                     let _ = request.respond(response);
                     return;
@@ -368,12 +350,7 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
                 return;
             }
 
-            let content_range = format!(
-                "bytes {}-{}/{}",
-                start,
-                actual_end,
-                total_size.max(available)
-            );
+            let content_range = format!("bytes {}-{}/{}", start, actual_end, total_size.max(available));
             let ctype = content_type_for_path(&read_path);
             let response = tiny_http::Response::new(
                 tiny_http::StatusCode::from(206),
@@ -399,17 +376,10 @@ fn serve_request(request: tiny_http::Request, state: &Arc<ProxyState>) {
     if total_size <= 1024 {
         let mut waited = 0;
         while !state.complete.load(Ordering::Relaxed) && waited < 120000 {
-            if let Some(err) = state
-                .error
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-            {
+            if let Some(err) = state.error.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 let response = tiny_http::Response::from_string(format!("Error: {}", err))
                     .with_status_code(502)
-                    .with_header(
-                        tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
-                    );
+                    .with_header(tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
                 let _ = request.respond(response);
                 return;
             }
@@ -468,14 +438,10 @@ fn content_type_for_path(path: &std::path::Path) -> &'static str {
 
 fn parse_range(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
     let range_str = range_str.trim();
-    if !range_str.starts_with("bytes=") {
-        return None;
-    }
+    if !range_str.starts_with("bytes=") { return None; }
     let range_val = &range_str[6..];
     let parts: Vec<&str> = range_val.split('-').collect();
-    if parts.len() != 2 {
-        return None;
-    }
+    if parts.len() != 2 { return None; }
 
     if parts[0].is_empty() {
         let suffix: u64 = parts[1].parse().ok()?;
@@ -493,13 +459,7 @@ fn parse_range(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
 
 fn sanitize_filename(s: &str) -> String {
     s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect::<String>()
         .chars()
         .take(50)
@@ -513,10 +473,7 @@ pub async fn resolve_redirects(url: &str) -> Result<String, String> {
         .build()
         .map_err(|e| format!("Client build: {}", e))?;
 
-    let resp = client
-        .head(url)
-        .send()
-        .await
+    let resp = client.head(url).send().await
         .map_err(|e| format!("HEAD failed: {}", e))?;
 
     let final_url = resp.url().to_string();
@@ -668,10 +625,7 @@ mod tests {
 
     #[test]
     fn content_type_mkv() {
-        assert_eq!(
-            content_type_for_path(Path::new("video.mkv")),
-            "video/x-matroska"
-        );
+        assert_eq!(content_type_for_path(Path::new("video.mkv")), "video/x-matroska");
     }
 
     #[test]
@@ -681,18 +635,12 @@ mod tests {
 
     #[test]
     fn content_type_avi() {
-        assert_eq!(
-            content_type_for_path(Path::new("video.avi")),
-            "video/x-msvideo"
-        );
+        assert_eq!(content_type_for_path(Path::new("video.avi")), "video/x-msvideo");
     }
 
     #[test]
     fn content_type_mov() {
-        assert_eq!(
-            content_type_for_path(Path::new("video.mov")),
-            "video/quicktime"
-        );
+        assert_eq!(content_type_for_path(Path::new("video.mov")), "video/quicktime");
     }
 
     #[test]
@@ -707,10 +655,7 @@ mod tests {
 
     #[test]
     fn content_type_wmv() {
-        assert_eq!(
-            content_type_for_path(Path::new("video.wmv")),
-            "video/x-ms-wmv"
-        );
+        assert_eq!(content_type_for_path(Path::new("video.wmv")), "video/x-ms-wmv");
     }
 
     #[test]
@@ -752,16 +697,12 @@ mod tests {
 
     #[test]
     fn allowed_content_types_include_video() {
-        assert!(ALLOWED_CONTENT_TYPES
-            .iter()
-            .any(|ct| ct.starts_with("video/")));
+        assert!(ALLOWED_CONTENT_TYPES.iter().any(|ct| ct.starts_with("video/")));
     }
 
     #[test]
     fn allowed_content_types_include_audio() {
-        assert!(ALLOWED_CONTENT_TYPES
-            .iter()
-            .any(|ct| ct.starts_with("audio/")));
+        assert!(ALLOWED_CONTENT_TYPES.iter().any(|ct| ct.starts_with("audio/")));
     }
 
     #[test]
@@ -940,10 +881,7 @@ mod tests {
         assert!(h.port > 0);
         assert_eq!(h.url, "https://example.com/video.mp4");
         assert!(!h.stop_flag.load(Ordering::Relaxed));
-        assert_eq!(
-            h.localhost_url(),
-            format!("http://127.0.0.1:{}/stream", h.port)
-        );
+        assert_eq!(h.localhost_url(), format!("http://127.0.0.1:{}/stream", h.port));
         stop_and_forget(h);
     }
 

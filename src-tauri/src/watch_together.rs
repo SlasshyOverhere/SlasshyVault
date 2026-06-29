@@ -1,11 +1,11 @@
 // Watch Together Module
 // Synchronized MPV playback across remote users via WebSocket relay
 
-use dirs;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
+use dirs;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, protocol::Message},
@@ -22,14 +22,8 @@ fn get_relay_server_url() -> String {
     }
 
     // Check media_config.json for dev_backend_url override
-    let config_dir = if cfg!(debug_assertions) {
-        "SlasshyVault-Dev"
-    } else {
-        "SlasshyVault"
-    };
-    if let Some(config_path) =
-        dirs::data_dir().map(|d| d.join(config_dir).join("media_config.json"))
-    {
+    let config_dir = if cfg!(debug_assertions) { "SlasshyVault-Dev" } else { "SlasshyVault" };
+    if let Some(config_path) = dirs::data_dir().map(|d| d.join(config_dir).join("media_config.json")) {
         if let Ok(contents) = std::fs::read_to_string(&config_path) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
                 if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
@@ -209,28 +203,16 @@ pub enum ServerMessage {
     HeartbeatAck { timestamp: i64 },
     /// LBAS: Server instructs all clients to prepare for playback
     #[serde(rename = "prepare")]
-    Prepare {
-        position: f64,
-        pre_buffer_target: u32,
-    },
+    Prepare { position: f64, pre_buffer_target: u32 },
     /// LBAS: Server schedules collective resume at a specific timestamp
     #[serde(rename = "play_at")]
-    PlayAt {
-        position: f64,
-        play_at_timestamp: f64,
-    },
+    PlayAt { position: f64, play_at_timestamp: f64 },
     /// LBAS: Server resumes playback after all participants recovered from buffering
     #[serde(rename = "sync_resume")]
-    SyncResume {
-        position: f64,
-        play_at_timestamp: f64,
-    },
+    SyncResume { position: f64, play_at_timestamp: f64 },
     /// LBAS: Server pauses playback due to a buffering participant
     #[serde(rename = "pause")]
-    Pause {
-        reason: String,
-        triggered_by: String,
-    },
+    Pause { reason: String, triggered_by: String },
 }
 
 /// Watch session state
@@ -311,28 +293,16 @@ pub enum WatchEvent {
     },
     /// LBAS: Server instructs client to prepare for playback
     #[serde(rename = "prepare")]
-    Prepare {
-        position: f64,
-        pre_buffer_target: u32,
-    },
+    Prepare { position: f64, pre_buffer_target: u32 },
     /// LBAS: Server schedules collective resume
     #[serde(rename = "play_at")]
-    PlayAt {
-        position: f64,
-        play_at_timestamp: f64,
-    },
+    PlayAt { position: f64, play_at_timestamp: f64 },
     /// LBAS: Server resumes after buffering recovery
     #[serde(rename = "sync_resume")]
-    SyncResume {
-        position: f64,
-        play_at_timestamp: f64,
-    },
+    SyncResume { position: f64, play_at_timestamp: f64 },
     /// LBAS: Server pauses due to buffering
     #[serde(rename = "pause")]
-    Pause {
-        reason: String,
-        triggered_by: String,
-    },
+    Pause { reason: String, triggered_by: String },
     /// Show OSD message inside MPV player (like Syncplay)
     #[serde(rename = "show_osd")]
     ShowOsd { message: String, duration_ms: u64 },
@@ -425,11 +395,7 @@ impl WatchTogetherManager {
             media_title: media_title.clone(),
             media_id,
             media_match_key,
-            nickname: nickname
-                .chars()
-                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-                .take(30)
-                .collect::<String>(),
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
         };
 
@@ -598,11 +564,7 @@ impl WatchTogetherManager {
         // Send join message
         let join_msg = ClientMessage::Join {
             room_code: room_code.to_uppercase(),
-            nickname: nickname
-                .chars()
-                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-                .take(30)
-                .collect::<String>(),
+            nickname: nickname.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).take(30).collect::<String>(),
             client_id: client_id.clone(),
             media_id,
             media_title,
@@ -857,82 +819,41 @@ impl WatchTogetherManager {
             ServerMessage::Error { message } => {
                 emit(WatchEvent::Error { message }).await;
             }
-            ServerMessage::Prepare {
-                position,
-                pre_buffer_target,
-            } => {
-                emit(WatchEvent::Prepare {
-                    position,
-                    pre_buffer_target,
-                })
-                .await;
+            ServerMessage::Prepare { position, pre_buffer_target } => {
+                emit(WatchEvent::Prepare { position, pre_buffer_target }).await;
                 emit(WatchEvent::ShowOsd {
-                    message: format!(
-                        "Pre-buffering {}s for smooth playback...",
-                        pre_buffer_target
-                    ),
+                    message: format!("Pre-buffering {}s for smooth playback...", pre_buffer_target),
                     duration_ms: 3000,
-                })
-                .await;
+                }).await;
             }
-            ServerMessage::PlayAt {
-                position,
-                play_at_timestamp,
-            } => {
-                emit(WatchEvent::PlayAt {
-                    position,
-                    play_at_timestamp,
-                })
-                .await;
+            ServerMessage::PlayAt { position, play_at_timestamp } => {
+                emit(WatchEvent::PlayAt { position, play_at_timestamp }).await;
                 emit(WatchEvent::ShowOsd {
                     message: "Starting synchronized playback".to_string(),
                     duration_ms: 3000,
-                })
-                .await;
+                }).await;
             }
-            ServerMessage::SyncResume {
-                position,
-                play_at_timestamp,
-            } => {
-                emit(WatchEvent::SyncResume {
-                    position,
-                    play_at_timestamp,
-                })
-                .await;
+            ServerMessage::SyncResume { position, play_at_timestamp } => {
+                emit(WatchEvent::SyncResume { position, play_at_timestamp }).await;
                 emit(WatchEvent::ShowOsd {
                     message: "Resuming sync — all participants ready".to_string(),
                     duration_ms: 2000,
-                })
-                .await;
+                }).await;
             }
-            ServerMessage::Pause {
-                reason,
-                triggered_by,
-            } => {
+            ServerMessage::Pause { reason, triggered_by } => {
                 let tid = triggered_by.clone();
                 let nickname = {
                     let info = room_info.read().await;
-                    info.as_ref()
-                        .and_then(|r| {
-                            r.participants
-                                .iter()
-                                .find(|p| p.id == tid)
-                                .map(|p| p.nickname.clone())
-                        })
+                    info.as_ref().and_then(|r| r.participants.iter().find(|p| p.id == tid).map(|p| p.nickname.clone()))
                         .unwrap_or_else(|| triggered_by.clone())
                 };
                 if reason == "buffering" {
                     emit(WatchEvent::ShowOsd {
                         message: format!("{} is buffering...", nickname),
                         duration_ms: 3000,
-                    })
-                    .await;
+                    }).await;
                 }
-                emit(WatchEvent::Pause {
-                    reason,
-                    triggered_by,
-                })
-                .await;
+                emit(WatchEvent::Pause { reason, triggered_by }).await;
             }
             _ => {}
         }
@@ -1019,9 +940,7 @@ impl WatchTogetherManager {
         let session_guard = self.session.lock().await;
 
         if let Some(session) = session_guard.as_ref() {
-            session
-                .read_room_info(|info| info.cloned().map(Self::normalize_room))
-                .await
+            session.read_room_info(|info| info.cloned().map(Self::normalize_room)).await
         } else {
             None
         }
@@ -1077,7 +996,9 @@ impl Default for WatchTogetherManager {
     }
 }
 
-fn filter_websocket_extensions(request: &mut http::Request<()>) {
+fn filter_websocket_extensions(
+    request: &mut http::Request<()>,
+) {
     if let Some(extensions) = request.headers().get("Sec-WebSocket-Extensions") {
         let filtered: String = extensions
             .to_str()
@@ -1096,9 +1017,7 @@ fn filter_websocket_extensions(request: &mut http::Request<()>) {
         request.headers_mut().remove("Sec-WebSocket-Extensions");
         if !filtered.is_empty() {
             if let Ok(header_val) = filtered.try_into() {
-                request
-                    .headers_mut()
-                    .insert("Sec-WebSocket-Extensions", header_val);
+                request.headers_mut().insert("Sec-WebSocket-Extensions", header_val);
             }
         }
     }
@@ -1328,9 +1247,7 @@ mod tests {
 
     // ── Helper to inject a session with channels ──
 
-    async fn make_manager_with_session(
-        is_host: bool,
-    ) -> (WatchTogetherManager, mpsc::Receiver<ClientMessage>) {
+    async fn make_manager_with_session(is_host: bool) -> (WatchTogetherManager, mpsc::Receiver<ClientMessage>) {
         let m = WatchTogetherManager::new();
         let (tx, rx) = mpsc::channel::<ClientMessage>(32);
         let (_, shutdown_rx_unused) = mpsc::channel::<()>(1);
@@ -1626,12 +1543,7 @@ mod tests {
             .body(())
             .unwrap();
         filter_websocket_extensions(&mut req);
-        let val = req
-            .headers()
-            .get("Sec-WebSocket-Extensions")
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let val = req.headers().get("Sec-WebSocket-Extensions").unwrap().to_str().unwrap();
         assert_eq!(val, "foo");
     }
 
@@ -1829,10 +1741,7 @@ mod tests {
         let json = r#"{"type":"participant_left","participant_id":"u2","room":{"code":"X","host_id":"h","media_title":"T","media_id":1,"participants":[],"current_position":0.0}}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::ParticipantLeft {
-                participant_id,
-                room,
-            } => {
+            ServerMessage::ParticipantLeft { participant_id, room } => {
                 assert_eq!(participant_id, "u2");
                 assert!(room.is_some());
             }
@@ -1845,10 +1754,7 @@ mod tests {
         let json = r#"{"type":"participant_left","participant_id":"u3"}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::ParticipantLeft {
-                participant_id,
-                room,
-            } => {
+            ServerMessage::ParticipantLeft { participant_id, room } => {
                 assert_eq!(participant_id, "u3");
                 assert!(room.is_none());
             }
@@ -1861,10 +1767,7 @@ mod tests {
         let json = r#"{"type":"participant_ready","participant_id":"u1","duration":120.0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::ParticipantReady {
-                participant_id,
-                duration,
-            } => {
+            ServerMessage::ParticipantReady { participant_id, duration } => {
                 assert_eq!(participant_id, "u1");
                 assert_eq!(duration, 120.0);
             }
@@ -1887,13 +1790,7 @@ mod tests {
         let json = r#"{"type":"state_update","position":42.5,"paused":false,"server_time":1234567890,"your_rtt":15.0,"participants":[]}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::StateUpdate {
-                position,
-                paused,
-                your_rtt,
-                participants,
-                ..
-            } => {
+            ServerMessage::StateUpdate { position, paused, your_rtt, participants, .. } => {
                 assert_eq!(position, 42.5);
                 assert!(!paused);
                 assert_eq!(your_rtt, 15.0);
@@ -1908,10 +1805,7 @@ mod tests {
         let json = r#"{"type":"ping","ping_id":"srv-1","server_time":999}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::Ping {
-                ping_id,
-                server_time,
-            } => {
+            ServerMessage::Ping { ping_id, server_time } => {
                 assert_eq!(ping_id, "srv-1");
                 assert_eq!(server_time, 999);
             }
@@ -1924,9 +1818,7 @@ mod tests {
         let json = r#"{"type":"pong","ping_id":"c-1","server_time":100,"your_rtt":12.0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::Pong {
-                ping_id, your_rtt, ..
-            } => {
+            ServerMessage::Pong { ping_id, your_rtt, .. } => {
                 assert_eq!(ping_id, "c-1");
                 assert_eq!(your_rtt, 12.0);
             }
@@ -1949,10 +1841,7 @@ mod tests {
         let json = r#"{"type":"prepare","position":10.0,"pre_buffer_target":3}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::Prepare {
-                position,
-                pre_buffer_target,
-            } => {
+            ServerMessage::Prepare { position, pre_buffer_target } => {
                 assert_eq!(position, 10.0);
                 assert_eq!(pre_buffer_target, 3);
             }
@@ -1965,10 +1854,7 @@ mod tests {
         let json = r#"{"type":"play_at","position":10.0,"play_at_timestamp":1700000000.0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::PlayAt {
-                position,
-                play_at_timestamp,
-            } => {
+            ServerMessage::PlayAt { position, play_at_timestamp } => {
                 assert_eq!(position, 10.0);
                 assert_eq!(play_at_timestamp, 1700000000.0);
             }
@@ -1981,10 +1867,7 @@ mod tests {
         let json = r#"{"type":"sync_resume","position":10.0,"play_at_timestamp":1700000000.0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::SyncResume {
-                position,
-                play_at_timestamp,
-            } => {
+            ServerMessage::SyncResume { position, play_at_timestamp } => {
                 assert_eq!(position, 10.0);
                 assert_eq!(play_at_timestamp, 1700000000.0);
             }
@@ -1997,10 +1880,7 @@ mod tests {
         let json = r#"{"type":"pause","reason":"buffering","triggered_by":"u1"}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ServerMessage::Pause {
-                reason,
-                triggered_by,
-            } => {
+            ServerMessage::Pause { reason, triggered_by } => {
                 assert_eq!(reason, "buffering");
                 assert_eq!(triggered_by, "u1");
             }
@@ -2077,9 +1957,7 @@ mod tests {
 
     #[test]
     fn watch_event_error_serializes() {
-        let ev = WatchEvent::Error {
-            message: "boom".into(),
-        };
+        let ev = WatchEvent::Error { message: "boom".into() };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains(r#""type":"error""#));
         assert!(json.contains("boom"));
@@ -2181,8 +2059,7 @@ mod tests {
             // We can't await in a sync callback, but we can check the event type
             // by matching on it
             let _ = event; // event is received
-        })
-        .await;
+        }).await;
 
         // The callback was set; verify it's Some
         let cb = m.event_callback.lock().await;
@@ -2219,9 +2096,6 @@ mod tests {
         }
 
         let state = m.get_room_state().await.unwrap();
-        assert!(
-            state.is_playing,
-            "normalize_room should set is_playing from state"
-        );
+        assert!(state.is_playing, "normalize_room should set is_playing from state");
     }
 }

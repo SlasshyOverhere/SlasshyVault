@@ -295,9 +295,9 @@ impl WatchTogetherController {
                                                 last_position = pos;
                                                 if pending_user_seek {
                                                     pending_user_seek = false;
-                                                    let _ = event_tx.send(MpvSyncEvent::Seeked {
-                                                        position: pos,
-                                                    });
+                                                    let _ = event_tx.send(
+                                                        MpvSyncEvent::Seeked { position: pos },
+                                                    );
                                                 }
                                             }
                                         }
@@ -318,10 +318,12 @@ impl WatchTogetherController {
                                             if prev == 0 {
                                                 ignoring.fetch_add(1, Ordering::SeqCst);
                                             } else if paused != last_paused {
-                                                let _ = event_tx.send(MpvSyncEvent::PauseChanged {
-                                                    paused,
-                                                    position: last_position,
-                                                });
+                                                let _ = event_tx.send(
+                                                    MpvSyncEvent::PauseChanged {
+                                                        paused,
+                                                        position: last_position,
+                                                    },
+                                                );
                                             }
                                             last_paused = paused;
                                         }
@@ -636,11 +638,7 @@ impl WatchTogetherController {
     }
 
     /// LBAS: Seek to position and schedule unpause at a specific target timestamp
-    pub async fn seek_and_play_at(
-        &self,
-        position: f64,
-        target_timestamp: f64,
-    ) -> Result<(), String> {
+    pub async fn seek_and_play_at(&self, position: f64, target_timestamp: f64) -> Result<(), String> {
         self.seek_to(position).await?;
         self.set_paused(true).await?;
         let now = std::time::SystemTime::now()
@@ -652,9 +650,9 @@ impl WatchTogetherController {
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
             if let Some(tx) = cmd_tx {
-                let _ = tx
-                    .send(r#"{"command":["set_property","pause",false]}"#.to_string())
-                    .await;
+                let _ = tx.send(
+                    r#"{"command":["set_property","pause",false]}"#.to_string()
+                ).await;
             }
         });
         Ok(())
@@ -698,10 +696,7 @@ pub fn launch_mpv_wt(
     // IPC for bidirectional communication via named pipe
     cmd.arg(controller.get_ipc_arg());
 
-    if let Some(title) = display_title
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(title) = display_title.map(str::trim).filter(|value| !value.is_empty()) {
         cmd.arg(format!("--force-media-title={}", title));
     }
 
@@ -809,10 +804,7 @@ mod tests {
     #[test]
     fn get_ipc_arg_returns_correct_path() {
         let c = WatchTogetherController::new("test-session", true);
-        assert_eq!(
-            c.get_ipc_arg(),
-            r"--input-ipc-server=\\.\pipe\mpv-wt-test-session"
-        );
+        assert_eq!(c.get_ipc_arg(), r"--input-ipc-server=\\.\pipe\mpv-wt-test-session");
     }
 
     // ── is_connected() ──
@@ -880,9 +872,9 @@ mod tests {
 
     #[test]
     fn mpv_response_deserialize_success() {
-        let r: MpvResponse =
-            serde_json::from_str(r#"{"data":"test.mp4","error":"success","request_id":7}"#)
-                .unwrap();
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":"test.mp4","error":"success","request_id":7}"#,
+        ).unwrap();
         assert_eq!(r.error, "success");
         assert_eq!(r.request_id, Some(7));
         assert_eq!(r.data.unwrap(), "test.mp4");
@@ -890,7 +882,8 @@ mod tests {
 
     #[test]
     fn mpv_response_deserialize_error() {
-        let r: MpvResponse = serde_json::from_str(r#"{"error":"property not found"}"#).unwrap();
+        let r: MpvResponse =
+            serde_json::from_str(r#"{"error":"property not found"}"#).unwrap();
         assert_eq!(r.error, "property not found");
         assert!(r.data.is_none());
         assert!(r.request_id.is_none());
@@ -898,7 +891,8 @@ mod tests {
 
     #[test]
     fn mpv_response_deserialize_null_data() {
-        let r: MpvResponse = serde_json::from_str(r#"{"data":null,"error":"success"}"#).unwrap();
+        let r: MpvResponse =
+            serde_json::from_str(r#"{"data":null,"error":"success"}"#).unwrap();
         assert_eq!(r.error, "success");
         // serde deserializes JSON null into None for Option<Value>
         assert!(r.data.is_none());
@@ -910,8 +904,7 @@ mod tests {
     fn mpv_event_property_change_time_pos() {
         let e: MpvEvent = serde_json::from_str(
             r#"{"event":"property-change","id":1,"name":"time-pos","data":42.5}"#,
-        )
-        .unwrap();
+        ).unwrap();
         assert_eq!(e.event.as_deref(), Some("property-change"));
         assert_eq!(e.id, Some(1));
         assert_eq!(e.name.as_deref(), Some("time-pos"));
@@ -922,8 +915,7 @@ mod tests {
     fn mpv_event_property_change_pause() {
         let e: MpvEvent = serde_json::from_str(
             r#"{"event":"property-change","id":2,"name":"pause","data":true}"#,
-        )
-        .unwrap();
+        ).unwrap();
         assert_eq!(e.name.as_deref(), Some("pause"));
         assert_eq!(e.data.unwrap().as_bool(), Some(true));
     }
@@ -948,8 +940,9 @@ mod tests {
 
     #[test]
     fn mpv_event_response_fields() {
-        let e: MpvEvent =
-            serde_json::from_str(r#"{"error":"success","request_id":5,"data":42}"#).unwrap();
+        let e: MpvEvent = serde_json::from_str(
+            r#"{"error":"success","request_id":5,"data":42}"#,
+        ).unwrap();
         assert!(e.event.is_none());
         assert_eq!(e.error.as_deref(), Some("success"));
         assert_eq!(e.request_id, Some(5));
@@ -1230,9 +1223,9 @@ mod tests {
 
     #[test]
     fn mpv_response_deserialize_object_data() {
-        let r: MpvResponse =
-            serde_json::from_str(r#"{"data":{"width":1920,"height":1080},"error":"success"}"#)
-                .unwrap();
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":{"width":1920,"height":1080},"error":"success"}"#,
+        ).unwrap();
         let data = r.data.unwrap();
         assert_eq!(data["width"], 1920);
         assert_eq!(data["height"], 1080);
@@ -1244,8 +1237,7 @@ mod tests {
     fn mpv_event_property_change_duration() {
         let e: MpvEvent = serde_json::from_str(
             r#"{"event":"property-change","id":3,"name":"duration","data":7200.5}"#,
-        )
-        .unwrap();
+        ).unwrap();
         assert_eq!(e.name.as_deref(), Some("duration"));
         assert_eq!(e.data.unwrap().as_f64(), Some(7200.5));
     }
@@ -1388,8 +1380,7 @@ mod tests {
     fn mpv_event_property_change_with_string_data() {
         let e: MpvEvent = serde_json::from_str(
             r#"{"event":"property-change","id":5,"name":"media-title","data":"My Movie.mp4"}"#,
-        )
-        .unwrap();
+        ).unwrap();
         assert_eq!(e.name.as_deref(), Some("media-title"));
         assert_eq!(e.data.unwrap().as_str(), Some("My Movie.mp4"));
     }
@@ -1459,7 +1450,9 @@ mod tests {
 
     #[test]
     fn mpv_response_deserialize_array_data() {
-        let r: MpvResponse = serde_json::from_str(r#"{"data":[1,2,3],"error":"success"}"#).unwrap();
+        let r: MpvResponse = serde_json::from_str(
+            r#"{"data":[1,2,3],"error":"success"}"#,
+        ).unwrap();
         let data = r.data.unwrap();
         assert_eq!(data.as_array().unwrap().len(), 3);
     }
@@ -1470,8 +1463,7 @@ mod tests {
     fn mpv_event_property_change_null_data() {
         let e: MpvEvent = serde_json::from_str(
             r#"{"event":"property-change","id":1,"name":"time-pos","data":null}"#,
-        )
-        .unwrap();
+        ).unwrap();
         assert_eq!(e.name.as_deref(), Some("time-pos"));
         assert!(e.data.is_none());
     }

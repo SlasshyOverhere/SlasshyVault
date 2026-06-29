@@ -167,10 +167,7 @@ mod tests {
         }
 
         let guard = init();
-        assert!(
-            guard.is_some(),
-            "sentry::init() should return Some when DSN is set"
-        );
+        assert!(guard.is_some(), "sentry::init() should return Some when DSN is set");
         assert!(has_consent(), "consent should be true by default");
 
         // Capture a test message to verify the pipeline works
@@ -204,10 +201,7 @@ mod tests {
         }
 
         let guard = init();
-        assert!(
-            guard.is_none(),
-            "init() should return None when DSN is not set"
-        );
+        assert!(guard.is_none(), "init() should return None when DSN is not set");
     }
 
     // ── has_consent / set_consent roundtrip ──
@@ -259,10 +253,7 @@ mod tests {
         // In `cargo test` (debug build), is_dev_runtime returns true
         // because cfg!(debug_assertions) is true.
         let dev = is_dev_runtime();
-        assert!(
-            dev,
-            "cargo test runs in debug mode, so is_dev_runtime should be true"
-        );
+        assert!(dev, "cargo test runs in debug mode, so is_dev_runtime should be true");
     }
 
     // ── init returns None when DSN is empty string ──
@@ -292,10 +283,7 @@ mod tests {
             return;
         }
 
-        std::env::set_var(
-            SENTRY_DSN_ENV,
-            "https://examplePublicKey@o0.ingest.sentry.io/0",
-        );
+        std::env::set_var(SENTRY_DSN_ENV, "https://examplePublicKey@o0.ingest.sentry.io/0");
         std::env::set_var(SENTRY_SAMPLE_RATE_ENV, "0.5");
         let guard = init();
         // Guard may be Some (init succeeded) or None (invalid DSN rejected by sentry crate)

@@ -95,14 +95,12 @@ pub fn cleanup_orphaned_media(db: &Database, image_cache_dir: &str) -> usize {
                     }
                 } else {
                     // For real folder paths, check if the folder exists
-                    let path = std::fs::canonicalize(file_path)
-                        .unwrap_or_else(|_| Path::new(file_path).to_path_buf());
+                    let path = std::fs::canonicalize(file_path).unwrap_or_else(|_| Path::new(file_path).to_path_buf());
                     !path.is_dir() && !path.exists()
                 }
             } else {
                 // For movie/tvepisode entries, check if the file exists
-                let path = std::fs::canonicalize(file_path)
-                    .unwrap_or_else(|_| Path::new(file_path).to_path_buf());
+                let path = std::fs::canonicalize(file_path).unwrap_or_else(|_| Path::new(file_path).to_path_buf());
                 !path.is_file()
             };
 
@@ -216,6 +214,8 @@ fn cleanup_image_directory(
         }
     }
 }
+
+
 
 pub fn process_movie(
     db: &Database,
@@ -473,10 +473,7 @@ pub fn process_tv_episode(
     let (episode_title, episode_overview, episode_still) = if let Some(ref tmdb_id) = series_tmdb_id
     {
         // First check if we have cached metadata
-        println!(
-            "[META] Episode S{:02}E{:02}: checking local cache...",
-            season, episode
-        );
+        println!("[META] Episode S{:02}E{:02}: checking local cache...", season, episode);
         let cached_data = db
             .get_cached_episode_metadata(tmdb_id, season, episode)
             .ok()
@@ -513,10 +510,7 @@ pub fn process_tv_episode(
             (cached.episode_title, cached.overview, cached.still_path)
         } else {
             // No valid cache - try imdbapi.dev for episode image first, then fall back to TMDB
-            println!(
-                "[META] Episode S{:02}E{:02}: cache miss, trying imdbapi.dev...",
-                season, episode
-            );
+            println!("[META] Episode S{:02}E{:02}: cache miss, trying imdbapi.dev...", season, episode);
             let mut imdbapi_still_path: Option<String> = None;
 
             if let Some(ref imdb_id) = series_imdb_id {
@@ -571,11 +565,7 @@ pub fn process_tv_episode(
                                                     .filter(|c| c.is_alphanumeric())
                                                     .take(20)
                                                     .collect();
-                                                let url_hash = if url_hash.is_empty() {
-                                                    "unknown".to_string()
-                                                } else {
-                                                    url_hash
-                                                };
+                                                let url_hash = if url_hash.is_empty() { "unknown".to_string() } else { url_hash };
                                                 let filename = format!(
                                                     "imdb_ep_s{:02}e{:02}_{}.jpg",
                                                     season, episode, url_hash
@@ -612,12 +602,8 @@ pub fn process_tv_episode(
                                                 }
                                                 // Only set still_path if the file actually exists on disk
                                                 if cache_path.exists() {
-                                                    let cached_path =
-                                                        format!("image_cache/{}", filename);
-                                                    println!(
-                                                        "[IMDBAPI] Got episode image: {}",
-                                                        cached_path
-                                                    );
+                                                    let cached_path = format!("image_cache/{}", filename);
+                                                    println!("[IMDBAPI] Got episode image: {}", cached_path);
                                                     imdbapi_still_path = Some(cached_path);
                                                 } else {
                                                     println!("[IMDBAPI] Episode image not available on disk for S{:02}E{:02}", season, episode);
@@ -640,17 +626,14 @@ pub fn process_tv_episode(
             }
 
             if series_imdb_id.is_some() && imdbapi_still_path.is_none() {
-                println!(
-                    "[IMDBAPI] No episode image from imdbapi.dev for S{:02}E{:02}",
-                    season, episode
-                );
+                println!("[IMDBAPI] No episode image from imdbapi.dev for S{:02}E{:02}", season, episode);
             }
 
             // If we got an image from imdbapi.dev and have cached title/overview, combine them
             // without hitting TMDB. Otherwise fall back to TMDB for full metadata.
-            let has_cached_text = cached_data
-                .as_ref()
-                .map_or(false, |c| c.episode_title.is_some() || c.overview.is_some());
+            let has_cached_text = cached_data.as_ref().map_or(false, |c| {
+                c.episode_title.is_some() || c.overview.is_some()
+            });
 
             if imdbapi_still_path.is_some() && has_cached_text {
                 let cached = cached_data.unwrap();
@@ -727,6 +710,8 @@ pub fn process_tv_episode(
     } else {
         (None, None, None)
     };
+
+
 
     match db.insert_episode_with_metadata(
         &ep_title,
@@ -1779,10 +1764,7 @@ mod tests {
 
     #[test]
     fn test_normalize_for_article_compare_numbers() {
-        assert_eq!(
-            normalize_for_article_compare("2001: A Space Odyssey"),
-            "2001 a space odyssey"
-        );
+        assert_eq!(normalize_for_article_compare("2001: A Space Odyssey"), "2001 a space odyssey");
     }
 
     // --- extract_year_from_title ---
@@ -1852,10 +1834,7 @@ mod tests {
         // Documents actual behavior: DTS-HD/5.1/FLAC removed, "MA" survives (space before MA)
         let result = clean_junk_from_title("Movie DTS-HD MA 5.1 FLAC");
         assert!(!result.to_lowercase().contains("dts"), "Should remove DTS");
-        assert!(
-            !result.to_lowercase().contains("flac"),
-            "Should remove FLAC"
-        );
+        assert!(!result.to_lowercase().contains("flac"), "Should remove FLAC");
         assert!(!result.contains("5.1"), "Should remove 5.1");
     }
 
@@ -1876,7 +1855,10 @@ mod tests {
 
     #[test]
     fn test_clean_junk_preserves_title() {
-        assert_eq!(clean_junk_from_title("The Dark Knight"), "The Dark Knight");
+        assert_eq!(
+            clean_junk_from_title("The Dark Knight"),
+            "The Dark Knight"
+        );
     }
 
     // --- clean_folder_name ---
@@ -2209,10 +2191,7 @@ mod tests {
         use std::env;
         use std::fs;
 
-        let temp_dir = env::temp_dir().join(format!(
-            "slasshyvault_cleanup_test_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let temp_dir = env::temp_dir().join(format!("slasshyvault_cleanup_test_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp_dir).unwrap();
 
         // Create an image cache dir that's empty
@@ -2228,14 +2207,22 @@ mod tests {
         used_paths.insert("image_cache/poster.jpg".to_string());
 
         // poster.jpg is used, should NOT be deleted
-        cleanup_image_directory(&image_cache.to_string_lossy(), &used_paths, "");
+        cleanup_image_directory(
+            &image_cache.to_string_lossy(),
+            &used_paths,
+            "",
+        );
         assert!(used_image.exists(), "Used image should not be deleted");
 
         // Create orphaned image
         let orphan_image = image_cache.join("orphan.jpg");
         fs::write(&orphan_image, "orphan").unwrap();
 
-        cleanup_image_directory(&image_cache.to_string_lossy(), &used_paths, "");
+        cleanup_image_directory(
+            &image_cache.to_string_lossy(),
+            &used_paths,
+            "",
+        );
         assert!(!orphan_image.exists(), "Orphaned image should be deleted");
         assert!(used_image.exists(), "Used image should still exist");
 
@@ -2247,8 +2234,7 @@ mod tests {
         use std::env;
         use std::fs;
 
-        let temp_dir =
-            env::temp_dir().join(format!("slasshyvault_nested_{}", uuid::Uuid::new_v4()));
+        let temp_dir = env::temp_dir().join(format!("slasshyvault_nested_{}", uuid::Uuid::new_v4()));
         let image_cache = temp_dir.join("image_cache");
         fs::create_dir_all(&image_cache).unwrap();
 
@@ -2263,16 +2249,14 @@ mod tests {
         let mut used_paths = std::collections::HashSet::new();
         used_paths.insert("image_cache/tv/used.jpg".to_string());
 
-        cleanup_image_directory(&image_cache.to_string_lossy(), &used_paths, "tv");
+        cleanup_image_directory(
+            &image_cache.to_string_lossy(),
+            &used_paths,
+            "tv",
+        );
 
-        assert!(
-            used_file.exists(),
-            "Used file in subdirectory should survive"
-        );
-        assert!(
-            !orphan_file.exists(),
-            "Orphaned file in subdirectory should be removed"
-        );
+        assert!(used_file.exists(), "Used file in subdirectory should survive");
+        assert!(!orphan_file.exists(), "Orphaned file in subdirectory should be removed");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -2282,8 +2266,7 @@ mod tests {
         use std::env;
         use std::fs;
 
-        let temp_dir =
-            env::temp_dir().join(format!("slasshyvault_emptydir_{}", uuid::Uuid::new_v4()));
+        let temp_dir = env::temp_dir().join(format!("slasshyvault_emptydir_{}", uuid::Uuid::new_v4()));
         let image_cache = temp_dir.join("image_cache");
         let subdir = image_cache.join("tv_posters");
         fs::create_dir_all(&subdir).unwrap();
@@ -2295,14 +2278,15 @@ mod tests {
         let used_paths = std::collections::HashSet::new();
 
         // Clean the parent image_cache dir (which recurses into subdirs)
-        cleanup_image_directory(&image_cache.to_string_lossy(), &used_paths, "");
+        cleanup_image_directory(
+            &image_cache.to_string_lossy(),
+            &used_paths,
+            "",
+        );
 
         // Orphaned file removed, subdir now empty → should be cleaned up
         assert!(!orphan.exists(), "Orphaned file should be removed");
-        assert!(
-            !subdir.exists(),
-            "Empty subdirectory should be removed after its last file was deleted"
-        );
+        assert!(!subdir.exists(), "Empty subdirectory should be removed after its last file was deleted");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
