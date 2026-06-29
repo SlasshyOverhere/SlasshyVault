@@ -794,8 +794,8 @@ export function SettingsModal({
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <LazyMotion features={domAnimation}>
-        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
-          <div className="flex flex-1 min-h-0">
+        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden">
+          <div className="flex flex-1 min-h-0 pr-14">
             {/* Sidebar */}
             <div className="w-40 sm:w-48 md:w-56 flex-shrink-0 bg-card/50 border-r border-border p-3 sm:p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-6">
@@ -2327,8 +2327,6 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
-                    </m.div>
-                  )}
 
                       {/* Selective Delete */}
                       <div className="p-4 rounded-xl border border-orange-500/30 bg-orange-500/5 space-y-4">
@@ -2359,6 +2357,8 @@ export function SettingsModal({
                           Browse & Select Files to Delete
                         </Button>
                       </div>
+                    </m.div>
+                  )}
 
                 </AnimatePresence>
               </div>
