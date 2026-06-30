@@ -152,9 +152,9 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           {/* Privacy Notice */}
           <p className="text-neutral-500 text-xs text-center mt-6 leading-relaxed">
             By signing in, you agree to our{' '}
-            <a href="https://slasshyvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
+            <a href="https://slasshyoverhere.github.io/SlasshyVault/#terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
             {' '}and{' '}
-            <a href="https://slasshyvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
+            <a href="https://slasshyoverhere.github.io/SlasshyVault/#privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
             <br />
             Your data is stored securely in your own Google Drive.
           </p>

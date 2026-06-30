@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SlasshyVault — Docs</title>
+  <meta name="description" content="SlasshyVault documentation, terms of service, and privacy policy.">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --card: #121212;
+      --border: rgba(255,255,255,0.08);
+      --text: #fafafa;
+      --muted: #8c8c8c;
+      --accent: #e53e3e;
+      --accent-dim: rgba(229,62,62,0.12);
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
+
+    /* Header */
+    header {
+      padding: 32px 0 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 48px;
+    }
+    header .container {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+    header nav a {
+      color: var(--muted); text-decoration: none; font-size: 13px; margin-left: 24px; transition: color 0.2s;
+    }
+    header nav a:hover { color: var(--text); }
+
+    /* Hero */
+    .hero { padding: 48px 0 64px; text-align: center; }
+    .hero h1 { font-size: 36px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 12px; }
+    .hero p { color: var(--muted); font-size: 16px; max-width: 520px; margin: 0 auto; }
+
+    /* Cards */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 64px; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: rgba(255,255,255,0.15); }
+    .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .card p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+    .card a {
+      display: inline-block; margin-top: 12px;
+      font-size: 13px; color: var(--accent); text-decoration: none; font-weight: 500;
+    }
+    .card a:hover { text-decoration: underline; }
+
+    /* Content sections */
+    .section { margin-bottom: 64px; }
+    .section h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .section h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+    .section p, .section li { font-size: 14px; color: var(--muted); }
+    .section ul, .section ol { padding-left: 20px; }
+    .section li { margin-bottom: 6px; }
+    .section a { color: var(--accent); }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 0;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <span class="logo">SlasshyVault</span>
+    <nav>
+      <a href="#terms">Terms</a>
+      <a href="#privacy">Privacy</a>
+      <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="container">
+    <h1>SlasshyVault</h1>
+    <p>Your media library. Your Google Drive. Privacy-first, open-source, and local-first by design.</p>
+  </div>
+</div>
+
+<div class="container">
+
+<div class="grid">
+  <div class="card">
+    <h3>🔒 Local-First</h3>
+    <p>All media metadata, watch history, and settings are stored locally on your device. No cloud servers hold your data.</p>
+  </div>
+  <div class="card">
+    <h3>☁️ Your Drive, Your Rules</h3>
+    <p>Media files stay in your own Google Drive. SlasshyVault indexes them locally and never uploads your tokens anywhere.</p>
+  </div>
+  <div class="card">
+    <h3>👤 No Accounts</h3>
+    <p>Sign-in is just Google OAuth to access your Drive. There is no SlasshyVault account, no user database, no tracking.</p>
+  </div>
+  <div class="card">
+    <h3>📺 Open Source</h3>
+    <p>Full source available on GitHub. Built with Tauri + Rust + React. No telemetry, no analytics, no ads.</p>
+    <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">View on GitHub →</a>
+  </div>
+</div>
+
+<!-- ==================== TERMS OF SERVICE ==================== -->
+<section class="section" id="terms">
+<h2>Terms of Service</h2>
+<p><em>Last updated: June 30, 2026</em></p>
+
+<h3>1. Acceptance</h3>
+<p>By downloading, installing, or using SlasshyVault (the "Software"), you agree to these Terms. If you do not agree, do not use the Software.</p>
+
+<h3>2. Description</h3>
+<p>SlasshyVault is a desktop application that indexes media files from your local storage and Google Drive, and provides an interface to browse, search, and play them via external players such as MPV. The Software is provided "as is" for personal, non-commercial use.</p>
+
+<h3>3. Google Drive Integration</h3>
+<p>The Software uses Google OAuth to authenticate with your Google Drive account solely to list and stream media files you explicitly choose to index. The Software does not upload, modify, or delete any files in your Drive without your explicit action. OAuth tokens are stored locally on your device and are never sent to any server other than Google's authorized endpoints.</p>
+
+<h3>4. Third-Party Services</h3>
+<p>The Software may optionally call third-party APIs (TMDB, IMDb, OMDb) to enrich metadata. These calls use either your own API keys or free public endpoints. No personal information is sent to these services. The Software also supports deploying a Cloudflare Worker for the Watch Together feature; this Worker runs on your own Cloudflare account and never communicates with any central server.</p>
+
+<h3>5. No Data Collection</h3>
+<p>SlasshyVault does not collect telemetry, analytics, usage statistics, or personal information. There are no servers operated by the developers that receive any data from the Software. The OAuth backend server only handles Google's authentication redirect and retains no user data beyond the lifetime of a single OAuth session (5 minutes).</p>
+
+<h3>6. Limitation of Liability</h3>
+<p>The Software is provided "as is" without warranty of any kind. The developers are not liable for any damages arising from the use or inability to use the Software, including but not limited to data loss, playback issues, or compatibility problems.</p>
+
+<h3>7. Changes</h3>
+<p>These Terms may be updated at any time. Continued use after changes constitutes acceptance of the new Terms. The latest version is always available at this URL.</p>
+
+<h3>8. Contact</h3>
+<p>For questions about these Terms, open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>.</p>
+</section>
+
+<!-- ==================== PRIVACY POLICY ==================== -->
+<section class="section" id="privacy">
+<h2>Privacy Policy</h2>
+<p><em>Last updated: June 30, 2026</em></p>
+
+<h3>What We Collect</h3>
+<p><strong>Nothing.</strong> SlasshyVault does not collect, store, transmit, or share any personal data. There are no analytics, no telemetry, no crash reporters, no advertising identifiers, no fingerprinting, and no user tracking of any kind.</p>
+
+<h3>Google Drive Access</h3>
+<p>When you sign in with Google, the Software requests access to your Google Drive to list and stream media files. This access is used exclusively for:</p>
+<ul>
+  <li>Listing folders and files you choose to index</li>
+  <li>Streaming video content directly to your media player</li>
+  <li>Reading watch-history metadata previously saved to your Drive (if any)</li>
+</ul>
+<p>The Software never writes, modifies, or deletes files in your Drive without your explicit action. Your OAuth tokens are stored encrypted on your local machine and are never sent to any third party.</p>
+
+<h3>OAuth Backend Server</h3>
+<p>The OAuth backend server (<code>auth.slasshyvault.com</code> or self-hosted) handles only the Google OAuth code exchange. It stores OAuth state and session IDs in memory for a maximum of 5 minutes, after which they are permanently deleted. No user information is logged or persisted.</p>
+
+<h3>Watch Together Relay</h3>
+<p>The Watch Together feature uses a Cloudflare Worker deployed to your own Cloudflare account. This Worker relays WebSocket messages between participants in a Watch Together room. It stores no data beyond the active room session (Durable Object in-memory state). You can delete the Worker at any time from your Cloudflare dashboard or through the Software settings.</p>
+
+<h3>Third-Party API Calls</h3>
+<p>The Software may make requests to TMDB (<code>api.themoviedb.org</code>), OMDb (<code>www.omdbapi.com</code>), or IMDb (<code>api.imdbapi.dev</code>) to fetch metadata such as titles, posters, ratings, and cast information. These requests are made directly from your device and include only the search query or media ID — no personal information is sent. These services have their own privacy policies.</p>
+
+<h3>Cloudflare Relay Deploy</h3>
+<p>If you use the one-click deploy feature, the Software makes API calls to <code>api.cloudflare.com</code> using the API token you provide. This deploys a Worker script to your Cloudflare account. The token is stored locally in your Software settings and is never transmitted to anyone other than Cloudflare.</p>
+
+<h3>Data Storage</h3>
+<ul>
+  <li><strong>Configuration:</strong> Stored locally in <code>media_config.json</code> in the app data directory.</li>
+  <li><strong>Watch History:</strong> Stored in a local SQLite database on your device.</li>
+  <li><strong>OAuth Tokens:</strong> Stored encrypted in local app data, used only for Google Drive API calls.</li>
+  <li><strong>Cloudflare Token:</strong> Stored in local config if you choose to use the relay deploy feature.</li>
+</ul>
+
+<h3>Data Deletion</h3>
+<p>All locally stored data can be deleted from the Software settings (Factory Reset). OAuth tokens can be revoked at any time through your <a href="https://myaccount.google.com/permissions" target="_blank">Google Account permissions page</a>. The Cloudflare Worker can be deleted from the Software settings or directly from your Cloudflare dashboard.</p>
+
+<h3>Children</h3>
+<p>The Software is not intended for children under 13. No data is collected from any user regardless of age.</p>
+
+<h3>Changes</h3>
+<p>This Privacy Policy may be updated. The latest version is always available at this URL.</p>
+
+<h3>Contact</h3>
+<p>For privacy concerns, open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>.</p>
+
+</section>
+
+</div>
+
+<footer>
+  <div class="container">
+    SlasshyVault — Open source media library. No tracking. No accounts. Your data stays yours.
+  </div>
+</footer>
+
+</body>
+</html>
