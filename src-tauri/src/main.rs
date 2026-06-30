@@ -21,7 +21,7 @@ mod zip_parser;
 mod zip_stream_proxy;
 mod remote_stream_proxy;
 mod remote_source;
-mod sentry;
+
 mod stream_cache;
 
 use tauri_plugin_autostart::MacosLauncher;
@@ -13033,8 +13033,7 @@ fn open_latest_release_page_for_manual_install(context: &str) {
 
 fn manual_update_error(context: &str, details: impl std::fmt::Display) -> String {
     let details_str = details.to_string();
-    // Report to Sentry — captures the exact error with context tag
-    crate::sentry::capture_error(context, &details_str);
+    // ponytail: removed sentry
     open_latest_release_page_for_manual_install(context);
     format!(
         "Auto updater issue, please install manually. Opening latest release page. {}",
@@ -17464,12 +17463,6 @@ fn remote_clear_streams_cache() -> Result<(), String> {
     Ok(())
 }
 
-// ── Frontend-to-backend error reporting ──
-#[tauri::command]
-fn sentry_report_error(context: String, details: String) -> Result<(), String> {
-    crate::sentry::capture_error(&context, &details);
-    Ok(())
-}
 
 #[tauri::command]
 async fn run_sync_validation(
@@ -17969,9 +17962,7 @@ fn main() {
     // This allows setting VITE_SENTRY_DSN, GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, etc.
     dotenvy::dotenv().ok();
 
-    // Initialize Sentry crash reporting (reads SENTRY_DSN from env).
-    // No-op if SENTRY_DSN is not set. 10% sampling, consent-gated.
-    let _sentry_guard = crate::sentry::init();
+    // ponytail: sentry removed
 
     // Migrate app data from old StreamVault directory to new SlasshyVault directory.
     // Dev builds use StreamVault-Dev → SlasshyVault-Dev (isolated from production).
@@ -18615,7 +18606,7 @@ fn main() {
             remove_addon_binary,
             restart_addon,
             remote_clear_streams_cache,
-            sentry_report_error,
+
             run_sync_validation,
             fix_sync_issues,
             refresh_tray_continue_watching,
