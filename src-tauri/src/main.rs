@@ -16558,7 +16558,6 @@ async fn remote_play_with_mpv(
 
     // Launch MPV with the URL directly — no Lua script, no progress tracking
     let mut cmd = std::process::Command::new(mpv_path);
-    cmd.arg(&url);
     cmd.arg(format!("--force-media-title={}", title));
     cmd.arg("--cache=yes");
     cmd.arg("--demuxer-max-bytes=500MiB");
@@ -16566,6 +16565,7 @@ async fn remote_play_with_mpv(
     cmd.arg("--save-position-on-quit=no");
     cmd.arg("--keep-open=no");
     cmd.arg("--");
+    cmd.arg(&url);
 
     #[cfg(target_os = "windows")]
     {
