@@ -17,11 +17,11 @@ import {
   Cloud,
   Download,
   RefreshCw,
-  Code,
   FlaskConical,
   Radio,
   Shield,
   Archive,
+  HardDrive,
   Loader2,
   Bug,
   Wifi,
@@ -31,6 +31,7 @@ import {
   getConfig,
   saveConfig,
   clearAllAppData,
+  deleteAllMediaFiles,
   TabVisibility,
   checkForUpdates,
   downloadUpdate,
@@ -41,6 +42,16 @@ import {
   getBundledMpvInfo,
   downloadBundledMpv,
   BundledMpvInfo,
+  getTopSpaceConsumers,
+  getGdriveAccountInfo,
+  getCloudCacheInfo,
+  cleanupCloudCache,
+  clearCloudCache,
+  getDownloadJobs,
+  MediaItem,
+  DriveAccountInfo,
+  CloudCacheInfo,
+  DownloadJob,
 } from "@/services/api";
 
 import { useToast } from "@/components/ui/use-toast";
@@ -52,6 +63,8 @@ import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GoogleDriveSettings } from "@/components/GoogleDriveSettings";
 import { ZipGuideModal } from "@/components/ZipGuideModal";
+import { SelectiveDeleteModal } from "@/components/SelectiveDeleteModal";
+import { BetaConfirmDialog } from "@/components/BetaConfirmDialog";
 
 interface SettingsModalProps {
   open: boolean;
@@ -72,11 +85,13 @@ type SettingsSection =
   | "beta"
   | "updates"
   | "cloud"
+  | "storage"
   | "api"
   | "external"
   | "danger"
   | "dev"
-  | "nightly";
+  | "nightly"
+  | "relay";
 
 const sections: {
   id: SettingsSection;
@@ -99,8 +114,14 @@ const sections: {
     label: "Cache & Storage",
     icon: <Cloud className="size-4" />,
   },
+  {
+    id: "storage",
+    label: "Storage & Bandwidth",
+    icon: <Archive className="size-4" />,
+  },
   { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
   { id: "external", label: "External", icon: <Radio className="size-4" /> },
+  { id: "relay", label: "Watch Together", icon: <Wifi className="size-4" /> },
   {
     id: "danger",
     label: "Factory Reset",
@@ -108,7 +129,7 @@ const sections: {
   },
   { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
   ...(import.meta.env.DEV
-    ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
+    ? []
     : []),
   ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
     ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
@@ -343,6 +364,7 @@ export function SettingsModal({
   autoCheckUpdate = false,
   onSimulateUpdate: _onSimulateUpdate,
 }: SettingsModalProps) {
+  const [showBetaConfirm, setShowBetaConfirm] = useState(false);
   const [config, setConfig] = useState<Config>({
     mpv_path: "",
     vlc_path: "",
@@ -358,7 +380,6 @@ export function SettingsModal({
     zip_cache_dir: "",
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
-    dev_backend_url: "",
     player_mode: "external",
     addon_url: "",
   });
@@ -366,6 +387,10 @@ export function SettingsModal({
   const [autoStart, setAutoStart] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [deleteAllStep, setDeleteAllStep] = useState<0 | 1 | 2>(0);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [showSelectiveDelete, setShowSelectiveDelete] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [activeSection, setActiveSection] =
@@ -380,8 +405,13 @@ export function SettingsModal({
   const [downloadingBundledMpv, setDownloadingBundledMpv] = useState(false);
   const [bundledMpvProgress, setBundledMpvProgress] = useState(0);
   const [showCustomMpv, setShowCustomMpv] = useState(false);
-  const [useOwnApiKey, setUseOwnApiKey] = useState(false);
+  // ponytail: api key section simplified — no useOwnApiKey toggle needed
   const [showZipGuide, setShowZipGuide] = useState(false);
+  const [driveInfo, setDriveInfo] = useState<DriveAccountInfo | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<CloudCacheInfo | null>(null);
+  const [topMedia, setTopMedia] = useState<MediaItem[]>([]);
+  const [recentDownloads, setRecentDownloads] = useState<DownloadJob[]>([]);
+  const [storageLoading, setStorageLoading] = useState(false);
   const [pathValidation, setPathValidation] = useState<Record<string, string>>({});
   const [showDevConsole, setShowDevConsole] = useState(() => {
     return localStorage.getItem("slasshyvault_show_dev_console") === "true";
@@ -419,6 +449,24 @@ export function SettingsModal({
       handleCheckUpdate();
     }
   }, [open, autoCheckUpdate, activeSection]);
+
+  // Fetch storage & bandwidth data when section is opened
+  useEffect(() => {
+    if (open && activeSection === "storage") {
+      setStorageLoading(true);
+      Promise.all([
+        getGdriveAccountInfo(),
+        getCloudCacheInfo(),
+        getTopSpaceConsumers(10),
+        getDownloadJobs(),
+      ]).then(([drive, cache, media, downloads]) => {
+        setDriveInfo(drive);
+        setCacheInfo(cache);
+        setTopMedia(media);
+        setRecentDownloads(downloads.filter(d => d.status === "completed" || d.status === "downloading").slice(0, 5));
+      }).finally(() => setStorageLoading(false));
+    }
+  }, [open, activeSection]);
 
   const loadAppVersion = async () => {
     try {
@@ -558,12 +606,11 @@ export function SettingsModal({
         zip_cache_dir: data.zip_cache_dir || "",
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
-        dev_backend_url: data.dev_backend_url || "",
         player_mode: data.player_mode || "external",
         addon_url: data.addon_url || "",
       });
       // If user already has a custom API key saved, show the custom input
-      setUseOwnApiKey(!!data.tmdb_api_key);
+      // ponytail: api key toggle removed
     } catch (error) {
       console.error("Failed to load config", error);
       toast({
@@ -608,6 +655,29 @@ export function SettingsModal({
       });
     } finally {
       setResetting(false);
+    }
+  };
+
+  const handleDeleteAllMedia = async () => {
+    setDeletingAll(true);
+    try {
+      const result = await deleteAllMediaFiles();
+      setDeleteAllStep(0);
+      setDeleteAllConfirmText("");
+      toast({
+        title: "All Media Deleted",
+        description: result.message,
+      });
+      emit("library-updated");
+    } catch (error) {
+      console.error("Failed to delete all media", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete all media files",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingAll(false);
     }
   };
 
@@ -720,10 +790,11 @@ export function SettingsModal({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <LazyMotion features={domAnimation}>
-        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden pr-14">
-          <div className="flex flex-1 min-h-0">
+        <DialogContent className="!flex max-w-4xl max-h-[85vh] p-0 gap-0 flex-col overflow-hidden">
+          <div className="flex flex-1 min-h-0 pr-14">
             {/* Sidebar */}
             <div className="w-40 sm:w-48 md:w-56 flex-shrink-0 bg-card/50 border-r border-border p-3 sm:p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-6">
@@ -1036,19 +1107,7 @@ export function SettingsModal({
                             checked={betaEnabled}
                             onCheckedChange={(checked) => {
                               if (checked) {
-                                // TODO: Replace browser confirm() with custom modal
-                                const confirmed = window.confirm(
-                                  "Beta Features Warning\n\n" +
-                                    "These features are experimental and for public testing only:\n\n" +
-                                    "\u2022 Watch Together - Watch with friends in sync\n" +
-                                    "\u2022 Social Features - Friends, chat, activity feed\n\n" +
-                                    "These features may not work properly, may have bugs, " +
-                                    "and could stop working at any time.\n\n" +
-                                    "Do you want to enable beta features?",
-                                );
-                                if (confirmed) {
-                                  onBetaToggle?.(true);
-                                }
+                                setShowBetaConfirm(true);
                               } else {
                                 onBetaToggle?.(false);
                               }
@@ -1446,6 +1505,177 @@ export function SettingsModal({
                     </m.div>
                   )}
 
+                  {/* ===== Storage & Bandwidth ===== */}
+                  {activeSection === "storage" && (
+                    <m.div
+                      key="storage"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Storage & Bandwidth
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Monitor storage usage, cache sizes, and download activity
+                        </p>
+                      </div>
+
+                      {storageLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : (
+                        <>
+                          {/* Google Drive Storage */}
+                          <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 rounded-lg bg-white/10">
+                                <Cloud className="size-5 text-white" />
+                              </div>
+                              <div>
+                                <Label className="text-base font-medium">Google Drive Storage</Label>
+                                {driveInfo && (
+                                  <p className="text-xs text-muted-foreground">{driveInfo.email}</p>
+                                )}
+                              </div>
+                            </div>
+                            {driveInfo?.storage_used != null && driveInfo?.storage_limit != null ? (
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Used</span>
+                                  <span className="font-medium">
+                                    {(driveInfo.storage_used / (1024 ** 3)).toFixed(1)} GB / {(driveInfo.storage_limit / (1024 ** 3)).toFixed(0)} GB
+                                  </span>
+                                </div>
+                                <div className="h-2 rounded-full bg-muted overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-white/70 transition-all"
+                                    style={{ width: `${Math.min(100, (driveInfo.storage_used / driveInfo.storage_limit) * 100)}%` }}
+                                  />
+                                </div>
+                                <p className="text-xs text-muted-foreground text-right">
+                                  {((driveInfo.storage_used / driveInfo.storage_limit) * 100).toFixed(1)}% used
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Connect Google Drive to view storage stats.</p>
+                            )}
+                          </div>
+
+                          {/* Cloud Cache */}
+                          <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 rounded-lg bg-white/10">
+                                <HardDrive className="size-5 text-white" />
+                              </div>
+                              <div className="flex-1">
+                                <Label className="text-base font-medium">Cloud Cache</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  {cacheInfo?.enabled ? `${cacheInfo.file_count} files, ${cacheInfo.total_size_mb.toFixed(1)} MB used` : "Disabled"}
+                                </p>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = await cleanupCloudCache();
+                                    toast({ title: "Cache cleaned", description: res.message });
+                                    const fresh = await getCloudCacheInfo();
+                                    setCacheInfo(fresh);
+                                  } catch { toast({ title: "Cleanup failed", variant: "destructive" }); }
+                                }}
+                              >
+                                <RefreshCw className="size-3 mr-1.5" /> Cleanup
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = await clearCloudCache();
+                                    toast({ title: "Cache cleared", description: res.message });
+                                    const fresh = await getCloudCacheInfo();
+                                    setCacheInfo(fresh);
+                                  } catch { toast({ title: "Clear failed", variant: "destructive" }); }
+                                }}
+                              >
+                                <Trash2 className="size-3 mr-1.5" /> Clear
+                              </Button>
+                            </div>
+                            {cacheInfo?.enabled && (
+                              <div className="h-2 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-white/50 transition-all"
+                                  style={{ width: `${Math.min(100, (cacheInfo.total_size_mb / cacheInfo.max_size_mb) * 100)}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Top Space Consumers */}
+                          {topMedia.length > 0 && (
+                            <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-white/10">
+                                  <Archive className="size-5 text-white" />
+                                </div>
+                                <Label className="text-base font-medium">Largest Library Items</Label>
+                              </div>
+                              <div className="space-y-1">
+                                {topMedia.map((item) => (
+                                  <div key={item.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-muted/30">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm truncate">{item.title}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {item.media_type === "tvshow" ? "TV Show" : "Movie"}{item.year ? ` (${item.year})` : ""}
+                                      </p>
+                                    </div>
+                                    <span className="text-sm font-mono text-muted-foreground ml-3">
+                                      {item.file_size_bytes ? `${(item.file_size_bytes / (1024 ** 3)).toFixed(2)} GB` : "—"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Recent Downloads */}
+                          {recentDownloads.length > 0 && (
+                            <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-white/10">
+                                  <Download className="size-5 text-white" />
+                                </div>
+                                <Label className="text-base font-medium">Recent Downloads</Label>
+                              </div>
+                              <div className="space-y-1">
+                                {recentDownloads.map((job) => (
+                                  <div key={job.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-muted/30">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm truncate">{job.title}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {job.status === "completed" ? "Completed" : `${(job.progress * 100).toFixed(0)}%`}
+                                      </p>
+                                    </div>
+                                    {job.speedBytesPerSecond != null && job.speedBytesPerSecond > 0 && (
+                                      <span className="text-xs font-mono text-muted-foreground ml-3">
+                                        {(job.speedBytesPerSecond / (1024 ** 2)).toFixed(1)} MB/s
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </m.div>
+                  )}
+
                   {/* ===== API Configuration ===== */}
                   {activeSection === "api" && (
                     <m.div
@@ -1480,93 +1710,16 @@ export function SettingsModal({
                           </div>
                         </div>
 
-                        {/* Option: Use Built-in */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setUseOwnApiKey(false);
-                            setConfig({ ...config, tmdb_api_key: "", omdb_api_key: "" });
-                          }}
-                          className={cn(
-                            "w-full p-3 rounded-xl border text-left transition-all",
-                            !useOwnApiKey
-                              ? "border-white/30 bg-white/10"
-                              : "border-border bg-card/50 hover:bg-card/80",
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={cn(
-                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
-                                !useOwnApiKey
-                                  ? "border-white"
-                                  : "border-muted-foreground",
-                              )}
-                            >
-                              {!useOwnApiKey && (
-                                <div className="size-2 rounded-full bg-white" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium">
-                                  Use Built-in Backend
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded">
-                                  FREE
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                Uses the app's official backend with shared TMDB
-                                and OMDb key pools.
-                              </p>
-                            </div>
-                          </div>
-                        </button>
+                        {/* API Keys info */}
+                        <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                          <p className="text-xs text-blue-300 leading-relaxed">
+                            IMDb ratings now use <strong>imdbapi.dev</strong> for free — no key needed.
+                            Optionally set your own keys below for dedicated rate limits.
+                          </p>
+                        </div>
 
-                        {/* Option: Use Your Own */}
-                        <button
-                          type="button"
-                          onClick={() => setUseOwnApiKey(true)}
-                          className={cn(
-                            "w-full p-3 rounded-xl border text-left transition-all",
-                            useOwnApiKey
-                              ? "border-white/30 bg-white/10"
-                              : "border-border bg-card/50 hover:bg-card/80",
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={cn(
-                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
-                                useOwnApiKey
-                                  ? "border-white"
-                                  : "border-muted-foreground",
-                              )}
-                            >
-                              {useOwnApiKey && (
-                                <div className="size-2 rounded-full bg-white" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium">
-                                  Use Your Own API Keys
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/20 text-blue-400 rounded">
-                                  RECOMMENDED
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                Provide your own TMDB and OMDb keys for direct
-                                access with no shared rate limits.
-                              </p>
-                            </div>
-                          </div>
-                        </button>
-
-                        {/* Custom API Key Inputs - Only shown when "Use Your Own" is selected */}
-                        {useOwnApiKey && (
+                        {/* Custom API Key Inputs */}
+                        <div className="space-y-4">
                           <m.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
@@ -1633,13 +1786,13 @@ export function SettingsModal({
                               </p>
                             </div>
                           </m.div>
-                        )}
+                        </div>
                       </div>
                     </m.div>
                   )}
 
-                  {/* ===== Dev Panel (only shown in dev mode) ===== */}
-                  {import.meta.env.DEV && activeSection === "dev" && (
+                  {/* ===== Hidden section when dev panel selected ===== */}
+                  {activeSection === "dev" && import.meta.env.DEV && (
                     <m.div
                       key="dev"
                       initial={{ opacity: 0, y: 10 }}
@@ -1647,78 +1800,6 @@ export function SettingsModal({
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground mb-1">
-                            Dev Panel
-                          </h3>
-                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
-                            DEV ONLY
-                          </span>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Override the backend URL for local development. Auth,
-                          TMDB proxy, and WebSocket URLs are derived from this.
-                        </p>
-                      </div>
-
-                      {/* Backend URL */}
-                      <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-yellow-500/20">
-                            <Code className="size-5 text-yellow-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Backend URL
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Points to SlasshyVault-Backend/server.js
-                            </p>
-                          </div>
-                        </div>
-                        <Input
-                          value={config.dev_backend_url || ""}
-                          onChange={(e) =>
-                            setConfig({
-                              ...config,
-                              dev_backend_url: e.target.value,
-                            })
-                          }
-                          placeholder="https://slasshyvault.onrender.com"
-                          className="font-mono text-xs"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Default: https://slasshyvault.onrender.com · Local: http://localhost:3001
-                        </p>
-                      </div>
-
-                      {/* Derived URLs hint */}
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          Derived endpoints:
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/auth/...
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/api/tmdb
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {(config.dev_backend_url || "https://slasshyvault.onrender.com")
-                            .replace("https://", "wss://")
-                            .replace("http://", "ws://")}
-                          /ws/watchtogether
-                        </p>
-                      </div>
-
-                      {/* Reset hint */}
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-xs text-muted-foreground">
-                          Leave empty and save to use production defaults.
-                        </p>
-                      </div>
-
                       {/* Test ZIP notification flow */}
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-2">
@@ -1904,6 +1985,120 @@ export function SettingsModal({
                     </m.div>
                   )}
 
+                  {/* ===== Watch Together Relay ===== */}
+                  {activeSection === "relay" && (
+                    <m.div
+                      key="relay"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Watch Together
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Configure your relay server for synchronized playback with friends.
+                        </p>
+                      </div>
+
+                      {/* What is a relay */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Watch Together uses a Cloudflare Worker as a WebSocket relay to sync
+                          playback between participants. You can deploy your own for free,
+                          or enter an existing relay URL.
+                        </p>
+                      </div>
+
+                      {/* Deploy or Manual Input */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
+                        {/* Deploy section */}
+                        <div className="space-y-3">
+                          <Label className="text-sm font-medium">Deploy to Cloudflare</Label>
+                          <p className="text-xs text-muted-foreground">
+                            One-click deploy a relay Worker to your Cloudflare account.
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            <Input
+                              placeholder="Cloudflare API Token (Workers:Edit permission)"
+                              value={config.together_cf_token || ""}
+                              onChange={(e) => setConfig({ ...config, together_cf_token: e.target.value })}
+                              type="password"
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={async () => {
+                                  if (!config.together_cf_token) return;
+                                  try {
+                                    const { listAccounts } = await import('@/services/cf-deploy');
+                                    const accounts = await listAccounts(config.together_cf_token);
+                                    if (accounts.length === 0) {
+                                      toast({ title: "No accounts found", variant: "destructive" });
+                                      return;
+                                    }
+                                    // Deploy to first account
+                                    const { deployRelay } = await import('@/services/cf-deploy');
+                                    const result = await deployRelay(config.together_cf_token, accounts[0].id);
+                                    setConfig({
+                                      ...config,
+                                      together_relay_url: result.url,
+                                      together_cf_account_id: accounts[0].id,
+                                    });
+                                    toast({ title: "Relay deployed!", description: result.url });
+                                  } catch (e) {
+                                    toast({ title: "Deploy failed", description: String(e), variant: "destructive" });
+                                  }
+                                }}
+                                disabled={!config.together_cf_token}
+                              >
+                                <Zap className="size-4 mr-1" />
+                                Deploy Relay
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={async () => {
+                                  if (!config.together_cf_token || !config.together_cf_account_id) return;
+                                  try {
+                                    const { deleteRelay } = await import('@/services/cf-deploy');
+                                    await deleteRelay(config.together_cf_token, config.together_cf_account_id);
+                                    setConfig({ ...config, together_relay_url: "", together_cf_account_id: "" });
+                                    toast({ title: "Relay stopped" });
+                                  } catch (e) {
+                                    toast({ title: "Failed to stop", description: String(e), variant: "destructive" });
+                                  }
+                                }}
+                                disabled={!config.together_cf_token || !config.together_cf_account_id}
+                              >
+                                Stop Relay
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="border-t border-border pt-4">
+                          <Label className="text-sm font-medium">Or enter existing relay URL</Label>
+                          <div className="flex gap-2 mt-2">
+                            <Input
+                              placeholder="wss://your-relay.workers.dev"
+                              value={config.together_relay_url || ""}
+                              onChange={(e) => setConfig({ ...config, together_relay_url: e.target.value })}
+                              className="font-mono text-xs"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Cloudflare Workers free tier: 100k req/day. Enough for many Watch Together sessions.
+                          </p>
+                        </div>
+                      </div>
+                    </m.div>
+                  )}
+
                   {/* ===== Factory Reset (Danger Zone) ===== */}
                   {activeSection === "danger" && (
                     <m.div
@@ -1982,9 +2177,152 @@ export function SettingsModal({
                           </div>
                         )}
                       </div>
+
+                      {/* Delete All Media Files */}
+                      <div className="p-4 rounded-xl border border-destructive/30 bg-destructive/5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-destructive/20">
+                            <Trash2 className="size-5 text-destructive" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium text-destructive">
+                              Delete All Media Files
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Remove all media from your library and cloud
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          This will permanently delete all SlasshyVault-managed
+                          files from Google Drive and remove all media entries
+                          (local and cloud) from your library. Watch history,
+                          settings, and reminders will be preserved. This action
+                          cannot be undone.
+                        </p>
+
+                        {deleteAllStep === 0 && (
+                          <Button
+                            variant="destructive"
+                            onClick={() => setDeleteAllStep(1)}
+                            className="w-full"
+                          >
+                            <Trash2 className="mr-2 size-4" />
+                            Delete All Media Files
+                          </Button>
+                        )}
+
+                        {deleteAllStep === 1 && (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-bold text-destructive text-center">
+                              ⚠️ WARNING: PERMANENT DELETION
+                            </p>
+                            <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                              <li>
+                                All cloud files will be <strong>permanently deleted</strong> from Google Drive — they will <strong>NOT</strong> go to Trash
+                              </li>
+                              <li>
+                                All media entries (local + cloud) will be removed from your library
+                              </li>
+                              <li>
+                                Watch history, settings, and reminders will be preserved
+                              </li>
+                              <li>
+                                This action is <strong>irreversible</strong>
+                              </li>
+                            </ul>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => setDeleteAllStep(0)}
+                                className="flex-1"
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={() => setDeleteAllStep(2)}
+                                className="flex-1"
+                              >
+                                I Understand, Continue
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {deleteAllStep === 2 && (
+                          <div className="space-y-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                            <p className="text-sm font-bold text-destructive text-center">
+                              FINAL CONFIRMATION
+                            </p>
+                            <p className="text-sm text-muted-foreground text-center">
+                              Type <strong>DELETE</strong> below to permanently erase all media files from Google Drive and your library.
+                            </p>
+                            <Input
+                              placeholder='Type "DELETE" to confirm'
+                              value={deleteAllConfirmText}
+                              onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                              className="text-center font-mono"
+                              autoFocus
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setDeleteAllStep(0);
+                                  setDeleteAllConfirmText("");
+                                }}
+                                className="flex-1"
+                                disabled={deletingAll}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={handleDeleteAllMedia}
+                                className="flex-1"
+                                disabled={deletingAll || deleteAllConfirmText !== "DELETE"}
+                              >
+                                {deletingAll
+                                  ? "Deleting..."
+                                  : "Permanently Delete Everything"}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Selective Delete */}
+                      <div className="p-4 rounded-xl border border-orange-500/30 bg-orange-500/5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-orange-500/20">
+                            <FolderOpen className="size-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <Label className="text-base font-medium text-orange-400">
+                              Selective Delete
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                              Browse and choose specific files to delete
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Browse your cloud folders, select individual files or
+                          entire folders to permanently delete from Google Drive.
+                          Files will NOT go to Trash.
+                        </p>
+                        <Button
+                          variant="outline"
+                          onClick={() => setShowSelectiveDelete(true)}
+                          className="w-full border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                        >
+                          <FolderOpen className="mr-2 size-4" />
+                          Browse & Select Files to Delete
+                        </Button>
+                      </div>
                     </m.div>
                   )}
-
 
                 </AnimatePresence>
               </div>
@@ -2014,7 +2352,17 @@ export function SettingsModal({
           </div>
         </DialogContent>
         <ZipGuideModal open={showZipGuide} onOpenChange={setShowZipGuide} />
+        <SelectiveDeleteModal open={showSelectiveDelete} onOpenChange={setShowSelectiveDelete} />
       </LazyMotion>
     </Dialog>
+
+    <BetaConfirmDialog
+      open={showBetaConfirm}
+      onOpenChange={setShowBetaConfirm}
+      onConfirm={() => {
+        onBetaToggle?.(true);
+      }}
+    />
+    </>
   );
 }

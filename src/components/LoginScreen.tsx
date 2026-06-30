@@ -5,9 +5,10 @@
  * Data is stored in user's own Google Drive for privacy.
  */
 
-import { useState } from 'react'
-import { Loader2, Film, Users, Shield, Zap, Minus, X } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2, Film, Users, Shield, Zap, Minus, X, Server } from 'lucide-react'
 import { appWindow } from '@tauri-apps/api/window'
+import { getConfig, saveConfig } from '@/services/api'
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
 
 interface LoginScreenProps {
@@ -17,6 +18,24 @@ interface LoginScreenProps {
 
 export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
   const [isHovered, setIsHovered] = useState(false)
+  const [showBackendInput, setShowBackendInput] = useState(false)
+  const [backendUrl, setBackendUrl] = useState('')
+
+  useEffect(() => {
+    getConfig().then(c => {
+      if (c.dev_backend_url) setBackendUrl(c.dev_backend_url)
+    }).catch(() => {})
+  }, [])
+
+  const saveBackendUrl = async () => {
+    const trimmed = backendUrl.trim().replace(/\/+$/, '')
+    if (trimmed && !trimmed.startsWith('http')) return
+    try {
+      const cfg = await getConfig()
+      await saveConfig({ ...cfg, dev_backend_url: trimmed || undefined })
+      setShowBackendInput(false)
+    } catch {}
+  }
 
   return (
     <div className="fixed inset-0 bg-[#0a0a0a] flex flex-col">
@@ -152,15 +171,42 @@ export function LoginScreen({ onLogin, isLoading = false }: LoginScreenProps) {
           {/* Privacy Notice */}
           <p className="text-neutral-500 text-xs text-center mt-6 leading-relaxed">
             By signing in, you agree to our{' '}
-            <a href="https://slasshyvault.app/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
+            <a href="https://slasshyoverhere.github.io/SlasshyVault/legal/terms" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Terms of Service</a>
             {' '}and{' '}
-            <a href="https://slasshyvault.app/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
+            <a href="https://slasshyoverhere.github.io/SlasshyVault/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-white cursor-pointer underline underline-offset-2">Privacy Policy</a>.
             <br />
             Your data is stored securely in your own Google Drive.
           </p>
 
+          {/* Self-hosted backend option */}
+          <div className="mt-4 text-center">
+            {showBackendInput ? (
+              <div className="flex flex-col gap-2 p-3 rounded-lg bg-neutral-800/50 border border-neutral-700/50">
+                <div className="flex items-center gap-2">
+                  <Server className="size-3.5 text-neutral-400 flex-shrink-0" />
+                  <input
+                    type="text"
+                    value={backendUrl}
+                    onChange={e => setBackendUrl(e.target.value)}
+                    placeholder="https://your-backend.com"
+                    className="flex-1 bg-transparent border border-neutral-700 rounded px-2 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-500"
+                    onKeyDown={e => e.key === 'Enter' && saveBackendUrl()}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={saveBackendUrl} className="flex-1 text-xs py-1 rounded bg-neutral-700 text-neutral-200 hover:bg-neutral-600 transition-colors">Save</button>
+                  <button onClick={() => { setShowBackendInput(false); setBackendUrl('') }} className="text-xs py-1 px-3 rounded text-neutral-500 hover:text-neutral-300 transition-colors">Reset</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => setShowBackendInput(true)} className="text-neutral-400 hover:text-white text-xs font-medium transition-colors underline underline-offset-2 decoration-neutral-600 hover:decoration-neutral-400">
+                Self-hosted backend?
+              </button>
+            )}
+          </div>
+
           {/* Divider */}
-          <div className="flex items-center gap-4 mt-8">
+          <div className="flex items-center gap-4 mt-6">
             <div className="flex-1 h-px bg-neutral-800" />
             <span className="text-neutral-600 text-xs">Privacy-First Design</span>
             <div className="flex-1 h-px bg-neutral-800" />

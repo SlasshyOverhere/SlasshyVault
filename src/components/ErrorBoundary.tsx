@@ -26,25 +26,41 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center h-screen w-screen bg-gray-950 text-white font-sans p-5 text-center">
-          <div className="w-[72px] h-[72px] rounded-full bg-white/10 flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(255,255,255,0.1)]">
-            <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="#fff" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        <div className="flex flex-col items-center justify-center h-screen w-screen bg-[#0a0a0a] text-white font-sans p-5 text-center">
+          {/* Minimal icon */}
+          <div className="mb-8 opacity-30">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01" />
             </svg>
           </div>
-          <h1 className="text-[22px] font-semibold mb-3">Something went wrong</h1>
-          <p className="text-white/50 text-sm leading-relaxed mb-6 max-w-[400px]">
-            An unexpected error occurred. Please try reloading the app.
+
+          {/* Error message — the actual error, not generic */}
+          <p className="text-sm text-white/40 font-mono mb-2 max-w-lg break-all leading-relaxed">
+            {this.state.error?.message || 'Unknown error'}
           </p>
+
+          {/* Stack trace — subtle, collapsed */}
+          {this.state.error?.stack && (
+            <details className="mb-10 max-w-lg">
+              <summary className="text-[11px] text-white/20 cursor-pointer hover:text-white/40 transition-colors">
+                stack trace
+              </summary>
+              <p className="text-[11px] text-white/15 font-mono mt-2 text-left whitespace-pre-wrap break-all leading-relaxed">
+                {this.state.error.stack.split('\n').slice(0, 6).join('\n')}
+              </p>
+            </details>
+          )}
+
+          {/* Reload button — ghost minimal */}
           <button
             type="button"
             onClick={() => {
               this.setState({ hasError: false, error: null })
               window.location.reload()
             }}
-            className="px-6 py-3 rounded-xl border-none bg-white text-black text-sm font-semibold cursor-pointer shadow-[0_8px_32px_rgba(255,255,255,0.15)]"
+            className="px-5 py-2 rounded-lg border border-white/10 text-white/30 text-xs tracking-widest uppercase hover:border-white/30 hover:text-white/60 transition-all duration-300"
           >
-            Reload App
+            Reload
           </button>
         </div>
       )

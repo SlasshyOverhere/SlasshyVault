@@ -84,6 +84,7 @@ pub struct MediaItem {
     // Cloud storage fields
     pub is_cloud: Option<bool>,
     pub cloud_file_id: Option<String>,
+    pub cloud_folder_id: Option<String>,
     pub archive_format: Option<String>,
     pub parent_zip_id: Option<String>,
     pub zip_entry_path: Option<String>,
@@ -432,6 +433,12 @@ pub struct SyncIssue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub items: Vec<MediaItem>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncValidationReport {
     pub ghost_entries: Vec<SyncIssue>,
     pub missing_files: Vec<SyncIssue>,
@@ -444,8 +451,11 @@ pub struct SyncValidationReport {
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // WAL mode: concurrent reads + writes without blocking each other.
+        // Critical for background enrichment writing while UI reads library.
+        let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()));
+        conn.execute("PRAGMA synchronous = NORMAL", [])?;
         // Enable foreign key enforcement so ON DELETE CASCADE works.
-        // SQLite has foreign_keys OFF by default per connection.
         conn.execute("PRAGMA foreign_keys = ON", [])?;
         let db = Database { conn };
         db.init()?;
@@ -1089,6 +1099,21 @@ impl Database {
               )",
             [],
         )?;
+        // Indexes for streaming_history and remote_playback_progress
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_streaming_history_last_watched ON streaming_history(last_watched DESC)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_remote_playback_last_watched ON remote_playback_progress(last_watched DESC)",
+            [],
+        )?;
+
+        // One-time reconciliation of legacy watch history events (moved from get_watch_history_events)
+        if let Err(e) = self.reconcile_legacy_watch_history_events() {
+            eprintln!("[DB] Warning: Failed to reconcile legacy watch history events: {}", e);
+        }
+
         Ok(())
     }
 
@@ -1098,7 +1123,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
@@ -1140,7 +1165,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ?",
@@ -1194,7 +1219,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type = ? AND ddl_source_id IS NOT NULL",
@@ -1230,7 +1255,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE media_type IN ('movie', 'tvshow')"
@@ -1261,19 +1286,117 @@ impl Database {
             .collect()
     }
 
+    pub fn search_media_by_cast(&self, cast_name: &str) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, ddl_source_id
+             FROM media WHERE cast_names LIKE '%' || ? || '%' AND media_type IN ('movie', 'tvshow')
+             ORDER BY last_watched DESC",
+        )?;
+
+        let items = stmt.query_map(params![cast_name], Self::map_media_item)?;
+
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
     pub fn get_episodes(&self, series_id: i64) -> Result<Vec<MediaItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE parent_id = ? ORDER BY season_number, episode_number",
         )?;
 
         let items = stmt.query_map(params![series_id], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
+    pub fn get_top_space_consumers(&self, limit: i32) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes, ddl_source_id
+             FROM media WHERE file_size_bytes IS NOT NULL AND media_type IN ('movie', 'tvshow')
+             ORDER BY file_size_bytes DESC LIMIT ?",
+        )?;
+        let items = stmt.query_map(params![limit], Self::map_media_item)?;
+        items
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(Ok)
+            .collect()
+    }
+
+    pub fn get_continue_watching_items(&self, limit: i32) -> Result<Vec<MediaItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                m.id,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.title ELSE m.title END as title,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.year ELSE m.year END as year,
+                m.overview,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.cast_names ELSE m.cast_names END as cast_names,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.director ELSE m.director END as director,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.poster_path ELSE m.poster_path END as poster_path,
+                m.file_path,
+                m.media_type,
+                m.duration_seconds,
+                m.resume_position_seconds,
+                m.last_watched,
+                m.season_number,
+                m.episode_number,
+                m.parent_id,
+                CASE WHEN m.media_type = 'tvepisode' THEN p.tmdb_id ELSE m.tmdb_id END as tmdb_id,
+                m.episode_title,
+                m.still_path,
+                m.archive_format,
+                m.is_cloud,
+                m.cloud_file_id,
+                m.parent_zip_id,
+                m.zip_entry_path,
+                m.zip_local_header_offset,
+                m.zip_data_start_offset,
+                m.zip_compressed_size,
+                m.zip_uncompressed_size,
+                m.zip_crc32,
+                m.zip_compression_method,
+                m.ddl_source_id
+             FROM media m
+             LEFT JOIN media p ON m.parent_id = p.id
+             WHERE COALESCE(m.resume_position_seconds, 0) > 0
+               AND m.last_watched IS NOT NULL
+               AND m.media_type IN ('movie', 'tvepisode')
+               AND (m.duration_seconds IS NULL
+                    OR m.duration_seconds <= 0
+                    OR (m.resume_position_seconds / m.duration_seconds) < 0.93)
+             ORDER BY m.last_watched DESC
+             LIMIT ?"
+        )?;
+
+        let items = stmt.query_map(params![limit], Self::map_media_item)?;
         items
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>()
@@ -1333,8 +1456,6 @@ impl Database {
     }
 
     pub fn get_watch_history_events(&self, limit: i32) -> Result<Vec<WatchHistoryEvent>> {
-        self.reconcile_legacy_watch_history_events()?;
-
         let mut stmt = self.conn.prepare(
             "SELECT
                 event_id,
@@ -1454,7 +1575,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes, ddl_source_id
              FROM media WHERE id = ?",
@@ -1778,51 +1899,21 @@ impl Database {
     }
 
     pub fn upsert_watch_history_events(&self, events: &[WatchHistoryEvent]) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        self.conn.execute("BEGIN", [])?;
+
         let mut merged = 0usize;
-
-        for event in events {
-            let existing_updated_at: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT updated_at FROM watch_history_events WHERE event_id = ?",
-                    params![event.event_id],
-                    |row| row.get(0),
-                )
-                .ok();
-
-            if existing_updated_at
-                .as_deref()
-                .map(|value| value >= event.updated_at.as_str())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
-            self.conn.execute(
+        {
+            let mut stmt = self.conn.prepare(
                 "INSERT INTO watch_history_events (
-                    event_id,
-                    media_id,
-                    parent_media_id,
-                    title,
-                    parent_title,
-                    media_type,
-                    year,
-                    overview,
-                    poster_path,
-                    still_path,
-                    tmdb_id,
-                    parent_tmdb_id,
-                    episode_title,
-                    season_number,
-                    episode_number,
-                    is_cloud,
-                    progress_percent,
-                    resume_position_seconds,
-                    duration_seconds,
-                    completed,
-                    started_at,
-                    ended_at,
-                    updated_at
+                    event_id, media_id, parent_media_id, title, parent_title,
+                    media_type, year, overview, poster_path, still_path,
+                    tmdb_id, parent_tmdb_id, episode_title, season_number, episode_number,
+                    is_cloud, progress_percent, resume_position_seconds, duration_seconds,
+                    completed, started_at, ended_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id) DO UPDATE SET
                     media_id = excluded.media_id,
@@ -1846,8 +1937,12 @@ impl Database {
                     completed = excluded.completed,
                     started_at = excluded.started_at,
                     ended_at = excluded.ended_at,
-                    updated_at = excluded.updated_at",
-                params![
+                    updated_at = excluded.updated_at
+                WHERE excluded.updated_at > watch_history_events.updated_at",
+            )?;
+
+            for event in events {
+                let rows = stmt.execute(params![
                     event.event_id,
                     event.media_id,
                     event.parent_media_id,
@@ -1871,11 +1966,12 @@ impl Database {
                     event.started_at,
                     event.ended_at,
                     event.updated_at,
-                ],
-            )?;
-            merged += 1;
+                ])?;
+                merged += rows;
+            }
         }
 
+        self.conn.execute("COMMIT", [])?;
         Ok(merged)
     }
 
@@ -2067,6 +2163,17 @@ impl Database {
                 media_id
             ],
         )?;
+        Ok(())
+    }
+
+    // Batch transaction helpers for bulk enrichment
+    pub fn begin_batch(&self) -> Result<()> {
+        self.conn.execute("BEGIN", [])?;
+        Ok(())
+    }
+
+    pub fn commit_batch(&self) -> Result<()> {
+        self.conn.execute("COMMIT", [])?;
         Ok(())
     }
 
@@ -2469,7 +2576,7 @@ impl Database {
         cast_names: Option<&str>,
         director: Option<&str>,
         poster_path: Option<&str>,
-        file_name: &str,
+        _file_name: &str,
         cloud_file_id: &str,
         cloud_folder_id: &str,
         duration: f64,
@@ -2528,7 +2635,7 @@ impl Database {
     pub fn insert_cloud_episode(
         &self,
         title: &str,
-        file_name: &str,
+        _file_name: &str,
         parent_id: i64,
         season: i32,
         episode: i32,
@@ -2846,7 +2953,7 @@ impl Database {
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
                     archive_format,
-                    is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, ddl_source_id
              FROM media WHERE ddl_source_id = ?
@@ -3708,7 +3815,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    archive_format, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes
              FROM media
@@ -3733,7 +3840,7 @@ impl Database {
             "SELECT id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
                     duration_seconds, resume_position_seconds, last_watched,
                     season_number, episode_number, parent_id, tmdb_id, episode_title, still_path,
-                    archive_format, is_cloud, cloud_file_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    archive_format, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
                     zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
                     zip_compression_method, file_size_bytes
              FROM media
@@ -4102,18 +4209,18 @@ impl Database {
         })
     }
 
-    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, parent_zip_id)
+    /// Get media info for deletion (file_path, is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, ddl_source_id)
     pub fn get_media_delete_info(
         &self,
         ids: &[i64],
-    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>, Option<String>)>> {
+    ) -> Result<Vec<(i64, Option<String>, bool, Option<String>, Option<String>, Option<String>, Option<String>)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, parent_zip_id, ddl_source_id FROM media WHERE id IN ({})",
+            "SELECT id, file_path, COALESCE(is_cloud, 0) as is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, ddl_source_id FROM media WHERE id IN ({})",
             placeholders.join(", ")
         );
 
@@ -4129,6 +4236,7 @@ impl Database {
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })?;
 
@@ -4201,6 +4309,101 @@ impl Database {
     /// Merge duplicate TV shows into a single entry.
     /// Groups by TMDB ID first, then by normalized title.
     /// Keeps the entry with the most complete metadata as the primary.
+    /// Find duplicate media entries: same tmdb_id or similar normalized titles.
+    /// Only checks movies and tvshows (not episodes).
+    pub fn find_duplicate_media(&self) -> Result<Vec<DuplicateGroup>> {
+        let select_cols = "id, title, year, overview, cast_names, director, poster_path, file_path, media_type,
+                    duration_seconds, resume_position_seconds, last_watched,
+                    season_number, episode_number, parent_id, tmdb_id, imdb_id, episode_title, still_path,
+                    archive_format,
+                    is_cloud, cloud_file_id, cloud_folder_id, parent_zip_id, zip_entry_path, zip_local_header_offset,
+                    zip_data_start_offset, zip_compressed_size, zip_uncompressed_size, zip_crc32,
+                    zip_compression_method, file_size_bytes, ddl_source_id";
+
+        let mut groups: Vec<DuplicateGroup> = Vec::new();
+
+        // 1) Exact tmdb_id duplicates (movies + tvshows, not episodes)
+        {
+            let sql = format!(
+                "SELECT {} FROM media WHERE media_type IN ('movie','tvshow') AND tmdb_id IS NOT NULL AND tmdb_id != '' ORDER BY tmdb_id, id",
+                select_cols
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let items: Vec<MediaItem> = stmt
+                .query_map([], Self::map_media_item)?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Group by tmdb_id
+            let mut by_tmdb: std::collections::HashMap<String, Vec<MediaItem>> = std::collections::HashMap::new();
+            for item in items {
+                if let Some(ref tid) = item.tmdb_id {
+                    by_tmdb.entry(tid.clone()).or_default().push(item);
+                }
+            }
+            for (tid, mut dupes) in by_tmdb {
+                if dupes.len() > 1 {
+                    dupes.sort_by(|a, b| a.id.cmp(&b.id));
+                    groups.push(DuplicateGroup {
+                        items: dupes,
+                        reason: format!("Same TMDB ID ({})", tid),
+                    });
+                }
+            }
+        }
+
+        // 2) Fuzzy title matches: normalized lowercase title for same media_type
+        {
+            let sql = format!(
+                "SELECT {} FROM media WHERE media_type IN ('movie','tvshow') ORDER BY media_type, id",
+                select_cols
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let items: Vec<MediaItem> = stmt
+                .query_map([], Self::map_media_item)?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Normalize: lowercase, strip non-alphanumeric
+            let normalize = |s: &str| -> String {
+                s.to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect()
+            };
+
+            // Group by (media_type, normalized_title)
+            let mut by_title: std::collections::HashMap<(String, String), Vec<MediaItem>> = std::collections::HashMap::new();
+            for item in items {
+                let key = (item.media_type.clone(), normalize(&item.title));
+                by_title.entry(key).or_default().push(item);
+            }
+            for ((_mt, _norm_title), dupes) in by_title {
+                if dupes.len() > 1 {
+                    // Avoid adding if all items already covered by tmdb_id groups
+                    let all_ids: Vec<i64> = dupes.iter().map(|d| d.id).collect();
+                    let already_covered = groups.iter().any(|g| {
+                        let group_ids: Vec<i64> = g.items.iter().map(|i| i.id).collect();
+                        all_ids.iter().all(|id| group_ids.contains(id))
+                    });
+                    if !already_covered {
+                        let sample_title = dupes[0].title.clone();
+                        let mut sorted = dupes;
+                        sorted.sort_by(|a, b| a.id.cmp(&b.id));
+                        groups.push(DuplicateGroup {
+                            items: sorted,
+                            reason: format!("Similar title (\"{}\")", sample_title),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort groups by count descending
+        groups.sort_by(|a, b| b.items.len().cmp(&a.items.len()));
+        Ok(groups)
+    }
+
     pub fn merge_duplicate_tvshows(&self) -> Result<i32> {
         println!("[MERGE] Looking for duplicate TV shows to merge...");
         let mut merged_count = 0;
@@ -4428,6 +4631,53 @@ impl Database {
         }
 
         Ok(merged)
+    }
+
+    /// Delete all media entries (local + cloud) and related data, preserving watch history and settings.
+    /// Returns (cloud_file_ids, image_cache_path) for the caller to handle file cleanup.
+    pub fn delete_all_media_entries(&self) -> Result<(Vec<String>, String)> {
+        // Collect cloud file IDs for GDrive deletion
+        let cloud_file_ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT cloud_file_id FROM media WHERE cloud_file_id IS NOT NULL AND cloud_file_id != ''"
+            )?;
+            let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            ids
+        };
+
+        // Delete related data first (foreign keys)
+        self.conn.execute("DELETE FROM cached_episode_metadata", [])?;
+        self.conn.execute("DELETE FROM zip_archives", [])?;
+        self.conn.execute("DELETE FROM ddl_sources", [])?;
+        self.conn.execute("DELETE FROM cloud_folders", [])?;
+        self.conn.execute("DELETE FROM cloud_index_failures", [])?;
+
+        // Delete all media entries
+        self.conn.execute("DELETE FROM media", [])?;
+
+        Ok((cloud_file_ids, get_image_cache_dir()))
+    }
+
+    /// Delete media entries by their Google Drive file IDs
+    pub fn delete_media_by_cloud_file_ids(&self, cloud_file_ids: &[String]) -> Result<usize> {
+        if cloud_file_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut deleted = 0usize;
+        for cloud_file_id in cloud_file_ids {
+            deleted += self.conn.execute(
+                "DELETE FROM media WHERE cloud_file_id = ?",
+                params![cloud_file_id],
+            )?;
+        }
+        // Also clean up orphaned cached_episode_metadata
+        self.conn.execute(
+            "DELETE FROM cached_episode_metadata WHERE NOT EXISTS (SELECT 1 FROM media WHERE media.id = cached_episode_metadata.media_id)",
+            [],
+        )?;
+        Ok(deleted)
     }
 
     /// Clear ALL app data - deletes every table and returns paths for file cleanup
@@ -5042,6 +5292,7 @@ impl Database {
             archive_format: Self::get_optional_named(row, "archive_format"),
             is_cloud,
             cloud_file_id: Self::get_optional_named(row, "cloud_file_id"),
+            cloud_folder_id: Self::get_optional_named(row, "cloud_folder_id"),
             parent_zip_id: Self::get_optional_named(row, "parent_zip_id"),
             zip_entry_path: Self::get_optional_named(row, "zip_entry_path"),
             zip_local_header_offset: Self::get_optional_named(row, "zip_local_header_offset"),

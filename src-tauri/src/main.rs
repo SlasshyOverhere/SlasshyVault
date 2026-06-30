@@ -11,6 +11,7 @@ mod gdrive;
 mod log_buffer;
 mod media_manager;
 mod mpv_ipc;
+mod cf_relay;
 mod tmdb;
 mod transcoder;
 mod watch_together;
@@ -20,10 +21,10 @@ mod zip_parser;
 mod zip_stream_proxy;
 mod remote_stream_proxy;
 mod remote_source;
-mod sentry;
+
 mod stream_cache;
 
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 use chrono::{
     DateTime, Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
@@ -33,7 +34,7 @@ use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -380,6 +381,39 @@ async fn get_library_filtered(
     Ok(enrich_media_items_archive_assessment(items))
 }
 
+// Combined search across all libraries (local + cloud, movies + TV) in one IPC call
+#[tauri::command]
+async fn search_all_libraries(
+    state: State<'_, AppState>,
+    search: String,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut results = Vec::new();
+    for (db_type, is_cloud) in [("movie", Some(false)), ("tvshow", Some(false)), ("movie", Some(true)), ("tvshow", Some(true))] {
+        results.extend(
+            db.get_library_filtered(db_type, Some(search.as_str()), is_cloud)
+                .map_err(|e| e.to_string())?
+        );
+    }
+    // Deduplicate by id
+    results.sort_by_key(|item| item.id);
+    results.dedup_by_key(|item| item.id);
+    Ok(enrich_media_items_archive_assessment(results))
+}
+
+// Search library by cast member name
+#[tauri::command]
+async fn search_media_by_cast(
+    state: State<'_, AppState>,
+    cast_name: String,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let items = db
+        .search_media_by_cast(&cast_name)
+        .map_err(|e| e.to_string())?;
+    Ok(enrich_media_items_archive_assessment(items))
+}
+
 // Get DDL library items
 #[tauri::command]
 async fn get_ddl_media(
@@ -466,6 +500,16 @@ async fn get_library_stats(
 ) -> Result<database::LibraryStats, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_library_stats(is_cloud).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_top_space_consumers(
+    state: State<'_, AppState>,
+    limit: Option<i32>,
+) -> Result<Vec<database::MediaItem>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_top_space_consumers(limit.unwrap_or(10))
+        .map_err(|e| e.to_string())
 }
 
 // Remove a single item from watch history
@@ -3029,7 +3073,7 @@ async fn delete_media_files(
     let mut db_media_ids_to_delete: Vec<i64> = Vec::new();
 
     // Separate cloud and local files
-    for (id, file_path, is_cloud, cloud_file_id, parent_zip_id, ddl_source_id) in media_info {
+    for (id, file_path, is_cloud, cloud_file_id, _cloud_folder_id, parent_zip_id, ddl_source_id) in media_info {
         if is_cloud {
             if ddl_source_id.is_some() {
                 // DDL item - no cloud file to delete on Google Drive, just remove from DB
@@ -3129,8 +3173,12 @@ async fn delete_media_files(
             "[DELETE] Deleting {} cloud files from Google Drive",
             cloud_file_ids_to_delete.len()
         );
-        for cloud_file_id in cloud_file_ids_to_delete {
-            match state.gdrive_client.delete_file(&cloud_file_id).await {
+        let delete_futures: Vec<_> = cloud_file_ids_to_delete.iter().map(|cloud_file_id| {
+            state.gdrive_client.delete_file(cloud_file_id)
+        }).collect();
+        let results = futures_util::future::join_all(delete_futures).await;
+        for (cloud_file_id, result) in cloud_file_ids_to_delete.iter().zip(results) {
+            match result {
                 Ok(_) => {
                     println!(
                         "[DELETE] Successfully deleted cloud file: {}",
@@ -3251,6 +3299,176 @@ async fn delete_media_files(
         };
 
     println!("[DELETE] Complete: {}", message);
+
+    Ok(DeleteResponse {
+        success: failed_count == 0,
+        deleted_count,
+        failed_count,
+        message,
+    })
+}
+
+// Delete ALL media files — cloud files from Drive + all media entries from DB
+// Preserves watch history, streaming history, settings, reminders, watchlist
+#[tauri::command]
+async fn delete_all_media_files(
+    state: State<'_, AppState>,
+    window: Window,
+    confirmed: bool,
+) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
+
+    println!("[DELETE-ALL] Starting delete all media files");
+
+    // Get cloud file IDs and clear DB entries
+    let (cloud_file_ids, image_cache_path) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.delete_all_media_entries().map_err(|e| e.to_string())?
+    };
+
+    let total_cloud = cloud_file_ids.len();
+    let mut deleted_count = 0usize;
+    let mut failed_count = 0usize;
+
+    // Delete cloud files from Google Drive
+    if !cloud_file_ids.is_empty() {
+        println!(
+            "[DELETE-ALL] Deleting {} cloud files from Google Drive",
+            total_cloud
+        );
+        let delete_futures: Vec<_> = cloud_file_ids.iter().map(|cloud_file_id| {
+            state.gdrive_client.delete_file(cloud_file_id)
+        }).collect();
+        let results = futures_util::future::join_all(delete_futures).await;
+        for (cloud_file_id, result) in cloud_file_ids.iter().zip(results) {
+            match result {
+                Ok(_) => {
+                    deleted_count += 1;
+                }
+                Err(e) => {
+                    let is_permission_error =
+                        e.contains("403") || e.contains("insufficientFilePermissions");
+                    if is_permission_error {
+                        println!(
+                            "[DELETE-ALL] Permission denied for {} (removing from DB anyway)",
+                            cloud_file_id
+                        );
+                        deleted_count += 1;
+                    } else {
+                        println!("[DELETE-ALL] Failed to delete {}: {}", cloud_file_id, e);
+                        failed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up image cache directory
+    let cache_path = std::path::Path::new(&image_cache_path);
+    if cache_path.exists() {
+        match std::fs::remove_dir_all(cache_path) {
+            Ok(_) => {
+                let _ = std::fs::create_dir_all(cache_path);
+                println!("[DELETE-ALL] Cleared image cache: {}", image_cache_path);
+            }
+            Err(e) => println!("[DELETE-ALL] Failed to clear image cache: {}", e),
+        }
+    }
+
+    // Notify frontend
+    window.emit("library-updated", ()).ok();
+
+    let message = if failed_count == 0 {
+        format!(
+            "Deleted all media files. {} cloud file(s) removed from Drive.",
+            deleted_count
+        )
+    } else {
+        format!(
+            "Deleted all media. {} cloud file(s) removed, {} failed.",
+            deleted_count, failed_count
+        )
+    };
+
+    println!("[DELETE-ALL] Complete: {}", message);
+
+    Ok(DeleteResponse {
+        success: failed_count == 0,
+        deleted_count,
+        failed_count,
+        message,
+    })
+}
+
+// Delete cloud files by Google Drive file IDs (for selective delete)
+// Deletes from Drive + removes matching DB entries. Works without needing media IDs.
+#[tauri::command]
+async fn delete_cloud_files_by_drive_ids(
+    state: State<'_, AppState>,
+    window: Window,
+    drive_file_ids: Vec<String>,
+    confirmed: bool,
+) -> Result<DeleteResponse, String> {
+    if !confirmed {
+        return Err("Operation cancelled by user".to_string());
+    }
+    if drive_file_ids.is_empty() {
+        return Err("No files selected".to_string());
+    }
+
+    println!("[DELETE-SELECTIVE] Starting deletion of {} Drive files", drive_file_ids.len());
+
+    let mut deleted_count = 0usize;
+    let mut failed_count = 0usize;
+
+    // Delete each file from Google Drive
+    let delete_futures: Vec<_> = drive_file_ids.iter().map(|drive_file_id| {
+        state.gdrive_client.delete_file(drive_file_id)
+    }).collect();
+    let results = futures_util::future::join_all(delete_futures).await;
+    for (drive_file_id, result) in drive_file_ids.iter().zip(results) {
+        match result {
+            Ok(_) => {
+                deleted_count += 1;
+            }
+            Err(e) => {
+                let is_permission_error =
+                    e.contains("403") || e.contains("insufficientFilePermissions");
+                if is_permission_error {
+                    println!("[DELETE-SELECTIVE] Permission denied for {} (removing anyway)", drive_file_id);
+                    deleted_count += 1;
+                } else {
+                    println!("[DELETE-SELECTIVE] Failed to delete {}: {}", drive_file_id, e);
+                    failed_count += 1;
+                }
+            }
+        }
+    }
+
+    // Remove matching entries from DB (non-fatal — Drive deletion already succeeded)
+    match state.db.lock() {
+        Ok(db) => {
+            if let Err(e) = db.delete_media_by_cloud_file_ids(&drive_file_ids) {
+                println!("[DELETE-SELECTIVE] DB cleanup failed (files already deleted from Drive): {}", e);
+            }
+        }
+        Err(e) => {
+            println!("[DELETE-SELECTIVE] Could not acquire DB lock for cleanup (will be cleaned by next scan): {}", e);
+        }
+    }
+
+    // Notify frontend
+    window.emit("library-updated", ()).ok();
+
+    let message = if failed_count == 0 {
+        format!("Deleted {} file(s) from Google Drive and library", deleted_count)
+    } else {
+        format!("Deleted {} file(s), {} failed", deleted_count, failed_count)
+    };
+
+    println!("[DELETE-SELECTIVE] Complete: {}", message);
 
     Ok(DeleteResponse {
         success: failed_count == 0,
@@ -3476,7 +3694,7 @@ async fn delete_series(
             let mut cloud_file_ids: Vec<String> = Vec::new();
             let mut local_file_paths: Vec<String> = Vec::new();
 
-            for (_id, file_path, is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+            for (_id, file_path, is_cloud, cloud_file_id, _cloud_folder_id, _parent_zip_id, ddl_source_id) in
                 episode_info
             {
                 if is_cloud && ddl_source_id.is_none() {
@@ -3603,7 +3821,7 @@ async fn delete_series_cloud_folder(
                     .map_err(|e| e.to_string())?
             };
 
-            for (_id, _file_path, _is_cloud, cloud_file_id, _parent_zip_id, ddl_source_id) in
+            for (_id, _file_path, _is_cloud, cloud_file_id, _cloud_folder_id, _parent_zip_id, ddl_source_id) in
                 episode_info
             {
                 if let Some(cloud_id) = cloud_file_id {
@@ -3761,12 +3979,10 @@ async fn download_bundled_mpv(
         use std::process::Command;
         let mpv_dir_str = mpv_dir.to_string_lossy().to_string();
         let _ = Command::new("powershell")
+            .env("MPV_UNBLOCK_DIR", mpv_dir_str)
             .args([
                 "-Command",
-                &format!(
-                    "Get-ChildItem -Recurse -LiteralPath '{}' | Unblock-File -ErrorAction SilentlyContinue",
-                    mpv_dir_str.replace('\'', "''")
-                ),
+                "Get-ChildItem -Recurse -LiteralPath $env:MPV_UNBLOCK_DIR | Unblock-File -ErrorAction SilentlyContinue",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -3844,7 +4060,7 @@ async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String
 // Save configuration
 #[tauri::command]
 async fn save_config(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     state: State<'_, AppState>,
     new_config: config::Config,
     confirmed: bool,
@@ -3864,7 +4080,6 @@ async fn save_config(
         .map(|s| s.url.clone());
     *config = merged.clone();
     config::save_config(&merged).map_err(|e| e.to_string())?;
-    apply_autostart_for_notifications(&app_handle, new_config.notifications_enabled);
     Ok(ApiResponse {
         message: "Configuration saved.".to_string(),
     })
@@ -3897,6 +4112,12 @@ async fn merge_duplicate_shows(state: State<'_, AppState>) -> Result<ApiResponse
     Ok(ApiResponse {
         message: format!("Merged {} duplicate TV shows", merged_count),
     })
+}
+
+#[tauri::command]
+async fn find_duplicate_media(state: State<'_, AppState>) -> Result<Vec<database::DuplicateGroup>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.find_duplicate_media().map_err(|e| e.to_string())
 }
 
 // Get resume info for a media item
@@ -5943,7 +6164,7 @@ async fn fix_match(
     };
 
     let api_key = tmdb::get_tmdb_credential(&config.tmdb_api_key.clone().unwrap_or_default());
-    let omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
+    let _omdb_credential = get_omdb_credential(&config.omdb_api_key.clone().unwrap_or_default());
     let image_cache_dir = database::get_image_cache_dir();
 
     println!("[META] fix_match called for media_id={}, tmdb_id={}, imdb_id={:?}", media_id, tmdb_id, imdb_id);
@@ -6017,8 +6238,7 @@ async fn fix_match(
                         "",
                     );
                     let client = http_client::shared_client();
-                    let use_bearer = crate::is_access_token(&api_key_c)
-                        && !tmdb::is_backend_proxy_credential(&api_key_c);
+                    let use_bearer = crate::is_access_token(&api_key_c);
                     let req = if use_bearer {
                         client
                             .get(&ext_url)
@@ -6140,18 +6360,31 @@ fn ensure_zip_proxy_firewall_rule() {
     };
     let port = zip_stream_proxy::ZIP_PROXY_PORT;
 
+    // Base64 encode the command to avoid string injection issues entirely,
+    // and since the nested process runs as admin, it won't inherit process-level
+    // environment variables, so we must bake the arguments safely.
+    // Convert to UTF-16LE as required by PowerShell -EncodedCommand.
     let netsh_script = format!(
-        "& {{ netsh advfirewall firewall delete rule name=\"{rule}\"; netsh advfirewall firewall add rule name=\"{rule}\" dir=in action=allow protocol=TCP localport={port} program=\"{exe}\" remoteip=127.0.0.1,::1 enable=yes }}",
+        "& {{ netsh advfirewall firewall delete rule name='{rule}'; netsh advfirewall firewall add rule name='{rule}' dir=in action=allow protocol=TCP localport={port} program='{exe}' remoteip=127.0.0.1,::1 enable=yes }}",
         rule = rule_name,
         port = port,
-        exe = exe,
+        exe = exe.replace('\'', "''"), // Escape single quotes in path
     );
-    let ps = format!(
-        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"{}\")",
-        netsh_script.replace('"', "`\"")
+    let encoded_script = base64::encode(
+        netsh_script
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect::<Vec<u8>>(),
     );
 
-    match Command::new("powershell").args(["-Command", &ps]).spawn() {
+    let ps = format!(
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-EncodedCommand','{}')",
+        encoded_script
+    );
+
+    match Command::new("powershell")
+        .args(["-Command", &ps])
+        .spawn() {
         Ok(_) => println!("[ZIP PROXY] Firewall rule requested — accept the UAC prompt to allow MPV loopback connections"),
         Err(e) => println!("[ZIP PROXY] Could not launch PowerShell to set up firewall: {}", e),
     }
@@ -6181,6 +6414,7 @@ async fn play_with_mpv(
     resume: bool,
     audio_language: Option<String>,
     subtitle_language: Option<String>,
+    subtitle_file_path: Option<String>,
     duration_seconds_override: Option<f64>,
     file_size_bytes_override: Option<i64>,
 ) -> Result<ApiResponse, String> {
@@ -6208,6 +6442,7 @@ async fn play_with_mpv(
 
     let is_cloud = media.is_cloud.unwrap_or(false);
     let title = media.title.clone();
+    let episode_title = media.episode_title.clone();
     let season_number = media.season_number;
     let episode_number = media.episode_number;
     let media_type = media.media_type.clone();
@@ -6225,6 +6460,14 @@ async fn play_with_mpv(
         }
     });
     let subtitle_language = subtitle_language.and_then(|value| {
+        let normalized = value.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
+    let subtitle_file_path = subtitle_file_path.and_then(|value| {
         let normalized = value.trim().to_string();
         if normalized.is_empty() {
             None
@@ -6623,6 +6866,7 @@ async fn play_with_mpv(
         cache_settings.as_ref(),
         audio_language.as_deref(),
         subtitle_language.as_deref(),
+        subtitle_file_path.as_deref(),
         mpv_audio_probe_pipe.as_deref(),
         effective_file_size,
         effective_duration,
@@ -6714,6 +6958,7 @@ async fn play_with_mpv(
                 serde_json::json!({
                     "media_id": media_id,
                     "title": title,
+                    "episode_title": episode_title,
                     "season_number": season_number,
                     "episode_number": episode_number,
                     "media_type": media_type,
@@ -7104,16 +7349,6 @@ fn is_access_token(credential: &str) -> bool {
 /// - For API keys: adds ?api_key=XXX to URL
 /// - For access tokens: returns URL without api_key (auth goes in header)
 fn build_tmdb_api_url(path: &str, credential: &str, extra_params: &str) -> String {
-    if tmdb::is_backend_proxy_credential(credential) {
-        let base = tmdb::get_tmdb_proxy_base_url();
-        let normalized_path = path.trim_start_matches('/');
-        return if extra_params.is_empty() {
-            format!("{}/{}", base, normalized_path)
-        } else {
-            format!("{}/{}?{}", base, normalized_path, extra_params)
-        };
-    }
-
     let base = "https://api.themoviedb.org/3";
     if is_access_token(credential) {
         if extra_params.is_empty() {
@@ -7138,7 +7373,7 @@ fn http_get_with_retry_auth(
     max_retries: u32,
 ) -> Result<reqwest::blocking::Response, String> {
     let mut last_error = String::new();
-    let use_bearer = is_access_token(credential) && !tmdb::is_backend_proxy_credential(credential);
+    let use_bearer = is_access_token(credential);
 
     for attempt in 0..max_retries {
         if attempt > 0 {
@@ -7259,51 +7494,15 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
 // OMDb Helpers
 // ============================================
 
-const OMDB_PROXY_CREDENTIAL: &str = "__OMDB_BACKEND_PROXY__";
-const DEFAULT_OMDB_PROXY_BASE_URL: &str =
-    "https://slasshyvault.onrender.com/api/omdb";
-
-fn get_omdb_proxy_base_url() -> String {
-    // Check media_config.json for dev_backend_url override
-    let config_path = crate::database::get_app_data_dir().join("media_config.json");
-    if let Ok(contents) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
-                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
-                if !trimmed.is_empty() {
-                    return format!("{}/api/omdb", trimmed);
-                }
-            }
-        }
-    }
-
-    if let Ok(proxy_url) = std::env::var("OMDB_PROXY_URL") {
-        let trimmed = proxy_url.trim();
-        if !trimmed.is_empty() {
-            return trimmed.trim_end_matches('/').to_string();
-        }
-    }
-
-    DEFAULT_OMDB_PROXY_BASE_URL.to_string()
-}
-
-fn is_omdb_backend_proxy(credential: &str) -> bool {
-    credential == OMDB_PROXY_CREDENTIAL
-}
-
+/// Use user's OMDb API key if provided, otherwise use imdbapi.dev for ratings
 fn get_omdb_credential(user_key: &str) -> String {
-    let trimmed = user_key.trim();
-    if trimmed.is_empty() {
-        OMDB_PROXY_CREDENTIAL.to_string()
-    } else {
-        trimmed.to_string()
-    }
+    user_key.trim().to_string()
 }
 
 fn build_omdb_url(credential: &str, imdb_id: &str) -> String {
-    if is_omdb_backend_proxy(credential) {
-        let base = get_omdb_proxy_base_url();
-        format!("{}?i={}", base, imdb_id)
+    if credential.is_empty() {
+        // Fallback to imdbapi.dev when no OMDb key configured
+        format!("https://api.imdbapi.dev/titles/{}", imdb_id)
     } else {
         format!(
             "https://www.omdbapi.com/?i={}&apikey={}",
@@ -7355,8 +7554,7 @@ fn find_tmdb_id_by_imdb_id(
 
     let client = http_client::shared_client();
 
-    let use_bearer = crate::is_access_token(tmdb_credential)
-        && !tmdb::is_backend_proxy_credential(tmdb_credential);
+    let use_bearer = crate::is_access_token(tmdb_credential) && !tmdb_credential.is_empty();
 
     let req = if use_bearer {
         client
@@ -8010,8 +8208,7 @@ async fn get_episode_imdb_ratings(
                 #[derive(serde::Deserialize)]
                 struct ShowExternalIds { imdb_id: Option<String> }
                 let client = http_client::shared_client();
-                let use_bearer = crate::is_access_token(&tmdb_credential)
-                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let use_bearer = crate::is_access_token(&tmdb_credential);
                 let req = if use_bearer {
                     client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
                 } else {
@@ -8130,8 +8327,7 @@ async fn get_episode_imdb_ratings(
 
             let imdb_id: Option<String> = {
                 let client = http_client::shared_client();
-                let use_bearer = crate::is_access_token(&tmdb_credential)
-                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let use_bearer = crate::is_access_token(&tmdb_credential);
                 let req = if use_bearer {
                     client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
                 } else {
@@ -8247,8 +8443,7 @@ async fn get_imdb_details(
             struct ExternalIds { imdb_id: Option<String> }
 
             let client = http_client::shared_client();
-            let use_bearer = crate::is_access_token(&tmdb_credential)
-                && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+            let use_bearer = crate::is_access_token(&tmdb_credential);
             let req = if use_bearer {
                 client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
             } else {
@@ -8448,6 +8643,64 @@ async fn get_imdb_details(
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct SeverityBreakdown {
+    severity_level: String,
+    vote_count: i32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct ParentsGuideCategory {
+    category: String,
+    severity_breakdowns: Option<Vec<SeverityBreakdown>>,
+}
+
+#[tauri::command]
+async fn get_parents_guide(imdb_id: String) -> Result<Vec<ParentsGuideCategory>, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let url = format!("https://api.imdbapi.dev/titles/{}/parentsGuide", imdb_id);
+        println!("[IMDBAPI] Fetching parentsGuide for {}", imdb_id);
+        let client = http_client::shared_client();
+        let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send().map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("parentsGuide API error: {}", resp.status()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ApiParentsGuideResponse {
+            parentsGuide: Option<Vec<ApiParentsGuideCategory>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiParentsGuideCategory {
+            category: Option<String>,
+            severityBreakdowns: Option<Vec<ApiSeverityBreakdown>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiSeverityBreakdown {
+            severityLevel: Option<String>,
+            voteCount: Option<i32>,
+        }
+
+        let data: ApiParentsGuideResponse = resp.json().map_err(|e| e.to_string())?;
+        let categories = data.parentsGuide.unwrap_or_default().into_iter().map(|cat| {
+            ParentsGuideCategory {
+                category: cat.category.unwrap_or_default(),
+                severity_breakdowns: cat.severityBreakdowns.map(|v| v.into_iter().map(|s| {
+                    SeverityBreakdown {
+                        severity_level: s.severityLevel.unwrap_or_default(),
+                        vote_count: s.voteCount.unwrap_or(0),
+                    }
+                }).collect()),
+            }
+        }).collect();
+
+        println!("[IMDBAPI] Got parentsGuide data for {}", imdb_id);
+        Ok(categories)
+    }).await.map_err(|e| e.to_string())?;
+
+    result
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 struct TmdbReview {
     author: String,
     content: String,
@@ -8476,8 +8729,7 @@ async fn get_tmdb_reviews(
 
     let reviews = tokio::task::spawn_blocking(move || {
         let client = http_client::shared_client();
-        let use_bearer = crate::is_access_token(&credential)
-            && !tmdb::is_backend_proxy_credential(&credential);
+        let use_bearer = crate::is_access_token(&credential);
         let req = if use_bearer {
             client.get(&url).header("Authorization", format!("Bearer {}", &credential))
         } else {
@@ -10022,7 +10274,7 @@ struct HybridSearchResponse {
 async fn search_content(
     state: State<'_, AppState>,
     query: String,
-    year: Option<i32>,
+    _year: Option<i32>,
     media_type: Option<String>,
 ) -> Result<HybridSearchResponse, String> {
     let config = {
@@ -10686,22 +10938,6 @@ fn send_system_notification(app_handle: &AppHandle, summary: &str, body: &str) {
         if let Err(err) = notification.show() {
             println!("[NOTIFY] notify-rust failed: {}", err);
         }
-    }
-}
-
-fn apply_autostart_for_notifications(app_handle: &AppHandle, enabled: bool) {
-    let result = if enabled {
-        app_handle.autolaunch().enable()
-    } else {
-        app_handle.autolaunch().disable()
-    };
-
-    if let Err(error) = result {
-        println!(
-            "[AUTOSTART] Failed to {} autostart: {}",
-            if enabled { "enable" } else { "disable" },
-            error
-        );
     }
 }
 
@@ -11793,6 +12029,26 @@ fn emit_zip_processing_event(
     };
 
     window.emit("zip-processing-status", payload).ok();
+
+    // Send Windows notification for detected / complete phases
+    match phase {
+        "detected" => {
+            let title = format!("{} archive{} detected", archive_count, if archive_count == 1 { "" } else { "s" });
+            let name = archive_name.unwrap_or("Unknown");
+            send_system_notification(&window.app_handle(), &title, &format!("Found in background scan: {}", name));
+        }
+        "complete" => {
+            let count = episodes_indexed.unwrap_or(0);
+            let title = format!("📦 Indexing complete");
+            let body = if count > 0 {
+                format!("{} episode{} indexed from {} archive{}", count, if count == 1 { "" } else { "s" }, archive_count, if archive_count == 1 { "" } else { "s" })
+            } else {
+                format!("{} archive{} processed", archive_count, if archive_count == 1 { "" } else { "s" })
+            };
+            send_system_notification(&window.app_handle(), &title, &body);
+        }
+        _ => {}
+    }
 }
 
 fn build_mpv_display_title(media: &database::MediaItem) -> String {
@@ -12797,8 +13053,7 @@ fn open_latest_release_page_for_manual_install(context: &str) {
 
 fn manual_update_error(context: &str, details: impl std::fmt::Display) -> String {
     let details_str = details.to_string();
-    // Report to Sentry — captures the exact error with context tag
-    crate::sentry::capture_error(context, &details_str);
+    // ponytail: removed sentry
     open_latest_release_page_for_manual_install(context);
     format!(
         "Auto updater issue, please install manually. Opening latest release page. {}",
@@ -13386,22 +13641,18 @@ fn resolve_windows_installer_from_package(
     let mut extract_cmd = std::process::Command::new("powershell");
     config::apply_hidden_process_flags(&mut extract_cmd);
 
-    // Build the zip path and dest as PowerShell strings — \\?\ prefix confuses Expand-Archive
+    // Build the zip path and dest as strings — \\?\ prefix confuses Expand-Archive
     let zip_str = package_path.to_string_lossy().replace(r"\\?\", "");
     let dest_str = extract_dir.to_string_lossy().replace(r"\\?\", "");
 
-    let ps_script = format!(
-        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-        zip_str.replace('\'', "''"),
-        dest_str.replace('\'', "''"),
-    );
-
     let output = extract_cmd
+        .env("ZIP_PATH", &zip_str)
+        .env("DEST_PATH", &dest_str)
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            &ps_script,
+            "Expand-Archive -LiteralPath $env:ZIP_PATH -DestinationPath $env:DEST_PATH -Force",
         ])
         .output()
         .map_err(|e| format!("Failed to extract updater ZIP: {}", e))?;
@@ -15052,29 +15303,70 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
         return;
     }
 
+    let total = candidates.len();
     println!(
-        "[STARTUP] Metadata enrichment queued for {} item(s)...",
-        candidates.len()
+        "[STARTUP] Metadata enrichment queued for {} item(s) with {} parallel workers...",
+        total,
+        16.min(total).max(1)
     );
 
     let db_path = database::get_database_path();
     let image_cache_dir = database::get_image_cache_dir();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize), String> {
-        let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
-        let mut updated = 0usize;
-        let mut failed = 0usize;
-        let mut no_match = 0usize;
 
-        for (idx, item) in candidates.iter().enumerate() {
-            let tmdb_media_type = if item.media_type == "tvshow" {
-                "tv"
-            } else {
-                "movie"
-            };
+    // Parallel worker design: chunk candidates into groups, each gets its own DB connection.
+    // WAL mode allows concurrent readers+writes without contention.
+    let num_workers = 16usize.min(total).max(1);
+    let chunk_size = (total + num_workers - 1) / num_workers;
+    let updated = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let no_match = Arc::new(AtomicUsize::new(0));
 
-            let metadata_result = if let Some(ref tid) = item.tmdb_id {
-                let cleaned = tid.trim();
-                if cleaned.is_empty() {
+    let mut handles = Vec::with_capacity(num_workers);
+
+    for chunk in candidates.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        let credential = credential.clone();
+        let db_path = db_path.clone();
+        let image_cache_dir = image_cache_dir.clone();
+        let updated = updated.clone();
+        let failed = failed.clone();
+        let no_match = no_match.clone();
+
+        handles.push(tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
+            // Begin a batch transaction for this chunk — 1 commit per ~16 items
+            // instead of individual commits per item
+            db.begin_batch().map_err(|e| e.to_string())?;
+
+            for item in &chunk {
+                let tmdb_media_type = if item.media_type == "tvshow" {
+                    "tv"
+                } else {
+                    "movie"
+                };
+
+                let metadata_result = if let Some(ref tid) = item.tmdb_id {
+                    let cleaned = tid.trim();
+                    if cleaned.is_empty() {
+                        tmdb::search_metadata(
+                            &credential,
+                            &item.title,
+                            tmdb_media_type,
+                            item.year,
+                            &image_cache_dir,
+                        )
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "No TMDB match found".to_string())
+                    } else {
+                        tmdb::fetch_metadata_by_id(
+                            &credential,
+                            cleaned,
+                            tmdb_media_type,
+                            &image_cache_dir,
+                        )
+                        .map_err(|e| e.to_string())
+                    }
+                } else {
                     tmdb::search_metadata(
                         &credential,
                         &item.title,
@@ -15084,117 +15376,93 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
                     )
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "No TMDB match found".to_string())
-                } else {
-                    tmdb::fetch_metadata_by_id(
-                        &credential,
-                        cleaned,
-                        tmdb_media_type,
-                        &image_cache_dir,
-                    )
-                    .map_err(|e| e.to_string())
-                }
-            } else {
-                tmdb::search_metadata(
-                    &credential,
-                    &item.title,
-                    tmdb_media_type,
-                    item.year,
-                    &image_cache_dir,
-                )
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "No TMDB match found".to_string())
-            };
+                };
 
-            match metadata_result {
-                Ok(mut metadata) => {
-                    metadata.title = media_manager::prefer_title_with_leading_article(
-                        &item.title,
-                        &metadata.title,
-                    );
+                match metadata_result {
+                    Ok(mut metadata) => {
+                        metadata.title = media_manager::prefer_title_with_leading_article(
+                            &item.title,
+                            &metadata.title,
+                        );
 
-                    // PRIMARY poster source: try imdbapi.dev first if we have an imdb_id
-                    // imdbapi.dev primaryImage is preferred over TMDB poster
-                    let tmdb_poster = metadata.poster_path.clone();
-                    if let Some(ref imdb_id) = metadata.imdb_id {
-                        println!("[IMDBAPI] Enrichment primary: trying poster for \"{}\" (imdb_id: {})", item.title, imdb_id);
-                        let image_type = if item.media_type == "tv" || item.media_type == "tvshow" {
-                            tmdb::ImageType::SeriesBanner
-                        } else {
-                            tmdb::ImageType::MovieBanner
-                        };
-                        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
-                        if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
-                            if let Ok(json) = resp.json::<serde_json::Value>() {
-                                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
-                                    if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
-                                        println!("[IMDBAPI] Enrichment poster (primary) result: Ok(\"{}\")", cached_path);
-                                        metadata.poster_path = Some(cached_path);
+                        // PRIMARY poster source: try imdbapi.dev first if we have an imdb_id
+                        let tmdb_poster = metadata.poster_path.clone();
+                        if let Some(ref imdb_id) = metadata.imdb_id {
+                            println!("[IMDBAPI] Enrichment primary: trying poster for \"{}\" (imdb_id: {})", item.title, imdb_id);
+                            let image_type = if item.media_type == "tv" || item.media_type == "tvshow" {
+                                tmdb::ImageType::SeriesBanner
+                            } else {
+                                tmdb::ImageType::MovieBanner
+                            };
+                            let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+                            if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                                if let Ok(json) = resp.json::<serde_json::Value>() {
+                                    if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                                        if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
+                                            println!("[IMDBAPI] Enrichment poster (primary) result: Ok(\"{}\")", cached_path);
+                                            metadata.poster_path = Some(cached_path);
+                                        } else {
+                                            println!("[IMDBAPI] Enrichment poster (primary) result: Err(cache failed), keeping TMDB poster");
+                                        }
                                     } else {
-                                        println!("[IMDBAPI] Enrichment poster (primary) result: Err(cache failed), keeping TMDB poster");
+                                        println!("[IMDBAPI] Enrichment poster (primary) result: Err(no image in response), keeping TMDB poster");
                                     }
-                                } else {
-                                    println!("[IMDBAPI] Enrichment poster (primary) result: Err(no image in response), keeping TMDB poster");
                                 }
                             }
                         }
-                    }
 
-                    // FALLBACK: TMDB poster is only kept if imdbapi.dev didn't provide one
-                    if metadata.poster_path == tmdb_poster && metadata.poster_path.is_some() {
-                        println!("[TMDB] Using TMDB poster for \"{}\": poster={:?}", item.title, metadata.poster_path);
-                    } else if metadata.poster_path.is_some() {
-                        println!("[TMDB] Enriched \"{}\": imdbapi.dev poster used as primary", item.title);
-                    }
+                        if metadata.poster_path == tmdb_poster && metadata.poster_path.is_some() {
+                            println!("[TMDB] Using TMDB poster for \"{}\": poster={:?}", item.title, metadata.poster_path);
+                        } else if metadata.poster_path.is_some() {
+                            println!("[TMDB] Enriched \"{}\": imdbapi.dev poster used as primary", item.title);
+                        }
 
-                    if db.update_metadata(item.id, &metadata).is_ok() {
-                        updated += 1;
-                    } else {
-                        failed += 1;
+                        if db.update_metadata(item.id, &metadata).is_ok() {
+                            updated.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                }
-                Err(err) => {
-                    if err.contains("No TMDB match found") {
-                        no_match += 1;
-                    } else {
-                        failed += 1;
+                    Err(err) => {
+                        if err.contains("No TMDB match found") {
+                            no_match.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
 
-            if (idx + 1) % 25 == 0 {
-                println!(
-                    "[STARTUP] Metadata enrichment progress: {}/{}",
-                    idx + 1,
-                    candidates.len()
-                );
-            }
+            // Single commit per chunk
+            db.commit_batch().map_err(|e| e.to_string())?;
+            Ok(())
+        }));
+    }
+
+    // Wait for all parallel workers
+    for handle in handles {
+        if let Err(e) = handle.await.unwrap_or_else(|e| Err(e.to_string())) {
+            println!("[STARTUP] Enrichment worker failed: {}", e);
         }
+    }
 
-        let remaining = db
+    let updated = updated.load(Ordering::Relaxed);
+    let failed = failed.load(Ordering::Relaxed);
+    let no_match = no_match.load(Ordering::Relaxed);
+
+    // Check remaining after parallel pass
+    let remaining = match database::Database::new(&db_path) {
+        Ok(db) => db
             .get_media_needing_metadata_enrichment(1)
             .map(|rows| rows.len())
-            .unwrap_or(1);
-
-        println!(
-            "[STARTUP] Metadata enrichment done. updated={}, failed={}, unmatched={}, remaining={}",
-            updated, failed, no_match, remaining
-        );
-
-        Ok((updated, failed + no_match, remaining))
-    })
-    .await;
-
-    let (updated, _not_updated, _remaining) = match result {
-        Ok(Ok(values)) => values,
-        Ok(Err(err)) => {
-            println!("[STARTUP] Metadata enrichment failed: {}", err);
-            return;
-        }
-        Err(err) => {
-            println!("[STARTUP] Metadata enrichment task join error: {}", err);
-            return;
-        }
+            .unwrap_or(0),
+        Err(_) => 0,
     };
+
+    println!(
+        "[STARTUP] Metadata enrichment done. updated={}, failed={}, unmatched={}, remaining={}",
+        updated, failed, no_match, remaining
+    );
 
     if updated > 0 {
         if let Some(window) = app_handle.get_window("main") {
@@ -16013,7 +16281,7 @@ async fn progressive_download(url: &str, dest_path: &std::path::Path, buffer_byt
 }
 
 /// Continue downloading from `buffer_bytes` offset to the end of the file.
-async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, total_bytes: u64) -> Result<(), String> {
+async fn download_remaining(url: &str, dest_path: &std::path::Path, start_offset: u64, _total_bytes: u64) -> Result<(), String> {
     use reqwest::header;
 
     let client = reqwest::Client::builder()
@@ -16251,20 +16519,20 @@ async fn remote_play_with_mpv(
     state: State<'_, AppState>,
     url: String,
     title: String,
-    video_size: i64,
-    media_identifier: String,
+    _video_size: i64,
+    _media_identifier: String,
     quality_label: String,
     // Netflix-style metadata
     media_type: String,
     tmdb_id: i64,
-    season_number: Option<i32>,
-    episode_number: Option<i32>,
-    episode_title: Option<String>,
-    poster_path: Option<String>,
-    still_path: Option<String>,
-    overview: Option<String>,
-    year: Option<i32>,
-    start_position: f64,
+    _season_number: Option<i32>,
+    _episode_number: Option<i32>,
+    _episode_title: Option<String>,
+    _poster_path: Option<String>,
+    _still_path: Option<String>,
+    _overview: Option<String>,
+    _year: Option<i32>,
+    _start_position: f64,
 ) -> Result<RemotePlaybackResponse, String> {
     let config = {
         let c = state.config.lock().map_err(|e| e.to_string())?;
@@ -17215,12 +17483,6 @@ fn remote_clear_streams_cache() -> Result<(), String> {
     Ok(())
 }
 
-// ── Frontend-to-backend error reporting ──
-#[tauri::command]
-fn sentry_report_error(context: String, details: String) -> Result<(), String> {
-    crate::sentry::capture_error(&context, &details);
-    Ok(())
-}
 
 #[tauri::command]
 async fn run_sync_validation(
@@ -17532,6 +17794,165 @@ async fn fix_sync_issues(
     }))
 }
 
+#[tauri::command]
+fn refresh_tray_continue_watching(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
+    let quit = CustomMenuItem::new("quit".to_string(), "Quit");
+    let mut tray_menu = SystemTrayMenu::new()
+        .add_item(show)
+        .add_native_item(SystemTrayMenuItem::Separator);
+
+    let continue_items = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.get_continue_watching_items(3).unwrap_or_default()
+    };
+    if !continue_items.is_empty() {
+        for item in &continue_items {
+            let label = if item.media_type == "tvepisode" {
+                let sn = item.season_number.unwrap_or(0);
+                let en = item.episode_number.unwrap_or(0);
+                let ep_title = item.episode_title.as_deref().unwrap_or("");
+                let display = if ep_title.is_empty() {
+                    format!("{} S{:02}E{:02}", item.title, sn, en)
+                } else {
+                    format!("{} S{:02}E{:02} - {}", item.title, sn, en, ep_title)
+                };
+                if display.len() > 45 {
+                    format!("{}...", &display[..42])
+                } else {
+                    display
+                }
+            } else {
+                if item.title.len() > 45 {
+                    format!("{}...", &item.title[..42])
+                } else {
+                    item.title.clone()
+                }
+            };
+            let menu_item = CustomMenuItem::new(
+                format!("continue_{}", item.id),
+                format!("▶ {}", label),
+            );
+            tray_menu = tray_menu.add_item(menu_item);
+        }
+        tray_menu = tray_menu.add_native_item(SystemTrayMenuItem::Separator);
+    }
+    tray_menu = tray_menu.add_item(quit);
+
+    app.tray_handle().set_menu(tray_menu).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ==================== SUBTITLE MANAGEMENT ====================
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SubtitleEntry {
+    id: String,
+    url: String,
+    lang: String,
+}
+
+#[tauri::command]
+async fn fetch_subtitles(imdb_id: String, media_type: String) -> Result<Vec<SubtitleEntry>, String> {
+    let type_str = match media_type.as_str() {
+        "movie" => "movie",
+        "tvshow" | "tvepisode" => "series",
+        _ => return Err("Unsupported media type".into()),
+    };
+
+    let clean_id = imdb_id.trim().trim_start_matches("tt");
+    let url = format!(
+        "https://opensubtitles-v3.strem.io/subtitles/{}/tt{}.json",
+        type_str, clean_id
+    );
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = http_client::shared_client();
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("Failed to fetch subtitles: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Subtitle API returned status {}", response.status()));
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .map_err(|e| format!("Failed to parse subtitle response: {}", e))?;
+
+        let subtitles_raw = body
+            .get("subtitles")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let entries: Vec<SubtitleEntry> = subtitles_raw
+            .iter()
+            .filter_map(|entry| {
+                let id = entry.get("id")?.as_str()?.to_string();
+                let url = entry.get("url")?.as_str()?.to_string();
+                let lang = entry
+                    .get("lang")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                Some(SubtitleEntry { id, url, lang })
+            })
+            .collect();
+
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    result
+}
+
+#[tauri::command]
+async fn download_subtitle(url: String, filename: String) -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let client = http_client::shared_client();
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("Failed to download subtitle: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Subtitle download returned status {}", response.status()));
+        }
+
+        let bytes = response
+            .bytes()
+            .map_err(|e| format!("Failed to read subtitle bytes: {}", e))?;
+
+        let temp_dir = std::env::temp_dir().join("slasshyvault_subtitles");
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create subtitle temp dir: {}", e))?;
+
+        // Ensure filename has a subtitle extension
+        let safe_filename = if filename.ends_with(".srt")
+            || filename.ends_with(".vtt")
+            || filename.ends_with(".sub")
+            || filename.ends_with(".ass")
+        {
+            filename
+        } else {
+            format!("{}.srt", filename)
+        };
+
+        let file_path = temp_dir.join(&safe_filename);
+        std::fs::write(&file_path, &bytes)
+            .map_err(|e| format!("Failed to write subtitle file: {}", e))?;
+
+        Ok(file_path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    result
+}
+
 fn main() {
     // Set Windows AppUserModelID so the volume mixer shows "SlasshyVault" instead of "WebView2".
     #[cfg(windows)]
@@ -17561,9 +17982,7 @@ fn main() {
     // This allows setting VITE_SENTRY_DSN, GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, etc.
     dotenvy::dotenv().ok();
 
-    // Initialize Sentry crash reporting (reads SENTRY_DSN from env).
-    // No-op if SENTRY_DSN is not set. 10% sampling, consent-gated.
-    let _sentry_guard = crate::sentry::init();
+    // ponytail: sentry removed
 
     // Migrate app data from old StreamVault directory to new SlasshyVault directory.
     // Dev builds use StreamVault-Dev → SlasshyVault-Dev (isolated from production).
@@ -17653,13 +18072,50 @@ fn main() {
         last_validation_report: Mutex::new(None),
     };
 
-    // Create system tray menu
+    // Create system tray menu with continue-watching items
     let show = CustomMenuItem::new("show".to_string(), "Show SlasshyVault");
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
-    let tray_menu = SystemTrayMenu::new()
+    let mut tray_menu = SystemTrayMenu::new()
         .add_item(show)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(quit);
+        .add_native_item(SystemTrayMenuItem::Separator);
+
+    // Add continue-watching items from database
+    let continue_items = {
+        let db_guard = state.db.lock().unwrap();
+        db_guard.get_continue_watching_items(3).unwrap_or_default()
+    };
+    if !continue_items.is_empty() {
+        for item in &continue_items {
+            let label = if item.media_type == "tvepisode" {
+                let sn = item.season_number.unwrap_or(0);
+                let en = item.episode_number.unwrap_or(0);
+                let ep_title = item.episode_title.as_deref().unwrap_or("");
+                let display = if ep_title.is_empty() {
+                    format!("{} S{:02}E{:02}", item.title, sn, en)
+                } else {
+                    format!("{} S{:02}E{:02} - {}", item.title, sn, en, ep_title)
+                };
+                if display.len() > 45 {
+                    format!("{}...", &display[..42])
+                } else {
+                    display
+                }
+            } else {
+                if item.title.len() > 45 {
+                    format!("{}...", &item.title[..42])
+                } else {
+                    item.title.clone()
+                }
+            };
+            let menu_item = CustomMenuItem::new(
+                format!("continue_{}", item.id),
+                format!("▶ {}", label),
+            );
+            tray_menu = tray_menu.add_item(menu_item);
+        }
+        tray_menu = tray_menu.add_native_item(SystemTrayMenuItem::Separator);
+    }
+    tray_menu = tray_menu.add_item(quit);
 
     let system_tray = SystemTray::new().with_menu(tray_menu);
 
@@ -17669,8 +18125,6 @@ fn main() {
     } else {
         builder
     };
-    let notifications_enabled_on_startup = config.notifications_enabled;
-
     builder
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| {
@@ -17679,14 +18133,17 @@ fn main() {
                     restore_or_create_main_window(app);
                 }
                 SystemTrayEvent::MenuItemClick { id, .. } => {
-                    match id.as_str() {
-                        "show" => {
+                    if id == "show" {
+                        restore_or_create_main_window(app);
+                    } else if id == "quit" {
+                        std::process::exit(0);
+                    } else if let Some(media_id_str) = id.strip_prefix("continue_") {
+                        if let Ok(media_id) = media_id_str.parse::<i64>() {
                             restore_or_create_main_window(app);
+                            let _ = app.emit_all("play-continue-watching", serde_json::json!({
+                                "media_id": media_id,
+                            }));
                         }
-                        "quit" => {
-                            std::process::exit(0);
-                        }
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -17721,8 +18178,6 @@ fn main() {
                     }
                 }
             }
-
-            apply_autostart_for_notifications(&app.handle(), notifications_enabled_on_startup);
 
             // Store global app handle for background thread event emission
             if let Ok(mut h) = GLOBAL_APP_HANDLE.lock() {
@@ -17983,8 +18438,11 @@ fn main() {
             get_recently_added,
             get_library,
             get_library_filtered,
+            search_all_libraries,
+            search_media_by_cast,
             get_ddl_media,
             get_library_stats,
+            get_top_space_consumers,
             get_episodes,
             get_watch_history,
             get_watch_history_events,
@@ -18003,6 +18461,8 @@ fn main() {
             cleanup_missing_metadata,
             // Other commands
             delete_media_files,
+            delete_all_media_files,
+            delete_cloud_files_by_drive_ids,
             delete_series,
             delete_series_cloud_folder,
             get_episodes_for_delete,
@@ -18048,6 +18508,7 @@ fn main() {
             get_tv_season_episodes,
             get_episode_imdb_ratings,
             get_imdb_details,
+            get_parents_guide,
             get_tmdb_reviews,
             refresh_series_metadata,
             get_tmdb_release_schedule,
@@ -18062,6 +18523,7 @@ fn main() {
             delete_watchlist_item,
             sync_watchlist,
             merge_duplicate_shows,
+            find_duplicate_media,
             // Google Drive commands
             gdrive_is_connected,
             gdrive_get_access_token,
@@ -18164,9 +18626,17 @@ fn main() {
             remove_addon_binary,
             restart_addon,
             remote_clear_streams_cache,
-            sentry_report_error,
+
             run_sync_validation,
             fix_sync_issues,
+            refresh_tray_continue_watching,
+            fetch_subtitles,
+            download_subtitle,
+            // Cloudflare relay commands
+            cf_relay::cf_list_accounts,
+            cf_relay::cf_deploy_relay,
+            cf_relay::cf_delete_relay,
+            cf_relay::cf_relay_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1287,6 +1287,7 @@ mod tests {
             still_path: None,
             is_cloud: Some(true),
             cloud_file_id: None,
+            cloud_folder_id: None,
             archive_format: Some("zip".to_string()),
             parent_zip_id: Some("zip123".to_string()),
             zip_entry_path: Some("Season 01/Test.Show.S01E01.mkv".to_string()),

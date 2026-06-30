@@ -2,6 +2,7 @@
 //! Handles OAuth2 authentication and Google Drive API operations
 
 use crate::archive_manager;
+use crate::database::get_app_data_dir;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,7 +12,6 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::database::get_app_data_dir;
 
 // Backend auth server URL (handles OAuth securely)
 // This keeps client_id and client_secret on the server
@@ -183,7 +183,7 @@ const MAX_DRIVE_RETRIES: u32 = 3;
 
 /// Execute a Drive API request with retry logic for rate limits (429) and server errors (5xx)
 async fn drive_request_with_retry(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     request_builder: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, String> {
     let mut last_error = String::new();
@@ -1582,6 +1582,7 @@ fn deobfuscate(data: &str) -> Result<String, String> {
 }
 
 /// Attempts AES-256-GCM decryption on data produced by `obfuscate`.
+/// Tries both the current and legacy encryption keys for backward compatibility.
 fn deobfuscate_aes(data: &str) -> Result<String, String> {
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -1596,38 +1597,44 @@ fn deobfuscate_aes(data: &str) -> Result<String, String> {
     let (nonce_bytes, ciphertext) = decoded.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let key = derive_encryption_key();
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .expect("AES-256-GCM key should always be 32 bytes");
+    // Try current key first, then legacy key for backward compatibility
+    for key in [derive_encryption_key(), derive_legacy_encryption_key()] {
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .expect("AES-256-GCM key should always be 32 bytes");
 
-    let plaintext = cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
+        if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
+            if let Ok(result) = String::from_utf8(plaintext) {
+                return Ok(result);
+            }
+        }
+    }
 
-    String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))
+    Err("AES-GCM decryption failed with both current and legacy keys".to_string())
 }
 
 /// Derives a machine-specific encryption key. Combines a hardcoded app secret
-/// with the current username, hostname, and app data path to produce a key that
-/// is unique per machine + user. Not military-grade, but a significant upgrade
-/// over plain base64: tokens encrypted on one machine/user can't be trivially
-/// decrypted on another, and offline cracking requires knowing the secret.
+/// with username and hostname to produce a key unique per machine + user.
+/// Does NOT depend on app data dir so debug and release builds share the same key.
+/// Not military-grade, but a significant upgrade over plain base64.
 fn derive_encryption_key() -> [u8; 32] {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    const APP_SECRET: &[u8] = b"SlasshyVault-TokenEncrypt-v1-2024";
+    let secret_str = std::env::var("GDRIVE_ENCRYPTION_SECRET").unwrap_or_default();
+    let app_secret: &[u8] = if secret_str.is_empty() {
+        env!("CARGO_PKG_NAME").as_bytes()
+    } else {
+        secret_str.as_bytes()
+    };
 
     let mut hasher = DefaultHasher::new();
-    APP_SECRET.hash(&mut hasher);
+    app_secret.hash(&mut hasher);
 
     if let Ok(user) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
         user.hash(&mut hasher);
     }
     if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
         host.hash(&mut hasher);
-    }
-    if let Some(data_dir) = crate::database::get_app_data_dir().to_str() {
-        data_dir.hash(&mut hasher);
     }
 
     let seed = hasher.finish();
@@ -1637,7 +1644,37 @@ fn derive_encryption_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     for i in 0..32 {
         key[i] = seed_bytes[i % 8]
-            .wrapping_add(APP_SECRET[i % APP_SECRET.len()])
+            .wrapping_add(app_secret[i % app_secret.len()])
+            .wrapping_mul(i as u8 + 1);
+    }
+    key
+}
+
+/// Legacy encryption key used before the GDRIVE_ENCRYPTION_SECRET env var was introduced.
+/// Needed to decrypt tokens that were AES-encrypted with the old hardcoded secret.
+fn derive_legacy_encryption_key() -> [u8; 32] {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let app_secret: &[u8] = b"SlasshyVault-TokenEncrypt-v1-2024";
+
+    let mut hasher = DefaultHasher::new();
+    app_secret.hash(&mut hasher);
+
+    if let Ok(user) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
+        user.hash(&mut hasher);
+    }
+    if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
+        host.hash(&mut hasher);
+    }
+
+    let seed = hasher.finish();
+    let seed_bytes = seed.to_le_bytes();
+
+    let mut key = [0u8; 32];
+    for i in 0..32 {
+        key[i] = seed_bytes[i % 8]
+            .wrapping_add(app_secret[i % app_secret.len()])
             .wrapping_mul(i as u8 + 1);
     }
     key

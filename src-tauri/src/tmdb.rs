@@ -8,75 +8,19 @@ const MAX_RETRIES: u32 = 5;
 const BASE_DELAY_MS: u64 = 500;
 const MAX_DELAY_MS: u64 = 10000;
 
-// Special marker used when we should call the backend TMDB proxy
-const BACKEND_PROXY_CREDENTIAL: &str = "__TMDB_BACKEND_PROXY__";
-const DEFAULT_TMDB_PROXY_BASE_URL: &str =
-    "https://slasshyvault.onrender.com/api/tmdb";
-
-pub fn get_tmdb_proxy_base_url() -> String {
-    if let Ok(proxy_url) = std::env::var("STREAMVAULT_TMDB_PROXY_URL") {
-        let trimmed = proxy_url.trim();
-        if !trimmed.is_empty() {
-            return trimmed.trim_end_matches('/').to_string();
-        }
-    }
-
-    if let Ok(proxy_url) = std::env::var("TMDB_PROXY_URL") {
-        let trimmed = proxy_url.trim();
-        if !trimmed.is_empty() {
-            return trimmed.trim_end_matches('/').to_string();
-        }
-    }
-
-    if let Ok(auth_server_url) = std::env::var("STREAMVAULT_AUTH_SERVER_URL") {
-        let trimmed = auth_server_url.trim();
-        if !trimmed.is_empty() {
-            return format!("{}/api/tmdb", trimmed.trim_end_matches('/'));
-        }
-    }
-
-    // Check media_config.json for dev_backend_url override
-    let config_path = crate::database::get_app_data_dir().join("media_config.json");
-    if let Ok(contents) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
-                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
-                if !trimmed.is_empty() {
-                    return format!("{}/api/tmdb", trimmed);
-                }
-            }
-        }
-    }
-
-    // Legacy config file check
-    if let Some(app_data) = dirs::data_dir().map(|d| d.join("SlasshyVault").join("config.json")) {
-        if let Ok(contents) = std::fs::read_to_string(&app_data) {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-                if let Some(proxy_url) = config.get("tmdb_proxy_url").and_then(|v| v.as_str()) {
-                    let trimmed = proxy_url.trim();
-                    if !trimmed.is_empty() {
-                        return trimmed.trim_end_matches('/').to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    DEFAULT_TMDB_PROXY_BASE_URL.to_string()
-}
-
-pub fn is_backend_proxy_credential(credential: &str) -> bool {
-    credential == BACKEND_PROXY_CREDENTIAL
-}
-
-/// Get the TMDB credential to use - user's key if provided, otherwise backend proxy
+/// Get the TMDB credential to use - user must provide their own API key
+/// Returns empty string if no key configured (callers should handle this)
 pub fn get_tmdb_credential(user_key: &str) -> String {
     let trimmed = user_key.trim();
     if trimmed.is_empty() {
-        BACKEND_PROXY_CREDENTIAL.to_string()
+        String::new()
     } else {
         trimmed.to_string()
     }
+}
+
+pub fn is_backend_proxy_credential(_credential: &str) -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,24 +145,10 @@ fn is_access_token(credential: &str) -> bool {
     credential.starts_with("eyJ")
 }
 
-fn build_tmdb_proxy_url(base_path: &str, extra_params: &str) -> String {
-    let base = get_tmdb_proxy_base_url();
-    let normalized_path = base_path.trim_start_matches('/');
-    if extra_params.is_empty() {
-        format!("{}/{}", base, normalized_path)
-    } else {
-        format!("{}/{}?{}", base, normalized_path, extra_params)
-    }
-}
-
 /// Build the URL with proper authentication
 /// - For API keys: adds ?api_key=XXX to URL
 /// - For access tokens: returns URL without api_key (auth goes in header)
 fn build_tmdb_url(base_path: &str, credential: &str, extra_params: &str) -> String {
-    if is_backend_proxy_credential(credential) {
-        return build_tmdb_proxy_url(base_path, extra_params);
-    }
-
     if is_access_token(credential) {
         format!("https://api.themoviedb.org/3{}?{}", base_path, extra_params)
     } else {
@@ -2149,44 +2079,13 @@ pub fn fetch_imdb_id(
 mod tests {
     use super::*;
 
-    // ── get_tmdb_proxy_base_url ──────────────────────────────────────────
-
-    #[test]
-    fn get_tmdb_proxy_base_url_returns_default_when_no_env() {
-        // Clear env vars so default path is taken
-        std::env::remove_var("STREAMVAULT_TMDB_PROXY_URL");
-        std::env::remove_var("TMDB_PROXY_URL");
-        std::env::remove_var("STREAMVAULT_AUTH_SERVER_URL");
-        let result = get_tmdb_proxy_base_url();
-        // May fall through to config files or default; just assert non-empty
-        assert!(!result.is_empty());
-    }
-
-    #[test]
-    fn get_tmdb_proxy_base_url_uses_streamvault_env() {
-        // NOTE: Cannot test env var behavior safely in parallel tests
-        // because env vars are process-global. Just verify no panic.
-        let _result = get_tmdb_proxy_base_url();
-    }
-
-    #[test]
-    fn get_tmdb_proxy_base_url_trims_trailing_slash() {
-        // NOTE: Cannot test env var behavior safely in parallel tests
-        let _result = get_tmdb_proxy_base_url();
-    }
-
-    // ── is_backend_proxy_credential ──────────────────────────────────────
-
-    #[test]
-    fn is_backend_proxy_credential_true() {
-        assert!(is_backend_proxy_credential("__TMDB_BACKEND_PROXY__"));
-    }
+    // ── is_backend_proxy_credential (always false now) ───────────────────
 
     #[test]
     fn is_backend_proxy_credential_false() {
+        assert!(!is_backend_proxy_credential("__TMDB_BACKEND_PROXY__"));
         assert!(!is_backend_proxy_credential("some_api_key"));
         assert!(!is_backend_proxy_credential(""));
-        assert!(!is_backend_proxy_credential("__TMDB_BACKEND_PROX"));
     }
 
     // ── get_tmdb_credential ─────────────────────────────────────────────
@@ -2197,13 +2096,13 @@ mod tests {
     }
 
     #[test]
-    fn get_tmdb_credential_returns_proxy_for_empty() {
-        assert_eq!(get_tmdb_credential(""), "__TMDB_BACKEND_PROXY__");
+    fn get_tmdb_credential_returns_empty_for_no_key() {
+        assert_eq!(get_tmdb_credential(""), "");
     }
 
     #[test]
-    fn get_tmdb_credential_returns_proxy_for_whitespace() {
-        assert_eq!(get_tmdb_credential("   "), "__TMDB_BACKEND_PROXY__");
+    fn get_tmdb_credential_trims_whitespace() {
+        assert_eq!(get_tmdb_credential("   "), "");
     }
 
     // ── normalize_title ─────────────────────────────────────────────────
@@ -2447,31 +2346,7 @@ mod tests {
         assert!(url.contains("query=Matrix"));
     }
 
-    // ── build_tmdb_proxy_url ────────────────────────────────────────────
-
-    #[test]
-    fn build_tmdb_proxy_url_no_extra_params() {
-        // NOTE: Cannot test env var routing safely in parallel tests
-        let url = build_tmdb_proxy_url("/search/movie", "");
-        assert!(url.contains("/search/movie"));
-    }
-
-    #[test]
-    fn build_tmdb_proxy_url_with_extra_params() {
-        // NOTE: Cannot test env var routing safely in parallel tests
-        let url = build_tmdb_proxy_url("/search/movie", "query=Matrix");
-        assert!(url.contains("/search/movie"));
-        assert!(url.contains("query=Matrix"));
-    }
-
-    #[test]
-    fn build_tmdb_proxy_url_strips_leading_slash() {
-        // NOTE: Cannot test env var routing safely in parallel tests
-        let url = build_tmdb_proxy_url("/search/movie", "");
-        assert!(url.contains("/search/movie"));
-    }
-
-    // ── extract_id_from_input ───────────────────────────────────────────
+    // ── build_tmdb_url empty extra cases ─────────────────────────────────
 
     #[test]
     fn extract_id_from_input_numeric() {
@@ -2954,7 +2829,6 @@ mod tests {
         assert_eq!(MAX_RETRIES, 5);
         assert_eq!(BASE_DELAY_MS, 500);
         assert_eq!(MAX_DELAY_MS, 10000);
-        assert!(!DEFAULT_TMDB_PROXY_BASE_URL.is_empty());
     }
 
     // ── build_tmdb_url extra cases ─────────────────────────────────────
@@ -3309,7 +3183,7 @@ mod tests {
         let result = cache_image_organized("/test.jpg", tmp.to_str().unwrap(), "My Show", ImageType::SeriesBanner);
         // Subfolder should have been created (even if download fails)
         let slug = create_slug("My Show");
-        let subfolder = tmp.join(&slug);
+        let _subfolder = tmp.join(&slug);
         // Directory creation is attempted before download
         assert!(result.is_some() || result.is_none());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -3690,32 +3564,11 @@ mod tests {
         assert_eq!(item.release_date, Some("2020-01-01".to_string()));
     }
 
-    // ── get_tmdb_proxy_base_url with TMDB_PROXY_URL env ────────────────
-
-    #[test]
-    fn get_tmdb_proxy_base_url_uses_tmdb_proxy_url_env() {
-        // NOTE: Cannot test env var behavior safely in parallel tests
-        let _result = get_tmdb_proxy_base_url();
-    }
-
-    #[test]
-    fn get_tmdb_proxy_base_url_prefers_streamvault_over_tmdb_proxy() {
-        // NOTE: Cannot test env var priority safely in parallel tests
-        // because env vars are process-global. Just verify the function
-        // returns a string without panicking.
-        let _result = get_tmdb_proxy_base_url();
-    }
-
     // ── get_tmdb_credential with actual key ────────────────────────────
 
     #[test]
     fn get_tmdb_credential_preserves_actual_key() {
         assert_eq!(get_tmdb_credential("abc123"), "abc123");
-    }
-
-    #[test]
-    fn get_tmdb_credential_trims_whitespace() {
-        assert_eq!(get_tmdb_credential("  key  "), "key");
     }
 
     // ── search_multi_raw mock JSON parsing ───────────────────────────────

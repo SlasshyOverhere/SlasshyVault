@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils"
 import {
   Settings,
   Home, RotateCw, Cloud, Clapperboard, Download, Link2, BarChart3, Radio,
-  Pin, PinOff, ShieldCheck
+  Pin, PinOff, ShieldCheck, Copy, Calendar
 } from "lucide-react"
 import { LazyMotion, domAnimation, m } from "framer-motion"
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react"
@@ -26,6 +26,7 @@ interface SidebarProps {
   betaEnabled?: boolean
   downloadJobCount?: number
   onSyncValidator?: () => void
+  onDuplicateDetector?: () => void
 }
 
 export function Sidebar({
@@ -40,6 +41,7 @@ export function Sidebar({
   betaEnabled: _betaEnabled = false,
   downloadJobCount = 0,
   onSyncValidator,
+  onDuplicateDetector,
 }: SidebarProps) {
   const subscribeWindowResize = useCallback((callback: () => void) => {
     window.addEventListener("resize", callback);
@@ -79,6 +81,15 @@ export function Sidebar({
     localStorage.setItem('slasshyvault_sidebar_pinned', String(isPinned));
   }, [isPinned]);
 
+  // Listen for pin toggle from command palette
+  useEffect(() => {
+    const handler = () => {
+      setIsPinned(localStorage.getItem('slasshyvault_sidebar_pinned') === 'true');
+    };
+    window.addEventListener('sidebar-pin-toggle', handler);
+    return () => window.removeEventListener('sidebar-pin-toggle', handler);
+  }, []);
+
   const isCollapsed = !isHovered && !isPinned;
   const sidebarWidth = isCollapsed ? 64 : (windowWidth < 1100 ? 232 : 264);
 
@@ -105,6 +116,7 @@ export function Sidebar({
     { id: "reminders", label: "Watchlist", icon: Clapperboard },
     { id: "downloads", label: "Downloads", icon: Download, badge: downloadJobCount > 0 ? String(downloadJobCount) : undefined },
     { id: "history", label: "History & Analytics", icon: BarChart3 },
+    { id: "calendar", label: "Calendar", icon: Calendar },
   ].filter(item => !item.hidden);
 
   return (
@@ -277,6 +289,26 @@ export function Sidebar({
                 <div className={cn("flex items-center gap-3", isCollapsed ? "justify-center" : "")}>
                   <ShieldCheck className="size-4 text-emerald-400" />
                   {!isCollapsed && <span className="text-xs font-bold text-neutral-300">Sync Validator</span>}
+                </div>
+              </button>
+            )}
+
+            {onDuplicateDetector && (
+              <button
+                type="button"
+                onClick={onDuplicateDetector}
+                aria-label="Duplicate Detector"
+                className={cn(
+                  "w-full flex items-center justify-between transition-all duration-300",
+                  isCollapsed
+                    ? "size-10 justify-center rounded-full bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08]"
+                    : "px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] hover:border-white/10 group"
+                )}
+                title={isCollapsed ? "Duplicate Detector" : ""}
+              >
+                <div className={cn("flex items-center gap-3", isCollapsed ? "justify-center" : "")}>
+                  <Copy className="size-4 text-amber-400" />
+                  {!isCollapsed && <span className="text-xs font-bold text-neutral-300">Duplicate Detector</span>}
                 </div>
               </button>
             )}

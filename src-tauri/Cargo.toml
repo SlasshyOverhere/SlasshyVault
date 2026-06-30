@@ -1,6 +1,6 @@
 [package]
 name = "slasshyvault"
-version = "3.0.57"
+version = "3.0.58"
 description = "A Tauri Media Library App"
 authors = ["Suman Patgiri"]
 license = "MIT"
@@ -21,7 +21,7 @@ tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-wo
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
-reqwest = { version = "0.12", features = ["json", "blocking", "stream", "gzip", "deflate"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "gzip", "deflate", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 regex = "1.10"
 walkdir = "2.4"
@@ -51,7 +51,6 @@ crc32fast = "1.4"
 tar = "0.4"
 rar-stream = { path = "vendor/rar-stream", features = ["async"] }
 unrar = "0.5"
-sentry = "0.48.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Graphics_Dwm", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

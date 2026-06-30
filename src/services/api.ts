@@ -27,6 +27,7 @@ export interface MediaItem {
   // Cloud storage fields
   is_cloud?: boolean;
   cloud_file_id?: string;
+  cloud_folder_id?: string;
   parent_zip_id?: string;
   zip_entry_path?: string;
   zip_local_header_offset?: number;
@@ -107,8 +108,7 @@ export interface Config {
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
   notifications_enabled?: boolean;
-  // Dev mode: override backend URL (e.g. http://localhost:3001)
-  // Auth, TMDB proxy, and WebSocket URLs are all derived from this
+  // Override the OAuth backend URL for self-hosting
   dev_backend_url?: string;
   // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
   player_mode?: "native" | "external";
@@ -116,6 +116,12 @@ export interface Config {
   addon_url?: string;
   // Multiple addon sources for External tab
   addon_sources?: AddonSource[];
+  // Watch Together Cloudflare relay URL (wss://...)
+  together_relay_url?: string;
+  // Cloudflare API token for one-click relay deploy
+  together_cf_token?: string;
+  // Cloudflare account ID for one-click relay deploy
+  together_cf_account_id?: string;
 }
 
 export interface AddonSource {
@@ -340,6 +346,18 @@ export const getLibraryFiltered = async (
   }
 };
 
+// Combined search across all libraries (local + cloud, movies + TV) in one IPC call
+export const searchAllLibraries = async (
+  search: string,
+): Promise<MediaItem[]> => {
+  try {
+    return await invoke<MediaItem[]>("search_all_libraries", { search });
+  } catch (error) {
+    console.error("Failed to search all libraries:", error);
+    return [];
+  }
+};
+
 // Get DDL library items
 export const getDdlMedia = async (
   type: "movie" | "tv",
@@ -554,6 +572,35 @@ export const deleteMediaFiles = async (
     return response;
   } catch (error) {
     console.error("Failed to delete media files:", error);
+    throw error;
+  }
+};
+
+// Delete ALL media files (cloud from Drive + all media entries from DB)
+export const deleteAllMediaFiles = async (): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_all_media_files", {
+      confirmed: true,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete all media files:", error);
+    throw error;
+  }
+};
+
+// Delete cloud files by Drive file IDs (for selective delete)
+export const deleteCloudFilesByDriveIds = async (
+  driveFileIds: string[],
+): Promise<DeleteResponse> => {
+  try {
+    const response = await invoke<DeleteResponse>("delete_cloud_files_by_drive_ids", {
+      driveFileIds,
+      confirmed: true,
+    });
+    return response;
+  } catch (error) {
+    console.error("Failed to delete cloud files:", error);
     throw error;
   }
 };
@@ -867,6 +914,7 @@ export const playMedia = async (
   subtitleLanguage?: string | null,
   durationSeconds?: number | null,
   fileSizeBytes?: number | null,
+  subtitleFilePath?: string | null,
 ): Promise<void> => {
   try {
     await invoke("play_with_mpv", {
@@ -874,6 +922,7 @@ export const playMedia = async (
       resume,
       audioLanguage: audioLanguage?.trim() || null,
       subtitleLanguage: subtitleLanguage?.trim() || null,
+      subtitleFilePath: subtitleFilePath?.trim() || null,
       durationSecondsOverride: durationSeconds && durationSeconds > 0 ? durationSeconds : null,
       fileSizeBytesOverride: fileSizeBytes && fileSizeBytes > 0 ? fileSizeBytes : null,
     });
@@ -942,6 +991,17 @@ export const fixMatch = async (
   } catch (error) {
     console.error("Failed to fix match:", error);
     throw error;
+  }
+};
+
+// Search library by cast member name
+export const searchMediaByCast = async (castName: string): Promise<MediaItem[]> => {
+  try {
+    const items = await invoke<MediaItem[]>("search_media_by_cast", { castName });
+    return items;
+  } catch (error) {
+    console.error("Failed to search media by cast:", error);
+    return [];
   }
 };
 
@@ -1873,6 +1933,20 @@ export const getImdbDetails = async (params: {
   }
 };
 
+export interface ParentsGuideCategory {
+  category: string;
+  severity_breakdowns: { severity_level: string; vote_count: number }[] | null;
+}
+
+export const getParentsGuide = async (imdbId: string): Promise<ParentsGuideCategory[] | null> => {
+  try {
+    return await invoke<ParentsGuideCategory[]>("get_parents_guide", { imdbId });
+  } catch (error) {
+    console.error("Failed to fetch parents guide:", error);
+    return null;
+  }
+};
+
 export interface TmdbReview {
   author: string;
   content: string;
@@ -2065,6 +2139,19 @@ export const getGdriveAccountInfo =
       return null;
     }
   };
+
+// ==================== STORAGE ANALYTICS ====================
+
+export const getTopSpaceConsumers = async (
+  limit: number = 10,
+): Promise<MediaItem[]> => {
+  try {
+    return await invoke<MediaItem[]>("get_top_space_consumers", { limit });
+  } catch (error) {
+    console.error("Failed to get top space consumers:", error);
+    return [];
+  }
+};
 
 // ==================== AUTO-UPDATE ====================
 
@@ -2317,6 +2404,21 @@ export const wtSendMpvCommand = async (
 
 // ==================== SYNC VALIDATOR ====================
 
+// Duplicate detection types
+export interface DuplicateGroup {
+  items: MediaItem[];
+  reason: string;
+}
+
+export const findDuplicateMedia = async (): Promise<DuplicateGroup[]> => {
+  try {
+    return await invoke<DuplicateGroup[]>("find_duplicate_media");
+  } catch (error) {
+    console.error("Failed to find duplicate media:", error);
+    return [];
+  }
+};
+
 export interface SyncIssue {
   category: string;
   file_name: string;
@@ -2355,3 +2457,48 @@ export const fixSyncIssues = async (
     throw error;
   }
 };
+
+// ==================== OPEN SUBTITLES ====================
+
+export interface SubtitleEntry {
+  id: string;
+  url: string;
+  lang: string;
+}
+
+export const fetchSubtitles = async (
+  imdbId: string,
+  mediaType: string,
+): Promise<SubtitleEntry[]> => {
+  try {
+    return await invoke<SubtitleEntry[]>("fetch_subtitles", { imdbId, mediaType });
+  } catch (error) {
+    console.error("Failed to fetch subtitles:", error);
+    return [];
+  }
+};
+
+export const downloadSubtitle = async (
+  url: string,
+  filename: string,
+): Promise<string> => {
+  try {
+    return await invoke<string>("download_subtitle", { url, filename });
+  } catch (error) {
+    console.error("Failed to download subtitle:", error);
+    throw error;
+  }
+};
+
+// Session-scoped subtitle file path store (per media ID)
+const pendingSubtitlePaths = new Map<number, string>()
+
+export const setPendingSubtitlePath = (mediaId: number, path: string): void => {
+  pendingSubtitlePaths.set(mediaId, path)
+}
+
+export const consumePendingSubtitlePath = (mediaId: number): string | null => {
+  const path = pendingSubtitlePaths.get(mediaId) ?? null
+  pendingSubtitlePaths.delete(mediaId)
+  return path
+}

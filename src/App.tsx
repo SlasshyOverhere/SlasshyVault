@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback, startTransition } from 'react'
 import { listen, emit, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/tauri'
 import { appWindow } from '@tauri-apps/api/window'
@@ -18,12 +18,14 @@ import {
   NotificationCenter,
   RemindersView,
   DownloadsView,
-  DeveloperConsole,
+  SmartCollections,
+  Clock,
 } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/toaster'
 import {
   getLibraryFiltered,
+  searchAllLibraries,
   getLibraryStats,
   getWatchHistory,
   getWatchHistoryEvents,
@@ -65,12 +67,13 @@ import {
   AnalyticsData,
   playMediaNative,
   getConfig,
+  consumePendingSubtitlePath,
 } from '@/services/api'
 import {
   Search, Loader2, Film, Tv,
   ChevronRight, LayoutGrid, List,
   TrendingUp, Sparkles, X, Cloud, RefreshCw, Minus, Download, Bell,
-  Maximize2, Minimize2, Archive, AlertCircle
+  Maximize2, Minimize2, Archive, AlertCircle, FolderOpen
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -90,9 +93,14 @@ import {
   waitForZipLoadingOverlayPaint,
 } from '@/utils/zipPlayback'
 import slasshyvaultIcon from '@/assets/slasshyvault-icon-ui.png'
-import { FullHistoryView } from '@/components/FullHistoryView'
-import DirectLinksView from '@/components/DirectLinksView'
-import { RemoteSourceView } from '@/components/RemoteSource/RemoteSourceView'
+import { CommandPalette } from '@/components/CommandPalette'
+const FullHistoryView = lazy(() => import('@/components/FullHistoryView').then(m => ({ default: m.FullHistoryView })))
+const DirectLinksView = lazy(() => import('@/components/DirectLinksView').then(m => ({ default: m.default })))
+const RemoteSourceView = lazy(() => import('@/components/RemoteSource/RemoteSourceView').then(m => ({ default: m.RemoteSourceView })))
+const CalendarView = lazy(() => import('@/components/CalendarView').then(m => ({ default: m.CalendarView })))
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { OptimizationContext } from '@/lib/OptimizationContext'
+import { useAutoOptimize, saveCachedLibrarySize } from '@/lib/optimization'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -109,6 +117,8 @@ const EpisodeBrowser = lazy(() => loadEpisodeBrowser().then(module => ({ default
 const WatchTogetherModal = lazy(() => loadWatchTogetherModal().then(module => ({ default: module.WatchTogetherModal })))
 const FixMatchModal = lazy(() => loadFixMatchModal().then(module => ({ default: module.FixMatchModal })))
 const SyncValidatorModal = lazy(() => loadSyncValidatorModal().then(module => ({ default: module.SyncValidatorModal })))
+const DuplicateDetector = lazy(() => import('@/components/DuplicateDetector').then(module => ({ default: module.DuplicateDetector })))
+const DeveloperConsole = lazy(() => import('@/components/DeveloperConsole').then(m => ({ default: m.DeveloperConsole })))
 
 
 
@@ -127,6 +137,7 @@ interface ScanCompletePayload {
 interface MpvPlaybackEndedPayload {
   media_id: number
   title: string
+  episode_title?: string
   season_number?: number
   episode_number?: number
   media_type?: string
@@ -213,7 +224,7 @@ const classifyNotificationCategory = (title: string, message: string): Notificat
 
 type ViewMode = 'grid' | 'list'
 type SortOption = 'title' | 'year' | 'recent' | 'progress'
-type MediaSubTab = 'movies' | 'tv'
+type MediaSubTab = 'movies' | 'tv' | 'collections'
 const LARGE_LIBRARY_THRESHOLD = 120
 const CLOUD_INITIAL_RENDER_COUNT = 48
 const CLOUD_CHUNK_RENDER_COUNT = 96
@@ -241,6 +252,11 @@ const formatUpdateError = (error: unknown) => {
     return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : JSON.stringify(error)
   }
   return 'Unknown update error.'
+}
+
+/** Get display title for a MediaItem — prefers episode_title for episodes */
+function displayTitleFor(item: MediaItem): string {
+  return item.episode_title || item.title
 }
 
 function App() {
@@ -285,6 +301,7 @@ function App() {
   const [view, setView] = useState<string>('home')
   const [items, setItems] = useState<MediaItem[]>([])
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([])
+  const downloadJobCount = useMemo(() => downloadJobs.filter((j) => j.status !== 'completed' && j.status !== 'failed' && j.status !== 'cancelled').length, [downloadJobs])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedShow, setSelectedShow] = useState<MediaItem | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
@@ -493,19 +510,35 @@ function App() {
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showSyncValidator, setShowSyncValidator] = useState(false)
+  const [showDuplicateDetector, setShowDuplicateDetector] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'beta' | 'updates' | 'cloud' | 'api' | 'danger' | 'dev'>('general')
   const [fixMatchOpen, setFixMatchOpen] = useState(false)
   const [itemToFix, setItemToFix] = useState<MediaItem | null>(null)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [theme] = useState<'dark' | 'light'>('dark')
   const { toast } = useToast()
+  const optim = useAutoOptimize()
+
+  // Confirm dialog state for delete confirmations
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const confirmDeleteActionRef = useRef<(() => void) | null>(null)
+  const [confirmDeleteDesc, setConfirmDeleteDesc] = useState('')
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => {
+      // Preload ALL lazy components so they don't suspend during user interaction
       void loadSettingsModal()
       void loadEpisodeBrowser()
       void loadWatchTogetherModal()
       void loadFixMatchModal()
-    }, 1500)
+      void loadSyncValidatorModal()
+      import('@/components/DuplicateDetector')
+      import('@/components/CalendarView')
+      import('@/components/DeveloperConsole')
+      import('@/components/FullHistoryView')
+      import('@/components/DirectLinksView')
+      import('@/components/RemoteSource/RemoteSourceView')
+    }, 500)
 
     return () => window.clearTimeout(preloadTimer)
   }, [])
@@ -593,15 +626,9 @@ function App() {
     }
   }, [])
 
-  const [currentTime, setCurrentTime] = useState(new Date())
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
   const [notificationFilter, setNotificationFilter] = useState<NotificationFilter>('all')
   const [notifications, setNotifications] = useState<AppNotificationItem[]>(() => loadStoredNotifications())
-
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(timer)
-  }, [])
 
   const notificationIdCounter = useRef(0)
   const pushNotification = useCallback((input: Omit<AppNotificationItem, 'id' | 'createdAt' | 'read'> & { createdAt?: string }) => {
@@ -625,13 +652,35 @@ function App() {
     [notifications],
   )
 
+  // Persist notification center state to localStorage (debounced)
+  const notificationsRef = useRef(notifications)
+  notificationsRef.current = notifications
+
   useEffect(() => {
-    try {
-      localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
-    } catch {
-      console.warn('[App] Failed to persist notifications')
-    }
+    const id = setTimeout(() => {
+      try {
+        localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notifications))
+      } catch {
+        console.warn('[App] Failed to persist notifications')
+      }
+    }, 2000)
+    return () => clearTimeout(id)
   }, [notifications])
+
+  // Flush pending notification writes on tab/window close
+  useEffect(() => {
+    const flush = () => {
+      try {
+        localStorage.setItem(NOTIFICATION_CENTER_STORAGE_KEY, JSON.stringify(notificationsRef.current))
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      // Also flush on unmount in React's case
+      flush()
+    }
+  }, [])
 
   const handleOpenNotificationCenter = useCallback(() => {
     setNotificationCenterOpen(true)
@@ -816,6 +865,12 @@ function App() {
           searchInputRef.current?.focus()
         }
       }
+
+      // CTRL+K or CMD+K to open command palette
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen((prev) => !prev)
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -844,6 +899,7 @@ function App() {
     try {
       const stats = await getLibraryStats(true)
       setLibraryStats(stats)
+      saveCachedLibrarySize(stats.movies + stats.shows + stats.episodes)
     } catch (error) {
       console.error('Failed to load stats', error)
     }
@@ -920,15 +976,8 @@ function App() {
 
     setIsHomeSearching(true)
     try {
-      // Search across all 4 entities: Local Movies, Local TV, Cloud Movies, Cloud TV
-      const [localMovies, localTv, cloudMovies, cloudTv] = await Promise.all([
-        getLibraryFiltered('movie', homeSearchQuery, false),
-        getLibraryFiltered('tv', homeSearchQuery, false),
-        getLibraryFiltered('movie', homeSearchQuery, true),
-        getLibraryFiltered('tv', homeSearchQuery, true)
-      ])
-
-      const combined = [...localMovies, ...localTv, ...cloudMovies, ...cloudTv]
+      // Single IPC call instead of 4 parallel calls
+      const combined = await searchAllLibraries(homeSearchQuery)
       const query = homeSearchQuery.toLowerCase()
 
       // Use Schwartzian transform to pre-calculate lowercase titles for faster sorting
@@ -965,7 +1014,7 @@ function App() {
   const fetchData = useCallback(async () => {
     try {
       let data: MediaItem[] = []
-      if (view === 'cloud') {
+      if (view === 'cloud' && cloudSubTab !== 'collections') {
         // Cloud view - filter by is_cloud = true
         const mediaType = cloudSubTab === 'movies' ? 'movie' : 'tv'
         data = await getLibraryFiltered(mediaType, searchQuery, true)
@@ -1115,12 +1164,13 @@ function App() {
       })
 
       unlistenMpvEnded = await listen<MpvPlaybackEndedPayload>('mpv-playback-ended', async (event) => {
-        const { media_id, title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
+        const { media_id, title, episode_title, season_number, episode_number, media_type, completed, final_position, final_duration } = event.payload
 
         const seasonEpisode = media_type === 'tvepisode' && season_number && episode_number
           ? `S${String(season_number).padStart(2, '0')}E${String(episode_number).padStart(2, '0')}`
           : undefined
-        const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
+        const resolvedTitle = episode_title || title
+        const displayTitle = seasonEpisode ? `${resolvedTitle} (${seasonEpisode})` : resolvedTitle
         const autoMarkAsWatched = async () => {
           await markAsComplete(media_id)
           await emit('media-marked-complete', { media_id })
@@ -1147,14 +1197,13 @@ function App() {
           } else if (shouldPromptToMarkComplete(progressPercent)) {
             setMarkCompleteData({
               mediaId: media_id,
-              title,
+              title: resolvedTitle,
               seasonEpisode,
               progressPercent,
               isCompletionConfirmation: false
             })
             setMarkCompleteDialogOpen(true)
           } else {
-            const displayTitle = seasonEpisode ? `${title} (${seasonEpisode})` : title
             toast({ title: "Progress Saved", description: `${displayTitle} - ${progressPercent.toFixed(0)}% watched` })
           }
         }
@@ -1522,11 +1571,12 @@ function App() {
     try {
       // Check player mode config — use native libmpv if enabled
       const config = await getConfig()
+      const subtitleFilePath = consumePendingSubtitlePath(item.id)
       if (config.player_mode === 'native') {
         await playMediaNative(item.id, resume, audioPreference, subtitlePreference)
         setIsNativePlaying(true)
       } else {
-        await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize)
+        await playMedia(item.id, resume, audioPreference, subtitlePreference, effectiveDuration, effectiveSize, subtitleFilePath)
       }
       if (loadingState) {
         await waitForMpvPlaybackStart(item.id)
@@ -1700,8 +1750,10 @@ function App() {
   }
 
   const handleFixMatch = useCallback((item: MediaItem) => {
-    setItemToFix(item)
-    setFixMatchOpen(true)
+    startTransition(() => {
+      setItemToFix(item)
+      setFixMatchOpen(true)
+    })
   }, [])
 
   const handleStartDownload = useCallback(async (item: MediaItem) => {
@@ -1877,14 +1929,13 @@ function App() {
       setDeleteModalData({ seriesId: item.id, seriesTitle: item.title })
       setDeleteModalOpen(true)
     } else {
-      const deletePrompt = item.ddl_source_id
+      const desc = item.ddl_source_id
         ? `"${item.title}" is a direct-link item. Deleting it will remove it from your library. Continue?`
         : item.parent_zip_id
           ? `"${item.title}" comes from a ZIP archive. Deleting it will remove the ZIP archive from Google Drive and all indexed episodes from that archive. Continue?`
           : `Are you sure you want to permanently delete "${item.title}"?`
-      // TODO: Replace with custom modal
-      const confirmed = confirm(deletePrompt)
-      if (confirmed) {
+      setConfirmDeleteDesc(desc)
+      confirmDeleteActionRef.current = async () => {
         try {
           const result = await deleteMediaFiles([item.id])
           if (result.success) {
@@ -1899,6 +1950,7 @@ function App() {
           toast({ title: "Error", description: "Failed to delete file", variant: "destructive" })
         }
       }
+      setConfirmDeleteOpen(true)
     }
   }, [toast])
 
@@ -1936,11 +1988,13 @@ function App() {
 
   const handleMarkComplete = async () => {
     if (!markCompleteData) return
+    const data = markCompleteData
+    setMarkCompleteData(null)
     try {
-      await markAsComplete(markCompleteData.mediaId)
-      toast({ title: "Marked Complete", description: `${markCompleteData.title} marked as watched` })
+      await markAsComplete(data.mediaId)
+      toast({ title: "Marked Complete", description: `${data.title} marked as watched` })
       // Emit event so EpisodeBrowser and other components can refresh
-      await emit('media-marked-complete', { media_id: markCompleteData.mediaId })
+      await emit('media-marked-complete', { media_id: data.mediaId })
       await Promise.all([loadContinueWatching(), loadRecentlyAdded(), loadHistoryEvents(), runWatchHistorySync()])
       // Refresh library items to update progress display on cards
       await fetchData()
@@ -1954,8 +2008,10 @@ function App() {
   const handleWatchTogether = useCallback((item: MediaItem) => {
     // Only allow if beta is enabled
     if (!betaEnabled) return
-    setWatchTogetherMedia(item)
-    setWatchTogetherOpen(true)
+    startTransition(() => {
+      setWatchTogetherMedia(item)
+      setWatchTogetherOpen(true)
+    })
   }, [betaEnabled])
 
   // Watch Together session change handler
@@ -1983,10 +2039,18 @@ function App() {
     toast({ title: "Theme Locked", description: "Dark mode is optimized for this interface." })
   }
 
+  const handleToggleSidebarPin = useCallback(() => {
+    const current = localStorage.getItem('slasshyvault_sidebar_pinned') === 'true'
+    localStorage.setItem('slasshyvault_sidebar_pinned', String(!current))
+    window.dispatchEvent(new CustomEvent('sidebar-pin-toggle'))
+    toast({ title: current ? 'Sidebar Unpinned' : 'Sidebar Pinned' })
+  }, [toast])
+
   const isUpdateGateActive = updateGateStatus === 'downloading' || updateGateStatus === 'installing'
   const showUpdateNotice = isUpdateNoticeVisible && (Boolean(updateInfo) || updateGateStatus === 'error')
 
   return (
+    <OptimizationContext.Provider value={optim}>
     <div className={`flex h-screen text-foreground overflow-hidden ${isNativePlaying ? 'bg-transparent' : 'bg-background bg-gradient-mesh'}`}>
       {/* Indexing confirmation dialog for first-time users */}
       <Dialog open={showIndexingPrompt} onOpenChange={declineIndexing}>
@@ -2426,9 +2490,10 @@ function App() {
               setHomeSearchQuery('')
               setHomeSearchResults([])
             }}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
             onCloudScan={handleCloudScan}
-            onSyncValidator={() => setShowSyncValidator(true)}
+            onSyncValidator={() => startTransition(() => setShowSyncValidator(true))}
+            onDuplicateDetector={() => startTransition(() => setShowDuplicateDetector(true))}
             theme={theme}
             toggleTheme={toggleTheme}
             isScanning={isScanning}
@@ -2436,7 +2501,7 @@ function App() {
             scanProgress={scanProgress}
             showCloudTab={tabVisibility.showCloud}
             betaEnabled={betaEnabled}
-            downloadJobCount={downloadJobs.filter((job) => job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled').length}
+            downloadJobCount={downloadJobCount}
             className="flex-shrink-0 z-50 h-screen sticky top-0"
           />
 
@@ -2494,6 +2559,17 @@ function App() {
                     >
                       <Tv className="size-3.5" />
                       <span>TV Shows</span>
+                    </motion.button>
+                    <motion.button
+                      onClick={() => setCloudSubTab('collections')}
+                      whileTap={{ scale: 0.95 }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${cloudSubTab === 'collections'
+                        ? 'bg-white text-black shadow-md'
+                        : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                      <FolderOpen className="size-3.5" />
+                      <span>Collections</span>
                     </motion.button>
                   </div>
 
@@ -2611,7 +2687,27 @@ function App() {
                       exit={{ opacity: 0 }}
                       className="h-full"
                     >
-                      <RemoteSourceView />
+                      <Suspense fallback={<LoadingFallback />}>
+                        <RemoteSourceView />
+                      </Suspense>
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </div>
+            ) : view === 'calendar' ? (
+              <div className="flex-1 overflow-hidden">
+                <div className="h-full min-h-0">
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key="calendar"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full"
+                    >
+                      <Suspense fallback={<LoadingFallback />}>
+                        <CalendarView />
+                      </Suspense>
                     </motion.div>
                   </AnimatePresence>
                 </div>
@@ -2654,20 +2750,7 @@ function App() {
                         <div className="relative flex-1 flex flex-col min-h-0">
                           {/* 1. Header Row: Clock + Branding + Date */}
                            <div className="pt-16 pb-6 flex flex-col items-center justify-center flex-shrink-0 w-full gap-2 relative">
-                            <div className="flex flex-col items-center gap-2">
-                                <div className="flex items-baseline gap-3">
-                                    <h1 className="text-5xl font-black text-white tabular-nums drop-shadow-2xl flex items-center gap-2">
-                                        <span>{String(currentTime.getHours()).padStart(2, '0')}</span>
-                                        <span className="text-white/40">:</span>
-                                        <span>{String(currentTime.getMinutes()).padStart(2, '0')}</span>
-                                        <span className="text-white/40">:</span>
-                                        <span>{String(currentTime.getSeconds()).padStart(2, '0')}</span>
-                                    </h1>
-                                </div>
-                                <p className="text-xs font-bold text-white/20 uppercase tracking-[0.25em]">
-                                    {currentTime.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-                                </p>
-                            </div>
+                            <Clock />
                           </div>
 
                           {/* 2. Centered Sleek Search Bar */}
@@ -2861,45 +2944,37 @@ function App() {
                                   </motion.div>
                                 )}
 
-                                {/* Empty state - Fixed scale */}
+                                {/* Empty state */}
                                 {continueWatching.length === 0 && libraryStats.movies === 0 && libraryStats.shows === 0 && (
                                   <motion.div
-                                    className="empty-state glass py-12 rounded-[40px] shadow-2xl border border-white/5 flex-1 flex flex-col justify-center"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="flex flex-col items-center justify-center flex-1 py-16"
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
                                   >
-                                    <div className="empty-state-icon mb-10 relative flex justify-center">
-                                      {/* Animated rings matching Cloud View indexing aesthetic */}
-                                      <motion.div
-                                        className="absolute rounded-full border-2 border-white/10"
-                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
-                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut" }}
-                                        style={{ width: 100, height: 100 }}
-                                      />
-                                      <motion.div
-                                        className="absolute rounded-full border-2 border-white/10"
-                                        animate={{ scale: [1, 1.8, 1.8], opacity: [0.2, 0, 0] }}
-                                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut", delay: 0.8 }}
-                                        style={{ width: 100, height: 100 }}
-                                      />
-                                      <div className="p-8 rounded-[32px] bg-white/5 border border-white/10 backdrop-blur-3xl relative z-10">
-                                        <Film className="size-16 text-white/40" />
-                                      </div>
+                                    {/* Subtle radial glow */}
+                                    <div className="absolute w-[400px] h-[200px] bg-white/[0.02] rounded-full blur-[80px] pointer-events-none" />
+
+                                    {/* Icon */}
+                                    <div className="mb-8 p-6 rounded-[28px] bg-white/[0.03] border border-white/[0.06]">
+                                      <Film className="size-14 text-white/30" strokeWidth={1.5} />
                                     </div>
-                                    <h3 className="text-3xl font-black text-white tracking-tighter mb-3">Your library is waiting</h3>
-                                    <p className="text-base text-white/30 max-w-sm mb-10 leading-relaxed font-medium mx-auto">
-                                      Connect your Google Drive account to transform this space into your ultimate private library.
+
+                                    {/* Copy */}
+                                    <h3 className="text-2xl font-bold text-white tracking-tight mb-2">Your library is waiting</h3>
+                                    <p className="text-sm text-white/20 mb-8 max-w-xs">
+                                      Connect Google Drive to start building your collection.
                                     </p>
-                                    <div className="flex justify-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => setSettingsOpen(true)}
-                                        className="btn-primary-compact py-4 px-10 rounded-2xl inline-flex items-center gap-3 text-base font-bold shadow-glow-sm hover:shadow-glow transition-all"
-                                      >
-                                        <Sparkles className="size-5 text-black" />
-                                        <span>Start Your Collection</span>
-                                      </button>
-                                    </div>
+
+                                    {/* CTA */}
+                                    <button
+                                      type="button"
+                                      onClick={() => startTransition(() => setSettingsOpen(true))}
+                                      className="btn-primary py-3 px-8 rounded-xl inline-flex items-center gap-2.5 text-sm font-semibold shadow-glow-sm hover:shadow-glow transition-all"
+                                    >
+                                      <Sparkles className="size-4 text-black" />
+                                      <span>Start Your Collection</span>
+                                    </button>
                                   </motion.div>
                                 )}
                               </div>
@@ -2920,10 +2995,12 @@ function App() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                       >
+                      <Suspense fallback={<LoadingFallback />}>
                         <FullHistoryView
                           analyticsData={analyticsData}
                           onAnalyticsTabActive={loadAnalytics}
                         />
+                      </Suspense>
                       </motion.div>
                     )}
 
@@ -2956,6 +3033,7 @@ function App() {
                         {/* Background Decorative Layer - Matching Home View Aesthetic */}
                         <div className="absolute inset-0 bg-gradient-mesh opacity-20 pointer-events-none" />
                         <div className="absolute inset-0 bg-sheen opacity-10 pointer-events-none" />
+                      <Suspense fallback={<LoadingFallback />}>
                         <DirectLinksView
                           onIndexComplete={handleDdlIndexComplete}
                           viewMode={viewMode}
@@ -2965,11 +3043,29 @@ function App() {
                           onDelete={handleDelete}
                           onWatchTogether={betaEnabled ? handleWatchTogether : undefined}
                         />
+                      </Suspense>
                       </motion.div>
                     )}
 
                     {/* Cloud Media Grid */}
-                    {view === 'cloud' && (
+                    {view === 'cloud' && cloudSubTab === 'collections' && (
+                      <motion.div
+                        key="cloud-collections"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <SmartCollections
+                          onItemClick={handleItemClick}
+                          onFixMatch={handleFixMatch}
+                          onDownload={handleStartDownload}
+                          onDelete={handleDelete}
+                          viewMode={viewMode}
+                        />
+                      </motion.div>
+                    )}
+
+                    {view === 'cloud' && cloudSubTab !== 'collections' && (
                       <motion.div
                         key={`cloud-${cloudSubTab}`}
                         initial={{ opacity: 0 }}
@@ -3118,10 +3214,10 @@ function App() {
                                       ) : (
                                         <button
                                           type="button"
-                                          onClick={() => {
+                                          onClick={() => startTransition(() => {
                                             setSettingsInitialTab('cloud')
                                             setSettingsOpen(true)
-                                          }}
+                                          })}
                                           className="btn-primary inline-flex items-center gap-3 px-8 py-4 text-base rounded-2xl"
                                         >
                                           <Sparkles className="size-5" />
@@ -3179,6 +3275,13 @@ function App() {
             />
           </Suspense>
 
+          <Suspense fallback={null}>
+            <DuplicateDetector
+              isOpen={showDuplicateDetector}
+              onClose={() => setShowDuplicateDetector(false)}
+            />
+          </Suspense>
+
           <ContentDetailsModal
             open={contentDetailsOpen}
             onOpenChange={handleContentDetailsOpenChange}
@@ -3196,7 +3299,7 @@ function App() {
             <ResumeDialog
               open={resumeDialogOpen}
               onOpenChange={setResumeDialogOpen}
-              title={resumeDialogData.item.title}
+              title={displayTitleFor(resumeDialogData.item)}
               mediaType={resumeDialogData.item.media_type}
               seasonEpisode={
                 resumeDialogData.item.season_number !== undefined && resumeDialogData.item.episode_number !== undefined
@@ -3214,8 +3317,8 @@ function App() {
           {playConfirmData && (
             <PlayConfirmDialog
               open={playConfirmOpen}
-              onOpenChange={setPlayConfirmOpen}
-              title={playConfirmData.title}
+              onOpenChange={(open) => { setPlayConfirmOpen(open); if (!open) setPlayConfirmData(null) }}
+              title={displayTitleFor(playConfirmData)}
               mediaType={playConfirmData.media_type}
               seasonEpisode={
                 playConfirmData.season_number !== undefined && playConfirmData.episode_number !== undefined
@@ -3308,6 +3411,7 @@ function App() {
               progressPercent={markCompleteData.progressPercent}
               onMarkComplete={handleMarkComplete}
               onKeepProgress={() => {
+                setMarkCompleteData(null)
                 toast({ title: "Progress Saved", description: `${markCompleteData.title} - ${markCompleteData.progressPercent.toFixed(0)}% watched` })
               }}
             />
@@ -3337,7 +3441,7 @@ function App() {
             <WatchTogetherBanner
               room={wtActiveRoom}
               isPlaying={wtIsPlaying}
-              onOpenModal={() => setWatchTogetherOpen(true)}
+              onOpenModal={() => startTransition(() => setWatchTogetherOpen(true))}
               onLeave={handleWtLeave}
             />
           )}
@@ -3351,12 +3455,41 @@ function App() {
             onClearAll={clearNotifications}
           />
 
+          <CommandPalette
+            open={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            setView={(v) => {
+              setView(v)
+              setSelectedShow(null)
+              setSearchQuery('')
+              setHomeSearchQuery('')
+              setHomeSearchResults([])
+            }}
+            onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
+            onCloudScan={handleCloudScan}
+            onSyncValidator={() => startTransition(() => setShowSyncValidator(true))}
+            onToggleSidebarPin={handleToggleSidebarPin}
+            continueWatching={continueWatching}
+            onPlayItem={startPlaybackFlow}
+          />
+
           <Toaster />
+
+          <ConfirmDialog
+            open={confirmDeleteOpen}
+            onOpenChange={setConfirmDeleteOpen}
+            title="Delete Media"
+            description={confirmDeleteDesc}
+            confirmLabel="Delete"
+            variant="destructive"
+            onConfirm={() => confirmDeleteActionRef.current?.()}
+          />
 
           {import.meta.env.DEV && <DeveloperConsole />}
         </>
       )}
     </div>
+    </OptimizationContext.Provider>
   )
 }
 

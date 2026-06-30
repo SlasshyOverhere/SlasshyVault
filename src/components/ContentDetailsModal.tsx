@@ -9,6 +9,7 @@ import {
   getMediaTechnicalDetails,
   ImdbEpisodeRating, getEpisodeImdbRatings,
   getSeriesSpoilerEnabled, setSeriesSpoilerEnabled,
+  setPendingSubtitlePath,
   type AudioTrackOption, type SubtitleTrackOption, type MediaTechnicalDetails
 } from "@/services/api"
 import { Dialog, DialogContent, DialogDescription, DialogPortal, DialogTitle } from "@/components/ui/dialog"
@@ -23,6 +24,8 @@ import { ShareDialog } from "@/components/ShareDialog"
 import { EpisodeThumbnailImage } from "@/components/EpisodeThumbnailImage"
 import { getZipCompressionLabel } from "@/utils/zip"
 import { ImdbDetailsPanel } from "@/components/ImdbDetailsPanel"
+import { CastMemberPanel } from "@/components/CastMemberPanel"
+import { SubtitleSelector } from "@/components/SubtitleSelector"
 
 interface ContentDetailsModalProps {
   open: boolean
@@ -210,10 +213,13 @@ export function ContentDetailsModal({
   const [selectedSubtitlePreference, setSelectedSubtitlePreference] = useState<string>(AUTO_SUBTITLE_VALUE)
   const [customSubtitlePreference, setCustomSubtitlePreference] = useState("")
   const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false)
+  const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false)
+  const [selectedSubtitlePath, setSelectedSubtitlePath] = useState<string | null>(null)
   const [shareFileId, setShareFileId] = useState<string | null>(null)
   const [shareFileName, setShareFileName] = useState<string>("")
   const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false)
   const [imdbPanelImdbId, setImdbPanelImdbId] = useState<string | null>(null)
+  const [castPanelName, setCastPanelName] = useState<string | null>(null)
   const [refreshCounter, setRefreshCounter] = useState(0)
 
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null)
@@ -489,6 +495,8 @@ export function ContentDetailsModal({
       setLoadingEpisodes(false)
       setTmdbEpisodesBySeason(new Map())
       setPlaybackSettingsOpen(false)
+      setSubtitlePanelOpen(false)
+      setSelectedSubtitlePath(null)
       return
     }
 
@@ -1222,11 +1230,15 @@ export function ContentDetailsModal({
                       </div>
                     )}
                     {(director || creator) && (
-                      <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCastPanelName(isShow ? creator : director)}
+                        className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                      >
                         <User className="size-3.5 text-white/25" />
                         <span className="text-white/80">{isShow ? creator : director}</span>
                         <span className="text-[9px] uppercase tracking-widest opacity-25">{isShow ? "Creator" : "Director"}</span>
-                      </div>
+                      </button>
                     )}
                     {zipCompressionLabel && (
                       <div className="px-2.5 py-1 rounded bg-white/5 border border-white/5 text-[9px] font-bold text-white/50 tracking-widest ml-1">
@@ -1240,9 +1252,14 @@ export function ContentDetailsModal({
                       <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20">Cast</p>
                       <div className="flex flex-wrap gap-x-3 gap-y-1.5">
                         {castList.slice(0, 8).map(name => (
-                          <span key={name} className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-default">
+                          <button
+                            type="button"
+                            key={name}
+                            onClick={() => setCastPanelName(name)}
+                            className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-pointer"
+                          >
                             {name}
-                          </span>
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -1250,8 +1267,11 @@ export function ContentDetailsModal({
 
                   {!isShow && (
                     <div className="shrink-0 mb-2 flex items-center gap-4">
-                      <Button 
-                        onClick={() => onPrimaryAction(displayItem)} 
+                      <Button
+                        onClick={() => {
+                          if (selectedSubtitlePath && displayItem.id) setPendingSubtitlePath(displayItem.id, selectedSubtitlePath)
+                          onPrimaryAction(displayItem)
+                        }}
                         className="h-14 px-10 rounded-full text-base font-bold tracking-tight shadow-[0_15px_40px_rgba(255,255,255,0.1)] hover:shadow-[0_20px_50px_rgba(255,255,255,0.15)] hover:scale-[1.02] active:scale-95 transition-all duration-500 bg-white text-black hover:bg-white"
                       >
                         <Play className="size-4 mr-2.5 fill-current" /> Play Now
@@ -1356,6 +1376,22 @@ export function ContentDetailsModal({
                       <SlidersHorizontal className="size-3.5" />
                       <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Audio</span>
                     </button>
+                    {item?.imdb_id && (
+                      <button
+                        type="button"
+                        onClick={() => setSubtitlePanelOpen(true)}
+                        className={cn(
+                          "size-8 flex items-center justify-center rounded-full transition-all duration-300 group relative",
+                          selectedSubtitlePath
+                            ? "bg-white/15 hover:bg-white/25 text-white"
+                            : "bg-white/5 hover:bg-white/10 text-white/50 hover:text-white",
+                        )}
+                        title="OpenSubtitles"
+                      >
+                        <Captions className="size-3.5" />
+                        <span className="absolute bottom-full mb-3 right-0 px-1.5 py-0.5 rounded bg-black/80 text-[9px] text-white font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity uppercase tracking-widest whitespace-nowrap">Subs</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={toggleSpoiler}
@@ -1409,8 +1445,14 @@ export function ContentDetailsModal({
                               type="button"
                               key={ep.id}
                               tabIndex={0}
-                              onClick={() => onPrimaryAction(ep)}
-                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onPrimaryAction(ep) }}
+                              onClick={() => {
+                                if (selectedSubtitlePath && ep.id) setPendingSubtitlePath(ep.id, selectedSubtitlePath)
+                                onPrimaryAction(ep)
+                              }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") {
+                                if (selectedSubtitlePath && ep.id) setPendingSubtitlePath(ep.id, selectedSubtitlePath)
+                                onPrimaryAction(ep)
+                              } }}
                               className="group flex gap-4 p-3 rounded-[1.6rem] bg-white/[0.03] border border-white/[0.05] hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-2xl"
                             >
                               <div className="relative w-36 sm:w-48 aspect-video rounded-2xl overflow-hidden shrink-0 bg-white/5 shadow-lg">
@@ -1581,6 +1623,30 @@ export function ContentDetailsModal({
             </button>
           )}
 
+          {subtitlePanelOpen && item && (
+            <button
+              type="button"
+              tabIndex={-1}
+              className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 px-4 backdrop-blur-[3px]"
+              onClick={() => setSubtitlePanelOpen(false)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSubtitlePanelOpen(false) }}
+            >
+              <div
+                className="w-full max-w-[430px]"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <SubtitleSelector
+                  item={item}
+                  onSubtitleReady={(path) => {
+                    setSelectedSubtitlePath(path)
+                    setSubtitlePanelOpen(false)
+                    toast({ title: "Subtitle ready", description: "Will be used on next playback." })
+                  }}
+                />
+              </div>
+            </button>
+          )}
+
           {shareFileId && (
             <ShareDialog
               open={true}
@@ -1648,6 +1714,17 @@ export function ContentDetailsModal({
         imdbId={imdbPanelImdbId}
         tmdbId={item?.tmdb_id ? Number(item.tmdb_id) : undefined}
         mediaType={item?.media_type === "tvshow" ? "tv" : "movie"}
+      />
+    )}
+    {castPanelName && (
+      <CastMemberPanel
+        open={true}
+        onOpenChange={() => setCastPanelName(null)}
+        castName={castPanelName}
+        onItemClick={(clickedItem) => {
+          setCastPanelName(null)
+          onPrimaryAction(clickedItem)
+        }}
       />
     )}
     </>

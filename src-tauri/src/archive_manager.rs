@@ -935,6 +935,7 @@ mod tests {
             still_path: None,
             is_cloud: None,
             cloud_file_id: None,
+            cloud_folder_id: None,
             archive_format: None,
             parent_zip_id: None,
             zip_entry_path: None,
