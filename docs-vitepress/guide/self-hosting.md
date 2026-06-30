@@ -21,6 +21,12 @@ The only external dependency is a tiny OAuth backend for Google sign-in. It's a 
 | `PORT` | — | 3001 | Server port |
 | `OAUTH_CALLBACK_URL` | — | `http://localhost:8085/callback` | Redirect target for the Tauri app |
 
+## Pointing the App to Your Backend
+
+On the **login screen**, click the "Self-hosted backend?" link, enter your backend URL (e.g. `https://your-app.onrender.com`), and click Save. The app will use your backend for OAuth instead of the default.
+
+This URL is stored in config as `dev_backend_url`. The Rust backend reads it from `media_config.json` at startup — no rebuild needed.
+
 ## Endpoints
 
 | Endpoint | Method | Purpose |
