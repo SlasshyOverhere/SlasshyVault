@@ -108,6 +108,8 @@ export interface Config {
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
   notifications_enabled?: boolean;
+  // Override the OAuth backend URL for self-hosting
+  dev_backend_url?: string;
   // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
   player_mode?: "native" | "external";
   // User-configured addon URL for External tab streaming
