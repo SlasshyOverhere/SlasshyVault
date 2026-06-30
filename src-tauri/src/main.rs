@@ -33,7 +33,7 @@ use notify_rust::Notification as SystemNotification;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -15335,29 +15335,70 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
         return;
     }
 
+    let total = candidates.len();
     println!(
-        "[STARTUP] Metadata enrichment queued for {} item(s)...",
-        candidates.len()
+        "[STARTUP] Metadata enrichment queued for {} item(s) with {} parallel workers...",
+        total,
+        16.min(total).max(1)
     );
 
     let db_path = database::get_database_path();
     let image_cache_dir = database::get_image_cache_dir();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize), String> {
-        let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
-        let mut updated = 0usize;
-        let mut failed = 0usize;
-        let mut no_match = 0usize;
 
-        for (idx, item) in candidates.iter().enumerate() {
-            let tmdb_media_type = if item.media_type == "tvshow" {
-                "tv"
-            } else {
-                "movie"
-            };
+    // Parallel worker design: chunk candidates into groups, each gets its own DB connection.
+    // WAL mode allows concurrent readers+writes without contention.
+    let num_workers = 16usize.min(total).max(1);
+    let chunk_size = (total + num_workers - 1) / num_workers;
+    let updated = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let no_match = Arc::new(AtomicUsize::new(0));
 
-            let metadata_result = if let Some(ref tid) = item.tmdb_id {
-                let cleaned = tid.trim();
-                if cleaned.is_empty() {
+    let mut handles = Vec::with_capacity(num_workers);
+
+    for chunk in candidates.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        let credential = credential.clone();
+        let db_path = db_path.clone();
+        let image_cache_dir = image_cache_dir.clone();
+        let updated = updated.clone();
+        let failed = failed.clone();
+        let no_match = no_match.clone();
+
+        handles.push(tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let db = database::Database::new(&db_path).map_err(|e| e.to_string())?;
+            // Begin a batch transaction for this chunk — 1 commit per ~16 items
+            // instead of individual commits per item
+            db.begin_batch().map_err(|e| e.to_string())?;
+
+            for item in &chunk {
+                let tmdb_media_type = if item.media_type == "tvshow" {
+                    "tv"
+                } else {
+                    "movie"
+                };
+
+                let metadata_result = if let Some(ref tid) = item.tmdb_id {
+                    let cleaned = tid.trim();
+                    if cleaned.is_empty() {
+                        tmdb::search_metadata(
+                            &credential,
+                            &item.title,
+                            tmdb_media_type,
+                            item.year,
+                            &image_cache_dir,
+                        )
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "No TMDB match found".to_string())
+                    } else {
+                        tmdb::fetch_metadata_by_id(
+                            &credential,
+                            cleaned,
+                            tmdb_media_type,
+                            &image_cache_dir,
+                        )
+                        .map_err(|e| e.to_string())
+                    }
+                } else {
                     tmdb::search_metadata(
                         &credential,
                         &item.title,
@@ -15367,117 +15408,93 @@ async fn run_startup_metadata_enrichment(app_handle: AppHandle) {
                     )
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "No TMDB match found".to_string())
-                } else {
-                    tmdb::fetch_metadata_by_id(
-                        &credential,
-                        cleaned,
-                        tmdb_media_type,
-                        &image_cache_dir,
-                    )
-                    .map_err(|e| e.to_string())
-                }
-            } else {
-                tmdb::search_metadata(
-                    &credential,
-                    &item.title,
-                    tmdb_media_type,
-                    item.year,
-                    &image_cache_dir,
-                )
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "No TMDB match found".to_string())
-            };
+                };
 
-            match metadata_result {
-                Ok(mut metadata) => {
-                    metadata.title = media_manager::prefer_title_with_leading_article(
-                        &item.title,
-                        &metadata.title,
-                    );
+                match metadata_result {
+                    Ok(mut metadata) => {
+                        metadata.title = media_manager::prefer_title_with_leading_article(
+                            &item.title,
+                            &metadata.title,
+                        );
 
-                    // PRIMARY poster source: try imdbapi.dev first if we have an imdb_id
-                    // imdbapi.dev primaryImage is preferred over TMDB poster
-                    let tmdb_poster = metadata.poster_path.clone();
-                    if let Some(ref imdb_id) = metadata.imdb_id {
-                        println!("[IMDBAPI] Enrichment primary: trying poster for \"{}\" (imdb_id: {})", item.title, imdb_id);
-                        let image_type = if item.media_type == "tv" || item.media_type == "tvshow" {
-                            tmdb::ImageType::SeriesBanner
-                        } else {
-                            tmdb::ImageType::MovieBanner
-                        };
-                        let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
-                        if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
-                            if let Ok(json) = resp.json::<serde_json::Value>() {
-                                if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
-                                    if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
-                                        println!("[IMDBAPI] Enrichment poster (primary) result: Ok(\"{}\")", cached_path);
-                                        metadata.poster_path = Some(cached_path);
+                        // PRIMARY poster source: try imdbapi.dev first if we have an imdb_id
+                        let tmdb_poster = metadata.poster_path.clone();
+                        if let Some(ref imdb_id) = metadata.imdb_id {
+                            println!("[IMDBAPI] Enrichment primary: trying poster for \"{}\" (imdb_id: {})", item.title, imdb_id);
+                            let image_type = if item.media_type == "tv" || item.media_type == "tvshow" {
+                                tmdb::ImageType::SeriesBanner
+                            } else {
+                                tmdb::ImageType::MovieBanner
+                            };
+                            let imdb_url = format!("https://api.imdbapi.dev/titles/{}", imdb_id);
+                            if let Ok(resp) = http_client::shared_client().get(&imdb_url).send() {
+                                if let Ok(json) = resp.json::<serde_json::Value>() {
+                                    if let Some(img_url) = json.get("primaryImage").and_then(|i| i.get("url")).and_then(|u| u.as_str()) {
+                                        if let Some(cached_path) = tmdb::cache_imdb_image(img_url, std::path::Path::new(&image_cache_dir), &image_type) {
+                                            println!("[IMDBAPI] Enrichment poster (primary) result: Ok(\"{}\")", cached_path);
+                                            metadata.poster_path = Some(cached_path);
+                                        } else {
+                                            println!("[IMDBAPI] Enrichment poster (primary) result: Err(cache failed), keeping TMDB poster");
+                                        }
                                     } else {
-                                        println!("[IMDBAPI] Enrichment poster (primary) result: Err(cache failed), keeping TMDB poster");
+                                        println!("[IMDBAPI] Enrichment poster (primary) result: Err(no image in response), keeping TMDB poster");
                                     }
-                                } else {
-                                    println!("[IMDBAPI] Enrichment poster (primary) result: Err(no image in response), keeping TMDB poster");
                                 }
                             }
                         }
-                    }
 
-                    // FALLBACK: TMDB poster is only kept if imdbapi.dev didn't provide one
-                    if metadata.poster_path == tmdb_poster && metadata.poster_path.is_some() {
-                        println!("[TMDB] Using TMDB poster for \"{}\": poster={:?}", item.title, metadata.poster_path);
-                    } else if metadata.poster_path.is_some() {
-                        println!("[TMDB] Enriched \"{}\": imdbapi.dev poster used as primary", item.title);
-                    }
+                        if metadata.poster_path == tmdb_poster && metadata.poster_path.is_some() {
+                            println!("[TMDB] Using TMDB poster for \"{}\": poster={:?}", item.title, metadata.poster_path);
+                        } else if metadata.poster_path.is_some() {
+                            println!("[TMDB] Enriched \"{}\": imdbapi.dev poster used as primary", item.title);
+                        }
 
-                    if db.update_metadata(item.id, &metadata).is_ok() {
-                        updated += 1;
-                    } else {
-                        failed += 1;
+                        if db.update_metadata(item.id, &metadata).is_ok() {
+                            updated.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                }
-                Err(err) => {
-                    if err.contains("No TMDB match found") {
-                        no_match += 1;
-                    } else {
-                        failed += 1;
+                    Err(err) => {
+                        if err.contains("No TMDB match found") {
+                            no_match.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
 
-            if (idx + 1) % 25 == 0 {
-                println!(
-                    "[STARTUP] Metadata enrichment progress: {}/{}",
-                    idx + 1,
-                    candidates.len()
-                );
-            }
+            // Single commit per chunk
+            db.commit_batch().map_err(|e| e.to_string())?;
+            Ok(())
+        }));
+    }
+
+    // Wait for all parallel workers
+    for handle in handles {
+        if let Err(e) = handle.await.unwrap_or_else(|e| Err(e.to_string())) {
+            println!("[STARTUP] Enrichment worker failed: {}", e);
         }
+    }
 
-        let remaining = db
+    let updated = updated.load(Ordering::Relaxed);
+    let failed = failed.load(Ordering::Relaxed);
+    let no_match = no_match.load(Ordering::Relaxed);
+
+    // Check remaining after parallel pass
+    let remaining = match database::Database::new(&db_path) {
+        Ok(db) => db
             .get_media_needing_metadata_enrichment(1)
             .map(|rows| rows.len())
-            .unwrap_or(1);
-
-        println!(
-            "[STARTUP] Metadata enrichment done. updated={}, failed={}, unmatched={}, remaining={}",
-            updated, failed, no_match, remaining
-        );
-
-        Ok((updated, failed + no_match, remaining))
-    })
-    .await;
-
-    let (updated, _not_updated, _remaining) = match result {
-        Ok(Ok(values)) => values,
-        Ok(Err(err)) => {
-            println!("[STARTUP] Metadata enrichment failed: {}", err);
-            return;
-        }
-        Err(err) => {
-            println!("[STARTUP] Metadata enrichment task join error: {}", err);
-            return;
-        }
+            .unwrap_or(0),
+        Err(_) => 0,
     };
+
+    println!(
+        "[STARTUP] Metadata enrichment done. updated={}, failed={}, unmatched={}, remaining={}",
+        updated, failed, no_match, remaining
+    );
 
     if updated > 0 {
         if let Some(window) = app_handle.get_window("main") {

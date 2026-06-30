@@ -2,6 +2,7 @@
 //! Handles OAuth2 authentication and Google Drive API operations
 
 use crate::archive_manager;
+use crate::database::get_app_data_dir;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,7 +12,6 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::database::get_app_data_dir;
 
 // Backend auth server URL (handles OAuth securely)
 // This keeps client_id and client_secret on the server
@@ -1613,10 +1613,9 @@ fn deobfuscate_aes(data: &str) -> Result<String, String> {
 }
 
 /// Derives a machine-specific encryption key. Combines a hardcoded app secret
-/// with the current username, hostname, and app data path to produce a key that
-/// is unique per machine + user. Not military-grade, but a significant upgrade
-/// over plain base64: tokens encrypted on one machine/user can't be trivially
-/// decrypted on another, and offline cracking requires knowing the secret.
+/// with username and hostname to produce a key unique per machine + user.
+/// Does NOT depend on app data dir so debug and release builds share the same key.
+/// Not military-grade, but a significant upgrade over plain base64.
 fn derive_encryption_key() -> [u8; 32] {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -1636,9 +1635,6 @@ fn derive_encryption_key() -> [u8; 32] {
     }
     if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
         host.hash(&mut hasher);
-    }
-    if let Some(data_dir) = crate::database::get_app_data_dir().to_str() {
-        data_dir.hash(&mut hasher);
     }
 
     let seed = hasher.finish();
@@ -1670,9 +1666,6 @@ fn derive_legacy_encryption_key() -> [u8; 32] {
     }
     if let Ok(host) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
         host.hash(&mut hasher);
-    }
-    if let Some(data_dir) = crate::database::get_app_data_dir().to_str() {
-        data_dir.hash(&mut hasher);
     }
 
     let seed = hasher.finish();

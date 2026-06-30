@@ -451,8 +451,11 @@ pub struct SyncValidationReport {
 impl Database {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // WAL mode: concurrent reads + writes without blocking each other.
+        // Critical for background enrichment writing while UI reads library.
+        let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()));
+        conn.execute("PRAGMA synchronous = NORMAL", [])?;
         // Enable foreign key enforcement so ON DELETE CASCADE works.
-        // SQLite has foreign_keys OFF by default per connection.
         conn.execute("PRAGMA foreign_keys = ON", [])?;
         let db = Database { conn };
         db.init()?;
@@ -2160,6 +2163,17 @@ impl Database {
                 media_id
             ],
         )?;
+        Ok(())
+    }
+
+    // Batch transaction helpers for bulk enrichment
+    pub fn begin_batch(&self) -> Result<()> {
+        self.conn.execute("BEGIN", [])?;
+        Ok(())
+    }
+
+    pub fn commit_batch(&self) -> Result<()> {
+        self.conn.execute("COMMIT", [])?;
         Ok(())
     }
 
