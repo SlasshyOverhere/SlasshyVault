@@ -3,7 +3,7 @@
   "author": "Suman Patgiri",
   "license": "MIT",
   "private": true,
-  "version": "3.0.57",
+  "version": "3.0.58",
   "type": "module",
   "scripts": {
     "dev": "vite",
