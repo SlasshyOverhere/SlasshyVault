@@ -1,0 +1,3 @@
+## 2024-06-30 — Improve keyboard focus visibility and indicate active navigation state
+Learning: Custom styled components built out of `button` and `div`s often lack visible focus indicators out-of-the-box when navigated via keyboard. Without `aria-current`, users relying on screen readers cannot distinguish the currently active navigation item.
+Action: Add clear visual focus styles using standard design tokens (like `focus-visible:ring`) to interactive elements. For active navigation states in sidebars or nav bars, explicitly set `aria-current="page"` instead of just relying on visual highlights.
