@@ -8,8 +8,8 @@ export default defineConfig({
     logo: false,
     siteTitle: 'SlasshyVault',
     nav: [
-      { text: 'Home', link: '/SlasshyVault/' },
-      { text: 'Guide', link: '/SlasshyVault/guide/getting-started' },
+      { text: 'Home', link: '/' },
+      { text: 'Guide', link: '/guide/getting-started' },
       { text: 'GitHub', link: 'https://github.com/SlasshyOverhere/SlasshyVault' },
     ],
     sidebar: {
@@ -17,18 +17,18 @@ export default defineConfig({
         {
           text: 'Getting Started',
           items: [
-            { text: 'Quick Start', link: '/SlasshyVault/guide/getting-started' },
-            { text: 'Architecture', link: '/SlasshyVault/guide/architecture' },
-            { text: 'Configuration', link: '/SlasshyVault/guide/configuration' },
-            { text: 'API Keys', link: '/SlasshyVault/guide/api-keys' },
-            { text: 'Watch Together', link: '/SlasshyVault/guide/watch-together' },
-            { text: 'Self-Hosting', link: '/SlasshyVault/guide/self-hosting' },
+            { text: 'Quick Start', link: '/guide/getting-started' },
+            { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'API Keys', link: '/guide/api-keys' },
+            { text: 'Watch Together', link: '/guide/watch-together' },
+            { text: 'Self-Hosting', link: '/guide/self-hosting' },
           ],
         },
         {
           text: 'Info',
           items: [
-            { text: 'FAQ', link: '/SlasshyVault/guide/faq' },
+            { text: 'FAQ', link: '/guide/faq' },
           ],
         },
       ],
@@ -36,8 +36,8 @@ export default defineConfig({
         {
           text: 'Legal',
           items: [
-            { text: 'Terms of Service', link: '/SlasshyVault/legal/terms' },
-            { text: 'Privacy Policy', link: '/SlasshyVault/legal/privacy' },
+            { text: 'Terms of Service', link: '/legal/terms' },
+            { text: 'Privacy Policy', link: '/legal/privacy' },
           ],
         },
       ],
