@@ -11,6 +11,7 @@ mod gdrive;
 mod log_buffer;
 mod media_manager;
 mod mpv_ipc;
+mod cf_relay;
 mod tmdb;
 mod transcoder;
 mod watch_together;
@@ -6237,8 +6238,7 @@ async fn fix_match(
                         "",
                     );
                     let client = http_client::shared_client();
-                    let use_bearer = crate::is_access_token(&api_key_c)
-                        && !tmdb::is_backend_proxy_credential(&api_key_c);
+                    let use_bearer = crate::is_access_token(&api_key_c);
                     let req = if use_bearer {
                         client
                             .get(&ext_url)
@@ -7349,16 +7349,6 @@ fn is_access_token(credential: &str) -> bool {
 /// - For API keys: adds ?api_key=XXX to URL
 /// - For access tokens: returns URL without api_key (auth goes in header)
 fn build_tmdb_api_url(path: &str, credential: &str, extra_params: &str) -> String {
-    if tmdb::is_backend_proxy_credential(credential) {
-        let base = tmdb::get_tmdb_proxy_base_url();
-        let normalized_path = path.trim_start_matches('/');
-        return if extra_params.is_empty() {
-            format!("{}/{}", base, normalized_path)
-        } else {
-            format!("{}/{}?{}", base, normalized_path, extra_params)
-        };
-    }
-
     let base = "https://api.themoviedb.org/3";
     if is_access_token(credential) {
         if extra_params.is_empty() {
@@ -7383,7 +7373,7 @@ fn http_get_with_retry_auth(
     max_retries: u32,
 ) -> Result<reqwest::blocking::Response, String> {
     let mut last_error = String::new();
-    let use_bearer = is_access_token(credential) && !tmdb::is_backend_proxy_credential(credential);
+    let use_bearer = is_access_token(credential);
 
     for attempt in 0..max_retries {
         if attempt > 0 {
@@ -7504,51 +7494,15 @@ fn http_get_with_retry(url: &str, max_retries: u32) -> Result<reqwest::blocking:
 // OMDb Helpers
 // ============================================
 
-const OMDB_PROXY_CREDENTIAL: &str = "__OMDB_BACKEND_PROXY__";
-const DEFAULT_OMDB_PROXY_BASE_URL: &str =
-    "https://slasshyvault.onrender.com/api/omdb";
-
-fn get_omdb_proxy_base_url() -> String {
-    // Check media_config.json for dev_backend_url override
-    let config_path = crate::database::get_app_data_dir().join("media_config.json");
-    if let Ok(contents) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-            if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
-                let trimmed = backend_url.trim().trim_end_matches('/').to_string();
-                if !trimmed.is_empty() {
-                    return format!("{}/api/omdb", trimmed);
-                }
-            }
-        }
-    }
-
-    if let Ok(proxy_url) = std::env::var("OMDB_PROXY_URL") {
-        let trimmed = proxy_url.trim();
-        if !trimmed.is_empty() {
-            return trimmed.trim_end_matches('/').to_string();
-        }
-    }
-
-    DEFAULT_OMDB_PROXY_BASE_URL.to_string()
-}
-
-fn is_omdb_backend_proxy(credential: &str) -> bool {
-    credential == OMDB_PROXY_CREDENTIAL
-}
-
+/// Use user's OMDb API key if provided, otherwise use imdbapi.dev for ratings
 fn get_omdb_credential(user_key: &str) -> String {
-    let trimmed = user_key.trim();
-    if trimmed.is_empty() {
-        OMDB_PROXY_CREDENTIAL.to_string()
-    } else {
-        trimmed.to_string()
-    }
+    user_key.trim().to_string()
 }
 
 fn build_omdb_url(credential: &str, imdb_id: &str) -> String {
-    if is_omdb_backend_proxy(credential) {
-        let base = get_omdb_proxy_base_url();
-        format!("{}?i={}", base, imdb_id)
+    if credential.is_empty() {
+        // Fallback to imdbapi.dev when no OMDb key configured
+        format!("https://api.imdbapi.dev/titles/{}", imdb_id)
     } else {
         format!(
             "https://www.omdbapi.com/?i={}&apikey={}",
@@ -7600,8 +7554,7 @@ fn find_tmdb_id_by_imdb_id(
 
     let client = http_client::shared_client();
 
-    let use_bearer = crate::is_access_token(tmdb_credential)
-        && !tmdb::is_backend_proxy_credential(tmdb_credential);
+    let use_bearer = crate::is_access_token(tmdb_credential) && !tmdb_credential.is_empty();
 
     let req = if use_bearer {
         client
@@ -8255,8 +8208,7 @@ async fn get_episode_imdb_ratings(
                 #[derive(serde::Deserialize)]
                 struct ShowExternalIds { imdb_id: Option<String> }
                 let client = http_client::shared_client();
-                let use_bearer = crate::is_access_token(&tmdb_credential)
-                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let use_bearer = crate::is_access_token(&tmdb_credential);
                 let req = if use_bearer {
                     client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
                 } else {
@@ -8375,8 +8327,7 @@ async fn get_episode_imdb_ratings(
 
             let imdb_id: Option<String> = {
                 let client = http_client::shared_client();
-                let use_bearer = crate::is_access_token(&tmdb_credential)
-                    && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+                let use_bearer = crate::is_access_token(&tmdb_credential);
                 let req = if use_bearer {
                     client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
                 } else {
@@ -8492,8 +8443,7 @@ async fn get_imdb_details(
             struct ExternalIds { imdb_id: Option<String> }
 
             let client = http_client::shared_client();
-            let use_bearer = crate::is_access_token(&tmdb_credential)
-                && !tmdb::is_backend_proxy_credential(&tmdb_credential);
+            let use_bearer = crate::is_access_token(&tmdb_credential);
             let req = if use_bearer {
                 client.get(&ext_url).header("Authorization", format!("Bearer {}", &tmdb_credential))
             } else {
@@ -8779,8 +8729,7 @@ async fn get_tmdb_reviews(
 
     let reviews = tokio::task::spawn_blocking(move || {
         let client = http_client::shared_client();
-        let use_bearer = crate::is_access_token(&credential)
-            && !tmdb::is_backend_proxy_credential(&credential);
+        let use_bearer = crate::is_access_token(&credential);
         let req = if use_bearer {
             client.get(&url).header("Authorization", format!("Bearer {}", &credential))
         } else {
@@ -18672,6 +18621,11 @@ fn main() {
             refresh_tray_continue_watching,
             fetch_subtitles,
             download_subtitle,
+            // Cloudflare relay commands
+            cf_relay::cf_list_accounts,
+            cf_relay::cf_deploy_relay,
+            cf_relay::cf_delete_relay,
+            cf_relay::cf_relay_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

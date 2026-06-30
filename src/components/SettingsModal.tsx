@@ -17,7 +17,6 @@ import {
   Cloud,
   Download,
   RefreshCw,
-  Code,
   FlaskConical,
   Radio,
   Shield,
@@ -91,7 +90,8 @@ type SettingsSection =
   | "external"
   | "danger"
   | "dev"
-  | "nightly";
+  | "nightly"
+  | "relay";
 
 const sections: {
   id: SettingsSection;
@@ -121,6 +121,7 @@ const sections: {
   },
   { id: "api", label: "API Keys", icon: <Key className="size-4" /> },
   { id: "external", label: "External", icon: <Radio className="size-4" /> },
+  { id: "relay", label: "Watch Together", icon: <Wifi className="size-4" /> },
   {
     id: "danger",
     label: "Factory Reset",
@@ -128,7 +129,7 @@ const sections: {
   },
   { id: "beta", label: "Beta", icon: <FlaskConical className="size-4" /> },
   ...(import.meta.env.DEV
-    ? [{ id: "dev" as SettingsSection, label: "Dev", icon: <Code className="size-4" /> }]
+    ? []
     : []),
   ...(import.meta.env.VITE_IS_NIGHTLY === 'true'
     ? [{ id: "nightly" as SettingsSection, label: "Nightly", icon: <Bug className="size-4" /> }]
@@ -379,7 +380,6 @@ export function SettingsModal({
     zip_cache_dir: "",
     zip_cache_max_gb: 20,
     zip_cache_expiry_days: 7,
-    dev_backend_url: "",
     player_mode: "external",
     addon_url: "",
   });
@@ -405,7 +405,7 @@ export function SettingsModal({
   const [downloadingBundledMpv, setDownloadingBundledMpv] = useState(false);
   const [bundledMpvProgress, setBundledMpvProgress] = useState(0);
   const [showCustomMpv, setShowCustomMpv] = useState(false);
-  const [useOwnApiKey, setUseOwnApiKey] = useState(false);
+  // ponytail: api key section simplified — no useOwnApiKey toggle needed
   const [showZipGuide, setShowZipGuide] = useState(false);
   const [driveInfo, setDriveInfo] = useState<DriveAccountInfo | null>(null);
   const [cacheInfo, setCacheInfo] = useState<CloudCacheInfo | null>(null);
@@ -606,12 +606,11 @@ export function SettingsModal({
         zip_cache_dir: data.zip_cache_dir || "",
         zip_cache_max_gb: data.zip_cache_max_gb ?? 20,
         zip_cache_expiry_days: data.zip_cache_expiry_days ?? 7,
-        dev_backend_url: data.dev_backend_url || "",
         player_mode: data.player_mode || "external",
         addon_url: data.addon_url || "",
       });
       // If user already has a custom API key saved, show the custom input
-      setUseOwnApiKey(!!data.tmdb_api_key);
+      // ponytail: api key toggle removed
     } catch (error) {
       console.error("Failed to load config", error);
       toast({
@@ -1711,93 +1710,16 @@ export function SettingsModal({
                           </div>
                         </div>
 
-                        {/* Option: Use Built-in */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setUseOwnApiKey(false);
-                            setConfig({ ...config, tmdb_api_key: "", omdb_api_key: "" });
-                          }}
-                          className={cn(
-                            "w-full p-3 rounded-xl border text-left transition-all",
-                            !useOwnApiKey
-                              ? "border-white/30 bg-white/10"
-                              : "border-border bg-card/50 hover:bg-card/80",
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={cn(
-                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
-                                !useOwnApiKey
-                                  ? "border-white"
-                                  : "border-muted-foreground",
-                              )}
-                            >
-                              {!useOwnApiKey && (
-                                <div className="size-2 rounded-full bg-white" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium">
-                                  Use Built-in Backend
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded">
-                                  FREE
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                Uses the app's official backend with shared TMDB
-                                and OMDb key pools.
-                              </p>
-                            </div>
-                          </div>
-                        </button>
+                        {/* API Keys info */}
+                        <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                          <p className="text-xs text-blue-300 leading-relaxed">
+                            IMDb ratings now use <strong>imdbapi.dev</strong> for free — no key needed.
+                            Optionally set your own keys below for dedicated rate limits.
+                          </p>
+                        </div>
 
-                        {/* Option: Use Your Own */}
-                        <button
-                          type="button"
-                          onClick={() => setUseOwnApiKey(true)}
-                          className={cn(
-                            "w-full p-3 rounded-xl border text-left transition-all",
-                            useOwnApiKey
-                              ? "border-white/30 bg-white/10"
-                              : "border-border bg-card/50 hover:bg-card/80",
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={cn(
-                                "size-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
-                                useOwnApiKey
-                                  ? "border-white"
-                                  : "border-muted-foreground",
-                              )}
-                            >
-                              {useOwnApiKey && (
-                                <div className="size-2 rounded-full bg-white" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium">
-                                  Use Your Own API Keys
-                                </span>
-                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/20 text-blue-400 rounded">
-                                  RECOMMENDED
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                Provide your own TMDB and OMDb keys for direct
-                                access with no shared rate limits.
-                              </p>
-                            </div>
-                          </div>
-                        </button>
-
-                        {/* Custom API Key Inputs - Only shown when "Use Your Own" is selected */}
-                        {useOwnApiKey && (
+                        {/* Custom API Key Inputs */}
+                        <div className="space-y-4">
                           <m.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: "auto" }}
@@ -1864,13 +1786,13 @@ export function SettingsModal({
                               </p>
                             </div>
                           </m.div>
-                        )}
+                        </div>
                       </div>
                     </m.div>
                   )}
 
-                  {/* ===== Dev Panel (only shown in dev mode) ===== */}
-                  {import.meta.env.DEV && activeSection === "dev" && (
+                  {/* ===== Hidden section when dev panel selected ===== */}
+                  {activeSection === "dev" && import.meta.env.DEV && (
                     <m.div
                       key="dev"
                       initial={{ opacity: 0, y: 10 }}
@@ -1878,78 +1800,6 @@ export function SettingsModal({
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground mb-1">
-                            Dev Panel
-                          </h3>
-                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
-                            DEV ONLY
-                          </span>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Override the backend URL for local development. Auth,
-                          TMDB proxy, and WebSocket URLs are derived from this.
-                        </p>
-                      </div>
-
-                      {/* Backend URL */}
-                      <div className="p-4 rounded-xl bg-card border border-yellow-500/30 space-y-3">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-yellow-500/20">
-                            <Code className="size-5 text-yellow-400" />
-                          </div>
-                          <div>
-                            <Label className="text-base font-medium">
-                              Backend URL
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Points to SlasshyVault-Backend/server.js
-                            </p>
-                          </div>
-                        </div>
-                        <Input
-                          value={config.dev_backend_url || ""}
-                          onChange={(e) =>
-                            setConfig({
-                              ...config,
-                              dev_backend_url: e.target.value,
-                            })
-                          }
-                          placeholder="https://slasshyvault.onrender.com"
-                          className="font-mono text-xs"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Default: https://slasshyvault.onrender.com · Local: http://localhost:3001
-                        </p>
-                      </div>
-
-                      {/* Derived URLs hint */}
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          Derived endpoints:
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/auth/...
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {config.dev_backend_url || "https://slasshyvault.onrender.com"}/api/tmdb
-                        </p>
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {(config.dev_backend_url || "https://slasshyvault.onrender.com")
-                            .replace("https://", "wss://")
-                            .replace("http://", "ws://")}
-                          /ws/watchtogether
-                        </p>
-                      </div>
-
-                      {/* Reset hint */}
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-xs text-muted-foreground">
-                          Leave empty and save to use production defaults.
-                        </p>
-                      </div>
-
                       {/* Test ZIP notification flow */}
                       <div className="p-4 rounded-xl bg-card border border-border space-y-3">
                         <div className="flex items-center gap-2">
@@ -2132,6 +1982,120 @@ export function SettingsModal({
                           </div>
                         </div>
                       </details>
+                    </m.div>
+                  )}
+
+                  {/* ===== Watch Together Relay ===== */}
+                  {activeSection === "relay" && (
+                    <m.div
+                      key="relay"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="space-y-6"
+                    >
+                      <div>
+                        <h3 className="text-lg font-semibold text-foreground mb-1">
+                          Watch Together
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Configure your relay server for synchronized playback with friends.
+                        </p>
+                      </div>
+
+                      {/* What is a relay */}
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Watch Together uses a Cloudflare Worker as a WebSocket relay to sync
+                          playback between participants. You can deploy your own for free,
+                          or enter an existing relay URL.
+                        </p>
+                      </div>
+
+                      {/* Deploy or Manual Input */}
+                      <div className="p-4 rounded-xl bg-card border border-border space-y-4">
+                        {/* Deploy section */}
+                        <div className="space-y-3">
+                          <Label className="text-sm font-medium">Deploy to Cloudflare</Label>
+                          <p className="text-xs text-muted-foreground">
+                            One-click deploy a relay Worker to your Cloudflare account.
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            <Input
+                              placeholder="Cloudflare API Token (Workers:Edit permission)"
+                              value={config.together_cf_token || ""}
+                              onChange={(e) => setConfig({ ...config, together_cf_token: e.target.value })}
+                              type="password"
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={async () => {
+                                  if (!config.together_cf_token) return;
+                                  try {
+                                    const { listAccounts } = await import('@/services/cf-deploy');
+                                    const accounts = await listAccounts(config.together_cf_token);
+                                    if (accounts.length === 0) {
+                                      toast({ title: "No accounts found", variant: "destructive" });
+                                      return;
+                                    }
+                                    // Deploy to first account
+                                    const { deployRelay } = await import('@/services/cf-deploy');
+                                    const result = await deployRelay(config.together_cf_token, accounts[0].id);
+                                    setConfig({
+                                      ...config,
+                                      together_relay_url: result.url,
+                                      together_cf_account_id: accounts[0].id,
+                                    });
+                                    toast({ title: "Relay deployed!", description: result.url });
+                                  } catch (e) {
+                                    toast({ title: "Deploy failed", description: String(e), variant: "destructive" });
+                                  }
+                                }}
+                                disabled={!config.together_cf_token}
+                              >
+                                <Zap className="size-4 mr-1" />
+                                Deploy Relay
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={async () => {
+                                  if (!config.together_cf_token || !config.together_cf_account_id) return;
+                                  try {
+                                    const { deleteRelay } = await import('@/services/cf-deploy');
+                                    await deleteRelay(config.together_cf_token, config.together_cf_account_id);
+                                    setConfig({ ...config, together_relay_url: "", together_cf_account_id: "" });
+                                    toast({ title: "Relay stopped" });
+                                  } catch (e) {
+                                    toast({ title: "Failed to stop", description: String(e), variant: "destructive" });
+                                  }
+                                }}
+                                disabled={!config.together_cf_token || !config.together_cf_account_id}
+                              >
+                                Stop Relay
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="border-t border-border pt-4">
+                          <Label className="text-sm font-medium">Or enter existing relay URL</Label>
+                          <div className="flex gap-2 mt-2">
+                            <Input
+                              placeholder="wss://your-relay.workers.dev"
+                              value={config.together_relay_url || ""}
+                              onChange={(e) => setConfig({ ...config, together_relay_url: e.target.value })}
+                              className="font-mono text-xs"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Cloudflare Workers free tier: 100k req/day. Enough for many Watch Together sessions.
+                          </p>
+                        </div>
+                      </div>
                     </m.div>
                   )}
 

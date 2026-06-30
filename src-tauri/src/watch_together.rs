@@ -12,7 +12,8 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-// Backend server URL - reads from env var, config file override, falls back to production
+/// Get the Watch Together relay server URL from config or env.
+/// Falls back to empty string (caller should handle missing URL).
 fn get_relay_server_url() -> String {
     if let Ok(ws_url) = std::env::var("STREAMVAULT_WS_URL") {
         let trimmed = ws_url.trim().to_string();
@@ -21,26 +22,22 @@ fn get_relay_server_url() -> String {
         }
     }
 
-    // Check media_config.json for dev_backend_url override
+    // Check media_config.json for together_relay_url
     let config_dir = if cfg!(debug_assertions) { "SlasshyVault-Dev" } else { "SlasshyVault" };
     if let Some(config_path) = dirs::data_dir().map(|d| d.join(config_dir).join("media_config.json")) {
         if let Ok(contents) = std::fs::read_to_string(&config_path) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) {
-                if let Some(backend_url) = config.get("dev_backend_url").and_then(|v| v.as_str()) {
-                    let trimmed = backend_url.trim().trim_end_matches('/').to_string();
+                if let Some(relay_url) = config.get("together_relay_url").and_then(|v| v.as_str()) {
+                    let trimmed = relay_url.trim().to_string();
                     if !trimmed.is_empty() {
-                        // Convert http:// -> ws:// and https:// -> wss://
-                        let ws_url = trimmed
-                            .replace("https://", "wss://")
-                            .replace("http://", "ws://");
-                        return format!("{}/ws/watchtogether", ws_url);
+                        return trimmed;
                     }
                 }
             }
         }
     }
 
-    "wss://slasshyvault.onrender.com/ws/watchtogether".to_string()
+    String::new()
 }
 
 // Room code characters (no ambiguous chars like I/1/O/0)

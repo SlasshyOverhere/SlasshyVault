@@ -108,15 +108,18 @@ export interface Config {
   zip_cache_max_gb?: number;
   zip_cache_expiry_days?: number;
   notifications_enabled?: boolean;
-  // Dev mode: override backend URL (e.g. http://localhost:3001)
-  // Auth, TMDB proxy, and WebSocket URLs are all derived from this
-  dev_backend_url?: string;
   // Player mode: "native" (libmpv embedded) or "external" (mpv.exe spawned)
   player_mode?: "native" | "external";
   // User-configured addon URL for External tab streaming
   addon_url?: string;
   // Multiple addon sources for External tab
   addon_sources?: AddonSource[];
+  // Watch Together Cloudflare relay URL (wss://...)
+  together_relay_url?: string;
+  // Cloudflare API token for one-click relay deploy
+  together_cf_token?: string;
+  // Cloudflare account ID for one-click relay deploy
+  together_cf_account_id?: string;
 }
 
 export interface AddonSource {

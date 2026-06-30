@@ -358,6 +358,15 @@ pub struct Config {
     // Multiple addon sources for External tab
     #[serde(default)]
     pub addon_sources: Vec<AddonSource>,
+    // Watch Together Cloudflare relay URL (wss://...)
+    #[serde(default)]
+    pub together_relay_url: Option<String>,
+    // Cloudflare API token for one-click relay deploy
+    #[serde(default)]
+    pub together_cf_token: Option<String>,
+    // Cloudflare account ID for one-click relay deploy
+    #[serde(default)]
+    pub together_cf_account_id: Option<String>,
 }
 
 /// A configured addon source for the External tab
@@ -437,6 +446,9 @@ impl Default for Config {
             player_mode: PlayerMode::default(),
             addon_url: None,
             addon_sources: Vec::new(),
+            together_relay_url: None,
+            together_cf_token: None,
+            together_cf_account_id: None,
         }
     }
 }
@@ -675,6 +687,9 @@ mod tests {
                 is_default: true,
                 binary_path: Some("C:\\addon.exe".to_string()),
             }],
+            together_relay_url: Some("wss://relay.example.com".to_string()),
+            together_cf_token: Some("cf-token".to_string()),
+            together_cf_account_id: Some("cf-account".to_string()),
         };
 
         let json = serde_json::to_string_pretty(&cfg).unwrap();
