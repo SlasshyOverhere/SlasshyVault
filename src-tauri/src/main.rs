@@ -12029,6 +12029,26 @@ fn emit_zip_processing_event(
     };
 
     window.emit("zip-processing-status", payload).ok();
+
+    // Send Windows notification for detected / complete phases
+    match phase {
+        "detected" => {
+            let title = format!("{} archive{} detected", archive_count, if archive_count == 1 { "" } else { "s" });
+            let name = archive_name.unwrap_or("Unknown");
+            send_system_notification(&window.app_handle(), &title, &format!("Found in background scan: {}", name));
+        }
+        "complete" => {
+            let count = episodes_indexed.unwrap_or(0);
+            let title = format!("📦 Indexing complete");
+            let body = if count > 0 {
+                format!("{} episode{} indexed from {} archive{}", count, if count == 1 { "" } else { "s" }, archive_count, if archive_count == 1 { "" } else { "s" })
+            } else {
+                format!("{} archive{} processed", archive_count, if archive_count == 1 { "" } else { "s" })
+            };
+            send_system_notification(&window.app_handle(), &title, &body);
+        }
+        _ => {}
+    }
 }
 
 fn build_mpv_display_title(media: &database::MediaItem) -> String {
