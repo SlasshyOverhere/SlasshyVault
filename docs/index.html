@@ -3,29 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SlasshyVault — Documentation</title>
-  <meta name="description" content="SlasshyVault documentation: architecture, privacy, security, self-hosting, terms of service, and privacy policy.">
+  <title>SlasshyVault — Docs</title>
+  <meta name="description" content="Documentation for SlasshyVault: architecture, self-hosting, security, terms of service, and privacy policy.">
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
     :root {
-      --bg: #0a0a0a;
-      --card: #121212;
-      --border: rgba(255,255,255,0.08);
-      --border-hover: rgba(255,255,255,0.15);
+      --bg: #09090b;
+      --surface: #111113;
+      --surface-raised: #18181b;
+      --border: rgba(255,255,255,0.06);
+      --border-strong: rgba(255,255,255,0.1);
       --text: #fafafa;
-      --muted: #8c8c8c;
+      --text-secondary: #a1a1aa;
+      --text-tertiary: #71717a;
       --accent: #e53e3e;
-      --accent-dim: rgba(229,62,62,0.12);
+      --accent-glow: rgba(229,62,62,0.15);
       --green: #22c55e;
-      --green-dim: rgba(34,197,94,0.12);
+      --green-dim: rgba(34,197,94,0.1);
       --blue: #3b82f6;
-      --blue-dim: rgba(59,130,246,0.12);
-      --yellow: #eab308;
-      --yellow-dim: rgba(234,179,8,0.12);
+      --blue-dim: rgba(59,130,246,0.08);
+      --radius: 10px;
       --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --mono: 'JetBrains Mono', 'Fira Code', monospace;
     }
     * { margin:0; padding:0; box-sizing:border-box; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; font-size: 16px; }
     body {
       font-family: var(--font);
       background: var(--bg);
@@ -33,592 +35,542 @@
       line-height: 1.7;
       -webkit-font-smoothing: antialiased;
     }
-    .container { max-width: 860px; margin: 0 auto; padding: 0 24px; }
 
-    /* --- Navigation --- */
-    header {
-      padding: 20px 0;
-      border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      background: rgba(10,10,10,0.85);
-      backdrop-filter: blur(12px);
-      z-index: 100;
+    /* ========================= Layout ========================= */
+    .layout { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 260px; flex-shrink: 0; position: fixed; top: 0; left: 0; bottom: 0;
+      border-right: 1px solid var(--border); padding: 28px 20px; overflow-y: auto;
+      background: var(--bg); z-index: 20;
     }
-    header .container { display: flex; align-items: center; justify-content: space-between; }
-    header .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
-    header nav { display: flex; gap: 8px; flex-wrap: wrap; }
-    header nav a {
-      color: var(--muted); text-decoration: none; font-size: 12px; padding: 4px 10px;
-      border-radius: 6px; transition: all 0.2s;
-    }
-    header nav a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
-
-    /* --- Hero --- */
-    .hero { padding: 64px 0 48px; text-align: center; }
-    .hero h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 12px; }
-    .hero p { color: var(--muted); font-size: 16px; max-width: 580px; margin: 0 auto 16px; }
-    .hero-badge {
-      display: inline-block; padding: 4px 12px; border-radius: 20px;
-      font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-      background: var(--green-dim); color: var(--green); border: 1px solid rgba(34,197,94,0.2);
-      margin-bottom: 20px;
+    .sidebar::-webkit-scrollbar { width: 4px; }
+    .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    .main { margin-left: 260px; flex: 1; min-width: 0; }
+    .content { max-width: 800px; padding: 48px 48px 80px; }
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .main { margin-left: 0; }
+      .content { padding: 24px 20px 80px; }
     }
 
-    /* --- Table of Contents --- */
-    .toc { margin-bottom: 48px; }
-    .toc h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
-    .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    @media (max-width: 600px) { .toc-grid { grid-template-columns: 1fr; } }
-    .toc-grid a {
-      display: block; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
-      color: var(--muted); text-decoration: none; font-size: 13px; transition: all 0.2s;
+    /* ========================= Sidebar ========================= */
+    .sidebar-logo { font-size: 20px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 28px; display: flex; align-items: center; gap: 8px; }
+    .sidebar-logo span { background: var(--accent); color: white; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0; }
+    .sidebar-section { margin-bottom: 24px; }
+    .sidebar-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-tertiary); margin-bottom: 8px; }
+    .sidebar a {
+      display: block; font-size: 13px; color: var(--text-secondary); text-decoration: none;
+      padding: 5px 10px; border-radius: 6px; transition: all 0.15s; margin-bottom: 1px;
     }
-    .toc-grid a:hover { border-color: var(--border-hover); color: var(--text); background: var(--card); }
+    .sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+    .sidebar a.sub { padding-left: 22px; font-size: 12.5px; }
 
-    /* --- Cards --- */
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 64px; }
-    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
-    .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;
-      transition: border-color 0.2s;
-    }
-    .card:hover { border-color: var(--border-hover); }
-    .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-    .card p { font-size: 13px; color: var(--muted); line-height: 1.6; }
-
-    /* --- Sections --- */
-    .section { margin-bottom: 64px; scroll-margin-top: 80px; }
-    .section h2 {
-      font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 20px;
+    /* ========================= Typography ========================= */
+    h1 { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.2; margin-bottom: 8px; }
+    h2 {
+      font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; margin: 48px 0 16px;
       padding-bottom: 8px; border-bottom: 1px solid var(--border);
     }
-    .section h3 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; }
-    .section h4 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; color: var(--text); }
-    .section p, .section li { font-size: 14px; color: var(--muted); }
-    .section ul, .section ol { padding-left: 20px; }
-    .section li { margin-bottom: 6px; }
-    .section a { color: var(--accent); }
-    .section strong { color: var(--text); }
-    .section blockquote {
-      border-left: 3px solid var(--accent); padding: 8px 16px; margin: 12px 0;
-      background: var(--accent-dim); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
-    }
+    h3 { font-size: 1.05rem; font-weight: 600; margin: 28px 0 8px; }
+    h4 { font-size: 0.9rem; font-weight: 600; margin: 20px 0 8px; color: var(--text-secondary); }
+    p { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.75; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    strong { color: var(--text); font-weight: 600; }
+    ul, ol { padding-left: 20px; margin-bottom: 12px; }
+    li { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
 
-    /* --- Code blocks --- */
+    /* ========================= Code ========================= */
     pre {
-      background: #111; border: 1px solid var(--border); border-radius: 8px;
-      padding: 14px 16px; overflow-x: auto; margin: 12px 0;
-      font-family: var(--mono); font-size: 12px; line-height: 1.6; color: #ccc;
+      background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 14px 16px; overflow-x: auto; margin: 12px 0; font-size: 0.8125rem; line-height: 1.6;
+      font-family: var(--mono); color: #d4d4d8;
     }
     code {
-      font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,0.06);
-      padding: 2px 6px; border-radius: 4px; color: #e2e8f0;
+      font-family: var(--mono); font-size: 0.8125rem; background: rgba(255,255,255,0.05);
+      padding: 1px 5px; border-radius: 4px; color: #e4e4e7;
     }
     pre code { background: none; padding: 0; border-radius: 0; }
+    .inline-icon { display: inline-block; width: 16px; height: 16px; vertical-align: middle; margin-right: 4px; }
 
-    /* --- Status tags --- */
-    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; }
-    .tag-green { background: var(--green-dim); color: var(--green); }
-    .tag-blue { background: var(--blue-dim); color: var(--blue); }
-    .tag-yellow { background: var(--yellow-dim); color: var(--yellow); }
-
-    /* --- Diagrams (pure CSS) --- */
-    .diagram {
-      background: #0d0d0d; border: 1px solid var(--border); border-radius: 10px;
-      padding: 20px; margin: 16px 0; overflow-x: auto;
+    /* ========================= Hero ========================= */
+    .hero { padding: 32px 0 24px; }
+    .hero-version {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 16px;
     }
-    .diagram svg text { font-family: var(--mono); }
-
-    /* --- Evidence box --- */
-    .evidence {
-      background: var(--green-dim); border: 1px solid rgba(34,197,94,0.2);
-      border-radius: 10px; padding: 16px; margin: 16px 0;
+    .hero-version span {
+      background: var(--accent-glow); color: var(--accent); padding: 1px 8px; border-radius: 4px;
+      font-weight: 600; font-size: 0.6875rem;
     }
-    .evidence h4 { color: var(--green); margin: 0 0 6px; font-size: 14px; }
-    .evidence p, .evidence li { font-size: 13px; color: #86efac; }
-    .evidence a { color: #86efac; text-decoration: underline; }
 
-    /* --- Table --- */
-    .table-wrap { overflow-x: auto; margin: 12px 0; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-    th { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-    td { color: var(--muted); }
+    /* ========================= Cards ========================= */
+    .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 24px 0; }
+    @media (max-width: 600px) { .card-grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 20px; transition: border-color 0.2s, background 0.2s;
+    }
+    .card:hover { border-color: var(--border-strong); background: var(--surface-raised); }
+    .card h4 { margin: 0 0 4px; font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    .card p { font-size: 0.8rem; color: var(--text-tertiary); margin: 0; }
+
+    /* ========================= Tables ========================= */
+    .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+    th { background: var(--surface); padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+    td { padding: 10px 14px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
     tr:last-child td { border-bottom: none; }
 
-    /* --- Footer --- */
-    footer {
-      border-top: 1px solid var(--border); padding: 32px 0;
-      text-align: center; font-size: 12px; color: var(--muted);
+    /* ========================= Callouts ========================= */
+    .callout {
+      border-radius: var(--radius); padding: 14px 16px; margin: 16px 0;
+      border: 1px solid; font-size: 0.8125rem;
     }
+    .callout-info { background: var(--blue-dim); border-color: rgba(59,130,246,0.15); color: #93c5fd; }
+    .callout-success { background: var(--green-dim); border-color: rgba(34,197,94,0.15); color: #86efac; }
+    .callout-warn { background: rgba(234,179,8,0.08); border-color: rgba(234,179,8,0.15); color: #fde68a; }
+    .callout strong { display: block; margin-bottom: 2px; font-size: 0.8125rem; }
+    .callout-info strong { color: #60a5fa; }
+    .callout-success strong { color: #4ade80; }
+    .callout-warn strong { color: #facc15; }
 
-    /* --- Expandable details --- */
-    details { margin: 12px 0; }
-    details summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text); padding: 8px 0; }
-    details .content { padding: 12px 16px; background: var(--card); border-radius: 8px; border: 1px solid var(--border); margin-top: 4px; }
+    /* ========================= Tags ========================= */
+    .tag {
+      display: inline-block; padding: 1px 7px; border-radius: 4px;
+      font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .tag-green { background: var(--green-dim); color: var(--green); }
+    .tag-blue { background: var(--blue-dim); color: var(--blue); }
+    .tag-neutral { background: rgba(255,255,255,0.05); color: var(--text-tertiary); }
+
+    /* ========================= Subnav (mobile only) ========================= */
+    .mobile-nav {
+      display: none; position: sticky; top: 0; z-index: 10;
+      background: rgba(9,9,11,0.9); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border); padding: 12px 20px;
+    }
+    .mobile-nav select {
+      width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+      padding: 8px 10px; border-radius: 6px; font-size: 13px; font-family: var(--font);
+    }
+    @media (max-width: 768px) { .mobile-nav { display: block; } }
+
+    /* ========================= Details / FAQ ========================= */
+    details { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    details summary {
+      cursor: pointer; padding: 10px 14px; font-size: 0.85rem; font-weight: 500;
+      color: var(--text); background: var(--surface); user-select: none;
+    }
+    details summary:hover { background: var(--surface-raised); }
+    details[open] summary { border-bottom: 1px solid var(--border); }
+    details .detail-body { padding: 12px 14px; font-size: 0.85rem; color: var(--text-secondary); }
+
+    /* ========================= Footer ========================= */
+    .footer { border-top: 1px solid var(--border); padding: 24px 0; text-align: center; font-size: 0.75rem; color: var(--text-tertiary); margin-top: 48px; }
   </style>
 </head>
 <body>
 
-<header>
-  <div class="container">
-    <span class="logo">SlasshyVault</span>
-    <nav>
-      <a href="#architecture">Architecture</a>
-      <a href="#security">Security</a>
-      <a href="#self-host">Self-Host</a>
-      <a href="#terms">Terms</a>
-      <a href="#privacy">Privacy</a>
-      <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>
-    </nav>
+<!-- Mobile nav -->
+<div class="mobile-nav">
+  <select onchange="if(this.value) location.hash=this.value">
+    <option value="">Jump to section…</option>
+    <option value="#intro">Introduction</option>
+    <option value="#quick-start">Quick Start</option>
+    <option value="#architecture">Architecture</option>
+    <option value="#configuration">Configuration</option>
+    <option value="#api-keys">API Keys</option>
+    <option value="#watch-together">Watch Together</option>
+    <option value="#storage">Storage</option>
+    <option value="#self-hosting">Self-Hosting</option>
+    <option value="#security">Security</option>
+    <option value="#faq">FAQ</option>
+    <option value="#terms">Terms of Service</option>
+    <option value="#privacy">Privacy Policy</option>
+  </select>
+</div>
+
+<div class="layout">
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">SlasshyVault <span>v3.0</span></div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-label">Getting Started</div>
+    <a href="#intro">Introduction</a>
+    <a href="#quick-start">Quick Start</a>
   </div>
-</header>
 
-<div class="hero">
-  <div class="container">
-    <span class="hero-badge">✓ Fully Open Source — No Telemetry — No Servers</span>
-    <h1>SlasshyVault</h1>
-    <p>Your media library on your machine, powered by your Google Drive. Designed to be private by default, verifiable by anyone.</p>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Guides</div>
+    <a href="#architecture">Architecture</a>
+    <a href="#configuration">Configuration</a>
+    <a href="#api-keys" class="sub">API Keys</a>
+    <a href="#watch-together" class="sub">Watch Together</a>
+    <a href="#storage" class="sub">Storage</a>
+    <a href="#self-hosting">Self-Hosting the Backend</a>
   </div>
-</div>
 
-<div class="container">
-
-<div class="toc">
-  <h2>Table of Contents</h2>
-  <div class="toc-grid">
-    <a href="#architecture">🏗️ Architecture & Data Flow</a>
-    <a href="#security">🔐 Security & Privacy Evidence</a>
-    <a href="#verification">🔍 How to Verify the Claims</a>
-    <a href="#self-host">🖥️ Self-Hosting the Backend</a>
-    <a href="#tech">⚙️ Technology Stack</a>
-    <a href="#faq">❓ FAQ</a>
-    <a href="#terms">📄 Terms of Service</a>
-    <a href="#privacy">🔏 Privacy Policy</a>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Trust & Safety</div>
+    <a href="#security">Security & Privacy</a>
+    <a href="#faq">FAQ</a>
   </div>
-</div>
 
-<!-- ==================== ARCHITECTURE ==================== -->
-<section class="section" id="architecture">
-<h2>🏗️ Architecture & Data Flow</h2>
-<p>SlasshyVault is a <strong>local-first</strong> desktop application. Every component is designed so <strong>you</strong> control your data at all times.</p>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Legal</div>
+    <a href="#terms">Terms of Service</a>
+    <a href="#privacy">Privacy Policy</a>
+  </div>
 
-<h3>High-Level Diagram</h3>
-<div class="diagram">
-<svg viewBox="0 0 820 420" width="100%" style="max-width:820px">
-  <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#8c8c8c"/></marker>
-  </defs>
-  <!-- Your PC -->
-  <rect x="20" y="20" width="260" height="380" rx="12" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1.5" stroke-dasharray="6,3"/>
-  <text x="150" y="45" fill="#8c8c8c" font-size="11" text-anchor="middle" font-weight="600">YOUR MACHINE (Tauri Desktop)</text>
-  <!-- Frames inside -->
-  <rect x="40" y="65" width="100" height="50" rx="6" fill="rgba(229,62,62,0.12)" stroke="rgba(229,62,62,0.3)"/>
-  <text x="90" y="86" fill="#e53e3e" font-size="11" text-anchor="middle" font-weight="600">OAuth Token</text>
-  <text x="90" y="101" fill="#e53e3e" font-size="10" text-anchor="middle">(encrypted local)</text>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid var(--border)">
+    <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank" style="font-size:12px;color:var(--text-tertiary)">GitHub →</a>
+  </div>
+</nav>
 
-  <rect x="155" y="65" width="110" height="50" rx="6" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.3)"/>
-  <text x="210" y="86" fill="#60a5fa" font-size="11" text-anchor="middle" font-weight="600">SQLite DB</text>
-  <text x="210" y="101" fill="#60a5fa" font-size="10" text-anchor="middle">(watch history)</text>
+<!-- Main Content -->
+<main class="main">
+  <div class="content">
 
-  <rect x="40" y="135" width="225" height="50" rx="6" fill="rgba(34,197,94,0.12)" stroke="rgba(34,197,94,0.3)"/>
-  <text x="152" y="156" fill="#22c55e" font-size="11" text-anchor="middle" font-weight="600">Config (media_config.json)</text>
-  <text x="152" y="171" fill="#22c55e" font-size="10" text-anchor="middle">TMDB key, relay URL, preferences</text>
+    <!-- ==================== INTRO ==================== -->
+    <section id="intro" class="hero">
+      <div class="hero-version">
+        <span>v3.0.58</span> MIT License · Open Source
+      </div>
+      <h1>SlasshyVault</h1>
+      <p style="font-size:1.05rem;color:var(--text-tertiary);max-width:600px">
+        A desktop media library that indexes your local files and Google Drive content.
+        Built with Tauri, Rust, and React. Privacy-first by design.
+      </p>
+    </section>
 
-  <rect x="40" y="205" width="225" height="50" rx="6" fill="rgba(234,179,8,0.12)" stroke="rgba(234,179,8,0.3)"/>
-  <text x="152" y="226" fill="#eab308" font-size="11" text-anchor="middle" font-weight="600">Media Index</text>
-  <text x="152" y="241" fill="#eab308" font-size="10" text-anchor="middle">(local files + GDrive cache)</text>
+    <div class="card-grid">
+      <div class="card"><h4>📂 Media Library</h4><p>Browse movies and TV shows from local storage or Google Drive with rich metadata.</p></div>
+      <div class="card"><h4>▶️ Multiple Players</h4><p>Play via MPV (bundled), VLC, or the built-in player. Audio/subtitle track selection.</p></div>
+      <div class="card"><h4>☁️ Cloud Streaming</h4><p>Stream video directly from your Google Drive without downloading. ZIP archive support.</p></div>
+      <div class="card"><h4>👥 Watch Together</h4><p>Synchronized playback with friends using your own Cloudflare Worker relay.</p></div>
+      <div class="card"><h4>🏷️ Metadata</h4><p>Automatic metadata from TMDB, IMDb ratings, cast info, and episode details.</p></div>
+      <div class="card"><h4>🔒 No Telemetry</h4><p>Zero analytics, zero tracking, zero data collection. Verifiable open source.</p></div>
+    </div>
 
-  <!-- Outgoing arrows -->
-  <line x1="152" y1="255" x2="152" y2="290" stroke="#8c8c8c" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="170" y="277" fill="#8c8c8c" font-size="10">direct HTTPS</text>
+    <!-- ==================== QUICK START ==================== -->
+    <section id="quick-start">
+      <h2>Quick Start</h2>
+      <ol>
+        <li>Download the latest release from <a href="https://github.com/SlasshyOverhere/SlasshyVault/releases" target="_blank">GitHub Releases</a>.</li>
+        <li>Install and launch SlasshyVault.</li>
+        <li>Sign in with Google to access your Drive.</li>
+        <li>Optionally index your Drive folders in Settings.</li>
+        <li>Add local media folders or point to Google Drive folders.</li>
+        <li>Browse, search, and play your media.</li>
+      </ol>
+      <p>Required: Windows 10+, Google account with Drive access. MPV is bundled with the installer.</p>
+    </section>
 
-  <!-- External services row -->
-  <rect x="20" y="295" width="225" height="40" rx="6" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
-  <text x="132" y="312" fill="#8c8c8c" font-size="10" text-anchor="middle">Google Drive API</text>
-  <text x="132" y="325" fill="#8c8c8c" font-size="9" text-anchor="middle">api.themoviedb.org / api.imdbapi.dev / omdbapi.com</text>
+    <!-- ==================== ARCHITECTURE ==================== -->
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <p>SlasshyVault is a local-first desktop app. All user data remains on your machine unless you explicitly choose otherwise.</p>
 
-  <!-- Backend (right side) -->
-  <rect x="450" y="20" width="340" height="380" rx="12" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1.5" stroke-dasharray="6,3"/>
-  <text x="620" y="45" fill="#8c8c8c" font-size="11" text-anchor="middle" font-weight="600">OAUTH BACKEND (Render or self-hosted)</text>
-  <text x="620" y="58" fill="#6b7280" font-size="10" text-anchor="middle">Only runs during sign-in. No user data stored.</text>
+      <h3>Components</h3>
+      <table>
+        <tr><th>Component</th><th>Technology</th><th>Role</th></tr>
+        <tr><td>Desktop Shell</td><td>Tauri 1.x</td><td>Native window, OS integration, IPC bridge</td></tr>
+        <tr><td>Backend</td><td>Rust</td><td>Media scanning, streaming, playback, local database</td></tr>
+        <tr><td>Frontend</td><td>React + TypeScript</td><td>User interface</td></tr>
+        <tr><td>Database</td><td>SQLite (bundled)</td><td>Watch history, media cache</td></tr>
+        <tr><td>OAuth Server</td><td>Node.js (Express)</td><td>Google OAuth code exchange (~120 lines)</td></tr>
+        <tr><td>Relay (optional)</td><td>Cloudflare Workers</td><td>Watch Together WebSocket relay</td></tr>
+      </table>
 
-  <rect x="470" y="80" width="300" height="100" rx="6" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)"/>
-  <text x="620" y="102" fill="#60a5fa" font-size="11" text-anchor="middle" font-weight="600">OAuth Code Exchange</text>
-  <text x="620" y="119" fill="#6b7280" font-size="10" text-anchor="middle">Receives auth code from Google</text>
-  <text x="620" y="134" fill="#6b7280" font-size="10" text-anchor="middle">Exchanges for tokens using CLIENT_SECRET</text>
-  <text x="620" y="149" fill="#6b7280" font-size="10" text-anchor="middle">Stores session in memory for 5 minutes max</text>
-  <text x="620" y="164" fill="#6b7280" font-size="10" text-anchor="middle">Redirects back to app on localhost:8085</text>
+      <h3>Data Flow</h3>
+      <table>
+        <tr><th>Action</th><th>Network Requests</th><th>Data Sent</th></tr>
+        <tr><td>Launch app</td><td>None</td><td>—</td></tr>
+        <tr><td>Browse library</td><td>None (local SQLite)</td><td>—</td></tr>
+        <tr><td>Play local file</td><td>None</td><td>—</td></tr>
+        <tr><td>Play cloud file</td><td>GET api.googleapis.com/drive/v3/files/{id}</td><td>Drive file ID</td></tr>
+        <tr><td>Search/Get metadata</td><td>GET api.themoviedb.org/3/search</td><td>Search query or TMDB ID</td></tr>
+        <tr><td>Get IMDb rating</td><td>GET api.imdbapi.dev/titles/{ttID}</td><td>IMDb ID</td></tr>
+        <tr><td>Watch Together</td><td>WebSocket to your Cloudflare Worker</td><td>Play/pause/seek state</td></tr>
+        <tr><td>Sign in</td><td>Redirect to your OAuth backend → Google</td><td>OAuth session (5 min)</td></tr>
+      </table>
+    </section>
 
-  <text x="620" y="215" fill="#22c55e" font-size="11" text-anchor="middle" font-weight="600">✓ No database</text>
-  <text x="620" y="232" fill="#22c55e" font-size="11" text-anchor="middle">✓ No WebSockets</text>
-  <text x="620" y="249" fill="#22c55e" font-size="11" text-anchor="middle">✓ No persistent storage</text>
-  <text x="620" y="266" fill="#22c55e" font-size="11" text-anchor="middle">✓ No analytics or logging</text>
+    <!-- ==================== CONFIGURATION ==================== -->
+    <section id="configuration">
+      <h2>Configuration</h2>
+      <p>Settings are stored locally in <code>media_config.json</code> inside the app data directory. All fields can be configured through the Settings UI.</p>
 
-  <!-- Cloudflare (bottom right) -->
-  <rect x="470" y="295" width="300" height="85" rx="6" fill="rgba(139,92,246,0.08)" stroke="rgba(139,92,246,0.2)"/>
-  <text x="620" y="315" fill="#a78bfa" font-size="11" text-anchor="middle" font-weight="600">Cloudflare Worker (optional)</text>
-  <text x="620" y="332" fill="#6b7280" font-size="10" text-anchor="middle">Deployed to YOUR account via API token</text>
-  <text x="620" y="347" fill="#6b7280" font-size="10" text-anchor="middle">Hosts WebSocket rooms for Watch Together</text>
-  <text x="620" y="362" fill="#6b7280" font-size="10" text-anchor="middle">No data persisted — ephemeral DO state</text>
+      <h3 id="api-keys">API Keys</h3>
+      <p>SlasshyVault uses TMDB for metadata and imdbapi.dev (free) for IMDb ratings. You can optionally provide your own keys:</p>
+      <table>
+        <tr><th>Service</th><th>Default</th><th>Custom Key?</th><th>Why Set One</th></tr>
+        <tr><td>TMDB (metadata)</td><td>—</td><td>✅ Recommended</td><td>Higher rate limits, no shared pool</td></tr>
+        <tr><td>OMDb (IMDb ratings)</td><td>imdbapi.dev (free)</td><td>✅ Optional</td><td>Fallback if imdbapi.dev is slow</td></tr>
+      </table>
+      <p>Get a free TMDB API key at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>. Enter it in Settings → API Keys.</p>
 
-  <!-- Arrow: App -> Backend -->
-  <line x1="260" y1="90" x2="450" y2="110" stroke="#eab308" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
-  <text x="340" y="85" fill="#eab308" font-size="9">browser redirect</text>
-</svg>
-</div>
+      <h3 id="watch-together">Watch Together</h3>
+      <p>Watch Together synchronizes playback across users via a WebSocket relay. You can use a hosted relay or deploy your own.</p>
+      <p><strong>Option 1: Deploy to Cloudflare (one-click)</strong></p>
+      <ol>
+        <li>Go to Settings → Watch Together.</li>
+        <li>Enter a Cloudflare API token with <code>Workers Scripts: Edit</code> permission.</li>
+        <li>Click <strong>Deploy Relay</strong>. The app uploads the worker to your account automatically.</li>
+        <li>The relay URL is saved to settings. Share it with friends to join rooms.</li>
+      </ol>
+      <p><strong>Option 2: Manual URL</strong></p>
+      <p>Paste any <code>wss://</code> relay URL into Settings → Watch Together. The relay runs the protocol defined in <code>src-tauri/relay/worker.js</code>.</p>
+      <p><strong>Option 3: Deploy manually with wrangler</strong></p>
+      <pre><code>git clone https://github.com/SlasshyOverhere/SlasshyVault
+cd SlasshyVault/src-tauri/relay
+# Copy worker.js to a new directory
+mkdir my-relay && cd my-relay
+cp ../worker.js .
+cat > wrangler.toml << 'EOF'
+name = "slasshyvault-together-relay"
+main = "worker.js"
+compatibility_date = "2026-05-01"
 
-<h3>Data Flow During Normal Use</h3>
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
 
-<table>
-<tr><th>Step</th><th>What Happens</th><th>Data Leaves Your Machine?</th></tr>
-<tr><td>1. Launch app</td><td>SQLite database opens locally. Config loaded from local JSON.</td><td><span class="tag tag-green">No</span></td></tr>
-<tr><td>2. Browse library</td><td>Reads local SQLite + indexed Drive metadata</td><td><span class="tag tag-green">No</span></td></tr>
-<tr><td>3. Play a local file</td><td>MPV spawns locally, reads file directly</td><td><span class="tag tag-green">No</span></td></tr>
-<tr><td>4. Play a cloud file</td><td>GDrive streaming URL fetched via API, piped to MPV</td><td><span class="tag tag-yellow">Stream bytes only (no personal data)</span></td></tr>
-<tr><td>5. Fetch metadata</td><td>GET request to TMDB / imdbapi / OMDb with media ID</td><td><span class="tag tag-yellow">Media ID only (no personal info)</span></td></tr>
-<tr><td>6. Watch Together</td><td>WebSocket messages relayed through your Cloudflare Worker</td><td><span class="tag tag-yellow">Playback state only</span></td></tr>
-<tr><td>7. Sign in</td><td>Browser opens → Google OAuth → backend exchanges code</td><td><span class="tag tag-blue">OAuth session (5 min only)</span></td></tr>
-</table>
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+EOF
+npx wrangler deploy</code></pre>
+      <p>Note the <code>wss://</code> URL and paste it in Settings.</p>
 
-</section>
+      <h3 id="storage">Storage</h3>
+      <table>
+        <tr><th>Data</th><th>Location</th><th>Format</th></tr>
+        <tr><td>Configuration</td><td><code>%APPDATA%/SlasshyVault/media_config.json</code></td><td>JSON</td></tr>
+        <tr><td>Watch History</td><td><code>%APPDATA%/SlasshyVault/slasshyvault.db</code></td><td>SQLite</td></tr>
+        <tr><td>Image Cache</td><td><code>%APPDATA%/SlasshyVault/image_cache/</code></td><td>Files</td></tr>
+        <tr><td>OAuth Tokens</td><td>In <code>media_config.json</code> (obfuscated)</td><td>JSON</td></tr>
+      </table>
+    </section>
 
-<!-- ==================== SECURITY & PRIVACY ==================== -->
-<section class="section" id="security">
-<h2>🔐 Security & Privacy Evidence</h2>
+    <!-- ==================== SELF-HOSTING ==================== -->
+    <section id="self-hosting">
+      <h2>Self-Hosting the Backend</h2>
+      <p>The only external dependency is the OAuth backend for Google sign-in. It is intentionally minimal — a single Express file with no database.</p>
 
-<p>Every claim below is backed by evidence you can verify yourself in the source code.</p>
-
-<div class="evidence">
-<h4>✅ No Telemetry or Analytics</h4>
-<p>The entire codebase has zero calls to analytics services. Grep for yourself:</p>
-<pre><code>git grep -i "google-analytics\|segment\.io\|amplitude\|mixpanel\|sentry\|datadog\|newrelic" src/ src-tauri/
-# → No results. Zero analytics dependencies.</code></pre>
-<p>There is no `<code>window.analytics</code>`, no tracking pixel, no crash reporter. Sentry is listed in Cargo.toml but is <strong>not initialized anywhere</strong> in the app — it's a leftover unused dependency.</p>
-</div>
-
-<div class="evidence">
-<h4>✅ No Network Requests on Launch</h4>
-<p>The app makes zero HTTP requests when it starts. No "phone home," no license check, no version ping. Verified by tracing all fetch/invoke calls:</p>
-<pre><code># All network requests go through explicit user actions:
-- User clicks "Scan" → GDrive API
-- User searches → TMDB API
-- User plays → GDrive stream URL
-- User signs in → OAuth flow</code></pre>
-</div>
-
-<div class="evidence">
-<h4>✅ OAuth Tokens Never Leave Your Machine</h4>
-<p>The OAuth flow is a standard Google OAuth 2.0 authorization_code grant:</p>
-<pre><code>src-tauri/src/gdrive.rs:
-// Token stored in GoogleTokens struct, serialized to local config file
-// Used only for Bearer Authorization headers to api.googleapis.com
-// NEVER transmitted anywhere else</code></pre>
-<p>The refresh token is stored locally in `media_config.json` (obfuscated). Only the app reads it. The backend never sees your tokens — it only sees the one-time authorization code from Google, exchanges it, and passes the result back through a session ID.</p>
-</div>
-
-<div class="evidence">
-<h4>✅ Watch Together Relay Is Your Own</h4>
-<p>The relay is a Cloudflare Worker deployed to <strong>your</strong> Cloudflare account using an API token you provide. The worker source is bundled into the app binary at <code>src-tauri/relay/worker.js</code> and uploaded directly to Cloudflare's API — no middleman.</p>
-<p>You can verify exactly what runs on your account by reading the 200-line worker file. It uses Durable Objects for ephemeral room state — no database, no persistence.</p>
-</div>
-
-<div class="evidence">
-<h4>✅ Backend Is Stateless — No Database</h4>
-<p>The OAuth backend has no database, no Redis, no file storage. State is kept in-memory with a 5-minute TTL. After the OAuth flow completes, the session is deleted. The entire backend is ~120 lines of Express:</p>
-<pre><code>SlasshyVault-Backend/server.js:
-- /auth/google → redirect
-- /auth/callback → exchange code → store in Map → redirect
-- /auth/session/:id → return tokens → delete from Map
-- /auth/refresh → forward to Google
-- /health → plain OK</code></pre>
-</div>
-
-<div class="evidence">
-<h4>✅ No User Accounts, No Database</h4>
-<p>There is no user registration, no email/password flow, no user database. "Sign in" just means "grant my app access to my Google Drive." The app identifies you by your Google ID only to the extent that Drive API needs it — and that ID is never sent anywhere but Google.</p>
-</div>
-
-</section>
-
-<!-- ==================== VERIFICATION ==================== -->
-<section class="section" id="verification">
-<h2>🔍 How to Verify These Claims Yourself</h2>
-<p>SlasshyVault is fully open source. Anyone can verify every claim on this page. Here's how:</p>
-
-<h3>1. Clone and grep for network calls</h3>
-<pre><code>git clone https://github.com/SlasshyOverhere/SlasshyVault
-cd SlasshyVault
-
-# Find every HTTP request in the Rust backend
-grep -rn "reqwest\|\.get(\|\.post(\|\.put(\|fetch(" src-tauri/src/ --include="*.rs" | grep -v test | grep -v "#\["
-
-# Find every fetch in the frontend
-grep -rn "fetch(" src/ --include="*.ts" --include="*.tsx" | grep -v "\.test\." | grep -v "localhost"
-
-# Check for any analytics/telemetry
-grep -rni "analytics\|telemetry\|tracking\|sentry\|datadog\|mixpanel" src/ src-tauri/src/</code></pre>
-
-<h3>2. Audit the OAuth flow</h3>
-<pre><code># The full OAuth exchange logic:
-less src-tauri/src/gdrive.rs     # OAuth listener + token storage
-less SlasshyVault-Backend/server.js  # Backend auth endpoints</code></pre>
-
-<h3>3. Verify the Cloudflare Worker</h3>
-<pre><code># The exact worker that gets deployed to your account:
-less src-tauri/relay/worker.js</code></pre>
-
-<h3>4. Check dependencies for unsafe crates</h3>
-<pre><code>cat src-tauri/Cargo.toml
-cat package.json</code></pre>
-<p>All dependencies are standard (serde, tokio, rusqlite, reqwest, tauri, react). No surprise network libraries.</p>
-
-</section>
-
-<!-- ==================== SELF-HOST ==================== -->
-<section class="section" id="self-host">
-<h2>🖥️ Self-Hosting the OAuth Backend</h2>
-<p>The only external service SlasshyVault requires is a tiny OAuth backend to handle Google's code exchange. You can host it yourself in 5 minutes.</p>
-
-<h3>Architecture</h3>
-<p>The flow is simple:</p>
-<ol>
-  <li>User clicks "Sign in" in the app</li>
-  <li>App opens browser to <code>https://your-backend/auth/google?nonce=...</code></li>
-  <li>Backend redirects to Google's consent screen</li>
-  <li>Google redirects to <code>https://your-backend/auth/callback?code=xxx&state=yyy</code></li>
-  <li>Backend exchanges the code for tokens</li>
-  <li>Backend stores tokens in memory with a session ID</li>
-  <li>Backend redirects browser to <code>http://localhost:8085/callback?session_id=zzz</code></li>
-  <li>App picks up the session, fetches tokens from backend, stores them locally</li>
-  <li><strong>Done.</strong> Backend never hears from the app again until next sign-in.</li>
-</ol>
-
-<h3>Deploy to Render (Free)</h3>
-<pre><code>1. Fork/clone the repo
-2. Go to https://dashboard.render.com → New Web Service
-3. Connect your GitHub repo
-4. Settings:
+      <h3>Deploy on Render (free)</h3>
+      <pre><code>1. Fork the repo on GitHub
+2. Go to dashboard.render.com → New Web Service
+3. Connect your fork, settings:
    - Root directory: SlasshyVault-Backend
-   - Build command: npm install
-   - Start command: npm start
-5. Add environment variables:
-   GOOGLE_CLIENT_ID=...
-   GOOGLE_CLIENT_SECRET=...
-   REDIRECT_URI=https://your-app.onrender.com/auth/callback
-6. Deploy
-7. In Google Cloud Console → APIs & Services → Credentials
-   → Your OAuth client → Add Authorized redirect URI:
+   - Build: npm install
+   - Start: npm start
+4. Set env vars:
+   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URI
+5. Deploy
+6. Add your redirect URI to Google Cloud Console:
    https://your-app.onrender.com/auth/callback</code></pre>
 
-<h3>Deploy to Any VPS</h3>
-<pre><code>git clone https://github.com/SlasshyOverhere/SlasshyVault
+      <h3>Run on a VPS</h3>
+      <pre><code>git clone https://github.com/SlasshyOverhere/SlasshyVault
 cd SlasshyVault/SlasshyVault-Backend
 npm install
 
-# Create .env:
-echo 'GOOGLE_CLIENT_ID=xxx
+# Create .env
+cat > .env << 'EOF'
+GOOGLE_CLIENT_ID=xxx
 GOOGLE_CLIENT_SECRET=xxx
 REDIRECT_URI=https://your-domain.com/auth/callback
 PORT=3001
-OAUTH_CALLBACK_URL=http://localhost:8085/callback' > .env
+OAUTH_CALLBACK_URL=http://localhost:8085/callback
+EOF
 
-# Run with PM2 or systemd:
 node server.js</code></pre>
 
-<h3>Environment Variables</h3>
-<table>
-<tr><th>Variable</th><th>Required</th><th>Description</th></tr>
-<tr><td><code>GOOGLE_CLIENT_ID</code></td><td>✅</td><td>From Google Cloud Console</td></tr>
-<tr><td><code>GOOGLE_CLIENT_SECRET</code></td><td>✅</td><td>From Google Cloud Console</td></tr>
-<tr><td><code>REDIRECT_URI</code></td><td>✅</td><td>Must match Google's authorized redirect URIs. Format: <code>https://your-domain/auth/callback</code></td></tr>
-<tr><td><code>OAUTH_CALLBACK_URL</code></td><td>—</td><td>Where to redirect after auth. Default: <code>http://localhost:8085/callback</code>. Only change if you modified the Tauri OAuth listener port.</td></tr>
-<tr><td><code>PORT</code></td><td>—</td><td>Server port (default 3001)</td></tr>
-</table>
+      <h3>Environment Variables</h3>
+      <table>
+        <tr><th>Variable</th><th>Required</th><th>Default</th><th>Description</th></tr>
+        <tr><td><code>GOOGLE_CLIENT_ID</code></td><td>✅</td><td>—</td><td>From Google Cloud Console</td></tr>
+        <tr><td><code>GOOGLE_CLIENT_SECRET</code></td><td>✅</td><td>—</td><td>From Google Cloud Console</td></tr>
+        <tr><td><code>REDIRECT_URI</code></td><td>✅</td><td>—</td><td>Must match Google's authorized URIs</td></tr>
+        <tr><td><code>PORT</code></td><td>—</td><td><code>3001</code></td><td>Server port</td></tr>
+        <tr><td><code>OAUTH_CALLBACK_URL</code></td><td>—</td><td><code>http://localhost:8085/callback</code></td><td>Where backend redirects after auth</td></tr>
+      </table>
 
-<h3>Setting the URL in the App</h3>
-<p>The Tauri app reads the backend URL from <code>gdrive.rs</code> line 18:</p>
-<pre><code>const AUTH_SERVER_URL: &str = "https://slasshyvault.onrender.com";</code></pre>
-<p>To point it at your own backend, you have two options:</p>
-<ol>
-  <li><strong>Env var at build time</strong> — set <code>STREAMVAULT_AUTH_SERVER_URL=https://your-backend.com</code></li>
-  <li><strong>Modify the source</strong> — change the constant and rebuild</li>
-</ol>
-<p>There is no runtime config for the auth URL (by design — prevents phishing). You must build your own copy.</p>
+      <h3>Pointing the App to Your Backend</h3>
+      <p>The auth server URL is hardcoded in <code>src-tauri/src/gdrive.rs</code> at line 18:</p>
+      <pre><code>const AUTH_SERVER_URL: &str = "https://slasshyvault.onrender.com";</code></pre>
+      <p>To use your own, set the environment variable <code>STREAMVAULT_AUTH_SERVER_URL</code> at build time, or change the constant and rebuild. This is intentional — it prevents phishing by ensuring the app only connects to a trusted auth server.</p>
 
-</section>
+      <div class="callout callout-info">
+        <strong>Endpoint reference</strong>
+        The backend exposes only these routes:
+        <code>GET /</code> · <code>GET /health</code> · <code>GET /auth/google</code> · <code>GET /auth/callback</code> · <code>GET /auth/session/:id</code> · <code>POST /auth/refresh</code>
+      </div>
+    </section>
 
-<!-- ==================== TECH STACK ==================== -->
-<section class="section" id="tech">
-<h2>⚙️ Technology Stack</h2>
+    <!-- ==================== SECURITY ==================== -->
+    <section id="security">
+      <h2>Security & Privacy</h2>
+      <p>SlasshyVault is designed so you can verify every claim by reading the source. Below is a summary of key properties with evidence.</p>
 
-<table>
-<tr><th>Layer</th><th>Technology</th><th>Purpose</th></tr>
-<tr><td>Desktop Shell</td><td>Tauri 1.x</td><td>Native window + OS integration</td></tr>
-<tr><td>Backend Runtime</td><td>Rust</td><td>Media scanning, streaming, playback, DB</td></tr>
-<tr><td>Frontend</td><td>React + TypeScript + Vite</td><td>UI</td></tr>
-<tr><td>Database</td><td>SQLite (rusqlite)</td><td>Watch history, metadata cache</td></tr>
-<tr><td>HTTP Client</td><td>reqwest (Rust)</td><td>All external API calls</td></tr>
-<tr><td>OAuth</td><td>Google OAuth 2.0</td><td>Drive access</td></tr>
-<tr><td>Media Player</td><td>MPV (spawned process or libmpv)</td><td>Video playback</td></tr>
-<tr><td>Streaming Proxy</td><td>Bundled Tiny HTTP (Rust)</td><td>RAR/ZIP archive streaming</td></tr>
-<tr><td>OAuth Server</td><td>Express (Node.js)</td><td>OAuth code exchange</td></tr>
-<tr><td>Watch Together Relay</td><td>Cloudflare Workers (Durable Objects)</td><td>WebSocket sync relay</td></tr>
-</table>
+      <h3>Data Collection</h3>
+      <p><strong>None.</strong> The app has no analytics, no telemetry, no crash reporting, no tracking of any kind. There is no "phone home" on launch.</p>
+      <pre><code># Verify yourself:
+grep -rni "analytics\|telemetry\|sentry\|datadog\|mixpanel\|amplitude" src/ src-tauri/
+# → No results</code></pre>
 
-</section>
+      <h3>OAuth Backend</h3>
+      <p>The backend is a stateless Node.js server (~120 lines). It stores OAuth state in memory for a maximum of 5 minutes, then deletes it. There is no database, no Redis, no persistent storage, and no logging of user data.</p>
 
-<!-- ==================== FAQ ==================== -->
-<section class="section" id="faq">
-<h2>❓ FAQ</h2>
+      <h3>Tokens</h3>
+      <p>OAuth tokens are stored locally in the app data directory, obfuscated. They are used exclusively for Drive API calls and are never transmitted to any server other than Google.</p>
 
-<details>
-<summary>Does SlasshyVault collect any data?</summary>
-<div class="content"><p><strong>No.</strong> There are no analytics, telemetry, crash reports, or usage tracking of any kind. The app makes no network requests on launch. All data lives on your machine and in your Google Drive.</p></div>
-</details>
+      <h3>Watch Together Relay</h3>
+      <p>The relay runs on your own Cloudflare account. It keeps room state in Durable Object memory only — no database, no persistence. State is lost when the last participant leaves.</p>
 
-<details>
-<summary>What does the OAuth backend do with my data?</summary>
-<div class="content"><p>Nothing. It stores a session ID in memory for 5 minutes max, then deletes it. It has no database, no file storage, and no logging of user data. Full source is at <code>SlasshyVault-Backend/server.js</code> — ~120 lines.</p></div>
-</details>
+      <h3>Third-Party API Calls</h3>
+      <p>All metadata requests (TMDB, imdbapi, OMDb) are made directly from your machine. They include only media IDs or search queries — no personal information.</p>
 
-<details>
-<summary>Does the Watch Together relay send data to any server?</summary>
-<div class="content"><p><strong>No.</strong> The relay deploys to <strong>your own Cloudflare account</strong>. The source code is bundled in the app at <code>src-tauri/relay/worker.js</code>. It uses Durable Objects (ephemeral in-memory state) — no database, no persistence, no central server.</p></div>
-</details>
+      <div class="callout callout-success">
+        <strong>Open source auditability</strong>
+        The full source is at <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">github.com/SlasshyOverhere/SlasshyVault</a>.
+        You can inspect every network call, every data path, and every dependency.
+      </div>
+    </section>
 
-<details>
-<summary>What third-party APIs does the app call?</summary>
-<div class="content"><p>TMDB (<code>api.themoviedb.org</code>) for metadata, and optionally imdbapi.dev or OMDb for ratings. You can provide your own API keys in Settings. These calls are direct from your machine — no proxy involved.</p></div>
-</details>
+    <!-- ==================== FAQ ==================== -->
+    <section id="faq">
+      <h2>FAQ</h2>
 
-<details>
-<summary>Can I use SlasshyVault without Google Drive?</summary>
-<div class="content"><p><strong>No.</strong> Google sign-in is required because the app uses Google Drive as its cloud storage backend. All media files you access through the cloud must be in your Drive. Local files still work, but you need to sign in to use the app.</p></div>
-</details>
+      <details>
+        <summary>Does SlasshyVault collect any data?</summary>
+        <div class="detail-body"><p>No. No telemetry, analytics, crash reports, or usage tracking. The app makes zero network requests on launch. All data stays on your machine or in your Google Drive.</p></div>
+      </details>
 
-<details>
-<summary>Is there a mobile version?</summary>
-<div class="content"><p>No. SlasshyVault is a desktop app built with Tauri. There are currently no mobile builds.</p></div>
-</details>
+      <details>
+        <summary>What does the OAuth backend do?</summary>
+        <div class="detail-body"><p>It exchanges Google's one-time authorization code for access and refresh tokens. It stores a session ID in memory for 5 minutes max, then deletes it. No database, no logs, no persistent storage.</p></div>
+      </details>
 
-</section>
+      <details>
+        <summary>Where is my data stored?</summary>
+        <div class="detail-body"><p>Watch history and metadata cache → local SQLite. Config and tokens → <code>media_config.json</code>. Media files → your local disk or Google Drive. Nothing is uploaded to any server.</p></div>
+      </details>
 
-<!-- ==================== TERMS OF SERVICE ==================== -->
-<section class="section" id="terms">
-<h2>📄 Terms of Service</h2>
-<p><em>Last updated: June 30, 2026</em></p>
+      <details>
+        <summary>Can I use my own TMDB key?</summary>
+        <div class="detail-body"><p>Yes. Go to Settings → API Keys and enter your TMDB API key or access token. This bypasses any shared pools and gives you dedicated rate limits.</p></div>
+      </details>
 
-<h3>1. Acceptance</h3>
-<p>By downloading, installing, or using SlasshyVault (the "Software"), you agree to these Terms. If you do not agree, do not use the Software.</p>
+      <details>
+        <summary>How does Watch Together work?</summary>
+        <div class="detail-body"><p>One user creates a room. Others join by room code. Playback state (play/pause/seek) is relayed through a Cloudflare Worker running on your own account. The worker source is bundled in the app and is fully auditable.</p></div>
+      </details>
 
-<h3>2. Description</h3>
-<p>SlasshyVault is a desktop application that indexes media files from your local storage and Google Drive, and provides an interface to browse, search, and play them via external players such as MPV. The Software is provided free of charge for personal, non-commercial use.</p>
+      <details>
+        <summary>Is there a mobile version?</summary>
+        <div class="detail-body"><p>No. SlasshyVault is a desktop app for Windows only. Built with Tauri, not a mobile framework.</p></div>
+      </details>
+    </section>
 
-<h3>3. Google Drive Integration</h3>
-<p>The Software uses Google OAuth to authenticate with your Google Drive account solely to list and stream media files you explicitly choose to index. The Software does not upload, modify, or delete any files in your Drive without your explicit action. OAuth tokens are stored locally on your device and are never sent to any server other than Google's authorized endpoints.</p>
+    <hr>
 
-<h3>4. Third-Party Services</h3>
-<p>The Software may call third-party APIs (TMDB, IMDb, OMDb) to enrich metadata. These calls use either your own API keys or free public endpoints. No personal information is sent to these services. The Software also supports deploying a Cloudflare Worker for the Watch Together feature; this Worker runs on your own Cloudflare account and never communicates with any central server.</p>
+    <!-- ==================== TERMS ==================== -->
+    <section id="terms">
+      <h2>Terms of Service</h2>
+      <p><em>Last updated: June 30, 2026</em></p>
 
-<h3>5. No Data Collection</h3>
-<p>SlasshyVault does not collect telemetry, analytics, usage statistics, or personal information. There are no servers operated by the developers that receive any data from the Software. The OAuth backend server only handles Google's authentication redirect and retains no user data beyond the lifetime of a single OAuth session (5 minutes maximum).</p>
+      <h3>1. Acceptance</h3>
+      <p>By downloading, installing, or using SlasshyVault (the "Software"), you agree to these Terms. If you do not agree, do not use the Software.</p>
 
-<h3>6. Limitation of Liability</h3>
-<p>The Software is provided "as is" without warranty of any kind, express or implied. The developers are not liable for any damages arising from the use or inability to use the Software, including but not limited to data loss, playback issues, or compatibility problems.</p>
+      <h3>2. Description</h3>
+      <p>SlasshyVault is a desktop application that indexes media files from your local storage and Google Drive, and provides an interface to browse, search, and play them via external players. The Software is provided free of charge for personal, non-commercial use.</p>
 
-<h3>7. Open Source</h3>
-<p>The Software is open source under the MIT license. You may inspect, modify, and distribute the source code in accordance with the license terms. The source is available at <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">github.com/SlasshyOverhere/SlasshyVault</a>.</p>
+      <h3>3. Google Drive Integration</h3>
+      <p>The Software uses Google OAuth to authenticate with your Google Drive account solely to list and stream media files you explicitly choose to index. The Software does not upload, modify, or delete files in your Drive without your explicit action. OAuth tokens are stored locally and are never sent to any server other than Google's authorized endpoints.</p>
 
-<h3>8. Changes to Terms</h3>
-<p>These Terms may be updated at any time. Continued use after changes constitutes acceptance of the new Terms. The latest version is always available at this URL.</p>
+      <h3>4. Third-Party Services</h3>
+      <p>The Software may call third-party APIs (TMDB, imdbapi.dev, OMDb) to enrich metadata. These calls use either your own API keys or free public endpoints. No personal information is sent to these services. The Software also supports deploying a Cloudflare Worker for the Watch Together feature; this Worker runs on your own Cloudflare account.</p>
 
-<h3>9. Contact</h3>
-<p>For questions about these Terms, open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>.</p>
-</section>
+      <h3>5. No Data Collection</h3>
+      <p>SlasshyVault does not collect telemetry, analytics, usage statistics, or personal information. There are no servers operated by the developers that receive any data from the Software. The OAuth backend server only handles Google's authentication redirect and retains no user data beyond 5 minutes.</p>
 
-<!-- ==================== PRIVACY POLICY ==================== -->
-<section class="section" id="privacy">
-<h2>🔏 Privacy Policy</h2>
-<p><em>Last updated: June 30, 2026</em></p>
+      <h3>6. Limitation of Liability</h3>
+      <p>The Software is provided "as is" without warranty of any kind. The developers are not liable for any damages arising from the use or inability to use the Software, including but not limited to data loss, playback issues, or compatibility problems.</p>
 
-<h3>1. What We Collect</h3>
-<p><strong>Nothing.</strong> SlasshyVault does not collect, store, transmit, or share any personal data. There are no analytics, no telemetry, no crash reporters, no advertising identifiers, no fingerprinting, and no user tracking of any kind. This is a verifiable fact — the full source code is available for audit.</p>
+      <h3>7. Open Source</h3>
+      <p>The Software is open source under the MIT license. You may inspect, modify, and distribute the source code per the license terms. Source: <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">github.com/SlasshyOverhere/SlasshyVault</a>.</p>
 
-<h3>2. Google Drive Access</h3>
-<p>When you sign in with Google, the Software requests the following OAuth scopes:</p>
-<ul>
-  <li><code>https://www.googleapis.com/auth/drive</code> — Read and stream your media files</li>
-  <li><code>https://www.googleapis.com/auth/userinfo.email</code> — Display your email in settings</li>
-</ul>
-<p>This access is used exclusively for:</p>
-<ul>
-  <li>Listing folders and files you choose to index</li>
-  <li>Streaming video content directly to your media player</li>
-</ul>
-<p>The Software never writes, modifies, or deletes files in your Drive without your explicit action. Your OAuth tokens are stored locally on your machine (obfuscated in <code>media_config.json</code>) and are never sent to any third party. You can revoke access at any time from your <a href="https://myaccount.google.com/permissions" target="_blank">Google Account permissions page</a>.</p>
+      <h3>8. Changes</h3>
+      <p>These Terms may be updated. Continued use after changes constitutes acceptance. The latest version is always available at this URL.</p>
 
-<h3>3. OAuth Backend Server</h3>
-<p>The OAuth backend server is a stateless Node.js service that handles only the Google OAuth code exchange. It stores OAuth state and session IDs in memory for a maximum of 5 minutes, after which they are permanently deleted. The backend has:</p>
-<ul>
-  <li><strong>No database</strong> (no Turso, no SQLite, no Postgres)</li>
-  <li><strong>No Redis</strong> (no Upstash, no key-value store)</li>
-  <li><strong>No persistent storage</strong> of any kind</li>
-  <li><strong>No logging</strong> of user information</li>
-  <li><strong>No analytics</strong></li>
-</ul>
-<p>The backend cannot identify you, cannot track you, and retains nothing after your OAuth flow completes. Full source is at <code>SlasshyVault-Backend/server.js</code> (~120 lines).</p>
+      <h3>9. Contact</h3>
+      <p>Open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a> for questions.</p>
+    </section>
 
-<h3>4. Watch Together Relay</h3>
-<p>The Watch Together feature uses a Cloudflare Worker deployed to <strong>your own</strong> Cloudflare account. This Worker relays WebSocket messages between participants in a Watch Together room using Durable Objects (ephemeral in-memory state). It stores no data beyond the active room session. State is lost when the last participant disconnects and after 6 hours of inactivity. You can delete the Worker at any time from your Cloudflare dashboard or through the Software settings.</p>
+    <!-- ==================== PRIVACY ==================== -->
+    <section id="privacy">
+      <h2>Privacy Policy</h2>
+      <p><em>Last updated: June 30, 2026</em></p>
 
-<h3>5. Third-Party API Calls</h3>
-<p>The Software may make direct HTTPS requests to the following services:</p>
-<ul>
-  <li><strong>TMDB</strong> (<code>api.themoviedb.org</code>) — Movie/TV metadata, posters, search. Request includes your search query or media ID.</li>
-  <li><strong>imdbapi.dev</strong> (<code>api.imdbapi.dev</code>) — IMDb ratings, episode data. Request includes the IMDb ID.</li>
-  <li><strong>OMDb</strong> (<code>www.omdbapi.com</code>) — Optional alternative for IMDb ratings, only if you provide a key.</li>
-  <li><strong>Google APIs</strong> (<code>www.googleapis.com</code>, <code>oauth2.googleapis.com</code>) — Drive file listing, streaming, OAuth.</li>
-  <li><strong>Cloudflare API</strong> (<code>api.cloudflare.com</code>) — Only when you use the one-click relay deploy feature, using the API token you provide.</li>
-</ul>
-<p>These requests include only the data necessary for the operation (search query, media ID, file ID) and never include personal information. These services operate under their own privacy policies.</p>
+      <h3>1. What We Collect</h3>
+      <p><strong>Nothing.</strong> SlasshyVault does not collect, store, transmit, or share any personal data. There are no analytics, no telemetry, no crash reporters, no advertising identifiers, no fingerprinting, and no user tracking. The full source is open for audit.</p>
 
-<h3>6. Data Storage</h3>
-<ul>
-  <li><strong>Configuration</strong> — Stored in <code>media_config.json</code> in the app data directory. Includes your API keys (if provided), relay URL, Cloudflare token (if provided), and preferences.</li>
-  <li><strong>Watch History</strong> — Stored in a local SQLite database. Includes what you watched, when, and progress. Never uploaded anywhere.</li>
-  <li><strong>OAuth Tokens</strong> — Stored obfuscated in <code>media_config.json</code>, used only for Google Drive API calls.</li>
-  <li><strong>Image Cache</strong> — Downloaded posters and stills cached locally for performance.</li>
-</ul>
+      <h3>2. Google Drive Access</h3>
+      <p>When you sign in, the Software requests these OAuth scopes:</p>
+      <ul>
+        <li><code>drive</code> — Read and stream your media files</li>
+        <li><code>userinfo.email</code> — Display your email in settings</li>
+      </ul>
+      <p>Tokens are stored locally (obfuscated) and used only for Drive API calls. Revoke at any time from <a href="https://myaccount.google.com/permissions" target="_blank">Google Account permissions</a>.</p>
 
-<h3>7. Data Deletion</h3>
-<ul>
-  <li><strong>Local data:</strong> Use "Factory Reset" in Settings to delete all local data (watch history, config, cache).</li>
-  <li><strong>OAuth tokens:</strong> Revoke at <a href="https://myaccount.google.com/permissions" target="_blank">Google Account permissions</a>.</li>
-  <li><strong>Cloudflare Worker:</strong> Delete from app Settings ("Stop Relay") or Cloudflare dashboard.</li>
-  <li><strong>Google Drive files:</strong> Nothing is written to your Drive by the app. No cleanup needed.</li>
-</ul>
+      <h3>3. OAuth Backend</h3>
+      <p>The backend is a stateless Node.js service that handles the Google OAuth code exchange. It stores OAuth state in memory for a maximum of 5 minutes, then permanently deletes it. It has no database, no Redis, no file storage, and no logging of user data. Source: <code>SlasshyVault-Backend/server.js</code>.</p>
 
-<h3>8. Children</h3>
-<p>The Software is not intended for children under 13. No data is collected from any user regardless of age.</p>
+      <h3>4. Watch Together Relay</h3>
+      <p>The relay is a Cloudflare Worker deployed to your own account. It uses Durable Objects for ephemeral room state — no persistence, no database. State is lost when the last participant leaves or after 6 hours of inactivity.</p>
 
-<h3>9. Changes to Policy</h3>
-<p>This Privacy Policy may be updated. The latest version is always available at this URL. Material changes will be noted in the app's release notes.</p>
+      <h3>5. Third-Party APIs</h3>
+      <p>The Software makes direct requests to TMDB, imdbapi.dev, and optionally OMDb. These requests include only search queries or media IDs. These services have their own privacy policies.</p>
 
-<h3>10. Contact</h3>
-<p>For privacy concerns, open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>.</p>
+      <h3>6. Data Storage Location</h3>
+      <ul>
+        <li><strong>Configuration & Tokens:</strong> <code>%APPDATA%/SlasshyVault/media_config.json</code></li>
+        <li><strong>Watch History:</strong> Local SQLite database</li>
+        <li><strong>Image Cache:</strong> Local files in app data directory</li>
+      </ul>
 
-</section>
+      <h3>7. Data Deletion</h3>
+      <ul>
+        <li><strong>Factory Reset</strong> in Settings deletes all local data.</li>
+        <li><strong>OAuth tokens</strong> can be revoked via <a href="https://myaccount.google.com/permissions" target="_blank">Google Account</a>.</li>
+        <li><strong>Cloudflare Worker</strong> can be deleted from Settings or Cloudflare dashboard.</li>
+        <li>The Software never writes to your Drive — no cleanup needed.</li>
+      </ul>
+
+      <h3>8. Children</h3>
+      <p>The Software is not intended for children under 13. No data is collected from any user regardless of age.</p>
+
+      <h3>9. Changes</h3>
+      <p>This Privacy Policy may be updated. The latest version is always at this URL.</p>
+
+      <h3>10. Contact</h3>
+      <p>Open an issue on <a href="https://github.com/SlasshyOverhere/SlasshyVault" target="_blank">GitHub</a>.</p>
+    </section>
+
+    <div class="footer">
+      SlasshyVault · MIT License · <a href="https://github.com/SlasshyOverhere/SlasshyVault" style="color:var(--text-tertiary)">GitHub</a>
+    </div>
+
+  </div>
+</main>
 
 </div>
-
-<footer>
-  <div class="container">
-    SlasshyVault — Open source media library. No tracking. No servers. Your data stays yours.<br>
-    <a href="https://github.com/SlasshyOverhere/SlasshyVault" style="color:#8c8c8c;text-decoration:underline;font-size:11px">GitHub</a>
-  </div>
-</footer>
 
 </body>
 </html>
