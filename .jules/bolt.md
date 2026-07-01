@@ -1,3 +1,6 @@
 ## 2025-05-18 - Avoid repeated array calculations inside React mapping loops
 **Learning:** In complex mapping loops within React, doing operations that calculate data across an entire array on every iteration (e.g., finding the `Math.max` for a progress bar ratio using `Math.max(...data.map(d => d.value))`) escalates the rendering complexity to O(N²), causing serious slowdowns when the array scales up in components like `AnalyticsView.tsx`.
 **Action:** Use an Immediately Invoked Function Expression (IIFE) around the block, or pre-calculate variables utilizing `useMemo` before mapping. This allows computing single values once before entering the loop to ensure strict O(N) array mapping performance.
+## 2025-02-24 - Array manipulation inside loops
+**Learning:** Calling `.split(",")`, `.map()`, and `.filter()` inside `.find()` iterators (like in `ContentDetailsModal.tsx`) causes O(N * M) allocations and string conversions in the React render cycle, significantly degrading performance on large arrays (like hundreds of subtitles).
+**Action:** Always hoist redundant string parsing outside of iterators. Convert lookups arrays into a `Set` to drop `.includes()` O(M) checks in favor of `Set.has()` O(1) lookups.

@@ -407,23 +407,26 @@ export function ContentDetailsModal({
     }
 
     const storedPreference = getSeriesAudioPreference(seriesPreferenceId)
-    const presetMatch = detectedAudioTracks.find(
-      (option) => {
-        const normalizedStored = storedPreference?.trim().toLowerCase()
-        if (!normalizedStored) return false
+    const normalizedStored = storedPreference?.trim().toLowerCase()
 
-        const preferenceParts = normalizedStored
+    let presetMatch = undefined
+    if (normalizedStored) {
+      // Lily: Optimization - moved parsing outside loop and use Set for O(1) lookups
+      const preferencePartsSet = new Set(
+        normalizedStored
           .split(",")
           .map((part) => part.trim())
           .filter(Boolean)
+      )
 
+      presetMatch = detectedAudioTracks.find((option) => {
         return (
           option.mpv_value?.trim().toLowerCase() === normalizedStored ||
           option.language_code?.trim().toLowerCase() === normalizedStored ||
-          preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+          preferencePartsSet.has(option.language_code?.trim().toLowerCase() || "")
         )
-      },
-    )
+      })
+    }
 
     if (presetMatch) {
       setSelectedAudioPreference(presetMatch.mpv_value || AUTO_AUDIO_VALUE)
@@ -457,20 +460,24 @@ export function ContentDetailsModal({
       return
     }
 
-    const presetMatch = detectedSubtitleTracks.find((option) => {
-      if (!normalizedStored) return false
-
-      const preferenceParts = normalizedStored
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean)
-
-      return (
-        option.mpv_value?.trim().toLowerCase() === normalizedStored ||
-        option.language_code?.trim().toLowerCase() === normalizedStored ||
-        preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+    let presetMatch = undefined
+    if (normalizedStored) {
+      // Lily: Optimization - moved parsing outside loop and use Set for O(1) lookups
+      const preferencePartsSet = new Set(
+        normalizedStored
+          .split(",")
+          .map((part) => part.trim())
+          .filter(Boolean)
       )
-    })
+
+      presetMatch = detectedSubtitleTracks.find((option) => {
+        return (
+          option.mpv_value?.trim().toLowerCase() === normalizedStored ||
+          option.language_code?.trim().toLowerCase() === normalizedStored ||
+          preferencePartsSet.has(option.language_code?.trim().toLowerCase() || "")
+        )
+      })
+    }
 
     if (presetMatch) {
       setSelectedSubtitlePreference(presetMatch.mpv_value || AUTO_SUBTITLE_VALUE)
