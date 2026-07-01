@@ -4841,8 +4841,14 @@ fn probe_tracks_with_ffprobe(
         None
     };
 
+    let safe_source = if source.contains("://") || source.starts_with("file:") {
+        source.to_string()
+    } else {
+        format!("file:{}", source)
+    };
+
     let output = command
-        .arg(source)
+        .arg(&safe_source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
 
@@ -4990,8 +4996,14 @@ fn probe_media_technical_details_with_ffprobe(
         None
     };
 
+    let safe_source = if source.contains("://") || source.starts_with("file:") {
+        source.to_string()
+    } else {
+        format!("file:{}", source)
+    };
+
     let output = command
-        .arg(source)
+        .arg(&safe_source)
         .output()
         .map_err(|error| format!("Failed to run ffprobe: {}", error))?;
 
