@@ -1,0 +1,3 @@
+## 2024-07-01 — Missing focus rings on custom dialog buttons
+Learning: Custom dialog components using unstyled `<button>` elements or framer-motion lack native focus indicators when navigated via keyboard, making them inaccessible. ARIA labels on icon-only buttons (like an `X` close button) are also frequently omitted.
+Action: Always add explicit `focus-visible` Tailwind classes (e.g., `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black`) to custom interactive elements and ensure icon-only buttons have an appropriate `aria-label`.

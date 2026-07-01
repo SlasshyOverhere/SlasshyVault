@@ -73,7 +73,8 @@ export function PlayConfirmDialog({
                 <button
                   type="button"
                   onClick={handleCancel}
-                  className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  aria-label="Close dialog"
+                  className="p-2 rounded-lg hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                 >
                   <X className="size-4 text-white/50" />
                 </button>
@@ -93,7 +94,7 @@ export function PlayConfirmDialog({
                 <button
                   type="button"
                   onClick={handleConfirm}
-                  className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                 >
                   <Play className="size-4 fill-current" />
                   Play

@@ -71,7 +71,8 @@ export function MarkCompleteDialog({
                 <button
                   type="button"
                   onClick={handleClose}
-                  className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  aria-label="Close dialog"
+                  className="p-2 rounded-lg hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                 >
                   <X className="size-4 text-muted-foreground" />
                 </button>
@@ -102,7 +103,7 @@ export function MarkCompleteDialog({
                       onMarkComplete()
                       onOpenChange(false)
                     }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-2"
+                    className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                   >
                     <CheckCircle className="size-4" />
                     {isCompletionConfirmation ? 'Yes, Mark Complete' : 'Mark as Complete'}
@@ -110,7 +111,7 @@ export function MarkCompleteDialog({
                   <button
                     type="button"
                     onClick={handleClose}
-                    className="w-full py-2.5 px-4 rounded-xl bg-white/10 text-white font-medium text-sm hover:bg-white/20 transition-colors flex items-center justify-center gap-2"
+                    className="w-full py-2.5 px-4 rounded-xl bg-white/10 text-white font-medium text-sm hover:bg-white/20 transition-colors flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                   >
                     <RotateCcw className="size-4" />
                     {isCompletionConfirmation ? 'No, Keep Progress' : `Keep Progress (${Math.round(progressPercent)}%)`}
