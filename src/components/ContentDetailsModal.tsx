@@ -407,20 +407,21 @@ export function ContentDetailsModal({
     }
 
     const storedPreference = getSeriesAudioPreference(seriesPreferenceId)
+
+    // Bolt: Calculate preference string properties outside loop
+    const normalizedStored = storedPreference?.trim().toLowerCase()
+    const preferenceParts = normalizedStored
+      ? new Set(normalizedStored.split(",").map((part) => part.trim()).filter(Boolean))
+      : new Set<string>()
+
     const presetMatch = detectedAudioTracks.find(
       (option) => {
-        const normalizedStored = storedPreference?.trim().toLowerCase()
         if (!normalizedStored) return false
-
-        const preferenceParts = normalizedStored
-          .split(",")
-          .map((part) => part.trim())
-          .filter(Boolean)
 
         return (
           option.mpv_value?.trim().toLowerCase() === normalizedStored ||
           option.language_code?.trim().toLowerCase() === normalizedStored ||
-          preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+          preferenceParts.has(option.language_code?.trim().toLowerCase() || "")
         )
       },
     )
@@ -457,18 +458,18 @@ export function ContentDetailsModal({
       return
     }
 
+    // Bolt: Calculate preference string properties outside loop
+    const preferenceParts = normalizedStored
+      ? new Set(normalizedStored.split(",").map((part) => part.trim()).filter(Boolean))
+      : new Set<string>()
+
     const presetMatch = detectedSubtitleTracks.find((option) => {
       if (!normalizedStored) return false
-
-      const preferenceParts = normalizedStored
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean)
 
       return (
         option.mpv_value?.trim().toLowerCase() === normalizedStored ||
         option.language_code?.trim().toLowerCase() === normalizedStored ||
-        preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+        preferenceParts.has(option.language_code?.trim().toLowerCase() || "")
       )
     })
 
