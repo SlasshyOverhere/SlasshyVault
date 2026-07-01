@@ -361,33 +361,14 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
           <div>
             <SectionLabel title="By Type" />
             <div className="space-y-2.5">
-              {data.content_breakdown.map((b) => {
-                const label = b.content_type === "movie" ? "Movies" : b.content_type === "tvepisode" ? "Episodes" : b.content_type
-                const maxCount = Math.max(...data.content_breakdown.map((x) => x.count), 1)
-                const pct = (b.count / maxCount) * 100
-                return (
-                  <div key={b.content_type}>
-                    <div className="flex items-baseline justify-between mb-1">
-                      <span className="text-xs text-white/60">{label}</span>
-                      <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                      <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="mt-6">
-              <SectionLabel title="By Source" />
-              <div className="space-y-2.5">
-                {data.source_breakdown.map((b) => {
-                  const label = b.source === "cloud" ? "Cloud" : "Local"
-                  const maxCount = Math.max(...data.source_breakdown.map((x) => x.count), 1)
-                  const pct = (b.count / maxCount) * 100
+              {(() => {
+                // Lily: Moved max calculation outside of the .map loop to avoid O(N^2) complexity on every render cycle
+                const maxContentCount = Math.max(...data.content_breakdown.map((x) => x.count), 1)
+                return data.content_breakdown.map((b) => {
+                  const label = b.content_type === "movie" ? "Movies" : b.content_type === "tvepisode" ? "Episodes" : b.content_type
+                  const pct = (b.count / maxContentCount) * 100
                   return (
-                    <div key={b.source}>
+                    <div key={b.content_type}>
                       <div className="flex items-baseline justify-between mb-1">
                         <span className="text-xs text-white/60">{label}</span>
                         <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
@@ -397,7 +378,32 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
                       </div>
                     </div>
                   )
-                })}
+                })
+              })()}
+            </div>
+
+            <div className="mt-6">
+              <SectionLabel title="By Source" />
+              <div className="space-y-2.5">
+                {(() => {
+                  // Lily: Moved max calculation outside of the .map loop to avoid O(N^2) complexity on every render cycle
+                  const maxSourceCount = Math.max(...data.source_breakdown.map((x) => x.count), 1)
+                  return data.source_breakdown.map((b) => {
+                    const label = b.source === "cloud" ? "Cloud" : "Local"
+                    const pct = (b.count / maxSourceCount) * 100
+                    return (
+                      <div key={b.source}>
+                        <div className="flex items-baseline justify-between mb-1">
+                          <span className="text-xs text-white/60">{label}</span>
+                          <span className="text-[10px] text-white/30">{b.count} &middot; {formatDuration(b.total_seconds)}</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+                          <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: "easeOut" }} />
+                        </div>
+                      </div>
+                    )
+                  })
+                })()}
               </div>
             </div>
           </div>
@@ -442,22 +448,26 @@ export function AnalyticsView({ data }: AnalyticsViewProps) {
           <div>
             <SectionLabel title="Completion Funnel" subtitle="How much you finish" />
             <div className="space-y-3">
-              {[
-                { label: "Started", value: data.completion_funnel.started, pct: 100 },
-                { label: "In Progress", value: data.completion_funnel.in_progress_25, pct: (data.completion_funnel.in_progress_25 / Math.max(data.completion_funnel.started, 1)) * 100 },
-                { label: "Mostly Done", value: data.completion_funnel.mostly_done_75, pct: (data.completion_funnel.mostly_done_75 / Math.max(data.completion_funnel.started, 1)) * 100 },
-                { label: "Completed", value: data.completion_funnel.completed, pct: (data.completion_funnel.completed / Math.max(data.completion_funnel.started, 1)) * 100 },
-              ].map((s, i) => (
-                <div key={s.label}>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className="text-xs text-white/60">{s.label}</span>
-                    <span className="text-[10px] text-white/30">{s.value}</span>
+              {(() => {
+                // Lily: Extracted division-safe value calculation to avoid redundant executions during the map iteration
+                const safeStarted = Math.max(data.completion_funnel.started, 1)
+                return [
+                  { label: "Started", value: data.completion_funnel.started, pct: 100 },
+                  { label: "In Progress", value: data.completion_funnel.in_progress_25, pct: (data.completion_funnel.in_progress_25 / safeStarted) * 100 },
+                  { label: "Mostly Done", value: data.completion_funnel.mostly_done_75, pct: (data.completion_funnel.mostly_done_75 / safeStarted) * 100 },
+                  { label: "Completed", value: data.completion_funnel.completed, pct: (data.completion_funnel.completed / safeStarted) * 100 },
+                ].map((s, i) => (
+                  <div key={s.label}>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className="text-xs text-white/60">{s.label}</span>
+                      <span className="text-[10px] text-white/30">{s.value}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+                      <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${Math.max(s.pct, 1)}%` }} transition={{ duration: 0.8, delay: i * 0.08, ease: "easeOut" }} />
+                    </div>
                   </div>
-                  <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
-                    <m.div className="h-full rounded-full bg-white/30" initial={{ width: 0 }} animate={{ width: `${Math.max(s.pct, 1)}%` }} transition={{ duration: 0.8, delay: i * 0.08, ease: "easeOut" }} />
-                  </div>
-                </div>
-              ))}
+                ))
+              })()}
             </div>
           </div>
         </div>
