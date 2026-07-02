@@ -407,20 +407,26 @@ export function ContentDetailsModal({
     }
 
     const storedPreference = getSeriesAudioPreference(seriesPreferenceId)
+    const normalizedStored = storedPreference?.trim().toLowerCase()
+
+    // Lily: Move string parsing and array creation out of the .find() loop for O(1) matching
+    const preferenceParts = new Set(
+      normalizedStored
+        ? normalizedStored
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean)
+        : []
+    )
+
     const presetMatch = detectedAudioTracks.find(
       (option) => {
-        const normalizedStored = storedPreference?.trim().toLowerCase()
         if (!normalizedStored) return false
-
-        const preferenceParts = normalizedStored
-          .split(",")
-          .map((part) => part.trim())
-          .filter(Boolean)
 
         return (
           option.mpv_value?.trim().toLowerCase() === normalizedStored ||
           option.language_code?.trim().toLowerCase() === normalizedStored ||
-          preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+          preferenceParts.has(option.language_code?.trim().toLowerCase() || "")
         )
       },
     )
@@ -457,18 +463,23 @@ export function ContentDetailsModal({
       return
     }
 
+    // Lily: Move string parsing and array creation out of the .find() loop for O(1) matching
+    const preferenceParts = new Set(
+      normalizedStored
+        ? normalizedStored
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean)
+        : []
+    )
+
     const presetMatch = detectedSubtitleTracks.find((option) => {
       if (!normalizedStored) return false
-
-      const preferenceParts = normalizedStored
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean)
 
       return (
         option.mpv_value?.trim().toLowerCase() === normalizedStored ||
         option.language_code?.trim().toLowerCase() === normalizedStored ||
-        preferenceParts.includes(option.language_code?.trim().toLowerCase() || "")
+        preferenceParts.has(option.language_code?.trim().toLowerCase() || "")
       )
     })
 
