@@ -58,7 +58,8 @@ export function BetaConfirmDialog({
                 <button
                   type="button"
                   onClick={handleCancel}
-                  className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  aria-label="Close"
+                  className="p-2 rounded-lg hover:bg-white/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
                 >
                   <X className="size-4 text-white/50" />
                 </button>

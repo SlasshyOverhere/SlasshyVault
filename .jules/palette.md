@@ -1,0 +1,3 @@
+## 2024-05-24 — Improve keyboard focus visibility and screen reader labels for dialog close buttons
+Learning: The codebase utilizes many custom framer-motion dialogs containing unstyled `button` elements specifically for a close `<X />` icon. Many lack screen reader accessible labels (`aria-label`) and do not fallback to standard focus rings when clicked by keyboard.
+Action: When designing or updating icon-only custom buttons or dialog components, explicitly include `aria-label="Close"` (or another appropriate accessible name) and apply Tailwind pseudo-classes like `focus-visible:ring-2 focus-visible:ring-offset-2` to support keyboard and screen reader accessibility without interfering with visual design for mouse users.
