@@ -96,7 +96,8 @@ export function DuplicateDetector({ isOpen, onClose, onDeleted }: DuplicateDetec
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-neutral-400 hover:text-white"
+            aria-label="Close"
+            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-neutral-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
           >
             <X className="size-5" />
           </button>
